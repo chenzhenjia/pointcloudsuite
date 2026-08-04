@@ -108,6 +108,19 @@ void runFixtureTests(const QString &directory) {
     const QVector<pointcloud::Point3D> lod = pointcloud::octreeLod(many, 64);
     expect(lod.size() <= 64 && !lod.isEmpty(), "octree LOD target count");
 
+    QVector<pointcloud::Point3D> noisy;
+    for (int y = 0; y < 8; ++y) for (int x = 0; x < 8; ++x)
+        noisy.push_back({float(x) * 0.1f, float(y) * 0.1f, 0.0f, 0, 0, 1});
+    noisy.push_back({50.0f, 50.0f, 50.0f, 0, 0, 1});
+    pointcloud::NoiseOptions noiseOptions;
+    noiseOptions.voxelEnabled = false;
+    noiseOptions.statisticalEnabled = true;
+    noiseOptions.meanK = 8;
+    noiseOptions.stddevMultiplier = 1.0f;
+    const pointcloud::NoiseResult noiseResult = pointcloud::removeNoise(noisy, noiseOptions);
+    expect(noiseResult.ok && noiseResult.points.size() < noisy.size(), "statistical outlier removal");
+    expect(noiseResult.points.size() >= 50, "preserve dense surface points");
+
     const QVector<pointcloud::Point3D> half = pointcloud::proportionalDownsample(points, 2);
     expect(half.size() == 2, "proportional downsample count");
     if (half.size() == 2)

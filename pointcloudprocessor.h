@@ -22,6 +22,23 @@ struct LoadResult {
     bool usedCache = false;
 };
 
+struct NoiseOptions {
+    bool voxelEnabled = true;
+    float voxelSize = 0.10f;
+    bool statisticalEnabled = true;
+    int meanK = 24;
+    float stddevMultiplier = 1.0f;
+    bool radiusEnabled = false;
+    float radius = 0.30f;
+    int minNeighbors = 3;
+};
+
+struct NoiseResult {
+    QVector<Point3D> points;
+    QString error;
+    bool ok = false;
+};
+
 // Loads ASCII PLY and binary little/big-endian PLY vertex xyz data.
 // RGB and other vertex properties are skipped safely.
 bool loadPly(const QString &fileName, QVector<Point3D> &points,
@@ -42,5 +59,7 @@ QVector<Point3D> proportionalDownsample(const QVector<Point3D> &points,
 // Spatial octree LOD: returns one representative point per occupied octree
 // leaf, bounded by targetCount. The input order is preserved only loosely.
 QVector<Point3D> octreeLod(const QVector<Point3D> &points, qsizetype targetCount);
+
+NoiseResult removeNoise(const QVector<Point3D> &points, const NoiseOptions &options);
 
 } // namespace pointcloud

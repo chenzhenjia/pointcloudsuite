@@ -3,6 +3,7 @@
 #include <QDataStream>
 #include <limits>
 #include <unordered_map>
+#include <vector>
 #include <QDebug>
 #include <QFile>
 #include <QRegularExpression>
@@ -308,6 +309,96 @@ QVector<Point3D> octreeLod(const QVector<Point3D> &points, qsizetype targetCount
         result.push_back(entry.second);
         if (result.size() >= targetCount) break;
     }
+    return result;
+}
+
+namespace {
+struct NoiseKey {
+    qint64 x = 0, y = 0, z = 0;
+    bool operator==(const NoiseKey &other) const { return x == other.x && y == other.y && z == other.z; }
+};
+struct NoiseKeyHash {
+    size_t operator()(const NoiseKey &key) const {
+        return size_t(key.x * 73856093LL) ^ size_t(key.y * 19349663LL) ^ size_t(key.z * 83492791LL);
+    }
+};
+
+NoiseKey noiseKey(const Point3D &point, float cell) {
+    return {qFloor(double(point.x) / cell), qFloor(double(point.y) / cell), qFloor(double(point.z) / cell)};
+}
+
+QVector<Point3D> voxelFilter(const QVector<Point3D> &points, float voxelSize) {
+    if (points.isEmpty() || voxelSize <= 0.0f) return points;
+    std::unordered_map<NoiseKey, Point3D, NoiseKeyHash> representatives;
+    representatives.reserve(size_t(points.size() / 2 + 1));
+    for (const Point3D &point : points) representatives.emplace(noiseKey(point, voxelSize), point);
+    QVector<Point3D> output;
+    output.reserve(qsizetype(representatives.size()));
+    for (const auto &entry : representatives) output.push_back(entry.second);
+    return output;
+}
+
+QVector<Point3D> neighborhoodFilter(const QVector<Point3D> &points, float cellSize,
+                                    int minNeighbors, float maxMeanDistance,
+                                    bool useMeanDistance) {
+    if (points.isEmpty()) return points;
+    cellSize = qMax(cellSize, 1.0e-5f);
+    std::unordered_map<NoiseKey, std::vector<int>, NoiseKeyHash> grid;
+    grid.reserve(size_t(points.size() / 2 + 1));
+    for (int i = 0; i < points.size(); ++i) grid[noiseKey(points[i], cellSize)].push_back(i);
+    QVector<Point3D> output;
+    output.reserve(points.size());
+    const int k = qMax(1, minNeighbors);
+    for (int i = 0; i < points.size(); ++i) {
+        const NoiseKey key = noiseKey(points[i], cellSize);
+        QVector<float> distances;
+        distances.reserve(k * 2);
+        int neighborCount = 0;
+        for (qint64 dz = -1; dz <= 1; ++dz) for (qint64 dy = -1; dy <= 1; ++dy) for (qint64 dx = -1; dx <= 1; ++dx) {
+            const auto it = grid.find({key.x + dx, key.y + dy, key.z + dz});
+            if (it == grid.end()) continue;
+            for (int index : it->second) {
+                if (index == i) continue;
+                const Point3D &a = points[i];
+                const Point3D &b = points[index];
+                const float d2 = (a.x-b.x)*(a.x-b.x) + (a.y-b.y)*(a.y-b.y) + (a.z-b.z)*(a.z-b.z);
+                distances.push_back(qSqrt(d2));
+                ++neighborCount;
+            }
+        }
+        if (neighborCount < k) continue;
+        if (useMeanDistance) {
+            std::nth_element(distances.begin(), distances.begin() + qMin(k, distances.size()) - 1, distances.end());
+            float sum = 0.0f;
+            const int count = qMin(k, distances.size());
+            for (int j = 0; j < count; ++j) sum += distances[j];
+            if (sum / count > maxMeanDistance) continue;
+        }
+        output.push_back(points[i]);
+    }
+    return output;
+}
+}
+
+NoiseResult removeNoise(const QVector<Point3D> &points, const NoiseOptions &options) {
+    NoiseResult result;
+    if (points.isEmpty()) {
+        result.error = QStringLiteral("没有可处理的点云");
+        return result;
+    }
+    QVector<Point3D> filtered = options.voxelEnabled
+        ? voxelFilter(points, options.voxelSize) : points;
+    if (options.statisticalEnabled) {
+        const float cell = options.voxelEnabled ? options.voxelSize : qMax(options.radius, 0.01f);
+        filtered = neighborhoodFilter(filtered, cell, options.meanK,
+                                      options.stddevMultiplier * cell * 2.5f, true);
+    }
+    if (options.radiusEnabled)
+        filtered = neighborhoodFilter(filtered, options.radius, options.minNeighbors,
+                                      options.radius, false);
+    result.points = std::move(filtered);
+    result.ok = !result.points.isEmpty();
+    if (!result.ok) result.error = QStringLiteral("噪点参数过严，所有点均被过滤");
     return result;
 }
 

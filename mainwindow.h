@@ -29,6 +29,8 @@ private slots:
     void loadFinished();
     void updateRenderSettings();
     void setDownsampleRatio(int denominator);
+    void applyNoiseRemoval();
+    void noiseFinished();
 
 private:
     void closeEvent(QCloseEvent *event) override;
@@ -44,12 +46,23 @@ private:
     QDoubleSpinBox *m_overlay = nullptr;
     QDoubleSpinBox *m_mapMin = nullptr;
     QDoubleSpinBox *m_mapMax = nullptr;
+    QCheckBox *m_voxelNoise = nullptr;
+    QDoubleSpinBox *m_voxelSize = nullptr;
+    QCheckBox *m_statisticalNoise = nullptr;
+    QSpinBox *m_meanK = nullptr;
+    QDoubleSpinBox *m_stddev = nullptr;
+    QCheckBox *m_radiusNoise = nullptr;
+    QDoubleSpinBox *m_radius = nullptr;
+    QSpinBox *m_minNeighbors = nullptr;
+    QPushButton *m_noiseApply = nullptr;
     PointCloudCanvas *m_canvas = nullptr;
     QVector<pointcloud::Point3D> m_rawPoints;
+    QVector<pointcloud::Point3D> m_filteredPoints;
     QVector<pointcloud::Point3D> m_points;
     bool m_loading = false;
     QString m_pendingPath;
     QFutureWatcher<pointcloud::LoadResult> *m_loadWatcher = nullptr;
+    QFutureWatcher<pointcloud::NoiseResult> *m_noiseWatcher = nullptr;
     int m_downsampleDenominator = 1;
     QList<QAction *> m_ratioActions;
 };
