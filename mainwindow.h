@@ -24,8 +24,8 @@ private slots:
     void openPointCloud();
     void downsample();
     void loadFinished();
-    void lodFinished();
     void updateRenderSettings();
+    void setDownsampleRatio(int denominator);
 
 private:
     void buildUi();
@@ -34,19 +34,16 @@ private:
     QLabel *m_fileInfo = nullptr;
     QLabel *m_canvasInfo = nullptr;
     QProgressBar *m_progress = nullptr;
-    QComboBox *m_ratio = nullptr;
     QSpinBox *m_pointSize = nullptr;
     QComboBox *m_colorMode = nullptr;
     QDoubleSpinBox *m_overlay = nullptr;
     QDoubleSpinBox *m_mapMin = nullptr;
     QDoubleSpinBox *m_mapMax = nullptr;
-    QCheckBox *m_lodEnabled = nullptr;
     PointCloudCanvas *m_canvas = nullptr;
     QVector<pointcloud::Point3D> m_rawPoints;
     QVector<pointcloud::Point3D> m_points;
     bool m_loading = false;
     QString m_pendingPath;
     QFutureWatcher<pointcloud::LoadResult> *m_loadWatcher = nullptr;
-    QFutureWatcher<QVector<pointcloud::Point3D>> *m_lodWatcher = nullptr;
-    bool m_lodQueued = false;
+    int m_downsampleDenominator = 1;
 };

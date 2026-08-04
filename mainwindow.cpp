@@ -74,12 +74,11 @@ public:
     }
 
     void setDisplayOptions(int colorMode, double overlay, double mapMin,
-                           double mapMax, bool lodEnabled) {
+                           double mapMax) {
         m_colorMode = colorMode;
         m_overlay = float(qBound(0.0, overlay, 1.0));
         m_mapMin = float(mapMin);
         m_mapMax = float(mapMax);
-        m_lodEnabled = lodEnabled;
         update();
     }
 
@@ -406,7 +405,6 @@ private:
     float m_overlay = 1.0f;
     float m_mapMin = 0.0f;
     float m_mapMax = 1.0f;
-    bool m_lodEnabled = true;
     bool m_uploadPending = false;
 };
 
@@ -449,6 +447,27 @@ void MainWindow::buildUi() {
     connect(openAction, &QAction::triggered, this, &MainWindow::openPointCloud);
     fileMenu->addSeparator();
     fileMenu->addAction(tr("退出"), qApp, &QApplication::quit);
+    auto *featureMenu = menuBar()->addMenu(tr("功能"));
+    auto addRatioAction = [this, featureMenu](const QString &text, int denominator, const QKeySequence &shortcut = {}) {
+        auto *action = featureMenu->addAction(text);
+        action->setCheckable(true);
+        action->setShortcut(shortcut);
+        connect(action, &QAction::triggered, this, [this, denominator]() { setDownsampleRatio(denominator); });
+        return action;
+    };
+    addRatioAction(tr("降采样：关闭"), 1, QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_0));
+    addRatioAction(tr("降采样：1/2"), 2, QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_2));
+    addRatioAction(tr("降采样：1/4"), 4, QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_4));
+    addRatioAction(tr("降采样：1/8"), 8, QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_8));
+    addRatioAction(tr("降采样：1/16"), 16);
+    auto *debugMenu = menuBar()->addMenu(tr("调试"));
+    debugMenu->addAction(tr("显示运行状态"), this, [this]() {
+        statusBar()->showMessage(tr("缓存：后台加载 · 渲染：OpenGL 全量直接标记 · 降采样：功能菜单"), 6000);
+    });
+    debugMenu->addAction(tr("显示 OpenGL 信息"), this, [this]() {
+        QMessageBox::information(this, tr("调试信息"),
+                                 tr("渲染后端：OpenGL\n点绘制：GL_POINTS 直接标记\n缓存：.pcvbin\nOctree LOD：已回滚"));
+    });
 
     auto *root = new QWidget(this);
     root->setObjectName(QStringLiteral("workspace"));
@@ -529,6 +548,9 @@ void MainWindow::buildUi() {
     resetViewButton->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
     connect(resetViewButton, &QPushButton::clicked, m_canvas, &PointCloudCanvas::resetView);
     renderForm->addRow(resetViewButton);
+    auto *renderTitle = new QLabel(tr("渲染效果"));
+    renderTitle->setObjectName(QStringLiteral("sectionTitle"));
+    renderForm->addRow(renderTitle);
     m_colorMode = new QComboBox;
     m_colorMode->addItems({tr("彩色高度"), tr("灰阶"), tr("法向量")});
     renderForm->addRow(tr("颜色样式"), m_colorMode);
@@ -546,27 +568,21 @@ void MainWindow::buildUi() {
     m_mapMax->setRange(-1.0e9, 1.0e9);
     m_mapMax->setDecimals(2);
     renderForm->addRow(tr("映射最大值"), m_mapMax);
-    m_lodEnabled = new QCheckBox(tr("启用 Octree LOD"));
-    m_lodEnabled->setChecked(true);
-    renderForm->addRow(m_lodEnabled);
     connect(m_colorMode, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::updateRenderSettings);
     connect(m_overlay, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &MainWindow::updateRenderSettings);
     connect(m_mapMin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &MainWindow::updateRenderSettings);
     connect(m_mapMax, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &MainWindow::updateRenderSettings);
-    connect(m_lodEnabled, &QCheckBox::toggled, this, &MainWindow::updateRenderSettings);
     tabs->addTab(renderPage, tr("显示"));
-
-    auto *dataPage = new QWidget;
-    auto *dataForm = new QFormLayout(dataPage);
-    dataForm->setContentsMargins(8, 14, 8, 8);
-    dataForm->setVerticalSpacing(12);
-    m_ratio = new QComboBox;
-    m_ratio->addItems({tr("原始点数"), tr("降至 1/2"), tr("降至 1/4"),
-                       tr("降至 1/8"), tr("降至 1/16"), tr("降至 1/32")});
-    dataForm->addRow(tr("点数比例"), m_ratio);
-    connect(m_ratio, qOverload<int>(&QComboBox::currentIndexChanged),
-            this, &MainWindow::downsample);
-    tabs->addTab(dataPage, tr("数据"));
+    auto *debugPage = new QWidget;
+    auto *debugForm = new QFormLayout(debugPage);
+    debugForm->setContentsMargins(8, 14, 8, 8);
+    auto *debugTitle = new QLabel(tr("调试状态"));
+    debugTitle->setObjectName(QStringLiteral("sectionTitle"));
+    debugForm->addRow(debugTitle);
+    debugForm->addRow(new QLabel(tr("加载：后台线程 + .pcvbin 缓存")));
+    debugForm->addRow(new QLabel(tr("绘制：OpenGL GL_POINTS 全量直接标记")));
+    debugForm->addRow(new QLabel(tr("显示层：不使用 Octree LOD")));
+    tabs->addTab(debugPage, tr("调试"));
 
     rightLayout->addWidget(tabs, 1);
     splitter->addWidget(rightPanel);
@@ -649,8 +665,7 @@ void MainWindow::downsample() {
     }
 
     QApplication::setOverrideCursor(Qt::WaitCursor);
-    const int denominator = 1 << m_ratio->currentIndex();
-    m_points = pointcloud::proportionalDownsample(m_rawPoints, denominator);
+    m_points = pointcloud::proportionalDownsample(m_rawPoints, m_downsampleDenominator);
     refreshDisplayCloud();
     QApplication::restoreOverrideCursor();
 
@@ -662,51 +677,20 @@ void MainWindow::downsample() {
 void MainWindow::updateRenderSettings() {
     if (!m_canvas) return;
     m_canvas->setDisplayOptions(m_colorMode->currentIndex(), m_overlay->value(),
-                                m_mapMin->value(), m_mapMax->value(), m_lodEnabled->isChecked());
-    refreshDisplayCloud();
+                                m_mapMin->value(), m_mapMax->value());
 }
 
 void MainWindow::refreshDisplayCloud() {
     if (m_rawPoints.isEmpty()) return;
-    const qsizetype target = m_lodEnabled && m_lodEnabled->isChecked()
-        ? qMin<qsizetype>(m_rawPoints.size(), 1000000) : m_rawPoints.size();
-    const int denominator = 1 << m_ratio->currentIndex();
-    if (target >= m_rawPoints.size()) {
-        m_points = denominator > 1
-            ? pointcloud::proportionalDownsample(m_rawPoints, denominator) : m_rawPoints;
-        m_canvas->setCloud(m_points);
-        if (m_canvasInfo) m_canvasInfo->setText(tr("当前显示 %1 个点  ·  原始 %2 个点")
-                              .arg(QLocale().toString(m_points.size()))
-                              .arg(QLocale().toString(m_rawPoints.size())));
-        return;
-    }
-    if (!m_lodWatcher) {
-        m_lodWatcher = new QFutureWatcher<QVector<pointcloud::Point3D>>(this);
-        connect(m_lodWatcher, &QFutureWatcher<QVector<pointcloud::Point3D>>::finished,
-                this, &MainWindow::lodFinished);
-    }
-    if (m_lodWatcher->isRunning()) {
-        m_lodQueued = true;
-        return;
-    }
-    const QVector<pointcloud::Point3D> source = m_rawPoints;
-    m_progress->show();
-    m_progress->setRange(0, 0);
-    m_lodWatcher->setFuture(QtConcurrent::run([source, target, denominator]() {
-        QVector<pointcloud::Point3D> lod = pointcloud::octreeLod(source, target);
-        return denominator > 1 ? pointcloud::proportionalDownsample(lod, denominator) : lod;
-    }));
-}
-
-void MainWindow::lodFinished() {
-    m_points = m_lodWatcher->result();
+    m_points = pointcloud::proportionalDownsample(m_rawPoints, m_downsampleDenominator);
     m_canvas->setCloud(m_points);
-    m_progress->hide();
-    if (m_canvasInfo) m_canvasInfo->setText(tr("当前显示 %1 个点  ·  原始 %2 个点  ·  Octree LOD")
+    if (m_canvasInfo) m_canvasInfo->setText(tr("当前显示 %1 个点  ·  原始 %2 个点  ·  全量直接标记")
                           .arg(QLocale().toString(m_points.size()))
                           .arg(QLocale().toString(m_rawPoints.size())));
-    if (m_lodQueued) {
-        m_lodQueued = false;
-        refreshDisplayCloud();
-    }
+}
+
+void MainWindow::setDownsampleRatio(int denominator) {
+    m_downsampleDenominator = qMax(1, denominator);
+    downsample();
+    statusBar()->showMessage(tr("功能：降采样比例已切换为 1/%1").arg(m_downsampleDenominator));
 }
