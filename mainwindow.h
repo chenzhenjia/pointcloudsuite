@@ -6,6 +6,7 @@
 class QListWidget;
 class QLabel;
 class QAction;
+class QCloseEvent;
 class QProgressBar;
 class QComboBox;
 class QSpinBox;
@@ -20,6 +21,7 @@ class MainWindow final : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget *parent = nullptr);
+    ~MainWindow() override;
 
 private slots:
     void openPointCloud();
@@ -29,6 +31,7 @@ private slots:
     void setDownsampleRatio(int denominator);
 
 private:
+    void closeEvent(QCloseEvent *event) override;
     void buildUi();
     void refreshDisplayCloud();
     QListWidget *m_fileList = nullptr;

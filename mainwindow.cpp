@@ -38,6 +38,7 @@
 #include <QVector3D>
 #include <QWheelEvent>
 #include <QSignalBlocker>
+#include <QCloseEvent>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
 #include <limits>
@@ -54,12 +55,7 @@ public:
     }
 
     ~PointCloudCanvas() override {
-        if (!context()) return;
-        makeCurrent();
-        m_vertexArray.destroy();
-        m_vertexBuffer.destroy();
-        m_program.removeAllShaders();
-        doneCurrent();
+        releaseGlResources();
     }
 
     void setCloud(const QVector<pointcloud::Point3D> &points) {
@@ -94,6 +90,12 @@ public:
 
 protected:
     void initializeGL() override {
+        m_glResourcesReleased = false;
+        if (context()) {
+            connect(context(), &QOpenGLContext::aboutToBeDestroyed,
+                    this, &PointCloudCanvas::releaseGlResources,
+                    Qt::DirectConnection);
+        }
         initializeOpenGLFunctions();
         glClearColor(0.018f, 0.025f, 0.035f, 1.0f);
         glEnable(GL_DEPTH_TEST);
@@ -228,6 +230,16 @@ protected:
     }
 
 private:
+    void releaseGlResources() {
+        if (m_glResourcesReleased || !context() || !context()->isValid()) return;
+        makeCurrent();
+        m_vertexArray.destroy();
+        m_vertexBuffer.destroy();
+        m_program.removeAllShaders();
+        doneCurrent();
+        m_glResourcesReleased = true;
+    }
+
     void updateBounds() {
         if (m_points.isEmpty()) {
             m_center = QVector3D();
@@ -408,10 +420,17 @@ private:
     float m_mapMin = 0.0f;
     float m_mapMax = 1.0f;
     bool m_uploadPending = false;
+    bool m_glResourcesReleased = false;
 };
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     buildUi();
+}
+
+MainWindow::~MainWindow() {
+    if (m_loadWatcher && m_loadWatcher->isRunning()) {
+        m_loadWatcher->waitForFinished();
+    }
 }
 
 void MainWindow::buildUi() {
@@ -545,11 +564,13 @@ void MainWindow::buildUi() {
     m_pointSize = new QSpinBox;
     m_pointSize->setRange(1, 8);
     m_pointSize->setValue(1);
+    m_pointSize->setToolTip(tr("设置直接像素标记的尺寸，1 表示单像素绘制"));
     renderForm->addRow(tr("像素标记尺寸"), m_pointSize);
     connect(m_pointSize, qOverload<int>(&QSpinBox::valueChanged),
             m_canvas, &PointCloudCanvas::setPointSize);
     auto *resetViewButton = new QPushButton(tr("重置视角"));
     resetViewButton->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
+    resetViewButton->setToolTip(tr("恢复默认三维视角、缩放和平移"));
     connect(resetViewButton, &QPushButton::clicked, m_canvas, &PointCloudCanvas::resetView);
     renderForm->addRow(resetViewButton);
     auto *renderTitle = new QLabel(tr("渲染效果"));
@@ -557,20 +578,24 @@ void MainWindow::buildUi() {
     renderForm->addRow(renderTitle);
     m_colorMode = new QComboBox;
     m_colorMode->addItems({tr("彩色高度"), tr("灰阶"), tr("法向量")});
+    m_colorMode->setToolTip(tr("选择点云颜色映射方式"));
     renderForm->addRow(tr("颜色样式"), m_colorMode);
     m_overlay = new QDoubleSpinBox;
     m_overlay->setRange(0.0, 1.0);
     m_overlay->setSingleStep(0.05);
     m_overlay->setDecimals(3);
     m_overlay->setValue(1.0);
+    m_overlay->setToolTip(tr("设置点云叠加透明度，范围 0.000–1.000"));
     renderForm->addRow(tr("叠加比例"), m_overlay);
     m_mapMin = new QDoubleSpinBox;
     m_mapMin->setRange(-1.0e9, 1.0e9);
     m_mapMin->setDecimals(2);
+    m_mapMin->setToolTip(tr("设置高度颜色映射的最小值，单位 mm"));
     renderForm->addRow(tr("映射最小值"), m_mapMin);
     m_mapMax = new QDoubleSpinBox;
     m_mapMax->setRange(-1.0e9, 1.0e9);
     m_mapMax->setDecimals(2);
+    m_mapMax->setToolTip(tr("设置高度颜色映射的最大值，单位 mm"));
     renderForm->addRow(tr("映射最大值"), m_mapMax);
     connect(m_colorMode, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::updateRenderSettings);
     connect(m_overlay, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &MainWindow::updateRenderSettings);
@@ -587,6 +612,7 @@ void MainWindow::buildUi() {
     m_ratio = new QComboBox;
     m_ratio->addItems({tr("关闭（100%）"), tr("1/2（50%）"), tr("1/4（25%）"),
                        tr("1/8（12.5%）"), tr("1/16（6.25%）")});
+    m_ratio->setToolTip(tr("按固定比例减少工作点云；原始点云保留，可随时切换"));
     dataForm->addRow(tr("降采样比例"), m_ratio);
     connect(m_ratio, qOverload<int>(&QComboBox::currentIndexChanged), this,
             [this](int index) { setDownsampleRatio(1 << index); });
@@ -719,4 +745,13 @@ void MainWindow::setDownsampleRatio(int denominator) {
         m_ratioActions[i]->setChecked((1 << i) == m_downsampleDenominator);
     downsample();
     statusBar()->showMessage(tr("功能：降采样比例已切换为 1/%1").arg(m_downsampleDenominator));
+}
+
+void MainWindow::closeEvent(QCloseEvent *event) {
+    if (m_loading && m_loadWatcher && m_loadWatcher->isRunning()) {
+        statusBar()->showMessage(tr("正在结束后台加载，请稍候..."));
+        m_loadWatcher->waitForFinished();
+        m_loading = false;
+    }
+    event->accept();
 }
