@@ -5,6 +5,7 @@
 
 class QListWidget;
 class QLabel;
+class QAction;
 class QProgressBar;
 class QComboBox;
 class QSpinBox;
@@ -34,6 +35,7 @@ private:
     QLabel *m_fileInfo = nullptr;
     QLabel *m_canvasInfo = nullptr;
     QProgressBar *m_progress = nullptr;
+    QComboBox *m_ratio = nullptr;
     QSpinBox *m_pointSize = nullptr;
     QComboBox *m_colorMode = nullptr;
     QDoubleSpinBox *m_overlay = nullptr;
@@ -46,4 +48,5 @@ private:
     QString m_pendingPath;
     QFutureWatcher<pointcloud::LoadResult> *m_loadWatcher = nullptr;
     int m_downsampleDenominator = 1;
+    QList<QAction *> m_ratioActions;
 };

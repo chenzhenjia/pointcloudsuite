@@ -37,9 +37,11 @@
 #include <QVector2D>
 #include <QVector3D>
 #include <QWheelEvent>
+#include <QSignalBlocker>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
 #include <limits>
+#include <cmath>
 
 class PointCloudCanvas final : public QOpenGLWidget,
                                protected QOpenGLFunctions_3_3_Core {
@@ -453,6 +455,7 @@ void MainWindow::buildUi() {
         action->setCheckable(true);
         action->setShortcut(shortcut);
         connect(action, &QAction::triggered, this, [this, denominator]() { setDownsampleRatio(denominator); });
+        m_ratioActions.push_back(action);
         return action;
     };
     addRatioAction(tr("降采样：关闭"), 1, QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_0));
@@ -460,6 +463,7 @@ void MainWindow::buildUi() {
     addRatioAction(tr("降采样：1/4"), 4, QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_4));
     addRatioAction(tr("降采样：1/8"), 8, QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_8));
     addRatioAction(tr("降采样：1/16"), 16);
+    m_ratioActions.first()->setChecked(true);
     auto *debugMenu = menuBar()->addMenu(tr("调试"));
     debugMenu->addAction(tr("显示运行状态"), this, [this]() {
         statusBar()->showMessage(tr("缓存：后台加载 · 渲染：OpenGL 全量直接标记 · 降采样：功能菜单"), 6000);
@@ -573,6 +577,21 @@ void MainWindow::buildUi() {
     connect(m_mapMin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &MainWindow::updateRenderSettings);
     connect(m_mapMax, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &MainWindow::updateRenderSettings);
     tabs->addTab(renderPage, tr("显示"));
+    auto *dataPage = new QWidget;
+    auto *dataForm = new QFormLayout(dataPage);
+    dataForm->setContentsMargins(8, 14, 8, 8);
+    dataForm->setVerticalSpacing(12);
+    auto *dataTitle = new QLabel(tr("数据处理"));
+    dataTitle->setObjectName(QStringLiteral("sectionTitle"));
+    dataForm->addRow(dataTitle);
+    m_ratio = new QComboBox;
+    m_ratio->addItems({tr("关闭（100%）"), tr("1/2（50%）"), tr("1/4（25%）"),
+                       tr("1/8（12.5%）"), tr("1/16（6.25%）")});
+    dataForm->addRow(tr("降采样比例"), m_ratio);
+    connect(m_ratio, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int index) { setDownsampleRatio(1 << index); });
+    dataForm->addRow(new QLabel(tr("改变比例后立即更新显示，原始点云保持不变")));
+    tabs->addTab(dataPage, tr("数据"));
     auto *debugPage = new QWidget;
     auto *debugForm = new QFormLayout(debugPage);
     debugForm->setContentsMargins(8, 14, 8, 8);
@@ -691,6 +710,13 @@ void MainWindow::refreshDisplayCloud() {
 
 void MainWindow::setDownsampleRatio(int denominator) {
     m_downsampleDenominator = qMax(1, denominator);
+    const int index = denominator <= 1 ? 0 : qBound(0, qRound(std::log2(double(denominator))), 4);
+    if (m_ratio && m_ratio->currentIndex() != index) {
+        QSignalBlocker blocker(m_ratio);
+        m_ratio->setCurrentIndex(index);
+    }
+    for (int i = 0; i < m_ratioActions.size(); ++i)
+        m_ratioActions[i]->setChecked((1 << i) == m_downsampleDenominator);
     downsample();
     statusBar()->showMessage(tr("功能：降采样比例已切换为 1/%1").arg(m_downsampleDenominator));
 }
