@@ -54,9 +54,7 @@ public:
         setToolTip(tr("左键旋转，右键平移，滚轮缩放"));
     }
 
-    ~PointCloudCanvas() override {
-        releaseGlResources();
-    }
+    ~PointCloudCanvas() override = default;
 
     void setCloud(const QVector<pointcloud::Point3D> &points) {
         m_points = points;
@@ -90,7 +88,6 @@ public:
 
 protected:
     void initializeGL() override {
-        m_glResourcesReleased = false;
         initializeOpenGLFunctions();
         glClearColor(0.018f, 0.025f, 0.035f, 1.0f);
         glEnable(GL_DEPTH_TEST);
@@ -225,16 +222,6 @@ protected:
     }
 
 private:
-    void releaseGlResources() {
-        if (m_glResourcesReleased || !context() || !context()->isValid()) return;
-        makeCurrent();
-        m_vertexArray.destroy();
-        m_vertexBuffer.destroy();
-        m_program.removeAllShaders();
-        doneCurrent();
-        m_glResourcesReleased = true;
-    }
-
     void updateBounds() {
         if (m_points.isEmpty()) {
             m_center = QVector3D();
@@ -415,7 +402,6 @@ private:
     float m_mapMin = 0.0f;
     float m_mapMax = 1.0f;
     bool m_uploadPending = false;
-    bool m_glResourcesReleased = false;
 };
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
@@ -643,7 +629,7 @@ void MainWindow::buildUi() {
     auto *voxelRow = new QHBoxLayout;
     voxelRow->addWidget(new QLabel(tr("体素尺寸 mm")));
     m_voxelSize = new QDoubleSpinBox;
-    m_voxelSize->setRange(0.001, 1000.0); m_voxelSize->setDecimals(3); m_voxelSize->setValue(0.10);
+    m_voxelSize->setRange(0.001, 1000.0); m_voxelSize->setDecimals(3); m_voxelSize->setValue(0.25);
     voxelRow->addWidget(m_voxelSize); cleanLayout->addLayout(voxelRow);
     m_statisticalNoise = new QCheckBox(tr("统计离群值去除（推荐）"));
     m_statisticalNoise->setChecked(true);
@@ -651,18 +637,18 @@ void MainWindow::buildUi() {
     cleanLayout->addWidget(m_statisticalNoise);
     auto *statRow = new QHBoxLayout;
     statRow->addWidget(new QLabel(tr("邻域 K"))); m_meanK = new QSpinBox;
-    m_meanK->setRange(4, 128); m_meanK->setValue(24); statRow->addWidget(m_meanK);
+    m_meanK->setRange(4, 128); m_meanK->setValue(45); statRow->addWidget(m_meanK);
     statRow->addWidget(new QLabel(tr("阈值倍数"))); m_stddev = new QDoubleSpinBox;
-    m_stddev->setRange(0.1, 5.0); m_stddev->setSingleStep(0.1); m_stddev->setValue(1.0); statRow->addWidget(m_stddev);
+    m_stddev->setRange(0.1, 5.0); m_stddev->setSingleStep(0.1); m_stddev->setValue(1.3); statRow->addWidget(m_stddev);
     cleanLayout->addLayout(statRow);
     m_radiusNoise = new QCheckBox(tr("半径滤波去除（可选）"));
     m_radiusNoise->setToolTip(tr("要求指定半径内存在足够邻居，适合清理局部稀疏点"));
     cleanLayout->addWidget(m_radiusNoise);
     auto *radiusRow = new QHBoxLayout;
     radiusRow->addWidget(new QLabel(tr("半径 mm"))); m_radius = new QDoubleSpinBox;
-    m_radius->setRange(0.001, 1000.0); m_radius->setDecimals(3); m_radius->setValue(0.30); radiusRow->addWidget(m_radius);
+    m_radius->setRange(0.001, 1000.0); m_radius->setDecimals(3); m_radius->setValue(1.00); radiusRow->addWidget(m_radius);
     radiusRow->addWidget(new QLabel(tr("最少邻居"))); m_minNeighbors = new QSpinBox;
-    m_minNeighbors->setRange(1, 128); m_minNeighbors->setValue(3); radiusRow->addWidget(m_minNeighbors);
+    m_minNeighbors->setRange(1, 128); m_minNeighbors->setValue(10); radiusRow->addWidget(m_minNeighbors);
     cleanLayout->addLayout(radiusRow);
     m_noiseApply = new QPushButton(tr("应用噪点去除"));
     m_noiseApply->setToolTip(tr("后台执行当前勾选的串联流程，原始点云可恢复"));
@@ -816,7 +802,8 @@ void MainWindow::applyNoiseRemoval() {
     m_noiseApply->setEnabled(false);
     m_progress->show(); m_progress->setRange(0, 0);
     statusBar()->showMessage(tr("后台执行噪点去除..."));
-    const QVector<pointcloud::Point3D> source = m_rawPoints;
+    const QVector<pointcloud::Point3D> source = m_filteredPoints.isEmpty() ? m_rawPoints : m_filteredPoints;
+    m_noiseInputCount = source.size();
     m_noiseWatcher->setFuture(QtConcurrent::run([source, options]() {
         return pointcloud::removeNoise(source, options);
     }));
@@ -836,8 +823,8 @@ void MainWindow::noiseFinished() {
     m_canvasInfo->setText(tr("清理后显示 %1 点 · 原始 %2 点")
                           .arg(QLocale().toString(m_points.size()))
                           .arg(QLocale().toString(m_rawPoints.size())));
-    statusBar()->showMessage(tr("噪点去除完成：%1 → %2 点")
-                             .arg(QLocale().toString(m_rawPoints.size()))
+    statusBar()->showMessage(tr("当前处理层完成：%1 → %2 点；后续处理将基于此结果")
+                             .arg(QLocale().toString(m_noiseInputCount))
                              .arg(QLocale().toString(result.points.size())));
 }
 

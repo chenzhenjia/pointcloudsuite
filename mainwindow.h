@@ -64,5 +64,6 @@ private:
     QFutureWatcher<pointcloud::LoadResult> *m_loadWatcher = nullptr;
     QFutureWatcher<pointcloud::NoiseResult> *m_noiseWatcher = nullptr;
     int m_downsampleDenominator = 1;
+    qsizetype m_noiseInputCount = 0;
     QList<QAction *> m_ratioActions;
 };
