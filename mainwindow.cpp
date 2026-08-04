@@ -436,28 +436,32 @@ void MainWindow::buildUi() {
     resize(1400, 860);
     setMinimumSize(1080, 680);
     setStyleSheet(R"(
-        QMainWindow, QWidget#workspace { background: #eef1f5; color: #243142; }
-        QMenuBar { background: #ffffff; border-bottom: 1px solid #dfe4ea; }
-        QMenuBar::item { padding: 7px 11px; }
-        QWidget#sidePanel { background: #ffffff; border: 1px solid #dfe4ea; }
-        QLabel#sectionTitle { color: #5d6b7d; font-size: 12px; font-weight: 600; }
-        QLabel#mainTitle { color: #192536; font-size: 20px; font-weight: 650; }
-        QLabel#subTitle { color: #718096; }
-        QPushButton { min-height: 32px; padding: 3px 12px; border: 1px solid #cdd5df;
-                      border-radius: 4px; background: #ffffff; }
-        QPushButton:hover { border-color: #2d79c7; background: #f4f8fc; }
+        QMainWindow, QWidget#workspace, QWidget { background: #101215; color: #e8edf4; }
+        QMenuBar { background: #171a1f; color: #e8edf4; border-bottom: 1px solid #303640; }
+        QMenuBar::item { padding: 7px 11px; background: transparent; }
+        QMenuBar::item:selected, QMenu::item:selected { background: #244d73; }
+        QMenu { background: #1b1f25; color: #e8edf4; border: 1px solid #3a424d; }
+        QWidget#sidePanel { background: #171a1f; border: 1px solid #303640; }
+        QLabel#sectionTitle { color: #a8b6c8; font-size: 12px; font-weight: 600; }
+        QLabel#mainTitle { color: #f3f7fc; font-size: 20px; font-weight: 650; }
+        QLabel#subTitle { color: #9aa8ba; }
+        QPushButton { min-height: 32px; padding: 3px 12px; border: 1px solid #3d4652;
+                      border-radius: 4px; background: #22272e; color: #e8edf4; }
+        QPushButton:hover { border-color: #4e9bdd; background: #293b4c; }
         QPushButton#primaryButton { color: #ffffff; background: #1769aa; border-color: #1769aa; }
-        QPushButton#primaryButton:hover { background: #125b96; }
-        QComboBox, QSpinBox { min-height: 30px; padding: 0 7px; border: 1px solid #cdd5df;
-                             border-radius: 3px; background: #ffffff; }
-        QListWidget { border: 1px solid #dfe4ea; background: #fbfcfd; outline: 0; }
+        QPushButton#primaryButton:hover { background: #2084cf; }
+        QComboBox, QSpinBox, QDoubleSpinBox { min-height: 30px; padding: 0 7px; border: 1px solid #3d4652;
+                             border-radius: 3px; background: #20252c; color: #e8edf4; }
+        QComboBox QAbstractItemView { background: #20252c; color: #e8edf4; selection-background-color: #244d73; }
+        QListWidget { border: 1px solid #303640; background: #111419; color: #dbe3ed; outline: 0; }
         QListWidget::item { min-height: 30px; padding: 3px 6px; }
-        QListWidget::item:selected { background: #dbeaf7; color: #183b57; }
-        QTabWidget::pane { border: 0; border-top: 1px solid #dfe4ea; }
-        QTabBar::tab { padding: 9px 17px; background: transparent; color: #657386; }
-        QTabBar::tab:selected { color: #1769aa; border-bottom: 2px solid #1769aa; }
-        QStatusBar { background: #ffffff; border-top: 1px solid #dfe4ea; color: #5d6b7d; }
-        QSplitter::handle { background: #eef1f5; width: 6px; }
+        QListWidget::item:selected { background: #244d73; color: #ffffff; }
+        QTabWidget::pane { border: 0; border-top: 1px solid #303640; }
+        QTabBar::tab { padding: 9px 17px; background: transparent; color: #9aa8ba; }
+        QTabBar::tab:selected { color: #66b5ff; border-bottom: 2px solid #2e91d8; }
+        QCheckBox { color: #dbe3ed; spacing: 6px; }
+        QStatusBar { background: #171a1f; border-top: 1px solid #303640; color: #a8b6c8; }
+        QSplitter::handle { background: #101215; width: 6px; }
     )");
 
     auto *fileMenu = menuBar()->addMenu(tr("文件"));
