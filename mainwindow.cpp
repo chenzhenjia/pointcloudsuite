@@ -91,11 +91,6 @@ public:
 protected:
     void initializeGL() override {
         m_glResourcesReleased = false;
-        if (context()) {
-            connect(context(), &QOpenGLContext::aboutToBeDestroyed,
-                    this, &PointCloudCanvas::releaseGlResources,
-                    Qt::DirectConnection);
-        }
         initializeOpenGLFunctions();
         glClearColor(0.018f, 0.025f, 0.035f, 1.0f);
         glEnable(GL_DEPTH_TEST);
