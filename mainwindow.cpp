@@ -415,6 +415,18 @@ MainWindow::~MainWindow() {
     if (m_noiseWatcher && m_noiseWatcher->isRunning()) {
         m_noiseWatcher->waitForFinished();
     }
+    if (m_loadWatcher) {
+        disconnect(m_loadWatcher, nullptr, this, nullptr);
+        m_loadWatcher->disconnect(this);
+    }
+    if (m_noiseWatcher) {
+        disconnect(m_noiseWatcher, nullptr, this, nullptr);
+        m_noiseWatcher->disconnect(this);
+    }
+    if (m_canvas) {
+        m_canvas->setUpdatesEnabled(false);
+        m_canvas->hide();
+    }
 }
 
 void MainWindow::buildUi() {
@@ -829,6 +841,11 @@ void MainWindow::noiseFinished() {
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
+    setEnabled(false);
+    if (m_canvas) {
+        m_canvas->setUpdatesEnabled(false);
+        m_canvas->hide();
+    }
     if (m_loading && m_loadWatcher && m_loadWatcher->isRunning()) {
         statusBar()->showMessage(tr("正在结束后台加载，请稍候..."));
         m_loadWatcher->waitForFinished();
