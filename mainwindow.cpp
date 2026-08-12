@@ -26,6 +26,7 @@
 #include <QOpenGLWidget>
 #include <QPainter>
 #include <QProgressBar>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QSplitter>
@@ -37,7 +38,6 @@
 #include <QVector2D>
 #include <QVector3D>
 #include <QWheelEvent>
-#include <QSignalBlocker>
 #include <QCloseEvent>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
@@ -415,6 +415,9 @@ MainWindow::~MainWindow() {
     if (m_noiseWatcher && m_noiseWatcher->isRunning()) {
         m_noiseWatcher->waitForFinished();
     }
+    if (m_planeWatcher && m_planeWatcher->isRunning()) {
+        m_planeWatcher->waitForFinished();
+    }
     if (m_loadWatcher) {
         disconnect(m_loadWatcher, nullptr, this, nullptr);
         m_loadWatcher->disconnect(this);
@@ -422,6 +425,10 @@ MainWindow::~MainWindow() {
     if (m_noiseWatcher) {
         disconnect(m_noiseWatcher, nullptr, this, nullptr);
         m_noiseWatcher->disconnect(this);
+    }
+    if (m_planeWatcher) {
+        disconnect(m_planeWatcher, nullptr, this, nullptr);
+        m_planeWatcher->disconnect(this);
     }
     if (m_canvas) {
         m_canvas->setUpdatesEnabled(false);
@@ -458,6 +465,7 @@ void MainWindow::buildUi() {
         QTabBar::tab { padding: 9px 17px; background: transparent; color: #9aa8ba; }
         QTabBar::tab:selected { color: #66b5ff; border-bottom: 2px solid #2e91d8; }
         QCheckBox { color: #dbe3ed; spacing: 6px; }
+        QPlainTextEdit { border: 1px solid #303640; background: #111419; color: #dbe3ed; }
         QStatusBar { background: #171a1f; border-top: 1px solid #303640; color: #a8b6c8; }
         QSplitter::handle { background: #101215; width: 6px; }
     )");
@@ -468,30 +476,6 @@ void MainWindow::buildUi() {
     connect(openAction, &QAction::triggered, this, &MainWindow::openPointCloud);
     fileMenu->addSeparator();
     fileMenu->addAction(tr("退出"), qApp, &QApplication::quit);
-    auto *featureMenu = menuBar()->addMenu(tr("功能"));
-    auto addRatioAction = [this, featureMenu](const QString &text, int denominator, const QKeySequence &shortcut = {}) {
-        auto *action = featureMenu->addAction(text);
-        action->setCheckable(true);
-        action->setShortcut(shortcut);
-        connect(action, &QAction::triggered, this, [this, denominator]() { setDownsampleRatio(denominator); });
-        m_ratioActions.push_back(action);
-        return action;
-    };
-    addRatioAction(tr("降采样：关闭"), 1, QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_0));
-    addRatioAction(tr("降采样：1/2"), 2, QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_2));
-    addRatioAction(tr("降采样：1/4"), 4, QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_4));
-    addRatioAction(tr("降采样：1/8"), 8, QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_8));
-    addRatioAction(tr("降采样：1/16"), 16);
-    m_ratioActions.first()->setChecked(true);
-    auto *debugMenu = menuBar()->addMenu(tr("调试"));
-    debugMenu->addAction(tr("显示运行状态"), this, [this]() {
-        statusBar()->showMessage(tr("缓存：后台加载 · 渲染：OpenGL 全量直接标记 · 降采样：功能菜单"), 6000);
-    });
-    debugMenu->addAction(tr("显示 OpenGL 信息"), this, [this]() {
-        QMessageBox::information(this, tr("调试信息"),
-                                 tr("渲染后端：OpenGL\n点绘制：GL_POINTS 直接标记\n缓存：.pcvbin\nOctree LOD：已回滚"));
-    });
-
     auto *root = new QWidget(this);
     root->setObjectName(QStringLiteral("workspace"));
     auto *layout = new QVBoxLayout(root);
@@ -602,32 +586,6 @@ void MainWindow::buildUi() {
     connect(m_mapMin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &MainWindow::updateRenderSettings);
     connect(m_mapMax, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &MainWindow::updateRenderSettings);
     tabs->addTab(renderPage, tr("显示"));
-    auto *dataPage = new QWidget;
-    auto *dataForm = new QFormLayout(dataPage);
-    dataForm->setContentsMargins(8, 14, 8, 8);
-    dataForm->setVerticalSpacing(12);
-    auto *dataTitle = new QLabel(tr("数据处理"));
-    dataTitle->setObjectName(QStringLiteral("sectionTitle"));
-    dataForm->addRow(dataTitle);
-    m_ratio = new QComboBox;
-    m_ratio->addItems({tr("关闭（100%）"), tr("1/2（50%）"), tr("1/4（25%）"),
-                       tr("1/8（12.5%）"), tr("1/16（6.25%）")});
-    m_ratio->setToolTip(tr("按固定比例减少工作点云；原始点云保留，可随时切换"));
-    dataForm->addRow(tr("降采样比例"), m_ratio);
-    connect(m_ratio, qOverload<int>(&QComboBox::currentIndexChanged), this,
-            [this](int index) { setDownsampleRatio(1 << index); });
-    dataForm->addRow(new QLabel(tr("改变比例后立即更新显示，原始点云保持不变")));
-    tabs->addTab(dataPage, tr("数据"));
-    auto *debugPage = new QWidget;
-    auto *debugForm = new QFormLayout(debugPage);
-    debugForm->setContentsMargins(8, 14, 8, 8);
-    auto *debugTitle = new QLabel(tr("调试状态"));
-    debugTitle->setObjectName(QStringLiteral("sectionTitle"));
-    debugForm->addRow(debugTitle);
-    debugForm->addRow(new QLabel(tr("加载：后台线程 + .pcvbin 缓存")));
-    debugForm->addRow(new QLabel(tr("绘制：OpenGL GL_POINTS 全量直接标记")));
-    debugForm->addRow(new QLabel(tr("显示层：不使用 Octree LOD")));
-    tabs->addTab(debugPage, tr("调试"));
     auto *cleanPage = new QWidget;
     auto *cleanLayout = new QVBoxLayout(cleanPage);
     cleanLayout->setContentsMargins(8, 14, 8, 8);
@@ -649,19 +607,10 @@ void MainWindow::buildUi() {
     cleanLayout->addWidget(m_statisticalNoise);
     auto *statRow = new QHBoxLayout;
     statRow->addWidget(new QLabel(tr("邻域 K"))); m_meanK = new QSpinBox;
-    m_meanK->setRange(4, 128); m_meanK->setValue(45); statRow->addWidget(m_meanK);
+    m_meanK->setRange(1, 128); m_meanK->setValue(16); statRow->addWidget(m_meanK);
     statRow->addWidget(new QLabel(tr("阈值倍数"))); m_stddev = new QDoubleSpinBox;
-    m_stddev->setRange(0.1, 5.0); m_stddev->setSingleStep(0.1); m_stddev->setValue(1.3); statRow->addWidget(m_stddev);
+    m_stddev->setRange(0.1, 5.0); m_stddev->setSingleStep(0.1); m_stddev->setValue(1.5); statRow->addWidget(m_stddev);
     cleanLayout->addLayout(statRow);
-    m_radiusNoise = new QCheckBox(tr("半径滤波去除（可选）"));
-    m_radiusNoise->setToolTip(tr("要求指定半径内存在足够邻居，适合清理局部稀疏点"));
-    cleanLayout->addWidget(m_radiusNoise);
-    auto *radiusRow = new QHBoxLayout;
-    radiusRow->addWidget(new QLabel(tr("半径 mm"))); m_radius = new QDoubleSpinBox;
-    m_radius->setRange(0.001, 1000.0); m_radius->setDecimals(3); m_radius->setValue(1.00); radiusRow->addWidget(m_radius);
-    radiusRow->addWidget(new QLabel(tr("最少邻居"))); m_minNeighbors = new QSpinBox;
-    m_minNeighbors->setRange(1, 128); m_minNeighbors->setValue(10); radiusRow->addWidget(m_minNeighbors);
-    cleanLayout->addLayout(radiusRow);
     m_noiseApply = new QPushButton(tr("应用噪点去除"));
     m_noiseApply->setToolTip(tr("后台执行当前勾选的串联流程，原始点云可恢复"));
     cleanLayout->addWidget(m_noiseApply);
@@ -671,9 +620,55 @@ void MainWindow::buildUi() {
     cleanLayout->addStretch();
     connect(m_noiseApply, &QPushButton::clicked, this, &MainWindow::applyNoiseRemoval);
     connect(restoreButton, &QPushButton::clicked, this, [this]() {
-        m_filteredPoints.clear(); m_downsampleDenominator = 1; refreshDisplayCloud(); statusBar()->showMessage(tr("已恢复原始点云"));
+        if ((m_noiseWatcher && m_noiseWatcher->isRunning())
+            || (m_planeWatcher && m_planeWatcher->isRunning())) {
+            statusBar()->showMessage(tr("点云处理任务正在运行"));
+            return;
+        }
+        publishCanvasCache(m_rawPoints);
+        statusBar()->showMessage(tr("已恢复原始点云"));
     });
     tabs->addTab(cleanPage, tr("点云清理"));
+
+    auto *planePage = new QWidget;
+    auto *planeLayout = new QVBoxLayout(planePage);
+    planeLayout->setContentsMargins(8, 14, 8, 8);
+    auto *planeTitle = new QLabel(tr("RANSAC 多平面分割"));
+    planeTitle->setObjectName(QStringLiteral("sectionTitle"));
+    planeLayout->addWidget(planeTitle);
+    auto *planeForm = new QFormLayout;
+    m_planeDistanceThreshold = new QDoubleSpinBox;
+    m_planeDistanceThreshold->setRange(0.000001, 1000.0);
+    m_planeDistanceThreshold->setDecimals(6);
+    m_planeDistanceThreshold->setValue(0.02);
+    planeForm->addRow(tr("距离阈值"), m_planeDistanceThreshold);
+    m_planeMaxCount = new QSpinBox;
+    m_planeMaxCount->setRange(1, 100);
+    m_planeMaxCount->setValue(10);
+    planeForm->addRow(tr("最大平面数"), m_planeMaxCount);
+    m_planeIterations = new QSpinBox;
+    m_planeIterations->setRange(50, 100000);
+    m_planeIterations->setValue(600);
+    planeForm->addRow(tr("RANSAC 迭代"), m_planeIterations);
+    m_planeMinInliers = new QSpinBox;
+    m_planeMinInliers->setRange(3, 100000000);
+    m_planeMinInliers->setValue(100);
+    planeForm->addRow(tr("最小内点数"), m_planeMinInliers);
+    m_planeSampleRatio = new QComboBox;
+    m_planeSampleRatio->addItems({tr("1/1"), tr("1/2"), tr("1/4"), tr("1/8"), tr("1/16")});
+    m_planeSampleRatio->setCurrentIndex(2);
+    planeForm->addRow(tr("建模采样"), m_planeSampleRatio);
+    planeLayout->addLayout(planeForm);
+    m_planeApply = new QPushButton(tr("执行平面分割"));
+    m_planeApply->setToolTip(tr("后台分析当前画布缓存，不改变画布点云"));
+    planeLayout->addWidget(m_planeApply);
+    m_planeOutput = new QPlainTextEdit;
+    m_planeOutput->setReadOnly(true);
+    m_planeOutput->setPlaceholderText(tr("平面方程和统计结果将在此显示"));
+    planeLayout->addWidget(m_planeOutput, 1);
+    connect(m_planeApply, &QPushButton::clicked,
+            this, &MainWindow::applyPlaneSegmentation);
+    tabs->addTab(planePage, tr("平面分割"));
 
     rightLayout->addWidget(tabs, 1);
     splitter->addWidget(rightPanel);
@@ -694,7 +689,11 @@ void MainWindow::buildUi() {
 }
 
 void MainWindow::openPointCloud() {
-    if (m_loading) return;
+    if (m_loading || (m_noiseWatcher && m_noiseWatcher->isRunning())
+        || (m_planeWatcher && m_planeWatcher->isRunning())) {
+        statusBar()->showMessage(tr("点云处理任务正在运行"));
+        return;
+    }
     const QString path = QFileDialog::getOpenFileName(
         this, tr("打开 PLY"), QString(), tr("PLY 文件 (*.ply);;所有文件 (*.*)"));
     if (path.isEmpty()) return;
@@ -721,8 +720,14 @@ void MainWindow::loadFinished() {
         statusBar()->showMessage(tr("加载失败"));
         return;
     }
+    if (result.points.isEmpty()) {
+        m_loading = false;
+        m_progress->hide();
+        QMessageBox::warning(this, tr("打开失败"), tr("PLY 文件不包含可显示的顶点"));
+        statusBar()->showMessage(tr("加载失败：点云为空"));
+        return;
+    }
     m_rawPoints = result.points;
-    m_filteredPoints.clear();
     float minZ = m_rawPoints.first().z;
     float maxZ = minZ;
     for (const auto &point : m_rawPoints) {
@@ -731,7 +736,7 @@ void MainWindow::loadFinished() {
     }
     m_mapMin->setValue(minZ);
     m_mapMax->setValue(maxZ > minZ ? maxZ : minZ + 1.0);
-    refreshDisplayCloud();
+    publishCanvasCache(m_rawPoints);
 
     const QFileInfo fileInfo(m_pendingPath);
     m_fileList->clear();
@@ -749,63 +754,43 @@ void MainWindow::loadFinished() {
     statusBar()->showMessage(result.usedCache ? tr("缓存加载完成") : tr("加载完成，已建立二进制缓存"));
 }
 
-void MainWindow::downsample() {
-    if (m_loading) return;
-    if (m_rawPoints.isEmpty()) {
-        statusBar()->showMessage(tr("比例已设置，将在加载点云后生效"));
-        return;
-    }
-
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-    m_points = pointcloud::proportionalDownsample(m_rawPoints, m_downsampleDenominator);
-    refreshDisplayCloud();
-    QApplication::restoreOverrideCursor();
-
-    statusBar()->showMessage(tr("比例已更新：%1 → %2 点，显示层无抽样")
-                                 .arg(QLocale().toString(m_rawPoints.size()))
-                                 .arg(QLocale().toString(m_points.size())));
-}
-
 void MainWindow::updateRenderSettings() {
     if (!m_canvas) return;
     m_canvas->setDisplayOptions(m_colorMode->currentIndex(), m_overlay->value(),
                                 m_mapMin->value(), m_mapMax->value());
 }
 
-void MainWindow::refreshDisplayCloud() {
-    if (m_rawPoints.isEmpty()) return;
-    const QVector<pointcloud::Point3D> &source = m_filteredPoints.isEmpty() ? m_rawPoints : m_filteredPoints;
-    m_points = pointcloud::proportionalDownsample(source, m_downsampleDenominator);
-    m_canvas->setCloud(m_points);
-    if (m_canvasInfo) m_canvasInfo->setText(tr("当前显示 %1 个点  ·  原始 %2 个点  ·  全量直接标记")
-                          .arg(QLocale().toString(m_points.size()))
-                          .arg(QLocale().toString(m_rawPoints.size())));
+void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points) {
+    m_points = std::move(points);
+    ++m_canvasRevision;
+    clearPlaneSegmentation();
+    if (m_canvas) m_canvas->setCloud(m_points);
+    if (m_canvasInfo) {
+        m_canvasInfo->setText(tr("当前显示 %1 个点  ·  原始 %2 个点  ·  全量直接标记")
+                                  .arg(QLocale().toString(m_points.size()))
+                                  .arg(QLocale().toString(m_rawPoints.size())));
+    }
 }
 
-void MainWindow::setDownsampleRatio(int denominator) {
-    m_downsampleDenominator = qMax(1, denominator);
-    const int index = denominator <= 1 ? 0 : qBound(0, qRound(std::log2(double(denominator))), 4);
-    if (m_ratio && m_ratio->currentIndex() != index) {
-        QSignalBlocker blocker(m_ratio);
-        m_ratio->setCurrentIndex(index);
-    }
-    for (int i = 0; i < m_ratioActions.size(); ++i)
-        m_ratioActions[i]->setChecked((1 << i) == m_downsampleDenominator);
-    downsample();
-    statusBar()->showMessage(tr("功能：降采样比例已切换为 1/%1").arg(m_downsampleDenominator));
+void MainWindow::clearPlaneSegmentation() {
+    m_planeResult = {};
+    if (m_planeOutput) m_planeOutput->clear();
 }
 
 void MainWindow::applyNoiseRemoval() {
-    if (m_loading || m_rawPoints.isEmpty()) {
+    if (m_loading || m_points.isEmpty()) {
         statusBar()->showMessage(tr("请先完成点云加载"));
         return;
     }
     if (m_noiseWatcher && m_noiseWatcher->isRunning()) return;
+    if (m_planeWatcher && m_planeWatcher->isRunning()) {
+        statusBar()->showMessage(tr("平面分割任务正在运行"));
+        return;
+    }
     pointcloud::NoiseOptions options;
     options.voxelEnabled = m_voxelNoise->isChecked(); options.voxelSize = float(m_voxelSize->value());
     options.statisticalEnabled = m_statisticalNoise->isChecked(); options.meanK = m_meanK->value();
-    options.stddevMultiplier = float(m_stddev->value()); options.radiusEnabled = m_radiusNoise->isChecked();
-    options.radius = float(m_radius->value()); options.minNeighbors = m_minNeighbors->value();
+    options.stddevMultiplier = float(m_stddev->value());
     if (!m_noiseWatcher) {
         m_noiseWatcher = new QFutureWatcher<pointcloud::NoiseResult>(this);
         connect(m_noiseWatcher, &QFutureWatcher<pointcloud::NoiseResult>::finished,
@@ -814,8 +799,10 @@ void MainWindow::applyNoiseRemoval() {
     m_noiseApply->setEnabled(false);
     m_progress->show(); m_progress->setRange(0, 0);
     statusBar()->showMessage(tr("后台执行噪点去除..."));
-    const QVector<pointcloud::Point3D> source = m_filteredPoints.isEmpty() ? m_rawPoints : m_filteredPoints;
+    // The canvas cache is the only valid input for all follow-up processing.
+    const QVector<pointcloud::Point3D> source = m_points;
     m_noiseInputCount = source.size();
+    m_noiseInputRevision = m_canvasRevision;
     m_noiseWatcher->setFuture(QtConcurrent::run([source, options]() {
         return pointcloud::removeNoise(source, options);
     }));
@@ -824,20 +811,96 @@ void MainWindow::applyNoiseRemoval() {
 void MainWindow::noiseFinished() {
     const pointcloud::NoiseResult result = m_noiseWatcher->result();
     m_noiseApply->setEnabled(true); m_progress->hide();
+    if (m_noiseInputRevision != m_canvasRevision) {
+        statusBar()->showMessage(tr("画布缓存已变化，已丢弃旧去噪结果"));
+        return;
+    }
     if (!result.ok) {
         QMessageBox::warning(this, tr("噪点去除失败"), result.error);
         statusBar()->showMessage(tr("噪点去除未改变当前点云"));
         return;
     }
-    m_filteredPoints = result.points;
-    m_points = pointcloud::proportionalDownsample(m_filteredPoints, m_downsampleDenominator);
-    m_canvas->setCloud(m_points);
+    publishCanvasCache(result.points);
     m_canvasInfo->setText(tr("清理后显示 %1 点 · 原始 %2 点")
                           .arg(QLocale().toString(m_points.size()))
                           .arg(QLocale().toString(m_rawPoints.size())));
-    statusBar()->showMessage(tr("当前处理层完成：%1 → %2 点；后续处理将基于此结果")
-                             .arg(QLocale().toString(m_noiseInputCount))
-                             .arg(QLocale().toString(result.points.size())));
+    const QString completion = tr("当前处理层完成：%1 → %2 点；后续处理将基于此结果")
+        .arg(QLocale().toString(m_noiseInputCount))
+        .arg(QLocale().toString(result.points.size()));
+    statusBar()->showMessage(result.error.isEmpty()
+                                 ? completion
+                                 : tr("%1；%2").arg(completion, result.error));
+}
+
+void MainWindow::applyPlaneSegmentation() {
+    if (m_loading || m_points.isEmpty()) {
+        statusBar()->showMessage(tr("当前画布没有可分割的点云缓存"));
+        return;
+    }
+    if ((m_planeWatcher && m_planeWatcher->isRunning())
+        || (m_noiseWatcher && m_noiseWatcher->isRunning())) {
+        statusBar()->showMessage(tr("已有点云处理任务正在运行"));
+        return;
+    }
+
+    pointcloud::PlaneSegmentationOptions options;
+    options.distanceThreshold = float(m_planeDistanceThreshold->value());
+    options.maxPlanes = m_planeMaxCount->value();
+    options.iterations = m_planeIterations->value();
+    options.minInliers = m_planeMinInliers->value();
+    options.sampleDenominator = 1 << m_planeSampleRatio->currentIndex();
+    options.preferHorizontal = false;
+
+    if (!m_planeWatcher) {
+        m_planeWatcher = new QFutureWatcher<pointcloud::PlaneSegmentationResult>(this);
+        connect(m_planeWatcher, &QFutureWatcher<pointcloud::PlaneSegmentationResult>::finished,
+                this, &MainWindow::planeSegmentationFinished);
+    }
+    const QVector<pointcloud::Point3D> source = m_points;
+    m_planeInputRevision = m_canvasRevision;
+    m_planeApply->setEnabled(false);
+    m_progress->show();
+    m_progress->setRange(0, 0);
+    m_planeOutput->setPlainText(tr("正在分析当前画布缓存..."));
+    statusBar()->showMessage(tr("后台执行多平面分割..."));
+    m_planeWatcher->setFuture(QtConcurrent::run([source, options]() {
+        return pointcloud::segmentPlanes(source, options);
+    }));
+}
+
+void MainWindow::planeSegmentationFinished() {
+    const pointcloud::PlaneSegmentationResult result = m_planeWatcher->result();
+    m_planeApply->setEnabled(true);
+    m_progress->hide();
+    if (m_planeInputRevision != m_canvasRevision) {
+        m_planeOutput->setPlainText(tr("画布缓存已变化，旧分割结果已丢弃。"));
+        statusBar()->showMessage(tr("画布缓存已变化，已丢弃旧平面分割结果"));
+        return;
+    }
+    if (!result.ok) {
+        m_planeResult = {};
+        m_planeOutput->setPlainText(result.error);
+        statusBar()->showMessage(tr("平面分割未找到有效平面"));
+        return;
+    }
+
+    m_planeResult = result;
+    QStringList lines;
+    lines << result.summary << QString();
+    for (int i = 0; i < result.planes.size(); ++i) {
+        const auto &plane = result.planes[i];
+        lines << tr("平面 %1").arg(i + 1)
+              << tr("%1 x + %2 y + %3 z + %4 = 0")
+                    .arg(plane.a, 0, 'g', 8).arg(plane.b, 0, 'g', 8)
+                    .arg(plane.c, 0, 'g', 8).arg(plane.d, 0, 'g', 8)
+              << tr("内点：%1  平均距离：%2  最大距离：%3")
+                    .arg(QLocale().toString(plane.inlierCount))
+                    .arg(plane.meanDistance, 0, 'g', 6)
+                    .arg(plane.maxDistance, 0, 'g', 6)
+              << QString();
+    }
+    m_planeOutput->setPlainText(lines.join(QLatin1Char('\n')));
+    statusBar()->showMessage(tr("平面分割完成：%1 个平面").arg(result.planes.size()));
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
@@ -854,6 +917,10 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     if (m_noiseWatcher && m_noiseWatcher->isRunning()) {
         statusBar()->showMessage(tr("正在结束后台噪点处理，请稍候..."));
         m_noiseWatcher->waitForFinished();
+    }
+    if (m_planeWatcher && m_planeWatcher->isRunning()) {
+        statusBar()->showMessage(tr("正在结束后台平面分割，请稍候..."));
+        m_planeWatcher->waitForFinished();
     }
     event->accept();
 }

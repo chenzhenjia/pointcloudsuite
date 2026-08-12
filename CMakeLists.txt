@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.19)
-project(pointcloudciew LANGUAGES CXX)
+project(pointcloudview LANGUAGES CXX)
 
-include(CTest)
+option(POINTCLOUDVIEW_BUILD_TESTS "Build pointcloud processor tests" OFF)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -28,7 +28,7 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Concurrent OpenGL OpenGLWi
 
 qt_standard_project_setup()
 
-qt_add_executable(pointcloudciew
+qt_add_executable(pointcloudview
     WIN32 MACOSX_BUNDLE
     main.cpp
     mainwindow.cpp
@@ -38,7 +38,7 @@ qt_add_executable(pointcloudciew
     pointcloudprocessor.h
 )
 
-target_link_libraries(pointcloudciew
+target_link_libraries(pointcloudview
     PRIVATE
         Qt::Core
         Qt::Widgets
@@ -47,14 +47,27 @@ target_link_libraries(pointcloudciew
         Qt::OpenGLWidgets
 )
 
-if (BUILD_TESTING)
+if (WIN32)
+    add_custom_command(TARGET pointcloudview POST_BUILD
+        COMMAND Qt6::windeployqt
+            --$<IF:$<CONFIG:Debug>,debug,release>
+            --compiler-runtime
+            --no-translations
+            "$<TARGET_FILE:pointcloudview>"
+        COMMENT "Deploying Qt runtime next to pointcloudview.exe"
+        VERBATIM
+    )
+endif()
+
+if (POINTCLOUDVIEW_BUILD_TESTS)
+    enable_testing()
     qt_add_executable(pointcloudprocessor_tests
         tests/pointcloudprocessor_tests.cpp
         pointcloudprocessor.cpp
         pointcloudprocessor.h
     )
     target_include_directories(pointcloudprocessor_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(pointcloudprocessor_tests PRIVATE Qt::Core)
+    target_link_libraries(pointcloudprocessor_tests PRIVATE Qt::Core Qt::Gui)
     add_test(NAME pointcloudprocessor_tests COMMAND pointcloudprocessor_tests)
     if (WIN32)
         set_tests_properties(pointcloudprocessor_tests PROPERTIES
@@ -62,14 +75,14 @@ if (BUILD_TESTING)
     endif()
 endif()
 
-install(TARGETS pointcloudciew
+install(TARGETS pointcloudview
     BUNDLE  DESTINATION .
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
 
 qt_generate_deploy_app_script(
-    TARGET pointcloudciew
+    TARGET pointcloudview
     OUTPUT_SCRIPT deploy_script
     NO_UNSUPPORTED_PLATFORM_ERROR
 )

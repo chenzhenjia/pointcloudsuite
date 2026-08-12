@@ -429,12 +429,16 @@ QVector<Point3D> neighborhoodFilter(const QVector<Point3D> &points, float cellSi
                         ++neighborCount;
                     }
                 }
-        if (neighborCount < k) continue;
+        // A 3x3x3 voxel neighborhood can contain fewer points than the
+        // requested K (especially after voxelization).  Use the available
+        // neighbors instead of rejecting every point in a sparse cloud.
+        const int actualK = qMin(k, neighborCount);
+        if (actualK <= 0) continue;
         if (useMeanDistance) {
-            std::nth_element(distances.begin(), distances.begin() + qMin(k, distances.size()) - 1,
+            std::nth_element(distances.begin(), distances.begin() + actualK - 1,
                              distances.end());
             float sum = 0.0f;
-            const int count = qMin(k, distances.size());
+            const int count = actualK;
             for (int j = 0; j < count; ++j) sum += distances[j];
             if (sum / float(count) > maxMeanDistance) continue;
         }
@@ -459,18 +463,22 @@ NoiseResult removeNoise(const QVector<Point3D> &points, const NoiseOptions &opti
         result.error = QStringLiteral("点云中没有有效坐标点");
         return result;
     }
-    // 去噪按“体素稀疏 -> 统计邻域 -> 半径邻域”顺序执行；每一层都缩小
-    // 后续搜索规模，最终结果直接作为界面后续操作使用的处理缓存。
+    // 去噪按“体素稀疏 -> 统计邻域”执行；半径滤波已移除，避免
+    // 稀疏点云因固定邻居阈值被全部误删。
     QVector<Point3D> filtered = options.voxelEnabled
         ? voxelFilter(validPoints, options.voxelSize) : validPoints;
     if (options.statisticalEnabled) {
-        const float cell = options.voxelEnabled ? options.voxelSize : qMax(options.radius, 0.01f);
+        const float cell = options.voxelEnabled ? qMax(options.voxelSize, 0.01f) : 0.01f;
         filtered = neighborhoodFilter(filtered, cell, options.meanK,
                                       options.stddevMultiplier * cell * 2.5f, true);
     }
-    if (options.radiusEnabled)
-        filtered = neighborhoodFilter(filtered, options.radius, options.minNeighbors,
-                                      options.radius, false);
+    if (filtered.isEmpty()) {
+        // Never replace a usable processing cache with an empty result.
+        result.points = validPoints;
+        result.ok = true;
+        result.error = QStringLiteral("参数过严，已保留原始有效点云");
+        return result;
+    }
     result.points = std::move(filtered);
     result.ok = !result.points.isEmpty();
     if (!result.ok) result.error = QStringLiteral("噪点参数过严，所有点均被过滤");
@@ -1697,14 +1705,11 @@ PlaneSegmentationResult segmentPlanes(const QVector<Point3D> &points,
             if (inliers.size() > bestCount) { bestCount = inliers.size(); bestInliers = inliers; ba=a; bb=b; bc=c; bd=d; }
         }
         if (bestCount < minInliers) break;
-        PlaneModel model; model.a=ba; model.b=bb; model.c=bc; model.d=bd; model.inlierCount = bestCount;
-        double sum = 0.0; float maxDistance = 0.0f;
+        PlaneModel model; model.a=ba; model.b=bb; model.c=bc; model.d=bd;
         QVector<quint8> remove(sampled.size(), 0);
         for (int index : bestInliers) {
-            const Point3D &p = sampled[index]; const float distance = std::abs(ba*p.x+bb*p.y+bc*p.z+bd);
-            sum += distance; maxDistance = qMax(maxDistance, distance); remove[index] = 1;
+            remove[index] = 1;
         }
-        model.meanDistance = float(sum / bestCount); model.maxDistance = maxDistance;
         result.planes.push_back(model);
         QVector<int> remaining; remaining.reserve(active.size()-bestCount);
         for (int index : active) if (!remove[index]) remaining.push_back(index);
@@ -1719,6 +1724,31 @@ PlaneSegmentationResult segmentPlanes(const QVector<Point3D> &points,
             if (distance <= best) { best = distance; label = p; }
         }
         result.labels[i] = label;
+    }
+    // RANSAC uses the sampled cache only to estimate models. Statistics are
+    // computed after projecting every model back onto the complete canvas
+    // cache, so reported counts and distances match the visible data.
+    QVector<double> distanceSums(result.planes.size(), 0.0);
+    for (PlaneModel &plane : result.planes) {
+        plane.inlierCount = 0;
+        plane.meanDistance = 0.0f;
+        plane.maxDistance = 0.0f;
+    }
+    for (int i = 0; i < points.size(); ++i) {
+        const int label = result.labels[i];
+        if (label < 0) continue;
+        PlaneModel &plane = result.planes[label];
+        const Point3D &point = points[i];
+        const float distance = std::abs(plane.a * point.x + plane.b * point.y
+                                        + plane.c * point.z + plane.d);
+        ++plane.inlierCount;
+        distanceSums[label] += distance;
+        plane.maxDistance = qMax(plane.maxDistance, distance);
+    }
+    for (int i = 0; i < result.planes.size(); ++i) {
+        PlaneModel &plane = result.planes[i];
+        if (plane.inlierCount > 0)
+            plane.meanDistance = float(distanceSums[i] / double(plane.inlierCount));
     }
     result.ok = !result.planes.isEmpty();
     if (!result.ok) result.error = QStringLiteral("未找到满足条件的平面");

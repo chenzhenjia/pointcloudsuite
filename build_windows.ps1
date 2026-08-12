@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 if ($env:VCToolsInstallDir -eq $null) {
-    Write-Warning 'Run this script from Developer PowerShell for Visual Studio so cl.exe and nmake.exe are available.'
+    Write-Warning 'Run this script from Visual Studio Developer PowerShell so cl.exe and nmake.exe are available.'
 }
 
 function Assert-Ascii([string]$Value, [string]$Name) {
@@ -47,4 +47,12 @@ New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & $cmakePath --build $BuildDir --config $Config --parallel
-exit $LASTEXITCODE
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+$Executable = Join-Path $BuildDir 'pointcloudview.exe'
+if (-not (Test-Path $Executable)) {
+    throw "Build succeeded but pointcloudview.exe was not found: $Executable"
+}
+
+Write-Host "Build and Qt deployment completed: $Executable"
+exit 0

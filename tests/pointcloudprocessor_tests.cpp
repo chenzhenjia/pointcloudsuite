@@ -152,6 +152,73 @@ void runFixtureTests(const QString &directory) {
     expect(points.isEmpty(), "clear partial data after truncated PLY");
 }
 
+void runGeometryTests() {
+    QVector<pointcloud::Point3D> planePoints;
+    for (int y = 0; y < 16; ++y) {
+        for (int x = 0; x < 16; ++x)
+            planePoints.push_back({float(x) * 0.1f, float(y) * 0.1f, 1.0f, 0, 0, 1});
+    }
+    planePoints.push_back({8.0f, 8.0f, 8.0f, 0, 0, 1});
+
+    pointcloud::PlaneSegmentationOptions planeOptions;
+    planeOptions.sampleDenominator = 4;
+    planeOptions.minInliers = 100;
+    planeOptions.maxPlanes = 1;
+    planeOptions.distanceThreshold = 0.01f;
+    const pointcloud::PlaneSegmentationResult segmented =
+        pointcloud::segmentPlanes(planePoints, planeOptions);
+    expect(segmented.ok && !segmented.planes.isEmpty(), "segment horizontal plane");
+    if (!segmented.planes.isEmpty()) {
+        const auto &plane = segmented.planes.first();
+        expect(plane.inlierCount == 256, "plane statistics use complete canvas cache");
+        expect(std::fabs(plane.a * 0.4f + plane.b * 0.7f + plane.c + plane.d) < 0.01f,
+               "plane equation contains input point");
+    }
+
+    QVector<pointcloud::Point3D> twoPlanes;
+    for (int z = 0; z < 2; ++z) {
+        for (int y = 0; y < 12; ++y) {
+            for (int x = 0; x < 12; ++x)
+                twoPlanes.push_back({float(x) * 0.1f, float(y) * 0.1f,
+                                     float(z) * 2.0f, 0, 0, 1});
+        }
+    }
+    planeOptions.sampleDenominator = 1;
+    planeOptions.minInliers = 100;
+    planeOptions.maxPlanes = 2;
+    const pointcloud::PlaneSegmentationResult multiple =
+        pointcloud::segmentPlanes(twoPlanes, planeOptions);
+    expect(multiple.ok && multiple.planes.size() == 2, "iteratively segment two planes");
+    if (multiple.planes.size() == 2) {
+        expect(multiple.planes[0].inlierCount == 144
+                   && multiple.planes[1].inlierCount == 144,
+               "multi-plane statistics cover complete canvas cache");
+    }
+
+    pointcloud::ThreePointPlaneOptions seedOptions;
+    seedOptions.neighborhoodSize = 12;
+    seedOptions.distanceThreshold = 0.02f;
+    const pointcloud::ThreePointPlaneResult selected = pointcloud::selectPlaneFromThreeSeeds(
+        planePoints, {17, 30, 225}, seedOptions);
+    expect(selected.ok && selected.planePoints.size() >= 100, "select plane from three seeds");
+
+    const QVector<pointcloud::Point3D> collinearCloud = {
+        {0.0f, 0.0f, 0.0f, 0, 0, 1},
+        {1.0f, 0.0f, 0.0f, 0, 0, 1},
+        {2.0f, 0.0f, 0.0f, 0, 0, 1}
+    };
+    const pointcloud::ThreePointPlaneResult collinear = pointcloud::selectPlaneFromThreeSeeds(
+        collinearCloud, {0, 1, 2}, seedOptions);
+    expect(!collinear.ok, "reject collinear three seeds");
+
+    pointcloud::GeometryFeatureOptions featureOptions;
+    featureOptions.neighborCount = 12;
+    const pointcloud::GeometryFeatureResult features =
+        pointcloud::extractGeometryFeatures(planePoints, featureOptions);
+    expect(features.ok && features.features.size() == planePoints.size(),
+           "extract geometry features through public API");
+}
+
 int loadRealPly(const QString &path) {
     QVector<pointcloud::Point3D> points;
     QString error;
@@ -176,6 +243,7 @@ int main(int argc, char *argv[]) {
     QTemporaryDir temporaryDirectory;
     expect(temporaryDirectory.isValid(), "create temporary test directory");
     if (temporaryDirectory.isValid()) runFixtureTests(temporaryDirectory.path());
+    runGeometryTests();
 
     if (failures == 0) std::cout << "All point cloud processor tests passed.\n";
     return failures == 0 ? 0 : 1;
