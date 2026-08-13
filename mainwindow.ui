@@ -232,9 +232,9 @@
             </item>
             <item>
              <widget class="QPlainTextEdit" name="registrationOutput">
-              <property name="readOnly">
-               <bool>true</bool>
-              </property>
+              <property name="readOnly"><bool>false</bool></property>
+              <property name="placeholderText"><string>Image_Set_A
+01 Start X_ Y_ Z_ RX_ RY_ RZ_ ; END X_ Y_ Z_ RX_ RY_ RZ_</string></property>
              </widget>
             </item>
            </layout>
