@@ -11,16 +11,19 @@
 #include <QRegularExpression>
 #include <QCoreApplication>
 #include <algorithm>
+#include <numeric>
 #include <cmath>
 #include <cstdlib>
 #include <QFileInfo>
 #include <QDataStream>
+#include <QtEndian>
 #include <QLocale>
 #include <QVector2D>
 #include <QVector3D>
 #include <QtMath>
 #include <random>
 #include <thread>
+#include <cstring>
 
 namespace pointcloud {
 namespace {
@@ -80,6 +83,25 @@ double readScalar(QDataStream &stream, const QByteArray &type) {
     if (type == "short" || type == "int16") { qint16 value = 0; stream >> value; return value; }
     if (type == "uint" || type == "uint32") { quint32 value = 0; stream >> value; return value; }
     qint32 value = 0; stream >> value; return value;
+}
+
+double readBinaryScalar(const char *&cursor, const char *end,
+                        const QByteArray &type, bool bigEndian, bool *ok) {
+    const int bytes = scalarBytes(type);
+    if (bytes <= 0 || cursor + bytes > end) { if (ok) *ok = false; return 0.0; }
+    const uchar *data = reinterpret_cast<const uchar *>(cursor);
+    cursor += bytes;
+    const quint16 raw16 = bigEndian ? qFromBigEndian<quint16>(data) : qFromLittleEndian<quint16>(data);
+    const quint32 raw32 = bigEndian ? qFromBigEndian<quint32>(data) : qFromLittleEndian<quint32>(data);
+    const quint64 raw64 = bigEndian ? qFromBigEndian<quint64>(data) : qFromLittleEndian<quint64>(data);
+    if (type == "float" || type == "float32") { float value; std::memcpy(&value, &raw32, sizeof(value)); return value; }
+    if (type == "double" || type == "float64") { double value; std::memcpy(&value, &raw64, sizeof(value)); return value; }
+    if (type == "uchar" || type == "uint8") return data[0];
+    if (type == "char" || type == "int8") return qint8(data[0]);
+    if (type == "ushort" || type == "uint16") return raw16;
+    if (type == "short" || type == "int16") return qint16(raw16);
+    if (type == "uint" || type == "uint32") return raw32;
+    return qint32(raw32);
 }
 
 } // namespace
@@ -174,12 +196,18 @@ bool loadPly(const QString &fileName, QVector<Point3D> &points, QString *error) 
                 QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 1);
         }
     } else {
-        QDataStream stream(&file);
-        stream.setByteOrder(format.contains("big_endian") ? QDataStream::BigEndian : QDataStream::LittleEndian);
-        for (int i = 0; i < vertexCount; ++i) {
+        const bool bigEndian = format.contains("big_endian");
+        const qsizetype bytesPerVertex = std::accumulate(properties.cbegin(), properties.cend(), qsizetype(0),
+            [](qsizetype total, const Property &property) { return total + scalarBytes(property.type); });
+        const qsizetype payloadBytes = bytesPerVertex * qsizetype(vertexCount);
+        QByteArray payload = file.read(payloadBytes);
+        const char *cursor = payload.constData();
+        const char *end = cursor + payload.size();
+        bool binaryOk = payload.size() == payloadBytes;
+        for (int i = 0; i < vertexCount && binaryOk; ++i) {
             Point3D point;
             for (int column = 0; column < properties.size(); ++column) {
-                const double value = readScalar(stream, properties[column].type);
+                const double value = readBinaryScalar(cursor, end, properties[column].type, bigEndian, &binaryOk);
                 if (column == indices[0]) point.x = float(value);
                 if (column == indices[1]) point.y = float(value);
                 if (column == indices[2]) point.z = float(value);
@@ -187,7 +215,6 @@ bool loadPly(const QString &fileName, QVector<Point3D> &points, QString *error) 
                 if (column == indices[4]) point.ny = float(value);
                 if (column == indices[5]) point.nz = float(value);
             }
-            if (stream.status() != QDataStream::Ok) break;
             points.push_back(point);
         }
     }
