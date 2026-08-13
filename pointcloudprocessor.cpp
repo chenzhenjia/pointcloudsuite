@@ -2,6 +2,7 @@
 
 #include <array>
 #include <limits>
+#include <queue>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -395,57 +396,131 @@ VoxelRepresentatives voxelRepresentatives(const QVector<Point3D> &points, float 
     return result;
 }
 
-// Grid-based K-neighborhood filter used by the layered noise-processing
-// version. The cell size bounds the local search to the 3x3x3 neighboring
-// cells, avoiding an O(N^2) scan on large clouds.
-QVector<Point3D> neighborhoodFilter(const QVector<Point3D> &points, float cellSize,
-                                    int minNeighbors, float maxMeanDistance,
-                                    bool useMeanDistance) {
-    if (points.isEmpty()) return points;
-    cellSize = qMax(cellSize, 1.0e-5f);
+float estimateStatisticalCellSize(const QVector<Point3D> &points) {
+    if (points.size() < 2) return 1.0f;
+    constexpr int maximumSamples = 4096;
+    const int step = qMax(1, int((points.size() + maximumSamples - 1) / maximumSamples));
+    std::array<QVector<float>, 3> coordinates;
+    for (auto &axis : coordinates) axis.reserve(qMin(maximumSamples, int(points.size())));
+    for (int i = 0; i < points.size(); i += step) {
+        coordinates[0].push_back(points[i].x);
+        coordinates[1].push_back(points[i].y);
+        coordinates[2].push_back(points[i].z);
+    }
+    std::array<float, 3> spans{};
+    for (int axis = 0; axis < 3; ++axis) {
+        auto &values = coordinates[axis];
+        std::sort(values.begin(), values.end());
+        const int trim = values.size() >= 32 ? qMax(1, int(values.size() / 100)) : 0;
+        spans[axis] = qMax(0.0f, values[values.size() - 1 - trim] - values[trim]);
+    }
+    std::sort(spans.begin(), spans.end(), std::greater<float>());
+    const float largest = qMax(spans[0], 1.0e-5f);
+    int dimensions = 1;
+    if (spans[1] > largest * 1.0e-4f) dimensions = 2;
+    if (spans[2] > largest * 1.0e-4f) dimensions = 3;
+    double extentProduct = 1.0;
+    for (int axis = 0; axis < dimensions; ++axis)
+        extentProduct *= qMax(double(spans[axis]), double(largest) * 1.0e-6);
+    const double spacing = std::pow(extentProduct / qMax<qsizetype>(1, points.size()),
+                                    1.0 / double(dimensions));
+    return qMax(float(spacing * 1.5), largest * 1.0e-7f);
+}
+
+struct StatisticalFilterResult {
+    QVector<Point3D> points;
+    QString warning;
+};
+
+// Approximate K-nearest-neighbour search over expanding voxel shells. The
+// distance threshold is derived from the cloud-wide mean and standard
+// deviation, so it remains valid when point spacing or voxel size changes.
+StatisticalFilterResult statisticalOutlierFilter(const QVector<Point3D> &points,
+                                                  float cellSize, int requestedK,
+                                                  float stddevMultiplier) {
+    StatisticalFilterResult result;
+    if (points.size() < 3) {
+        result.points = points;
+        result.warning = QStringLiteral("点数不足，已跳过统计离群值去除");
+        return result;
+    }
+    cellSize = qMax(cellSize, 1.0e-7f);
     std::unordered_map<NoiseKey, std::vector<int>, NoiseKeyHash> grid;
     grid.reserve(size_t(points.size() / 2 + 1));
     for (int i = 0; i < points.size(); ++i) {
         if (usablePoint(points[i])) grid[noiseKey(points[i], cellSize)].push_back(i);
     }
-    QVector<Point3D> output;
-    output.reserve(points.size());
-    const int k = qMax(1, minNeighbors);
+    const int k = qBound(1, requestedK, int(points.size() - 1));
+    const int minimumNeighbors = qMin(k, qMax(2, k / 4));
+    constexpr int maximumCellRadius = 8;
+    QVector<float> meanDistances(points.size(), std::numeric_limits<float>::quiet_NaN());
+    int measuredCount = 0;
     for (int i = 0; i < points.size(); ++i) {
         if (!usablePoint(points[i])) continue;
         const NoiseKey key = noiseKey(points[i], cellSize);
-        QVector<float> distances;
-        distances.reserve(k * 2);
-        int neighborCount = 0;
-        for (qint64 dz = -1; dz <= 1; ++dz)
-            for (qint64 dy = -1; dy <= 1; ++dy)
-                for (qint64 dx = -1; dx <= 1; ++dx) {
+        std::priority_queue<float> nearestSquared;
+        for (qint64 radius = 0; radius <= maximumCellRadius; ++radius) {
+            for (qint64 dz = -radius; dz <= radius; ++dz)
+                for (qint64 dy = -radius; dy <= radius; ++dy)
+                    for (qint64 dx = -radius; dx <= radius; ++dx) {
+                    if (std::max({std::abs(dx), std::abs(dy), std::abs(dz)}) != radius)
+                        continue;
                     const auto it = grid.find({key.x + dx, key.y + dy, key.z + dz});
                     if (it == grid.end()) continue;
                     for (int index : it->second) {
                         if (index == i) continue;
                         const Point3D &a = points[i], &b = points[index];
                         const float ddx = a.x - b.x, ddy = a.y - b.y, ddz = a.z - b.z;
-                        distances.push_back(qSqrt(ddx * ddx + ddy * ddy + ddz * ddz));
-                        ++neighborCount;
+                        const float squared = ddx * ddx + ddy * ddy + ddz * ddz;
+                        if (nearestSquared.size() < size_t(k)) nearestSquared.push(squared);
+                        else if (squared < nearestSquared.top()) {
+                            nearestSquared.pop();
+                            nearestSquared.push(squared);
+                        }
                     }
                 }
-        // A 3x3x3 voxel neighborhood can contain fewer points than the
-        // requested K (especially after voxelization).  Use the available
-        // neighbors instead of rejecting every point in a sparse cloud.
-        const int actualK = qMin(k, neighborCount);
-        if (actualK <= 0) continue;
-        if (useMeanDistance) {
-            std::nth_element(distances.begin(), distances.begin() + actualK - 1,
-                             distances.end());
-            float sum = 0.0f;
-            const int count = actualK;
-            for (int j = 0; j < count; ++j) sum += distances[j];
-            if (sum / float(count) > maxMeanDistance) continue;
+            if (nearestSquared.size() >= size_t(k)) break;
         }
-        output.push_back(points[i]);
+        if (nearestSquared.size() < size_t(minimumNeighbors)) continue;
+        double sum = 0.0;
+        const int count = int(nearestSquared.size());
+        while (!nearestSquared.empty()) {
+            sum += std::sqrt(double(nearestSquared.top()));
+            nearestSquared.pop();
+        }
+        meanDistances[i] = float(sum / double(count));
+        ++measuredCount;
     }
-    return output;
+    const int minimumSamples = qMin(int(points.size()), qMax(3, k + 1));
+    if (measuredCount < minimumSamples) {
+        result.points = points;
+        result.warning = QStringLiteral("有效邻域不足（%1/%2），已保留当前点云；请降低 K 或增大体素尺寸")
+                             .arg(measuredCount).arg(minimumSamples);
+        return result;
+    }
+    double globalMean = 0.0;
+    for (float value : meanDistances)
+        if (std::isfinite(value)) globalMean += value;
+    globalMean /= measuredCount;
+    double variance = 0.0;
+    for (float value : meanDistances)
+        if (std::isfinite(value)) {
+            const double delta = double(value) - globalMean;
+            variance += delta * delta;
+        }
+    const double standardDeviation = measuredCount > 1
+        ? std::sqrt(variance / double(measuredCount - 1)) : 0.0;
+    const double threshold = globalMean
+        + qMax(0.0f, stddevMultiplier) * standardDeviation;
+    result.points.reserve(points.size());
+    for (int i = 0; i < points.size(); ++i)
+        if (std::isfinite(meanDistances[i]) && meanDistances[i] <= threshold)
+            result.points.push_back(points[i]);
+    if (result.points.isEmpty()) {
+        result.points = points;
+        result.warning = QStringLiteral("统计结果无有效保留点，已保留当前点云；请增大阈值倍数");
+    }
+    return result;
 }
 
 }
@@ -464,25 +539,22 @@ NoiseResult removeNoise(const QVector<Point3D> &points, const NoiseOptions &opti
         result.error = QStringLiteral("点云中没有有效坐标点");
         return result;
     }
-    // 去噪按“体素稀疏 -> 统计邻域”执行；半径滤波已移除，避免
-    // 稀疏点云因固定邻居阈值被全部误删。
+    // Denoising runs against the current canvas cache. Radius filtering is
+    // intentionally absent; statistical K-neighbour distances determine the
+    // threshold from the current cloud's own scale.
     QVector<Point3D> filtered = options.voxelEnabled
         ? voxelFilter(validPoints, options.voxelSize) : validPoints;
     if (options.statisticalEnabled) {
-        const float cell = options.voxelEnabled ? qMax(options.voxelSize, 0.01f) : 0.01f;
-        filtered = neighborhoodFilter(filtered, cell, options.meanK,
-                                      options.stddevMultiplier * cell * 2.5f, true);
-    }
-    if (filtered.isEmpty()) {
-        // Never replace a usable processing cache with an empty result.
-        result.points = validPoints;
-        result.ok = true;
-        result.error = QStringLiteral("参数过严，已保留原始有效点云");
-        return result;
+        const float estimatedCell = estimateStatisticalCellSize(filtered);
+        const float cell = options.voxelEnabled && options.voxelSize > 0.0f
+            ? qMax(options.voxelSize, estimatedCell) : estimatedCell;
+        StatisticalFilterResult statistical = statisticalOutlierFilter(
+            filtered, cell, options.meanK, options.stddevMultiplier);
+        filtered = std::move(statistical.points);
+        result.error = std::move(statistical.warning);
     }
     result.points = std::move(filtered);
-    result.ok = !result.points.isEmpty();
-    if (!result.ok) result.error = QStringLiteral("噪点参数过严，所有点均被过滤");
+    result.ok = true;
     return result;
 }
 
@@ -1914,15 +1986,28 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points
     }
     initialNormal.normalize();
     if (initialNormal.z() < 0.0f) initialNormal = -initialNormal;
+    const float minimumNormalZ = options.useZAxisResidual
+        ? std::cos(qDegreesToRadians(qBound(0.0f, options.maxNormalTiltDegrees, 89.0f)))
+        : 0.0f;
+    if (options.useZAxisResidual && initialNormal.z() < minimumNormalZ) {
+        result.error = QStringLiteral("所选平面过于陡峭，不符合 2.5D 高度面约束");
+        return result;
+    }
     const float initialD = -QVector3D::dotProduct(initialNormal, p1);
     const float initialTolerance = qMax(1.0e-6f, options.initialTolerance);
     const float surfaceTolerance = qMax(1.0e-6f, options.surfaceTolerance);
+    const auto residual = [&options](const QVector3D &normal, float d,
+                                     const Point3D &point) {
+        const float equation = normal.x() * point.x + normal.y() * point.y
+            + normal.z() * point.z + d;
+        return std::abs(equation) / (options.useZAxisResidual
+            ? qMax(std::abs(normal.z()), 1.0e-6f) : 1.0f);
+    };
 
     for (int i = 0; i < points.size(); ++i) {
         const Point3D &p = points[i];
         if (!finitePoint(p)) continue;
-        const float distance = std::abs(initialNormal.x() * p.x + initialNormal.y() * p.y
-                                        + initialNormal.z() * p.z + initialD);
+        const float distance = residual(initialNormal, initialD, p);
         if (distance <= initialTolerance) result.candidateIndices.push_back(i);
     }
     const int requiredInliers = qMax(3, options.minInliers);
@@ -1946,8 +2031,7 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points
     // samples may replace it only when they explain more nearby points.
     for (int index : modelCandidates) {
         const Point3D &p = points[index];
-        if (std::abs(initialNormal.x() * p.x + initialNormal.y() * p.y
-                     + initialNormal.z() * p.z + initialD) <= surfaceTolerance) {
+        if (residual(initialNormal, initialD, p) <= surfaceTolerance) {
             bestModelInliers.push_back(index);
         }
     }
@@ -1963,12 +2047,12 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points
         if (normal.lengthSquared() <= 1.0e-14f) continue;
         normal.normalize();
         if (QVector3D::dotProduct(normal, initialNormal) < 0.0f) normal = -normal;
+        if (options.useZAxisResidual && std::abs(normal.z()) < minimumNormalZ) continue;
         const float d = -QVector3D::dotProduct(normal, a);
         bool containsSeeds = true;
         for (int seed : seedIndices) {
             const Point3D &p = points[seed];
-            if (std::abs(normal.x() * p.x + normal.y() * p.y + normal.z() * p.z + d)
-                > surfaceTolerance) {
+            if (residual(normal, d, p) > surfaceTolerance) {
                 containsSeeds = false;
                 break;
             }
@@ -1978,8 +2062,7 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points
         inliers.reserve(modelCandidates.size());
         for (int index : modelCandidates) {
             const Point3D &p = points[index];
-            if (std::abs(normal.x() * p.x + normal.y() * p.y + normal.z() * p.z + d)
-                <= surfaceTolerance) {
+            if (residual(normal, d, p) <= surfaceTolerance) {
                 inliers.push_back(index);
             }
         }
@@ -1993,8 +2076,7 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points
     bestInliers.reserve(result.candidateIndices.size());
     for (int index : result.candidateIndices) {
         const Point3D &p = points[index];
-        if (std::abs(bestNormal.x() * p.x + bestNormal.y() * p.y
-                     + bestNormal.z() * p.z + bestD) <= surfaceTolerance) {
+        if (residual(bestNormal, bestD, p) <= surfaceTolerance) {
             bestInliers.push_back(index);
         }
     }
@@ -2029,6 +2111,10 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points
     finalNormal.normalize();
     if (QVector3D::dotProduct(finalNormal, bestNormal) < 0.0f) finalNormal = -finalNormal;
     if (finalNormal.z() < 0.0f) finalNormal = -finalNormal;
+    if (options.useZAxisResidual && finalNormal.z() < minimumNormalZ) {
+        result.error = QStringLiteral("拟合平面过于陡峭，不符合 2.5D 高度面约束");
+        return result;
+    }
     const QVector3D origin{float(mean[0]), float(mean[1]), float(mean[2])};
     const float finalD = -QVector3D::dotProduct(finalNormal, origin);
 
@@ -2037,9 +2123,7 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points
     for (int i = 0; i < points.size(); ++i) {
         const Point3D &p = points[i];
         if (!finitePoint(p)) continue;
-        const float distance = finalNormal.x() * p.x + finalNormal.y() * p.y
-            + finalNormal.z() * p.z + finalD;
-        if (std::abs(distance) <= surfaceTolerance) {
+        if (residual(finalNormal, finalD, p) <= surfaceTolerance) {
             classified.push_back(i);
         }
     }
@@ -2169,8 +2253,7 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points
     for (int index : result.planeIndices) {
         const Point3D &p = points[index];
         result.planePoints.push_back(p);
-        const float distance = finalNormal.x() * p.x + finalNormal.y() * p.y
-            + finalNormal.z() * p.z + finalD;
+        const float distance = residual(finalNormal, finalD, p);
         squaredError += double(distance) * distance;
     }
     result.rmsError = float(std::sqrt(squaredError / double(result.planeIndices.size())));

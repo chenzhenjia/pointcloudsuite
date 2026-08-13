@@ -182,7 +182,7 @@ protected:
                 vec3 normalized = (vertexPosition - cloudCenter) * (2.0 / cloudSpan);
                 gl_Position = transform * vec4(normalized, 1.0);
                 gl_Position.xy += viewPan * gl_Position.w;
-                gl_PointSize = renderPass == 0 ? pointSize : pointSize + 1.5;
+                gl_PointSize = renderPass == 0 ? pointSize : max(pointSize + 6.0, 8.0);
                 normalValue = vertexNormal;
                 stateValue = int(pointState);
                 heightValue = clamp((vertexPosition.z - minHeight) /
@@ -199,6 +199,8 @@ protected:
             out vec4 fragmentColor;
             flat in int stateValue;
             void main() {
+                if (renderPass == 1 && distance(gl_PointCoord, vec2(0.5)) > 0.48)
+                    discard;
                 vec3 lowColor = vec3(0.05, 0.55, 0.95);
                 vec3 middleColor = vec3(0.12, 0.88, 0.70);
                 vec3 highColor = vec3(1.00, 0.68, 0.20);
@@ -471,15 +473,19 @@ private:
         m_vertexArray.release();
         m_pickingProgram.release();
 
-        const int centerX = qBound(0, qRound(position.x() * dpr), pixelSize.width() - 1);
-        const int centerY = qBound(0, pixelSize.height() - 1 - qRound(position.y() * dpr),
+        const int centerX = qBound(0, int(std::floor(position.x() * dpr)),
+                                   pixelSize.width() - 1);
+        const int centerY = qBound(0, pixelSize.height() - 1
+                                   - int(std::floor(position.y() * dpr)),
                                    pixelSize.height() - 1);
         quint8 pixels[3 * 3 * 4] = {};
+        float depths[3 * 3] = {};
         const int x = qBound(0, centerX - 1, qMax(0, pixelSize.width() - 3));
         const int y = qBound(0, centerY - 1, qMax(0, pixelSize.height() - 3));
         const int readWidth = qMin(3, pixelSize.width());
         const int readHeight = qMin(3, pixelSize.height());
         glReadPixels(x, y, readWidth, readHeight, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        glReadPixels(x, y, readWidth, readHeight, GL_DEPTH_COMPONENT, GL_FLOAT, depths);
         glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
         glViewport(0, 0, pixelSize.width(), pixelSize.height());
         glClearColor(0.018f, 0.025f, 0.035f, 1.0f);
@@ -495,10 +501,24 @@ private:
         };
         quint32 id = decode(preferredX, preferredY);
         if (id == 0) {
-            for (int radius = 1; radius <= 1 && id == 0; ++radius)
-                for (int dy = -radius; dy <= radius && id == 0; ++dy)
-                    for (int dx = -radius; dx <= radius && id == 0; ++dx)
-                        id = decode(preferredX + dx, preferredY + dy);
+            int bestDistanceSquared = std::numeric_limits<int>::max();
+            float bestDepth = 1.0f;
+            for (int py = 0; py < readHeight; ++py) {
+                for (int px = 0; px < readWidth; ++px) {
+                    const quint32 candidate = decode(px, py);
+                    if (candidate == 0) continue;
+                    const int dx = px - preferredX;
+                    const int dy = py - preferredY;
+                    const int distanceSquared = dx * dx + dy * dy;
+                    const float depth = depths[py * readWidth + px];
+                    if (distanceSquared < bestDistanceSquared
+                        || (distanceSquared == bestDistanceSquared && depth < bestDepth)) {
+                        id = candidate;
+                        bestDistanceSquared = distanceSquared;
+                        bestDepth = depth;
+                    }
+                }
+            }
         }
         return id > 0 && id <= quint32(m_points.size()) ? int(id - 1) : -1;
     }
@@ -635,9 +655,6 @@ MainWindow::~MainWindow() {
     if (m_noiseWatcher && m_noiseWatcher->isRunning()) {
         m_noiseWatcher->waitForFinished();
     }
-    if (m_planeWatcher && m_planeWatcher->isRunning()) {
-        m_planeWatcher->waitForFinished();
-    }
     if (m_threePlaneWatcher && m_threePlaneWatcher->isRunning()) {
         m_threePlaneWatcher->waitForFinished();
     }
@@ -648,10 +665,6 @@ MainWindow::~MainWindow() {
     if (m_noiseWatcher) {
         disconnect(m_noiseWatcher, nullptr, this, nullptr);
         m_noiseWatcher->disconnect(this);
-    }
-    if (m_planeWatcher) {
-        disconnect(m_planeWatcher, nullptr, this, nullptr);
-        m_planeWatcher->disconnect(this);
     }
     if (m_threePlaneWatcher) {
         disconnect(m_threePlaneWatcher, nullptr, this, nullptr);
@@ -831,13 +844,14 @@ void MainWindow::buildUi() {
     voxelRow->addWidget(m_voxelSize); cleanLayout->addLayout(voxelRow);
     m_statisticalNoise = new QCheckBox(tr("统计离群值去除（推荐）"));
     m_statisticalNoise->setChecked(true);
-    m_statisticalNoise->setToolTip(tr("按邻域平均距离剔除孤立飞点"));
+    m_statisticalNoise->setToolTip(tr("自适应搜索 K 近邻，并按全局均值与标准差剔除孤立飞点"));
     cleanLayout->addWidget(m_statisticalNoise);
     auto *statRow = new QHBoxLayout;
     statRow->addWidget(new QLabel(tr("邻域 K"))); m_meanK = new QSpinBox;
-    m_meanK->setRange(1, 128); m_meanK->setValue(16); statRow->addWidget(m_meanK);
+    m_meanK->setRange(1, 128); m_meanK->setValue(45); statRow->addWidget(m_meanK);
     statRow->addWidget(new QLabel(tr("阈值倍数"))); m_stddev = new QDoubleSpinBox;
-    m_stddev->setRange(0.1, 5.0); m_stddev->setSingleStep(0.1); m_stddev->setValue(1.5); statRow->addWidget(m_stddev);
+    m_stddev->setRange(0.1, 5.0); m_stddev->setDecimals(2);
+    m_stddev->setSingleStep(0.05); m_stddev->setValue(1.30); statRow->addWidget(m_stddev);
     cleanLayout->addLayout(statRow);
     m_noiseApply = new QPushButton(tr("应用噪点去除"));
     m_noiseApply->setToolTip(tr("后台执行当前勾选的串联流程，原始点云可恢复"));
@@ -857,117 +871,56 @@ void MainWindow::buildUi() {
     });
     tabs->addTab(cleanPage, tr("点云清理"));
 
-    auto *planePage = new QWidget;
-    auto *planeLayout = new QVBoxLayout(planePage);
-    planeLayout->setContentsMargins(8, 14, 8, 8);
-    auto *planeTitle = new QLabel(tr("RANSAC 多平面分割"));
-    planeTitle->setObjectName(QStringLiteral("sectionTitle"));
-    planeLayout->addWidget(planeTitle);
-    auto *planeForm = new QFormLayout;
-    m_planeDistanceThreshold = new QDoubleSpinBox;
-    m_planeDistanceThreshold->setRange(0.000001, 1000.0);
-    m_planeDistanceThreshold->setDecimals(6);
-    m_planeDistanceThreshold->setValue(0.02);
-    planeForm->addRow(tr("距离阈值"), m_planeDistanceThreshold);
-    m_planeMaxCount = new QSpinBox;
-    m_planeMaxCount->setRange(1, 100);
-    m_planeMaxCount->setValue(10);
-    planeForm->addRow(tr("最大平面数"), m_planeMaxCount);
-    m_planeIterations = new QSpinBox;
-    m_planeIterations->setRange(50, 100000);
-    m_planeIterations->setValue(600);
-    planeForm->addRow(tr("RANSAC 迭代"), m_planeIterations);
-    m_planeMinInliers = new QSpinBox;
-    m_planeMinInliers->setRange(3, 100000000);
-    m_planeMinInliers->setValue(100);
-    planeForm->addRow(tr("最小内点数"), m_planeMinInliers);
-    m_planeSampleRatio = new QComboBox;
-    m_planeSampleRatio->addItems({tr("1/1"), tr("1/2"), tr("1/4"), tr("1/8"), tr("1/16")});
-    m_planeSampleRatio->setCurrentIndex(2);
-    planeForm->addRow(tr("建模采样"), m_planeSampleRatio);
-    planeLayout->addLayout(planeForm);
-    m_planeApply = new QPushButton(tr("执行平面分割"));
-    m_planeApply->setToolTip(tr("后台分析当前画布缓存，不改变画布点云"));
-    planeLayout->addWidget(m_planeApply);
-    m_planeOutput = new QPlainTextEdit;
-    m_planeOutput->setReadOnly(true);
-    m_planeOutput->setPlaceholderText(tr("平面方程和统计结果将在此显示"));
-    planeLayout->addWidget(m_planeOutput, 1);
-    connect(m_planeApply, &QPushButton::clicked,
-            this, &MainWindow::applyPlaneSegmentation);
-    tabs->addTab(planePage, tr("平面分割"));
-
     auto *threePage = new QWidget;
     auto *threeLayout = new QVBoxLayout(threePage);
     threeLayout->setContentsMargins(8, 14, 8, 8);
-    auto *threeTitle = new QLabel(tr("三点目标平面"));
+    auto *threeTitle = new QLabel(tr("2.5D 平面提取"));
     threeTitle->setObjectName(QStringLiteral("sectionTitle"));
     threeLayout->addWidget(threeTitle);
-    auto *threeForm = new QFormLayout;
-    m_threeInitialTolerance = new QDoubleSpinBox;
-    m_threeInitialTolerance->setRange(0.0001, 1000.0);
-    m_threeInitialTolerance->setDecimals(4);
-    m_threeInitialTolerance->setValue(1.0);
-    threeForm->addRow(tr("初始容差 mm"), m_threeInitialTolerance);
-    m_threeSurfaceTolerance = new QDoubleSpinBox;
-    m_threeSurfaceTolerance->setRange(0.0001, 1000.0);
-    m_threeSurfaceTolerance->setDecimals(4);
-    m_threeSurfaceTolerance->setValue(0.4);
-    threeForm->addRow(tr("表面容差 mm"), m_threeSurfaceTolerance);
-    m_threeConnectivityRadius = new QDoubleSpinBox;
-    m_threeConnectivityRadius->setRange(0.0, 10000.0);
-    m_threeConnectivityRadius->setDecimals(4);
-    m_threeConnectivityRadius->setSpecialValueText(tr("自动"));
-    threeForm->addRow(tr("连通半径 mm"), m_threeConnectivityRadius);
-    m_threeIterations = new QSpinBox;
-    m_threeIterations->setRange(10, 100000);
-    m_threeIterations->setValue(300);
-    threeForm->addRow(tr("RANSAC 迭代"), m_threeIterations);
-    m_threeMinInliers = new QSpinBox;
-    m_threeMinInliers->setRange(3, 100000000);
-    m_threeMinInliers->setValue(100);
-    threeForm->addRow(tr("最小内点数"), m_threeMinInliers);
-    threeLayout->addLayout(threeForm);
-    auto *threeButtons = new QHBoxLayout;
-    m_threeStart = new QPushButton(tr("开始选择"));
-    auto *threeUndo = new QPushButton(tr("撤销"));
-    auto *threeClear = new QPushButton(tr("清除"));
-    threeButtons->addWidget(m_threeStart);
-    threeButtons->addWidget(threeUndo);
-    threeButtons->addWidget(threeClear);
-    threeLayout->addLayout(threeButtons);
+    auto *pickButtons = new QHBoxLayout;
+    m_pickPointsButton = new QPushButton(tr("取点"));
+    m_abandonPointsButton = new QPushButton(tr("放弃取点"));
+    m_undoPointButton = new QPushButton(tr("撤销选择的点"));
+    pickButtons->addWidget(m_pickPointsButton);
+    pickButtons->addWidget(m_abandonPointsButton);
+    pickButtons->addWidget(m_undoPointButton);
+    threeLayout->addLayout(pickButtons);
+    m_determinePlaneButton = new QPushButton(tr("确定平面"));
+    m_confirmCandidateButton = new QPushButton(tr("确定候选平面"));
+    m_cancelCandidateButton = new QPushButton(tr("取消确定平面"));
+    threeLayout->addWidget(m_determinePlaneButton);
+    threeLayout->addWidget(m_confirmCandidateButton);
+    threeLayout->addWidget(m_cancelCandidateButton);
     m_threeOutput = new QPlainTextEdit;
     m_threeOutput->setReadOnly(true);
-    m_threeOutput->setPlaceholderText(tr("选择三个点后显示平面方程和统计结果"));
+    m_threeOutput->setPlaceholderText(tr("点击取点并在画布中指定三个点"));
     threeLayout->addWidget(m_threeOutput, 1);
-    connect(m_threeStart, &QPushButton::clicked, this, &MainWindow::startThreePointSelection);
-    connect(threeClear, &QPushButton::clicked, this, &MainWindow::clearThreePointSelection);
-    const auto undoThreePoint = [this]() {
-        if (pointTaskRunning()) {
-            statusBar()->showMessage(tr("点云处理任务正在运行"));
-            return;
-        }
-        if (m_selectedPointIndices.isEmpty()) return;
-        m_selectedPointIndices.removeLast();
-        m_threePointSelectionActive = true;
-        m_canvas->setSelectionMode(true);
-        m_canvas->setSelectedIndices(m_selectedPointIndices);
-        m_canvas->clearPlaneResult();
-        m_threePlaneResult = {};
-        updateThreePointStatus();
-    };
-    connect(threeUndo, &QPushButton::clicked, this, undoThreePoint);
+    connect(m_pickPointsButton, &QPushButton::clicked,
+            this, &MainWindow::startPlanePointSelection);
+    connect(m_abandonPointsButton, &QPushButton::clicked,
+            this, &MainWindow::abandonPlanePointSelection);
+    connect(m_undoPointButton, &QPushButton::clicked,
+            this, &MainWindow::undoPlanePointSelection);
+    connect(m_determinePlaneButton, &QPushButton::clicked,
+            this, &MainWindow::determinePlaneCandidate);
+    connect(m_confirmCandidateButton, &QPushButton::clicked,
+            this, &MainWindow::confirmPlaneCandidate);
+    connect(m_cancelCandidateButton, &QPushButton::clicked,
+            this, &MainWindow::cancelPlaneCandidate);
     auto *cancelThreeAction = new QAction(this);
     cancelThreeAction->setShortcut(QKeySequence(Qt::Key_Escape));
     cancelThreeAction->setShortcutContext(Qt::ApplicationShortcut);
-    connect(cancelThreeAction, &QAction::triggered, this, &MainWindow::cancelThreePointSelection);
+    connect(cancelThreeAction, &QAction::triggered,
+            this, &MainWindow::abandonPlanePointSelection);
     addAction(cancelThreeAction);
     auto *undoThreeAction = new QAction(this);
     undoThreeAction->setShortcut(QKeySequence(Qt::Key_Backspace));
     undoThreeAction->setShortcutContext(Qt::ApplicationShortcut);
-    connect(undoThreeAction, &QAction::triggered, this, undoThreePoint);
+    connect(undoThreeAction, &QAction::triggered,
+            this, &MainWindow::undoPlanePointSelection);
     addAction(undoThreeAction);
-    tabs->addTab(threePage, tr("三点选平面"));
+    tabs->addTab(threePage, tr("平面提取"));
+    updatePlaneExtractionUi();
 
     rightLayout->addWidget(tabs, 1);
     splitter->addWidget(rightPanel);
@@ -1061,15 +1014,16 @@ void MainWindow::updateRenderSettings() {
 void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points) {
     m_points = std::move(points);
     ++m_canvasRevision;
-    clearPlaneSegmentation();
     m_selectedPointIndices.clear();
     m_threePlaneResult = {};
     m_threePointSelectionActive = false;
+    m_planeCandidateConfirmed = false;
     if (m_canvas) {
         m_canvas->setSelectionMode(false);
         m_canvas->setCloud(m_points);
     }
     if (m_threeOutput) m_threeOutput->clear();
+    updatePlaneExtractionUi();
     if (m_canvasInfo) {
         m_canvasInfo->setText(tr("当前显示 %1 个点  ·  原始 %2 个点  ·  全量直接标记")
                                   .arg(QLocale().toString(m_points.size()))
@@ -1077,18 +1031,12 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points) {
     }
 }
 
-void MainWindow::clearPlaneSegmentation() {
-    m_planeResult = {};
-    if (m_planeOutput) m_planeOutput->clear();
-}
-
 bool MainWindow::pointTaskRunning() const {
     return m_loading || (m_noiseWatcher && m_noiseWatcher->isRunning())
-        || (m_planeWatcher && m_planeWatcher->isRunning())
         || (m_threePlaneWatcher && m_threePlaneWatcher->isRunning());
 }
 
-void MainWindow::startThreePointSelection() {
+void MainWindow::startPlanePointSelection() {
     if (pointTaskRunning()) {
         statusBar()->showMessage(tr("点云处理任务正在运行"));
         return;
@@ -1099,20 +1047,23 @@ void MainWindow::startThreePointSelection() {
     }
     m_selectedPointIndices.clear();
     m_threePlaneResult = {};
+    m_planeCandidateConfirmed = false;
     m_threePointSelectionActive = true;
     m_canvas->clearPlaneResult();
     m_canvas->setSelectedIndices({});
     m_canvas->setSelectionMode(true);
-    updateThreePointStatus();
+    updatePlaneExtractionUi();
+    statusBar()->showMessage(tr("请选择第 1 个点"));
 }
 
-void MainWindow::clearThreePointSelection() {
+void MainWindow::abandonPlanePointSelection() {
     if (m_threePlaneWatcher && m_threePlaneWatcher->isRunning()) {
-        statusBar()->showMessage(tr("三点平面拟合正在运行"));
+        statusBar()->showMessage(tr("平面提取正在运行"));
         return;
     }
     m_selectedPointIndices.clear();
     m_threePlaneResult = {};
+    m_planeCandidateConfirmed = false;
     m_threePointSelectionActive = false;
     if (m_canvas) {
         m_canvas->setSelectionMode(false);
@@ -1120,21 +1071,43 @@ void MainWindow::clearThreePointSelection() {
         m_canvas->clearPlaneResult();
     }
     if (m_threeOutput) m_threeOutput->clear();
-    statusBar()->showMessage(tr("三点选择已清除"));
+    updatePlaneExtractionUi();
+    statusBar()->showMessage(tr("已放弃取点"));
 }
 
-void MainWindow::cancelThreePointSelection() {
-    if (!m_threePointSelectionActive) return;
-    m_threePointSelectionActive = false;
-    m_selectedPointIndices.clear();
-    m_canvas->setSelectionMode(false);
-    m_canvas->setSelectedIndices({});
-    updateThreePointStatus();
-    statusBar()->showMessage(tr("已取消三点选择"));
+void MainWindow::undoPlanePointSelection() {
+    if (pointTaskRunning()) {
+        statusBar()->showMessage(tr("点云处理任务正在运行"));
+        return;
+    }
+    if (m_selectedPointIndices.isEmpty()) return;
+    m_selectedPointIndices.removeLast();
+    m_threePlaneResult = {};
+    m_planeCandidateConfirmed = false;
+    m_threePointSelectionActive = true;
+    m_canvas->clearPlaneResult();
+    m_canvas->setSelectedIndices(m_selectedPointIndices);
+    m_canvas->setSelectionMode(true);
+    updatePlaneExtractionUi();
+    statusBar()->showMessage(tr("请选择第 %1 个点").arg(m_selectedPointIndices.size() + 1));
 }
 
-void MainWindow::updateThreePointStatus() {
-    if (!m_threeOutput) return;
+void MainWindow::updatePlaneExtractionUi() {
+    const bool running = m_threePlaneWatcher && m_threePlaneWatcher->isRunning();
+    const bool hasThreePoints = m_selectedPointIndices.size() == 3;
+    const bool hasCandidate = m_threePlaneResult.ok;
+    if (m_pickPointsButton) m_pickPointsButton->setEnabled(!running && !m_points.isEmpty());
+    if (m_abandonPointsButton)
+        m_abandonPointsButton->setEnabled(!running && !m_selectedPointIndices.isEmpty());
+    if (m_undoPointButton)
+        m_undoPointButton->setEnabled(!running && !m_selectedPointIndices.isEmpty());
+    if (m_determinePlaneButton)
+        m_determinePlaneButton->setEnabled(!running && hasThreePoints && !hasCandidate);
+    if (m_confirmCandidateButton)
+        m_confirmCandidateButton->setEnabled(!running && hasCandidate && !m_planeCandidateConfirmed);
+    if (m_cancelCandidateButton)
+        m_cancelCandidateButton->setEnabled(!running && hasCandidate);
+    if (!m_threeOutput || hasCandidate) return;
     QStringList lines;
     for (int i = 0; i < m_selectedPointIndices.size(); ++i) {
         const int index = m_selectedPointIndices[i];
@@ -1146,6 +1119,8 @@ void MainWindow::updateThreePointStatus() {
     }
     if (m_threePointSelectionActive && m_selectedPointIndices.size() < 3)
         lines << QString() << tr("请选择第 %1 个点").arg(m_selectedPointIndices.size() + 1);
+    else if (hasThreePoints)
+        lines << QString() << tr("三个点已就绪，请点击“确定平面”");
     m_threeOutput->setPlainText(lines.join(QLatin1Char('\n')));
 }
 
@@ -1161,40 +1136,52 @@ void MainWindow::handleCanvasPointPicked(int index) {
     }
     m_selectedPointIndices.push_back(index);
     m_canvas->setSelectedIndices(m_selectedPointIndices);
-    updateThreePointStatus();
+    updatePlaneExtractionUi();
     if (m_selectedPointIndices.size() < 3) {
         statusBar()->showMessage(tr("请选择第 %1 个点").arg(m_selectedPointIndices.size() + 1));
         return;
     }
 
+    m_threePointSelectionActive = false;
+    m_canvas->setSelectionMode(false);
+    updatePlaneExtractionUi();
+    statusBar()->showMessage(tr("三个点已就绪，请点击“确定平面”"));
+}
+
+void MainWindow::determinePlaneCandidate() {
+    if (pointTaskRunning()) return;
+    if (m_selectedPointIndices.size() != 3) {
+        statusBar()->showMessage(tr("请先在画布中指定三个点"));
+        return;
+    }
     pointcloud::ThreePointPlaneOptions options;
-    options.initialTolerance = float(m_threeInitialTolerance->value());
-    options.surfaceTolerance = float(m_threeSurfaceTolerance->value());
-    options.connectivityRadius = float(m_threeConnectivityRadius->value());
-    options.ransacIterations = m_threeIterations->value();
-    options.minInliers = m_threeMinInliers->value();
+    options.initialTolerance = 1.0f;
+    options.surfaceTolerance = 0.4f;
+    options.ransacIterations = 300;
+    options.minInliers = qMin(100, qMax(3, int(m_points.size() / 4)));
+    options.useZAxisResidual = true;
+    options.maxNormalTiltDegrees = 45.0f;
     if (!m_threePlaneWatcher) {
         m_threePlaneWatcher = new QFutureWatcher<pointcloud::ThreePointPlaneResult>(this);
         connect(m_threePlaneWatcher, &QFutureWatcher<pointcloud::ThreePointPlaneResult>::finished,
-                this, &MainWindow::threePointPlaneFinished);
+                this, &MainWindow::planeExtractionFinished);
     }
     const QVector<pointcloud::Point3D> source = m_points;
     const QVector<int> seeds = m_selectedPointIndices;
     m_threePlaneInputRevision = m_canvasRevision;
     m_threePointSelectionActive = false;
     m_canvas->setSelectionMode(false);
-    m_threeStart->setEnabled(false);
     m_progress->show();
     m_progress->setRange(0, 0);
     statusBar()->showMessage(tr("后台拟合目标平面..."));
+    updatePlaneExtractionUi();
     m_threePlaneWatcher->setFuture(QtConcurrent::run([source, seeds, options]() {
         return pointcloud::extractPlaneFromThreePoints(source, seeds, options);
     }));
 }
 
-void MainWindow::threePointPlaneFinished() {
+void MainWindow::planeExtractionFinished() {
     const pointcloud::ThreePointPlaneResult result = m_threePlaneWatcher->result();
-    m_threeStart->setEnabled(true);
     m_progress->hide();
     if (m_threePlaneInputRevision != m_canvasRevision) {
         statusBar()->showMessage(tr("画布缓存已变化，已丢弃旧三点平面结果"));
@@ -1210,10 +1197,12 @@ void MainWindow::threePointPlaneFinished() {
         m_canvas->setSelectedIndices(m_selectedPointIndices);
         m_threeOutput->appendPlainText(QStringLiteral("\n") + result.error);
         m_threeOutput->appendPlainText(tr("请重新选择第 3 个点"));
+        updatePlaneExtractionUi();
         statusBar()->showMessage(result.error);
         return;
     }
     m_threePlaneResult = result;
+    m_planeCandidateConfirmed = false;
     m_canvas->setPlaneResult(result.planeIndices, result.edgeIndices);
     const auto &plane = result.model;
     QStringList lines;
@@ -1226,12 +1215,35 @@ void MainWindow::threePointPlaneFinished() {
           << tr("%1 x + %2 y + %3 z + %4 = 0")
                  .arg(plane.a, 0, 'g', 9).arg(plane.b, 0, 'g', 9)
                  .arg(plane.c, 0, 'g', 9).arg(plane.d, 0, 'g', 9)
-          << tr("候选点：%1").arg(QLocale().toString(result.candidateIndices.size()))
-          << tr("目标平面点：%1").arg(QLocale().toString(result.planeIndices.size()))
+          << tr("初始候选点：%1").arg(QLocale().toString(result.candidateIndices.size()))
+          << tr("候选平面点：%1").arg(QLocale().toString(result.planeIndices.size()))
           << tr("边缘点：%1").arg(QLocale().toString(result.edgeIndices.size()))
-          << tr("RMS 误差：%1 mm").arg(result.rmsError, 0, 'g', 7);
+          << tr("Z 方向 RMS：%1 mm").arg(result.rmsError, 0, 'g', 7)
+          << QString() << tr("候选平面已生成，请确认或取消");
     m_threeOutput->setPlainText(lines.join(QLatin1Char('\n')));
-    statusBar()->showMessage(tr("目标平面已生成"));
+    updatePlaneExtractionUi();
+    statusBar()->showMessage(tr("候选平面已生成"));
+}
+
+void MainWindow::confirmPlaneCandidate() {
+    if (!m_threePlaneResult.ok || pointTaskRunning()) return;
+    m_planeCandidateConfirmed = true;
+    m_threePointSelectionActive = false;
+    m_canvas->setSelectionMode(false);
+    m_threeOutput->appendPlainText(tr("\n候选平面已确定"));
+    updatePlaneExtractionUi();
+    statusBar()->showMessage(tr("平面提取已确定"));
+}
+
+void MainWindow::cancelPlaneCandidate() {
+    if (!m_threePlaneResult.ok || pointTaskRunning()) return;
+    m_threePlaneResult = {};
+    m_planeCandidateConfirmed = false;
+    m_threePointSelectionActive = false;
+    m_canvas->clearPlaneResult();
+    m_canvas->setSelectionMode(false);
+    updatePlaneExtractionUi();
+    statusBar()->showMessage(tr("已取消确定平面，可重新确定或撤销取点"));
 }
 
 void MainWindow::applyNoiseRemoval() {
@@ -1288,76 +1300,6 @@ void MainWindow::noiseFinished() {
                                  : tr("%1；%2").arg(completion, result.error));
 }
 
-void MainWindow::applyPlaneSegmentation() {
-    if (m_loading || m_points.isEmpty()) {
-        statusBar()->showMessage(tr("当前画布没有可分割的点云缓存"));
-        return;
-    }
-    if (pointTaskRunning()) {
-        statusBar()->showMessage(tr("已有点云处理任务正在运行"));
-        return;
-    }
-
-    pointcloud::PlaneSegmentationOptions options;
-    options.distanceThreshold = float(m_planeDistanceThreshold->value());
-    options.maxPlanes = m_planeMaxCount->value();
-    options.iterations = m_planeIterations->value();
-    options.minInliers = m_planeMinInliers->value();
-    options.sampleDenominator = 1 << m_planeSampleRatio->currentIndex();
-    options.preferHorizontal = false;
-
-    if (!m_planeWatcher) {
-        m_planeWatcher = new QFutureWatcher<pointcloud::PlaneSegmentationResult>(this);
-        connect(m_planeWatcher, &QFutureWatcher<pointcloud::PlaneSegmentationResult>::finished,
-                this, &MainWindow::planeSegmentationFinished);
-    }
-    const QVector<pointcloud::Point3D> source = m_points;
-    m_planeInputRevision = m_canvasRevision;
-    m_planeApply->setEnabled(false);
-    m_progress->show();
-    m_progress->setRange(0, 0);
-    m_planeOutput->setPlainText(tr("正在分析当前画布缓存..."));
-    statusBar()->showMessage(tr("后台执行多平面分割..."));
-    m_planeWatcher->setFuture(QtConcurrent::run([source, options]() {
-        return pointcloud::segmentPlanes(source, options);
-    }));
-}
-
-void MainWindow::planeSegmentationFinished() {
-    const pointcloud::PlaneSegmentationResult result = m_planeWatcher->result();
-    m_planeApply->setEnabled(true);
-    m_progress->hide();
-    if (m_planeInputRevision != m_canvasRevision) {
-        m_planeOutput->setPlainText(tr("画布缓存已变化，旧分割结果已丢弃。"));
-        statusBar()->showMessage(tr("画布缓存已变化，已丢弃旧平面分割结果"));
-        return;
-    }
-    if (!result.ok) {
-        m_planeResult = {};
-        m_planeOutput->setPlainText(result.error);
-        statusBar()->showMessage(tr("平面分割未找到有效平面"));
-        return;
-    }
-
-    m_planeResult = result;
-    QStringList lines;
-    lines << result.summary << QString();
-    for (int i = 0; i < result.planes.size(); ++i) {
-        const auto &plane = result.planes[i];
-        lines << tr("平面 %1").arg(i + 1)
-              << tr("%1 x + %2 y + %3 z + %4 = 0")
-                    .arg(plane.a, 0, 'g', 8).arg(plane.b, 0, 'g', 8)
-                    .arg(plane.c, 0, 'g', 8).arg(plane.d, 0, 'g', 8)
-              << tr("内点：%1  平均距离：%2  最大距离：%3")
-                    .arg(QLocale().toString(plane.inlierCount))
-                    .arg(plane.meanDistance, 0, 'g', 6)
-                    .arg(plane.maxDistance, 0, 'g', 6)
-              << QString();
-    }
-    m_planeOutput->setPlainText(lines.join(QLatin1Char('\n')));
-    statusBar()->showMessage(tr("平面分割完成：%1 个平面").arg(result.planes.size()));
-}
-
 void MainWindow::closeEvent(QCloseEvent *event) {
     setEnabled(false);
     if (m_canvas) {
@@ -1372,10 +1314,6 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     if (m_noiseWatcher && m_noiseWatcher->isRunning()) {
         statusBar()->showMessage(tr("正在结束后台噪点处理，请稍候..."));
         m_noiseWatcher->waitForFinished();
-    }
-    if (m_planeWatcher && m_planeWatcher->isRunning()) {
-        statusBar()->showMessage(tr("正在结束后台平面分割，请稍候..."));
-        m_planeWatcher->waitForFinished();
     }
     if (m_threePlaneWatcher && m_threePlaneWatcher->isRunning()) {
         statusBar()->showMessage(tr("正在结束后台三点平面拟合，请稍候..."));

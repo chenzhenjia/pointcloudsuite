@@ -121,6 +121,34 @@ void runFixtureTests(const QString &directory) {
     expect(noiseResult.ok && noiseResult.points.size() < noisy.size(), "statistical outlier removal");
     expect(noiseResult.points.size() >= 50, "preserve dense surface points");
 
+    QVector<pointcloud::Point3D> voxelizedSurface;
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            voxelizedSurface.push_back({float(x) * 0.25f, float(y) * 0.25f,
+                                        float((x + y) % 3) * 0.002f, 0, 0, 1});
+    voxelizedSurface.push_back({50.0f, 50.0f, 50.0f, 0, 0, 1});
+    pointcloud::NoiseOptions defaultNoise;
+    defaultNoise.voxelSize = 0.25f;
+    const pointcloud::NoiseResult voxelizedNoise =
+        pointcloud::removeNoise(voxelizedSurface, defaultNoise);
+    expect(voxelizedNoise.ok && voxelizedNoise.points.size() >= 300
+               && voxelizedNoise.points.size() < voxelizedSurface.size(),
+           "default statistical filter preserves voxelized 2.5D surface");
+    expect(!voxelizedNoise.error.contains(QStringLiteral("参数过严")),
+           "default statistical filter does not report overly strict parameters");
+
+    QVector<pointcloud::Point3D> largeScaleSurface;
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            largeScaleSurface.push_back({float(x) * 10.0f, float(y) * 10.0f,
+                                         0.0f, 0, 0, 1});
+    largeScaleSurface.push_back({10000.0f, 10000.0f, 10000.0f, 0, 0, 1});
+    defaultNoise.voxelEnabled = false;
+    const pointcloud::NoiseResult scaledNoise =
+        pointcloud::removeNoise(largeScaleSurface, defaultNoise);
+    expect(scaledNoise.ok && scaledNoise.points.size() == voxelizedNoise.points.size(),
+           "statistical threshold adapts to point-cloud scale");
+
     const QVector<pointcloud::Point3D> half = pointcloud::proportionalDownsample(points, 2);
     expect(half.size() == 2, "proportional downsample count");
     if (half.size() == 2)
@@ -258,6 +286,23 @@ void runGeometryTests() {
                "refined plane equation contains every returned point");
         expect(noisy.model.c > 0.0f, "refined plane normal points toward positive Z");
     }
+
+    pointcloud::ThreePointPlaneOptions heightOptions = seedOptions;
+    heightOptions.useZAxisResidual = true;
+    heightOptions.maxNormalTiltDegrees = 45.0f;
+    const pointcloud::ThreePointPlaneResult heightPlane =
+        pointcloud::extractPlaneFromThreePoints(noisyTilted, {0, 13, 195}, heightOptions);
+    expect(heightPlane.ok && heightPlane.planeIndices.size() == 196,
+           "extract 2.5D height plane using Z-axis residual");
+
+    QVector<pointcloud::Point3D> verticalPlane;
+    for (int z = 0; z < 12; ++z)
+        for (int y = 0; y < 12; ++y)
+            verticalPlane.push_back({0.0f, float(y) * 0.1f, float(z) * 0.1f, 1, 0, 0});
+    heightOptions.minInliers = 100;
+    const pointcloud::ThreePointPlaneResult vertical =
+        pointcloud::extractPlaneFromThreePoints(verticalPlane, {0, 11, 143}, heightOptions);
+    expect(!vertical.ok, "reject vertical plane in 2.5D height extraction mode");
 
     QVector<pointcloud::Point3D> separated;
     for (int region = 0; region < 2; ++region) {

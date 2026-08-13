@@ -27,8 +27,8 @@ struct NoiseOptions {
     bool voxelEnabled = true;
     float voxelSize = 0.10f;
     bool statisticalEnabled = true;
-    int meanK = 16;
-    float stddevMultiplier = 1.5f;
+    int meanK = 45;
+    float stddevMultiplier = 1.30f;
 };
 
 struct GeometryFeatureOptions { int neighborCount = 24; float searchRadius = 0.0f; int minNeighbors = 3; bool useExistingNormals = true; int neighbors = 24; float radius = 0.0f; bool estimateNormals = true; };
@@ -66,6 +66,8 @@ struct ThreePointPlaneOptions {
     int minInliers = 100;
     unsigned int randomSeed = 20260813u;
     bool keepSeedComponentOnly = true;
+    bool useZAxisResidual = false;
+    float maxNormalTiltDegrees = 45.0f;
 };
 struct ThreePointPlaneResult {
     PlaneModel model;
