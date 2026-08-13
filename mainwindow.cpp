@@ -1607,16 +1607,11 @@ void MainWindow::startPointCloudRegistration() {
         const QVector<double> start = parsePoseCells(m_registrationTable, row, 1, &startOk);
         const QVector<double> end = parsePoseCells(m_registrationTable, row, 7, &endOk);
         if (!startOk || !endOk) { errors << tr("第 %1 行位姿包含无效数字").arg(row + 1); continue; }
-        QVector<double> mid(6);
-        for (int i = 0; i < 6; ++i) {
-            double delta = end[i] - start[i];
-            if (i >= 3) while (delta > 180.0) delta -= 360.0;
-            if (i >= 3) while (delta < -180.0) delta += 360.0;
-            mid[i] = start[i] + delta * 0.5;
-        }
         pointcloud::WorldCloudInput input;
         input.filePath = m_registrationTable->item(row, 0)->text();
-        input.worldFromLocal = poseMatrixZYX(mid) * flangeFromDepth;
+        input.startWorldFromLocal = poseMatrixZYX(start) * flangeFromDepth;
+        input.endWorldFromLocal = poseMatrixZYX(end) * flangeFromDepth;
+        input.interpolateScanPose = true;
         input.voxelDownsample = m_registrationVoxelEnabled && m_registrationVoxelEnabled->isChecked();
         input.voxelSize = m_registrationVoxelSize ? float(m_registrationVoxelSize->value()) : 0.25f;
         inputs.push_back(std::move(input));
@@ -1797,8 +1792,10 @@ void MainWindow::mergeWorldPointClouds() {
         }
         pointcloud::WorldCloudInput input;
         input.filePath = dir.absoluteFilePath(fileName);
-        input.worldFromLocal.setToIdentity();
-        input.worldFromLocal.translate(x, y, z);
+        input.startWorldFromLocal.setToIdentity();
+        input.startWorldFromLocal.translate(x, y, z);
+        input.endWorldFromLocal = input.startWorldFromLocal;
+        input.interpolateScanPose = false;
         inputs.push_back(input);
     }
     m_pendingWorldInputs = inputs;

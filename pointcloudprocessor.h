@@ -39,7 +39,9 @@ struct NoiseOptions {
 // no per-point robot trajectory compensation is implied.
 struct WorldCloudInput {
     QString filePath;
-    QMatrix4x4 worldFromLocal;
+    QMatrix4x4 startWorldFromLocal;
+    QMatrix4x4 endWorldFromLocal;
+    bool interpolateScanPose = true;
     bool voxelDownsample = true;
     float voxelSize = 0.25f;
 };

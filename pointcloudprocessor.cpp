@@ -20,6 +20,7 @@
 #include <QLocale>
 #include <QVector2D>
 #include <QVector3D>
+#include <QQuaternion>
 #include <QtMath>
 #include <random>
 #include <thread>
@@ -496,7 +497,7 @@ bool readMergeCache(const QVector<WorldCloudInput> &inputs, WorldCloudMergeResul
         QString path; quint64 size = 0; qint64 stamp = 0; stream >> path >> size >> stamp;
         QFileInfo info(input.filePath);
         if (path != input.filePath || size != quint64(info.size()) || stamp != info.lastModified().toMSecsSinceEpoch()) return false;
-        for (int i = 0; i < 16; ++i) { float value = 0; stream >> value; if (std::abs(value - input.worldFromLocal.constData()[i]) > 1.0e-6f) return false; }
+        for (int i = 0; i < 16; ++i) { float value = 0; stream >> value; if (std::abs(value - input.startWorldFromLocal.constData()[i]) > 1.0e-6f) return false; }
     }
     if (pointCount > quint64(std::numeric_limits<qsizetype>::max())) return false;
     result.points.resize(qsizetype(pointCount)); result.cloudIds.resize(qsizetype(pointCount)); result.sourceIndices.resize(qsizetype(pointCount));
@@ -509,7 +510,7 @@ void writeMergeCache(const QVector<WorldCloudInput> &inputs, const WorldCloudMer
     QFile file(temp); if (!file.open(QIODevice::WriteOnly)) return;
     QDataStream stream(&file); stream.setByteOrder(QDataStream::LittleEndian);
     stream << MergeCacheMagic << MergeCacheVersion << quint32(inputs.size()) << quint64(result.points.size());
-    for (const auto &input : inputs) { QFileInfo info(input.filePath); stream << input.filePath << quint64(info.size()) << info.lastModified().toMSecsSinceEpoch(); for (int i = 0; i < 16; ++i) stream << input.worldFromLocal.constData()[i]; }
+    for (const auto &input : inputs) { QFileInfo info(input.filePath); stream << input.filePath << quint64(info.size()) << info.lastModified().toMSecsSinceEpoch(); for (int i = 0; i < 16; ++i) stream << input.startWorldFromLocal.constData()[i]; }
     for (qsizetype i = 0; i < result.points.size(); ++i) { const auto &p = result.points[i]; stream << p.x << p.y << p.z << p.nx << p.ny << p.nz << qint32(result.cloudIds[i]) << qint64(result.sourceIndices[i]); }
     file.flush(); file.close(); QFile::remove(path); QFile::rename(temp, path);
 }
@@ -548,6 +549,22 @@ IcpCorrection estimateIcpCorrection(const QVector<Point3D> &moving,
 
 void applyIcpCorrection(QVector<Point3D> &points, const IcpCorrection &c) { for(Point3D &p:points){const float x=p.x,y=p.y,z=p.z;p.x=c.r[0][0]*x+c.r[0][1]*y+c.r[0][2]*z+c.t.x();p.y=c.r[1][0]*x+c.r[1][1]*y+c.r[1][2]*z+c.t.y();p.z=c.r[2][0]*x+c.r[2][1]*y+c.r[2][2]*z+c.t.z();const float nx=p.nx,ny=p.ny,nz=p.nz;p.nx=c.r[0][0]*nx+c.r[0][1]*ny+c.r[0][2]*nz;p.ny=c.r[1][0]*nx+c.r[1][1]*ny+c.r[1][2]*nz;p.nz=c.r[2][0]*nx+c.r[2][1]*ny+c.r[2][2]*nz;} }
 
+QMatrix4x4 interpolateRigidTransform(const QMatrix4x4 &start, const QMatrix4x4 &end, float t) {
+    const QVector3D startPosition(start(0,3), start(1,3), start(2,3));
+    const QVector3D endPosition(end(0,3), end(1,3), end(2,3));
+    QMatrix3x3 startRotation, endRotation;
+    for (int row=0; row<3; ++row) for (int column=0; column<3; ++column) {
+        startRotation(row,column)=start(row,column); endRotation(row,column)=end(row,column);
+    }
+    const QQuaternion rotation = QQuaternion::slerp(
+        QQuaternion::fromRotationMatrix(startRotation),
+        QQuaternion::fromRotationMatrix(endRotation), t).normalized();
+    const QVector3D position = startPosition * (1.0f-t) + endPosition * t;
+    QMatrix4x4 result; result.setToIdentity(); result.rotate(rotation);
+    result(0,3)=position.x(); result(1,3)=position.y(); result(2,3)=position.z();
+    return result;
+}
+
 WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &inputs, const IcpOptions &icp) {
     WorldCloudMergeResult result;
     if (inputs.isEmpty()) { result.error = QStringLiteral("未选择 PLY 文件"); return result; }
@@ -565,10 +582,6 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
         LoadResult item = futures[i].get();
         if (!item.ok) { result.error = QStringLiteral("加载 %1 失败：%2").arg(inputs[i].filePath, item.error); return result; }
         if (item.points.isEmpty()) { result.error = QStringLiteral("%1 不包含可显示的顶点").arg(inputs[i].filePath); return result; }
-        if (inputs[i].voxelDownsample && inputs[i].voxelSize > 0.0f) {
-            item.points = voxelFilter(item.points, inputs[i].voxelSize);
-        }
-        if (item.points.isEmpty()) { result.error = QStringLiteral("%1 降采样后没有有效点").arg(inputs[i].filePath); return result; }
         total += item.points.size(); loaded[i] = std::move(item.points);
     }
     result.points.reserve(total); result.cloudIds.reserve(total); result.sourceIndices.reserve(total);
@@ -576,9 +589,24 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
     for (int cloudId = 0; cloudId < inputs.size(); ++cloudId) {
         result.sourceFiles.push_back(inputs[cloudId].filePath);
         QVector<Point3D> points = std::move(loaded[cloudId]);
-        for (Point3D &source : points) {
-            const QVector3D world = inputs[cloudId].worldFromLocal.map(QVector3D(source.x, source.y, source.z));
+        QVector<qsizetype> sourceIndices(points.size());
+        for (qsizetype sourceIndex=0; sourceIndex<points.size(); ++sourceIndex) {
+            Point3D &source=points[sourceIndex]; sourceIndices[sourceIndex]=sourceIndex;
+            const float progress = inputs[cloudId].interpolateScanPose && points.size()>1
+                ? float(sourceIndex)/float(points.size()-1) : 0.0f;
+            const QMatrix4x4 transform = interpolateRigidTransform(
+                inputs[cloudId].startWorldFromLocal, inputs[cloudId].endWorldFromLocal, progress);
+            const QVector3D world = transform.map(QVector3D(source.x, source.y, source.z));
+            const QVector3D normal = transform.mapVector(QVector3D(source.nx, source.ny, source.nz));
             source.x=world.x();source.y=world.y();source.z=world.z();
+            source.nx=normal.x();source.ny=normal.y();source.nz=normal.z();
+        }
+        if (inputs[cloudId].voxelDownsample && inputs[cloudId].voxelSize > 0.0f) {
+            std::unordered_map<NoiseKey, qsizetype, NoiseKeyHash> representatives;
+            QVector<Point3D> reduced; QVector<qsizetype> reducedIndices;
+            representatives.reserve(size_t(points.size()/2+1));
+            for (qsizetype i=0;i<points.size();++i) if (usablePoint(points[i]) && representatives.emplace(noiseKey(points[i],inputs[cloudId].voxelSize),i).second) { reduced.push_back(points[i]); reducedIndices.push_back(sourceIndices[i]); }
+            points=std::move(reduced); sourceIndices=std::move(reducedIndices);
         }
         if (icp.enabled && cloudId > 0) {
             float previous=std::numeric_limits<float>::max();
@@ -586,7 +614,7 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
         }
         for (qsizetype sourceIndex = 0; sourceIndex < points.size(); ++sourceIndex) {
             const Point3D &point = points[sourceIndex];
-            result.points.push_back(point); result.cloudIds.push_back(cloudId); result.sourceIndices.push_back(sourceIndex);
+            result.points.push_back(point); result.cloudIds.push_back(cloudId); result.sourceIndices.push_back(sourceIndices[sourceIndex]);
         }
     }
     result.ok = !result.points.isEmpty();
