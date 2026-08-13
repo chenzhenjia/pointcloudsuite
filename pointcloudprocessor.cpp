@@ -23,6 +23,7 @@
 #include <QtMath>
 #include <random>
 #include <thread>
+#include <future>
 #include <cstring>
 
 namespace pointcloud {
@@ -463,17 +464,19 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
     WorldCloudMergeResult result;
     if (inputs.isEmpty()) { result.error = QStringLiteral("未选择 PLY 文件"); return result; }
     qsizetype total = 0;
-    QVector<QVector<Point3D>> loaded;
-    loaded.reserve(inputs.size());
+    std::vector<std::future<LoadResult>> futures;
+    futures.reserve(inputs.size());
     for (const WorldCloudInput &input : inputs) {
-        if (input.filePath.trimmed().isEmpty()) { result.error = QStringLiteral("存在空的 PLY 路径"); return result; }
-        QVector<Point3D> points;
-        QString error;
-        if (!loadPlyCached(input.filePath, points, &error, nullptr)) {
-            result.error = QStringLiteral("加载 %1 失败：%2").arg(input.filePath, error); return result;
-        }
-        if (points.isEmpty()) { result.error = QStringLiteral("%1 不包含可显示的顶点").arg(input.filePath); return result; }
-        total += points.size(); loaded.push_back(std::move(points));
+        futures.push_back(std::async(std::launch::async, [path = input.filePath]() {
+            return loadPlyCachedResult(path);
+        }));
+    }
+    QVector<QVector<Point3D>> loaded(inputs.size());
+    for (int i = 0; i < inputs.size(); ++i) {
+        LoadResult item = futures[i].get();
+        if (!item.ok) { result.error = QStringLiteral("加载 %1 失败：%2").arg(inputs[i].filePath, item.error); return result; }
+        if (item.points.isEmpty()) { result.error = QStringLiteral("%1 不包含可显示的顶点").arg(inputs[i].filePath); return result; }
+        total += item.points.size(); loaded[i] = std::move(item.points);
     }
     result.points.reserve(total); result.cloudIds.reserve(total); result.sourceIndices.reserve(total);
     result.sourceFiles.reserve(inputs.size());
