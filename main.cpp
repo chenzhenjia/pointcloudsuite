@@ -5,6 +5,7 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QFile>
+#include <QPointer>
 #include <QSurfaceFormat>
 #include <QTextStream>
 #include <QTimer>
@@ -48,15 +49,23 @@ int main(int argc, char *argv[])
     // trigger a Qt QObject sender assertion in debug builds.
     qInstallMessageHandler(startupMessageHandler);
     qInfo() << "startup: QApplication created";
-    // Keep the top-level window on the heap.  QOpenGLWidget and its native
-    // context are destroyed after the event loop has stopped; placing the
-    // complete widget tree in main's stack makes MSVC's /RTC1 stack guard
-    // report a false-looking "stack around w was corrupted" during Qt's
-    // deferred native-window cleanup.  Explicit destruction after exec also
-    // gives the widget a well-defined lifetime and keeps the stack frame
-    // free of Qt/OpenGL-owned state.
-    auto *w = new MainWindow;
+    // Keep the top-level window in a guarded QPointer.  QOpenGLWidget owns
+    // native GL resources and must be destroyed while the Qt application and
+    // platform integration are still alive.  The previous unconditional
+    // delete after exec could run after Qt had torn down the GUI platform,
+    // producing an access violation at 0xFFFFFFFFFFFFFFFF on Windows.
+    QPointer<MainWindow> w = new MainWindow;
     qInfo() << "startup: MainWindow constructed";
+    QObject::connect(qApp, &QCoreApplication::aboutToQuit, [&w]() {
+        // Destroy the OpenGL widget tree while QApplication and its platform
+        // context are still alive.  Deleting it after exec() returns races
+        // Qt's native window teardown on some MSVC/Qt 6 builds.
+        if (w) {
+            w->close();
+            delete w;
+            w = nullptr;
+        }
+    });
     w->show();
     qInfo() << "startup: MainWindow shown";
     if (qEnvironmentVariableIsSet("POINTCLOUDVIEW_SELFTEST_CLOSE")) {
@@ -68,6 +77,5 @@ int main(int argc, char *argv[])
         QTimer::singleShot(500, qApp, &QCoreApplication::quit);
     }
     const int result = QApplication::exec();
-    delete w;
     return result;
 }

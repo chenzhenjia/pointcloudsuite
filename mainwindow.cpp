@@ -20,6 +20,7 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QOpenGLBuffer>
+#include <QOpenGLContext>
 #include <QOpenGLFunctions_3_3_Core>
 #include <QOpenGLFramebufferObject>
 #include <QOpenGLShaderProgram>
@@ -74,8 +75,9 @@ public:
     }
 
     ~PointCloudCanvas() override {
-        if (!context()) return;
+        if (!context() || !context()->isValid()) return;
         makeCurrent();
+        if (!QOpenGLContext::currentContext()) return;
         m_pickingFbo.reset();
         if (m_contourBuffer.isCreated()) m_contourBuffer.destroy();
         if (m_contourVertexArray.isCreated()) m_contourVertexArray.destroy();
@@ -185,15 +187,27 @@ public:
 protected:
     void initializeGL() override {
         initializeOpenGLFunctions();
-        const QString vendor = QString::fromLatin1(
-            reinterpret_cast<const char *>(glGetString(GL_VENDOR)));
-        const QString renderer = QString::fromLatin1(
-            reinterpret_cast<const char *>(glGetString(GL_RENDERER)));
-        const QString version = QString::fromLatin1(
-            reinterpret_cast<const char *>(glGetString(GL_VERSION)));
+        // A failed/invalid context may legally return nullptr from glGetString.
+        // Passing that pointer directly to QString::fromLatin1() caused the
+        // Windows 0xFFFFFFFFFFFFFFFF read-access crash during QWidget::show().
+        const auto safeGlString = [this](GLenum name) {
+            const GLubyte *value = glGetString(name);
+            return value ? QString::fromLatin1(reinterpret_cast<const char *>(value))
+                         : QStringLiteral("<unavailable>");
+        };
+        const QString vendor = safeGlString(GL_VENDOR);
+        const QString renderer = safeGlString(GL_RENDERER);
+        const QString version = safeGlString(GL_VERSION);
         qInfo().noquote() << "OpenGL vendor:" << vendor;
         qInfo().noquote() << "OpenGL renderer:" << renderer;
         qInfo().noquote() << "OpenGL version:" << version;
+        if (vendor == QStringLiteral("<unavailable>")
+            || renderer == QStringLiteral("<unavailable>")) {
+            m_initializationError = tr("无法创建有效的 OpenGL 上下文。请检查显卡驱动或 Qt OpenGL 部署。\n"
+                                       "程序将保留界面，但暂时不绘制点云。");
+            qWarning().noquote() << m_initializationError;
+            return;
+        }
         const QString rendererLower = renderer.toLower();
         if (rendererLower.contains(QStringLiteral("llvmpipe"))
             || rendererLower.contains(QStringLiteral("softpipe"))
@@ -347,7 +361,8 @@ protected:
     void paintGL() override {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        if (m_initializationError.isEmpty() && !m_points.isEmpty()) {
+        if (m_initializationError.isEmpty() && context() && context()->isValid()
+            && !m_points.isEmpty()) {
             uploadCloudIfNeeded();
             if (m_uploadError.isEmpty()) {
                 uploadStatesIfNeeded();
