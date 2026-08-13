@@ -1456,7 +1456,9 @@ void MainWindow::openPointCloudSource() {
         m_sourceDirectory = directory;
         m_sourceFiles.clear();
         for (const QString &name : files) m_sourceFiles.push_back(dir.absoluteFilePath(name));
+        m_folderScanOnly = true;
         m_fileList->clear();
+        m_fileList->setSelectionMode(QAbstractItemView::ExtendedSelection);
         for (const QString &path : m_sourceFiles) m_fileList->addItem(QFileInfo(path).fileName());
         m_fileInfo->setText(tr("文件夹扫描完成\nPLY 文件数  %1\n请在列表中选择文件查看，或进入“点云配准”页进行多选。")
                                 .arg(m_sourceFiles.size()));
@@ -1584,8 +1586,13 @@ void MainWindow::loadFinished() {
         return;
     }
     m_rawPoints = result.points;
-    m_sourceFiles = {m_pendingPath};
-    m_sourceDirectory = QFileInfo(m_pendingPath).absolutePath();
+    const QFileInfo fileInfo(m_pendingPath);
+    const bool keepFolderSources = m_folderScanOnly && m_sourceFiles.size() > 1
+        && m_sourceFiles.contains(m_pendingPath);
+    if (!keepFolderSources) {
+        m_sourceFiles = {m_pendingPath};
+        m_sourceDirectory = fileInfo.absolutePath();
+    }
     float minZ = m_rawPoints.first().z;
     float maxZ = minZ;
     for (const auto &point : m_rawPoints) {
@@ -1600,9 +1607,6 @@ void MainWindow::loadFinished() {
     for (qsizetype i = 0; i < m_pointSourceIndices.size(); ++i) m_pointSourceIndices[i] = i;
     m_pointSourceFiles = {m_pendingPath};
 
-    const QFileInfo fileInfo(m_pendingPath);
-    const bool keepFolderSources = m_sourceFiles.size() > 1
-        && m_sourceFiles.contains(m_pendingPath);
     if (!keepFolderSources) {
         m_sourceFiles = {m_pendingPath};
         m_sourceDirectory = fileInfo.absolutePath();
