@@ -29,19 +29,11 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 
 int main(int argc, char *argv[])
 {
-    qInstallMessageHandler(startupMessageHandler);
-    qInfo() << "startup: entering main";
-    // This Qt 6.8.3 installation crashes while creating QOpenGLWidget with
-    // QT_OPENGL=software. Use desktop OpenGL unless explicitly overridden.
-    const QByteArray backend = qgetenv("QT_OPENGL").trimmed().toLower();
-    if (backend.isEmpty()) {
-        qputenv("QT_OPENGL", QByteArrayLiteral("desktop"));
-        QApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
-    } else if (backend == "desktop") {
-        QApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
-    } else if (backend == "software") {
-        QApplication::setAttribute(Qt::AA_UseSoftwareOpenGL);
-    }
+    // Qt 6.8.3's software OpenGL path crashes inside Qt6OpenGLd.dll on this
+    // machine. Override stale IDE/user settings and always request the native
+    // desktop driver before QApplication exists.
+    qputenv("QT_OPENGL", QByteArrayLiteral("desktop"));
+    QApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
     QSurfaceFormat format;
     format.setRenderableType(QSurfaceFormat::OpenGL);
     format.setVersion(3, 3);
@@ -50,6 +42,7 @@ int main(int argc, char *argv[])
     QSurfaceFormat::setDefaultFormat(format);
 
     QApplication a(argc, argv);
+    qInstallMessageHandler(startupMessageHandler);
     qInfo() << "startup: QApplication created";
     MainWindow w;
     qInfo() << "startup: MainWindow constructed";
