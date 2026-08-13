@@ -531,6 +531,10 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
         LoadResult item = futures[i].get();
         if (!item.ok) { result.error = QStringLiteral("加载 %1 失败：%2").arg(inputs[i].filePath, item.error); return result; }
         if (item.points.isEmpty()) { result.error = QStringLiteral("%1 不包含可显示的顶点").arg(inputs[i].filePath); return result; }
+        if (inputs[i].voxelDownsample && inputs[i].voxelSize > 0.0f) {
+            item.points = voxelFilter(item.points, inputs[i].voxelSize);
+        }
+        if (item.points.isEmpty()) { result.error = QStringLiteral("%1 降采样后没有有效点").arg(inputs[i].filePath); return result; }
         total += item.points.size(); loaded[i] = std::move(item.points);
     }
     result.points.reserve(total); result.cloudIds.reserve(total); result.sourceIndices.reserve(total);

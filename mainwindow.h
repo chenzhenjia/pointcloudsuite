@@ -71,6 +71,8 @@ private:
     QPushButton *m_registrationPrepare = nullptr;
     QPushButton *m_registrationStart = nullptr;
     QPlainTextEdit *m_registrationOutput = nullptr;
+    QCheckBox *m_registrationVoxelEnabled = nullptr;
+    QDoubleSpinBox *m_registrationVoxelSize = nullptr;
     QLabel *m_fileInfo = nullptr;
     QLabel *m_canvasInfo = nullptr;
     QProgressBar *m_progress = nullptr;

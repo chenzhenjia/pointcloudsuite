@@ -40,6 +40,8 @@ struct NoiseOptions {
 struct WorldCloudInput {
     QString filePath;
     QMatrix4x4 worldFromLocal;
+    bool voxelDownsample = true;
+    float voxelSize = 0.25f;
 };
 
 struct WorldCloudMergeResult {

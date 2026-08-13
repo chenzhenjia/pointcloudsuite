@@ -192,6 +192,15 @@
               </property>
              </widget>
             </item>
+            <item><widget class="QCheckBox" name="registrationVoxelEnabled"><property name="text"><string>配准前体素降采样</string></property><property name="checked"><bool>true</bool></property></widget></item>
+            <item><layout class="QHBoxLayout" name="registrationVoxelRow"><item><widget class="QLabel" name="registrationVoxelLabel"><property name="text"><string>体素尺寸 mm</string></property></widget></item><item><widget class="QDoubleSpinBox" name="registrationVoxelSize"><property name="minimum"><double>0.001000000000000</double></property><property name="maximum"><double>1000.000000000000000</double></property><property name="decimals"><number>3</number></property><property name="value"><double>0.250000000000000</double></property></widget></item></layout></item>
+            <item>
+             <widget class="QPushButton" name="registrationStart">
+              <property name="text">
+               <string>开始点云配准</string>
+              </property>
+             </widget>
+            </item>
             <item>
              <widget class="QTableWidget" name="registrationTable">
               <property name="minimumSize">
@@ -219,13 +228,6 @@
               <column/>
               <column/>
               <column/>
-             </widget>
-            </item>
-            <item>
-             <widget class="QPushButton" name="registrationStart">
-              <property name="text">
-               <string>开始点云配准</string>
-              </property>
              </widget>
             </item>
             <item>
@@ -753,4 +755,3 @@
  <resources/>
  <connections/>
 </ui>
-

@@ -959,6 +959,8 @@ void MainWindow::buildUi() {
     m_registrationPrepare = ui->primaryButton1;
     m_registrationStart = ui->registrationStart;
     m_registrationOutput = ui->registrationOutput;
+    m_registrationVoxelEnabled = ui->registrationVoxelEnabled;
+    m_registrationVoxelSize = ui->registrationVoxelSize;
     m_fileInfo = ui->subTitle1;
     m_canvasInfo = ui->subTitle2;
     m_progress = ui->progress;
@@ -1523,6 +1525,8 @@ void MainWindow::startPointCloudRegistration() {
         pointcloud::WorldCloudInput input;
         input.filePath = m_registrationTable->item(row, 0)->text();
         input.worldFromLocal = poseMatrixZYX(mid);
+        input.voxelDownsample = m_registrationVoxelEnabled && m_registrationVoxelEnabled->isChecked();
+        input.voxelSize = m_registrationVoxelSize ? float(m_registrationVoxelSize->value()) : 0.25f;
         inputs.push_back(std::move(input));
     }
     if (!errors.isEmpty()) { QMessageBox::warning(this, tr("位姿输入错误"), errors.join(QLatin1Char('\n'))); return; }
