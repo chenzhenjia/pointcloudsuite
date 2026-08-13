@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
  <class>MainWindow</class>
- <widget class="QMainWindow" name="MainWindow">
+ <widget class="QMainWindow" name="main_window">
   <property name="geometry">
    <rect>
     <x>0</x>
@@ -19,7 +19,7 @@
   <property name="windowTitle">
    <string>点云预览工作台</string>
   </property>
-  <widget class="QWidget" name="centralwidget">
+  <widget class="QWidget" name="wgt_central">
    <layout class="QVBoxLayout" name="rootLayout">
     <property name="spacing">
      <number>0</number>
@@ -32,14 +32,14 @@
          <number>0</number>
         </property>
         <item>
-         <widget class="QLabel" name="mainTitle">
+         <widget class="QLabel" name="lbl_main_title">
           <property name="text">
            <string>点云预览工作台</string>
           </property>
          </widget>
         </item>
         <item>
-         <widget class="QLabel" name="subTitle">
+         <widget class="QLabel" name="lbl_subtitle">
           <property name="text">
            <string>PLY  ·  3D VIEW</string>
           </property>
@@ -61,7 +61,7 @@
        </spacer>
       </item>
       <item>
-       <widget class="QPushButton" name="primaryButton">
+       <widget class="QPushButton" name="btn_open_point_cloud">
         <property name="text">
          <string>打开点云</string>
         </property>
@@ -70,14 +70,14 @@
      </layout>
     </item>
     <item>
-     <widget class="QSplitter" name="mainSplitter">
+     <widget class="QSplitter" name="splitter_main">
       <property name="orientation">
        <enum>Qt::Orientation::Horizontal</enum>
       </property>
       <property name="childrenCollapsible">
        <bool>false</bool>
       </property>
-      <widget class="QWidget" name="sidePanel">
+      <widget class="QWidget" name="wgt_source_panel">
        <property name="minimumSize">
         <size>
          <width>220</width>
@@ -90,26 +90,26 @@
          <height>16777215</height>
         </size>
        </property>
-       <layout class="QVBoxLayout" name="leftLayout">
+       <layout class="QVBoxLayout" name="vbl_source">
         <property name="spacing">
          <number>0</number>
         </property>
         <item>
-         <widget class="QLabel" name="sectionTitle">
+         <widget class="QLabel" name="lbl_source_title">
           <property name="text">
            <string>数据源</string>
           </property>
          </widget>
         </item>
         <item>
-         <widget class="QListWidget" name="fileList">
+         <widget class="QListWidget" name="lw_files">
           <property name="selectionMode">
            <enum>QAbstractItemView::SelectionMode::ExtendedSelection</enum>
           </property>
          </widget>
         </item>
         <item>
-         <widget class="QLabel" name="subTitle">
+         <widget class="QLabel" name="lbl_subtitle">
           <property name="text">
            <string>尚未加载点云</string>
           </property>
@@ -120,13 +120,13 @@
         </item>
        </layout>
       </widget>
-      <widget class="QWidget" name="centerPanel">
-       <layout class="QVBoxLayout" name="centerLayout">
+      <widget class="QWidget" name="wgt_canvas_panel">
+       <layout class="QVBoxLayout" name="vbl_canvas">
         <property name="spacing">
          <number>0</number>
         </property>
         <item>
-         <widget class="QWidget" name="canvasHost" native="true">
+         <widget class="QWidget" name="wgt_canvas_host" native="true">
           <property name="sizePolicy">
            <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
             <horstretch>0</horstretch>
@@ -136,7 +136,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QLabel" name="subTitle">
+         <widget class="QLabel" name="lbl_subtitle">
           <property name="text">
            <string>就绪</string>
           </property>
@@ -144,7 +144,7 @@
         </item>
        </layout>
       </widget>
-      <widget class="QWidget" name="sidePanel">
+      <widget class="QWidget" name="wgt_source_panel">
        <property name="minimumSize">
         <size>
          <width>270</width>
@@ -157,26 +157,26 @@
          <height>16777215</height>
         </size>
        </property>
-       <layout class="QVBoxLayout" name="rightLayout">
+       <layout class="QVBoxLayout" name="vbl_control">
         <item>
-         <widget class="QTabWidget" name="tabs">
+         <widget class="QTabWidget" name="tw_main">
           <property name="currentIndex">
            <number>0</number>
           </property>
-          <widget class="QWidget" name="registrationPage">
+          <widget class="QWidget" name="wgt_registration">
            <attribute name="title">
             <string>点云配准</string>
            </attribute>
-           <layout class="QVBoxLayout" name="registrationLayout">
+           <layout class="QVBoxLayout" name="vbl_registration">
             <item>
-             <widget class="QLabel" name="sectionTitle">
+             <widget class="QLabel" name="lbl_source_title">
               <property name="text">
                <string>点云配准 · 世界坐标</string>
               </property>
              </widget>
             </item>
             <item>
-             <widget class="QLabel" name="registrationHint">
+             <widget class="QLabel" name="lbl_registration_hint">
               <property name="text">
                <string>先在数据源中多选 PLY，输入每次扫描起止位姿（mm、度）。整幅扫描采用起止位姿中间值进行刚体变换。</string>
               </property>
@@ -186,23 +186,23 @@
              </widget>
             </item>
             <item>
-             <widget class="QPushButton" name="primaryButton">
+             <widget class="QPushButton" name="btn_open_point_cloud">
               <property name="text">
                <string>确认点云配准</string>
               </property>
              </widget>
             </item>
-            <item><widget class="QCheckBox" name="registrationVoxelEnabled"><property name="text"><string>配准前体素降采样</string></property><property name="checked"><bool>true</bool></property></widget></item>
-            <item><layout class="QHBoxLayout" name="registrationVoxelRow"><item><widget class="QLabel" name="registrationVoxelLabel"><property name="text"><string>体素尺寸 mm</string></property></widget></item><item><widget class="QDoubleSpinBox" name="registrationVoxelSize"><property name="minimum"><double>0.001000000000000</double></property><property name="maximum"><double>1000.000000000000000</double></property><property name="decimals"><number>3</number></property><property name="value"><double>0.250000000000000</double></property></widget></item></layout></item>
+            <item><widget class="QCheckBox" name="chk_registration_voxel"><property name="text"><string>配准前体素降采样</string></property><property name="checked"><bool>true</bool></property></widget></item>
+            <item><layout class="QHBoxLayout" name="hbl_registration_voxel"><item><widget class="QLabel" name="lbl_registration_voxel"><property name="text"><string>体素尺寸 mm</string></property></widget></item><item><widget class="QDoubleSpinBox" name="dsb_registration_voxel"><property name="minimum"><double>0.001000000000000</double></property><property name="maximum"><double>1000.000000000000000</double></property><property name="decimals"><number>3</number></property><property name="value"><double>0.250000000000000</double></property></widget></item></layout></item>
             <item>
-             <widget class="QPushButton" name="registrationStart">
+             <widget class="QPushButton" name="btn_start_registration">
               <property name="text">
                <string>开始点云配准</string>
               </property>
              </widget>
             </item>
             <item>
-             <widget class="QTableWidget" name="registrationTable">
+             <widget class="QTableWidget" name="tbl_registration">
               <property name="minimumSize">
                <size>
                 <width>0</width>
@@ -231,7 +231,7 @@
              </widget>
             </item>
             <item>
-             <widget class="QPlainTextEdit" name="registrationOutput">
+             <widget class="QPlainTextEdit" name="pte_registration_output">
               <property name="readOnly"><bool>false</bool></property>
               <property name="placeholderText"><string>Image_Set_A
 01 Start X_ Y_ Z_ RX_ RY_ RZ_ ; END X_ Y_ Z_ RX_ RY_ RZ_</string></property>
@@ -239,23 +239,23 @@
             </item>
            </layout>
           </widget>
-          <widget class="QWidget" name="renderPage">
+          <widget class="QWidget" name="wgt_render">
            <attribute name="title">
             <string>显示</string>
            </attribute>
-           <layout class="QFormLayout" name="renderForm">
+           <layout class="QFormLayout" name="fml_render">
             <property name="verticalSpacing">
              <number>12</number>
             </property>
             <item row="0" column="0">
-             <widget class="QLabel" name="pointSizeLabel">
+             <widget class="QLabel" name="lbl_point_size">
               <property name="text">
                <string>像素标记尺寸</string>
               </property>
              </widget>
             </item>
             <item row="0" column="1">
-             <widget class="QSpinBox" name="pointSize">
+             <widget class="QSpinBox" name="spb_point_size">
               <property name="minimum">
                <number>1</number>
               </property>
@@ -268,28 +268,28 @@
              </widget>
             </item>
             <item row="1" column="0" colspan="2">
-             <widget class="QPushButton" name="resetViewButton">
+             <widget class="QPushButton" name="btn_reset_view">
               <property name="text">
                <string>重置视角</string>
               </property>
              </widget>
             </item>
             <item row="2" column="0" colspan="2">
-             <widget class="QLabel" name="sectionTitle">
+             <widget class="QLabel" name="lbl_source_title">
               <property name="text">
                <string>渲染效果</string>
               </property>
              </widget>
             </item>
             <item row="3" column="0">
-             <widget class="QLabel" name="colorModeLabel">
+             <widget class="QLabel" name="lbl_color_mode">
               <property name="text">
                <string>颜色样式</string>
               </property>
              </widget>
             </item>
             <item row="3" column="1">
-             <widget class="QComboBox" name="colorMode">
+             <widget class="QComboBox" name="cb_color_mode">
               <item>
                <property name="text">
                 <string>彩色高度</string>
@@ -308,14 +308,14 @@
              </widget>
             </item>
             <item row="4" column="0">
-             <widget class="QLabel" name="overlayLabel">
+             <widget class="QLabel" name="lbl_overlay">
               <property name="text">
                <string>叠加比例</string>
               </property>
              </widget>
             </item>
             <item row="4" column="1">
-             <widget class="QDoubleSpinBox" name="overlay">
+             <widget class="QDoubleSpinBox" name="dsb_overlay">
               <property name="decimals">
                <number>3</number>
               </property>
@@ -331,14 +331,14 @@
              </widget>
             </item>
             <item row="5" column="0">
-             <widget class="QLabel" name="mapMinLabel">
+             <widget class="QLabel" name="lbl_map_min">
               <property name="text">
                <string>映射最小值</string>
               </property>
              </widget>
             </item>
             <item row="5" column="1">
-             <widget class="QDoubleSpinBox" name="mapMin">
+             <widget class="QDoubleSpinBox" name="dsb_map_min">
               <property name="decimals">
                <number>2</number>
               </property>
@@ -351,14 +351,14 @@
              </widget>
             </item>
             <item row="6" column="0">
-             <widget class="QLabel" name="mapMaxLabel">
+             <widget class="QLabel" name="lbl_map_max">
               <property name="text">
                <string>映射最大值</string>
               </property>
              </widget>
             </item>
             <item row="6" column="1">
-             <widget class="QDoubleSpinBox" name="mapMax">
+             <widget class="QDoubleSpinBox" name="dsb_map_max">
               <property name="decimals">
                <number>2</number>
               </property>
@@ -372,20 +372,20 @@
             </item>
            </layout>
           </widget>
-          <widget class="QWidget" name="cleanPage">
+          <widget class="QWidget" name="wgt_clean">
            <attribute name="title">
             <string>点云清理</string>
            </attribute>
-           <layout class="QVBoxLayout" name="cleanLayout">
+           <layout class="QVBoxLayout" name="vbl_clean">
             <item>
-             <widget class="QLabel" name="sectionTitle">
+             <widget class="QLabel" name="lbl_source_title">
               <property name="text">
                <string>点云清理 · 后台处理</string>
               </property>
              </widget>
             </item>
             <item>
-             <widget class="QCheckBox" name="voxelNoise">
+             <widget class="QCheckBox" name="chk_voxel_noise">
               <property name="text">
                <string>体素降采样（预处理）</string>
               </property>
@@ -395,16 +395,16 @@
              </widget>
             </item>
             <item>
-             <layout class="QHBoxLayout" name="voxelRow">
+             <layout class="QHBoxLayout" name="hbl_voxel">
               <item>
-               <widget class="QLabel" name="voxelLabel">
+               <widget class="QLabel" name="lbl_voxel_size">
                 <property name="text">
                  <string>体素尺寸 mm</string>
                 </property>
                </widget>
               </item>
               <item>
-               <widget class="QDoubleSpinBox" name="voxelSize">
+               <widget class="QDoubleSpinBox" name="dsb_voxel_size">
                 <property name="decimals">
                  <number>3</number>
                 </property>
@@ -422,7 +422,7 @@
              </layout>
             </item>
             <item>
-             <widget class="QCheckBox" name="statisticalNoise">
+             <widget class="QCheckBox" name="chk_statistical_noise">
               <property name="text">
                <string>统计离群值去除（推荐）</string>
               </property>
@@ -432,16 +432,16 @@
              </widget>
             </item>
             <item>
-             <layout class="QHBoxLayout" name="statRow">
+             <layout class="QHBoxLayout" name="hbl_statistical">
               <item>
-               <widget class="QLabel" name="meanKLabel">
+               <widget class="QLabel" name="lbl_mean_k">
                 <property name="text">
                  <string>邻域 K</string>
                 </property>
                </widget>
               </item>
               <item>
-               <widget class="QSpinBox" name="meanK">
+               <widget class="QSpinBox" name="spb_mean_k">
                 <property name="minimum">
                  <number>1</number>
                 </property>
@@ -454,14 +454,14 @@
                </widget>
               </item>
               <item>
-               <widget class="QLabel" name="stddevLabel">
+               <widget class="QLabel" name="lbl_stddev">
                 <property name="text">
                  <string>阈值倍数</string>
                 </property>
                </widget>
               </item>
               <item>
-               <widget class="QDoubleSpinBox" name="stddev">
+               <widget class="QDoubleSpinBox" name="dsb_stddev">
                 <property name="decimals">
                  <number>2</number>
                 </property>
@@ -482,21 +482,21 @@
              </layout>
             </item>
             <item>
-             <widget class="QPushButton" name="noiseApply">
+             <widget class="QPushButton" name="btn_apply_noise">
               <property name="text">
                <string>应用噪点去除</string>
               </property>
              </widget>
             </item>
             <item>
-             <widget class="QPushButton" name="restoreButton">
+             <widget class="QPushButton" name="btn_restore_cloud">
               <property name="text">
                <string>恢复原始点云</string>
               </property>
              </widget>
             </item>
             <item>
-             <spacer name="cleanSpacer">
+             <spacer name="spacer_clean">
               <property name="orientation">
                <enum>Qt::Orientation::Vertical</enum>
               </property>
@@ -510,36 +510,36 @@
             </item>
            </layout>
           </widget>
-          <widget class="QWidget" name="threePage">
+          <widget class="QWidget" name="wgt_plane">
            <attribute name="title">
             <string>平面提取</string>
            </attribute>
-           <layout class="QVBoxLayout" name="threeLayout">
+           <layout class="QVBoxLayout" name="vbl_plane">
             <item>
-             <widget class="QLabel" name="sectionTitle">
+             <widget class="QLabel" name="lbl_source_title">
               <property name="text">
                <string>2.5D 平面提取</string>
               </property>
              </widget>
             </item>
             <item>
-             <layout class="QHBoxLayout" name="pickButtons">
+             <layout class="QHBoxLayout" name="hbl_plane_actions">
               <item>
-               <widget class="QPushButton" name="pickPointsButton">
+               <widget class="QPushButton" name="btn_pick_points">
                 <property name="text">
                  <string>取点</string>
                 </property>
                </widget>
               </item>
               <item>
-               <widget class="QPushButton" name="abandonPointsButton">
+               <widget class="QPushButton" name="btn_abandon_points">
                 <property name="text">
                  <string>放弃取点</string>
                 </property>
                </widget>
               </item>
               <item>
-               <widget class="QPushButton" name="undoPointButton">
+               <widget class="QPushButton" name="btn_undo_point">
                 <property name="text">
                  <string>撤销选择的点</string>
                 </property>
@@ -548,28 +548,28 @@
              </layout>
             </item>
             <item>
-             <widget class="QPushButton" name="determinePlaneButton">
+             <widget class="QPushButton" name="btn_determine_plane">
               <property name="text">
                <string>确定平面</string>
               </property>
              </widget>
             </item>
             <item>
-             <widget class="QPushButton" name="confirmCandidateButton">
+             <widget class="QPushButton" name="btn_confirm_candidate">
               <property name="text">
                <string>确定候选平面</string>
               </property>
              </widget>
             </item>
             <item>
-             <widget class="QPushButton" name="cancelCandidateButton">
+             <widget class="QPushButton" name="btn_cancel_candidate">
               <property name="text">
                <string>取消确定平面</string>
               </property>
              </widget>
             </item>
             <item>
-             <widget class="QPlainTextEdit" name="threeOutput">
+             <widget class="QPlainTextEdit" name="pte_plane_output">
               <property name="readOnly">
                <bool>true</bool>
               </property>
@@ -580,29 +580,29 @@
             </item>
            </layout>
           </widget>
-          <widget class="QWidget" name="edgePage">
+          <widget class="QWidget" name="wgt_edge">
            <attribute name="title">
             <string>边缘处理</string>
            </attribute>
-           <layout class="QVBoxLayout" name="edgeLayout">
+           <layout class="QVBoxLayout" name="vbl_edge">
             <item>
-             <widget class="QLabel" name="sectionTitle">
+             <widget class="QLabel" name="lbl_source_title">
               <property name="text">
                <string>平面边缘分割</string>
               </property>
              </widget>
             </item>
             <item>
-             <layout class="QFormLayout" name="edgeForm">
+             <layout class="QFormLayout" name="fml_edge">
               <item row="0" column="0">
-               <widget class="QLabel" name="edgeGridLabel">
+               <widget class="QLabel" name="lbl_edge_grid">
                 <property name="text">
                  <string>栅格尺寸 mm</string>
                 </property>
                </widget>
               </item>
               <item row="0" column="1">
-               <widget class="QDoubleSpinBox" name="edgeGridSize">
+               <widget class="QDoubleSpinBox" name="dsb_edge_grid">
                 <property name="decimals">
                  <number>4</number>
                 </property>
@@ -612,28 +612,28 @@
                </widget>
               </item>
               <item row="1" column="0">
-               <widget class="QLabel" name="edgeCloseLabel">
+               <widget class="QLabel" name="lbl_edge_close">
                 <property name="text">
                  <string>闭运算半径</string>
                 </property>
                </widget>
               </item>
               <item row="1" column="1">
-               <widget class="QSpinBox" name="edgeCloseRadius">
+               <widget class="QSpinBox" name="spb_edge_close">
                 <property name="maximum">
                  <number>4</number>
                 </property>
                </widget>
               </item>
               <item row="2" column="0">
-               <widget class="QLabel" name="edgeOpenLabel">
+               <widget class="QLabel" name="lbl_edge_open">
                 <property name="text">
                  <string>开运算半径</string>
                 </property>
                </widget>
               </item>
               <item row="2" column="1">
-               <widget class="QSpinBox" name="edgeOpenRadius">
+               <widget class="QSpinBox" name="spb_edge_open">
                 <property name="maximum">
                  <number>4</number>
                 </property>
@@ -642,42 +642,42 @@
              </layout>
             </item>
             <item>
-             <widget class="QPushButton" name="extractPlaneImageButton">
+             <widget class="QPushButton" name="btn_extract_plane_image">
               <property name="text">
                <string>提取平面 2D 图像</string>
               </property>
              </widget>
             </item>
             <item>
-             <widget class="QPushButton" name="edgeApplyButton">
+             <widget class="QPushButton" name="btn_apply_edge">
               <property name="text">
                <string>执行边缘分割</string>
               </property>
              </widget>
             </item>
             <item>
-             <widget class="QPushButton" name="selectEdgeButton">
+             <widget class="QPushButton" name="btn_select_edge">
               <property name="text">
                <string>选择边缘点</string>
               </property>
              </widget>
             </item>
             <item>
-             <widget class="QPushButton" name="clearEdgeSelectionButton">
+             <widget class="QPushButton" name="btn_clear_edge">
               <property name="text">
                <string>清除边缘选择</string>
               </property>
              </widget>
             </item>
             <item>
-             <widget class="QPushButton" name="savePlaneImageButton">
+             <widget class="QPushButton" name="btn_save_plane_image">
               <property name="text">
                <string>保存 2D 图片</string>
               </property>
              </widget>
             </item>
             <item>
-             <widget class="QLabel" name="planeImagePreview">
+             <widget class="QLabel" name="lbl_plane_image_preview">
               <property name="minimumSize">
                <size>
                 <width>0</width>
@@ -693,7 +693,7 @@
              </widget>
             </item>
             <item>
-             <widget class="QPlainTextEdit" name="edgeOutput">
+             <widget class="QPlainTextEdit" name="pte_edge_output">
               <property name="readOnly">
                <bool>true</bool>
               </property>
@@ -711,7 +711,7 @@
      </widget>
     </item>
     <item>
-     <widget class="QProgressBar" name="progress">
+     <widget class="QProgressBar" name="pbar_progress">
       <property name="maximum">
        <number>100</number>
       </property>
@@ -722,7 +722,7 @@
     </item>
    </layout>
   </widget>
-  <widget class="QMenuBar" name="menubar">
+  <widget class="QMenuBar" name="menubar_main">
    <property name="geometry">
     <rect>
      <x>0</x>
@@ -732,8 +732,8 @@
     </rect>
    </property>
   </widget>
-  <widget class="QStatusBar" name="statusbar"/>
-  <action name="openAction">
+  <widget class="QStatusBar" name="statusbar_main"/>
+  <action name="act_open">
    <property name="text">
     <string>打开点云...</string>
    </property>
@@ -741,12 +741,12 @@
     <string>Ctrl+O</string>
    </property>
   </action>
-  <action name="separatorAction">
+  <action name="act_separator">
    <property name="text">
     <string>separator</string>
    </property>
   </action>
-  <action name="exitAction">
+  <action name="act_exit">
    <property name="text">
     <string>退出</string>
    </property>
@@ -755,3 +755,5 @@
  <resources/>
  <connections/>
 </ui>
+
+
