@@ -2450,117 +2450,6 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points
         return result;
     }
 
-    QVector<QVector2D> selectedProjected;
-    selectedProjected.reserve(result.planeIndices.size());
-    float minimumU = std::numeric_limits<float>::max();
-    float minimumV = std::numeric_limits<float>::max();
-    float maximumU = std::numeric_limits<float>::lowest();
-    float maximumV = std::numeric_limits<float>::lowest();
-    for (int index : result.planeIndices) {
-        const QVector3D delta = vectorFor(index) - origin;
-        const QVector2D uv(QVector3D::dotProduct(delta, axisU),
-                           QVector3D::dotProduct(delta, axisV));
-        selectedProjected.push_back(uv);
-        minimumU = qMin(minimumU, uv.x()); maximumU = qMax(maximumU, uv.x());
-        minimumV = qMin(minimumV, uv.y()); maximumV = qMax(maximumV, uv.y());
-    }
-
-    float edgeGridSize = options.edgeGridSize > 0.0f
-        ? options.edgeGridSize : qMax(estimatedSpacing * 1.25f, 1.0e-6f);
-    const int closeRadius = qBound(0, options.morphologyCloseRadius, 4);
-    const int openRadius = qBound(0, options.morphologyOpenRadius, 4);
-    const int padding = qMax(2, closeRadius + openRadius + 2);
-    int gridWidth = 0;
-    int gridHeight = 0;
-    const qsizetype maximumCells = qMax(1024, options.maximumEdgeGridCells);
-    for (int attempt = 0; attempt < 16; ++attempt) {
-        const double widthValue = std::ceil(double(maximumU - minimumU) / edgeGridSize)
-            + 1.0 + 2.0 * padding;
-        const double heightValue = std::ceil(double(maximumV - minimumV) / edgeGridSize)
-            + 1.0 + 2.0 * padding;
-        if (widthValue <= std::numeric_limits<int>::max()
-            && heightValue <= std::numeric_limits<int>::max()
-            && widthValue * heightValue <= double(maximumCells)) {
-            gridWidth = int(widthValue);
-            gridHeight = int(heightValue);
-            break;
-        }
-        edgeGridSize *= 2.0f;
-    }
-    if (gridWidth > 2 && gridHeight > 2) {
-        minimumU -= float(padding) * edgeGridSize;
-        minimumV -= float(padding) * edgeGridSize;
-        QVector<quint8> mask(gridWidth * gridHeight, 0);
-        for (int local = 0; local < selectedProjected.size(); ++local) {
-            const int x = qBound(0, int(std::floor((selectedProjected[local].x() - minimumU)
-                                                   / edgeGridSize)), gridWidth - 1);
-            const int y = qBound(0, int(std::floor((selectedProjected[local].y() - minimumV)
-                                                   / edgeGridSize)), gridHeight - 1);
-            const int cellIndex = y * gridWidth + x;
-            mask[cellIndex] = 1;
-        }
-
-        if (closeRadius > 0)
-            mask = erodeMask(dilateMask(mask, gridWidth, gridHeight, closeRadius),
-                             gridWidth, gridHeight, closeRadius);
-        if (openRadius > 0)
-            mask = dilateMask(erodeMask(mask, gridWidth, gridHeight, openRadius),
-                              gridWidth, gridHeight, openRadius);
-
-        std::unordered_set<int> edgeSet;
-        for (int local = 0; local < selectedProjected.size(); ++local) {
-            const int x = qBound(0, int(std::floor((selectedProjected[local].x() - minimumU)
-                                                   / edgeGridSize)), gridWidth - 1);
-            const int y = qBound(0, int(std::floor((selectedProjected[local].y() - minimumV)
-                                                   / edgeGridSize)), gridHeight - 1);
-            if (!mask[y * gridWidth + x]) continue;
-            bool boundary = false;
-            for (int dy = -1; dy <= 1 && !boundary; ++dy)
-                for (int dx = -1; dx <= 1; ++dx) {
-                    if (dx == 0 && dy == 0) continue;
-                    const int nx = x + dx, ny = y + dy;
-                    if (nx < 0 || nx >= gridWidth || ny < 0 || ny >= gridHeight
-                        || !mask[ny * gridWidth + nx]) {
-                        boundary = true;
-                        break;
-                    }
-                }
-            if (boundary) edgeSet.insert(result.planeIndices[local]);
-        }
-        result.edgeIndices.reserve(qsizetype(edgeSet.size()));
-        for (int index : result.planeIndices)
-            if (edgeSet.find(index) != edgeSet.end()) result.edgeIndices.push_back(index);
-
-        QVector<QVector<QVector2D>> contourUvs = marchingSquaresContours(
-            mask, gridWidth, gridHeight, edgeGridSize, minimumU, minimumV);
-        QVector<double> contourAreas;
-        contourAreas.reserve(contourUvs.size());
-        for (const auto &contour : contourUvs) contourAreas.push_back(signedArea(contour));
-        for (int contourIndex = 0; contourIndex < contourUvs.size(); ++contourIndex) {
-            QVector<QVector2D> &contourUv = contourUvs[contourIndex];
-            if (std::abs(contourAreas[contourIndex]) < edgeGridSize * edgeGridSize)
-                continue;
-            int nestingDepth = 0;
-            const QVector2D probe = contourUv.first();
-            for (int other = 0; other < contourUvs.size(); ++other) {
-                if (other == contourIndex
-                    || std::abs(contourAreas[other]) <= std::abs(contourAreas[contourIndex]))
-                    continue;
-                if (pointInPolygon(probe, contourUvs[other])) ++nestingDepth;
-            }
-            PlaneContour contour;
-            contour.hole = (nestingDepth % 2) != 0;
-            contour.points.reserve(contourUv.size());
-            for (const QVector2D &uv : contourUv) {
-                const QVector3D position = origin + axisU * uv.x() + axisV * uv.y();
-                contour.points.push_back({position.x(), position.y(), position.z(),
-                                          finalNormal.x(), finalNormal.y(), finalNormal.z()});
-            }
-            result.contours.push_back(std::move(contour));
-        }
-        result.edgeGridSize = edgeGridSize;
-    }
-
     result.planePoints.reserve(result.planeIndices.size());
     double squaredError = 0.0;
     for (int index : result.planeIndices) {
@@ -2574,6 +2463,175 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points
     result.model = {finalNormal.x(), finalNormal.y(), finalNormal.z(), finalD,
                     int(result.planeIndices.size()), result.rmsError, surfaceTolerance};
     result.ok = true;
+    return result;
+}
+
+PlaneEdgeResult segmentPlaneEdges(const QVector<Point3D> &points,
+                                  const QVector<int> &planeIndices,
+                                  const PlaneModel &model,
+                                  const PlaneEdgeOptions &options) {
+    PlaneEdgeResult result;
+    if (points.isEmpty() || planeIndices.size() < 3) {
+        result.error = QStringLiteral("需要已提取且包含至少三个点的平面");
+        return result;
+    }
+    QVector3D normal(model.a, model.b, model.c);
+    const float normalLength = normal.length();
+    if (!std::isfinite(normalLength) || normalLength <= 1.0e-8f) {
+        result.error = QStringLiteral("平面模型无效");
+        return result;
+    }
+    normal /= normalLength;
+    if (normal.z() < 0.0f) normal = -normal;
+    const float normalizedD = model.d / normalLength
+        * (QVector3D::dotProduct(normal, QVector3D(model.a, model.b, model.c)) >= 0.0f
+               ? 1.0f : -1.0f);
+    const QVector3D origin = -normalizedD * normal;
+    QVector3D axisU = QVector3D::crossProduct(normal,
+        std::abs(normal.z()) < 0.9f ? QVector3D(0, 0, 1) : QVector3D(0, 1, 0));
+    if (axisU.lengthSquared() <= 1.0e-12f) axisU = QVector3D(1, 0, 0);
+    axisU.normalize();
+    const QVector3D axisV = QVector3D::crossProduct(normal, axisU).normalized();
+
+    QVector<QVector2D> projected;
+    QVector<int> validIndices;
+    projected.reserve(planeIndices.size());
+    validIndices.reserve(planeIndices.size());
+    float minimumU = std::numeric_limits<float>::max();
+    float minimumV = std::numeric_limits<float>::max();
+    float maximumU = std::numeric_limits<float>::lowest();
+    float maximumV = std::numeric_limits<float>::lowest();
+    for (int index : planeIndices) {
+        if (index < 0 || index >= points.size()) continue;
+        const Point3D &point = points[index];
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+            continue;
+        const QVector3D delta(QVector3D(point.x, point.y, point.z) - origin);
+        const QVector2D uv(QVector3D::dotProduct(delta, axisU),
+                           QVector3D::dotProduct(delta, axisV));
+        projected.push_back(uv);
+        validIndices.push_back(index);
+        minimumU = qMin(minimumU, uv.x()); maximumU = qMax(maximumU, uv.x());
+        minimumV = qMin(minimumV, uv.y()); maximumV = qMax(maximumV, uv.y());
+    }
+    if (projected.size() < 3) {
+        result.error = QStringLiteral("平面索引没有对应到当前画布缓存");
+        return result;
+    }
+
+    const double area = double(qMax(maximumU - minimumU, 1.0e-6f))
+        * double(qMax(maximumV - minimumV, 1.0e-6f));
+    const float estimatedSpacing = qMax(
+        float(std::sqrt(area / qMax(1, projected.size()))), 1.0e-6f);
+    float gridSize = options.edgeGridSize > 0.0f
+        ? options.edgeGridSize : estimatedSpacing * 1.25f;
+    const int closeRadius = qBound(0, options.morphologyCloseRadius, 4);
+    const int openRadius = qBound(0, options.morphologyOpenRadius, 4);
+    const int padding = qMax(2, closeRadius + openRadius + 2);
+    const qsizetype maximumCells = qMax(1024, options.maximumEdgeGridCells);
+    int gridWidth = 0;
+    int gridHeight = 0;
+    for (int attempt = 0; attempt < 16; ++attempt) {
+        const double widthValue = std::ceil(double(maximumU - minimumU) / gridSize)
+            + 1.0 + 2.0 * padding;
+        const double heightValue = std::ceil(double(maximumV - minimumV) / gridSize)
+            + 1.0 + 2.0 * padding;
+        if (widthValue <= std::numeric_limits<int>::max()
+            && heightValue <= std::numeric_limits<int>::max()
+            && widthValue * heightValue <= double(maximumCells)) {
+            gridWidth = int(widthValue);
+            gridHeight = int(heightValue);
+            break;
+        }
+        gridSize *= 2.0f;
+    }
+    if (gridWidth <= 2 || gridHeight <= 2) {
+        result.error = QStringLiteral("平面范围过大，无法在栅格上生成边缘");
+        return result;
+    }
+
+    minimumU -= float(padding) * gridSize;
+    minimumV -= float(padding) * gridSize;
+    QVector<quint8> mask(gridWidth * gridHeight, 0);
+    QVector<int> pointCells(projected.size(), -1);
+    for (int local = 0; local < projected.size(); ++local) {
+        const int x = qBound(0, int(std::floor((projected[local].x() - minimumU) / gridSize)),
+                             gridWidth - 1);
+        const int y = qBound(0, int(std::floor((projected[local].y() - minimumV) / gridSize)),
+                             gridHeight - 1);
+        pointCells[local] = y * gridWidth + x;
+        mask[pointCells[local]] = 1;
+    }
+    if (closeRadius > 0)
+        mask = erodeMask(dilateMask(mask, gridWidth, gridHeight, closeRadius),
+                         gridWidth, gridHeight, closeRadius);
+    if (openRadius > 0)
+        mask = dilateMask(erodeMask(mask, gridWidth, gridHeight, openRadius),
+                          gridWidth, gridHeight, openRadius);
+
+    QVector<quint8> boundaryMask(gridWidth * gridHeight, 0);
+    for (int y = 0; y < gridHeight; ++y) {
+        for (int x = 0; x < gridWidth; ++x) {
+            const int cell = y * gridWidth + x;
+            if (!mask[cell]) continue;
+            ++result.occupiedCellCount;
+            for (int dy = -1; dy <= 1 && !boundaryMask[cell]; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    if (dx == 0 && dy == 0) continue;
+                    const int nx = x + dx, ny = y + dy;
+                    if (nx < 0 || nx >= gridWidth || ny < 0 || ny >= gridHeight
+                        || !mask[ny * gridWidth + nx]) {
+                        boundaryMask[cell] = 1;
+                        break;
+                    }
+                }
+        }
+    }
+    for (int local = 0; local < validIndices.size(); ++local)
+        if (pointCells[local] >= 0 && boundaryMask[pointCells[local]])
+            result.edgeIndices.push_back(validIndices[local]);
+
+    QVector<QVector<QVector2D>> contourUvs = marchingSquaresContours(
+        mask, gridWidth, gridHeight, gridSize, minimumU, minimumV);
+    QVector<double> contourAreas;
+    contourAreas.reserve(contourUvs.size());
+    for (const auto &contour : contourUvs) contourAreas.push_back(signedArea(contour));
+    for (int contourIndex = 0; contourIndex < contourUvs.size(); ++contourIndex) {
+        const QVector<QVector2D> &contourUv = contourUvs[contourIndex];
+        if (std::abs(contourAreas[contourIndex]) < gridSize * gridSize) continue;
+        int nestingDepth = 0;
+        for (int other = 0; other < contourUvs.size(); ++other) {
+            if (other == contourIndex
+                || std::abs(contourAreas[other]) <= std::abs(contourAreas[contourIndex]))
+                continue;
+            if (pointInPolygon(contourUv.first(), contourUvs[other])) ++nestingDepth;
+        }
+        PlaneContour contour;
+        contour.hole = (nestingDepth % 2) != 0;
+        contour.points.reserve(contourUv.size());
+        for (const QVector2D &uv : contourUv) {
+            const QVector3D position = origin + axisU * uv.x() + axisV * uv.y();
+            contour.points.push_back({position.x(), position.y(), position.z(),
+                                      normal.x(), normal.y(), normal.z()});
+        }
+        result.contours.push_back(std::move(contour));
+    }
+
+    result.image = QImage(gridWidth, gridHeight, QImage::Format_RGB32);
+    result.image.fill(qRgb(16, 18, 21));
+    for (int y = 0; y < gridHeight; ++y) {
+        QRgb *row = reinterpret_cast<QRgb *>(result.image.scanLine(gridHeight - 1 - y));
+        for (int x = 0; x < gridWidth; ++x) {
+            const int cell = y * gridWidth + x;
+            if (boundaryMask[cell]) row[x] = qRgb(255, 220, 48);
+            else if (mask[cell]) row[x] = qRgb(166, 172, 180);
+        }
+    }
+    result.gridSize = gridSize;
+    result.width = maximumU - minimumU + float(padding) * gridSize;
+    result.height = maximumV - minimumV + float(padding) * gridSize;
+    result.ok = !result.image.isNull();
+    if (!result.ok) result.error = QStringLiteral("无法创建平面 2D 图像");
     return result;
 }
 

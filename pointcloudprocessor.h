@@ -2,6 +2,7 @@
 
 #include <QString>
 #include <QVector>
+#include <QImage>
 #include <QtGlobal>
 
 namespace pointcloud {
@@ -69,6 +70,8 @@ struct ThreePointPlaneOptions {
     bool useZAxisResidual = false;
     float maxNormalTiltDegrees = 45.0f;
     int pcaRefinementIterations = 2;
+};
+struct PlaneEdgeOptions {
     float edgeGridSize = 0.0f;
     int morphologyCloseRadius = 1;
     int morphologyOpenRadius = 1;
@@ -82,15 +85,23 @@ struct ThreePointPlaneResult {
     PlaneModel model;
     QVector<int> candidateIndices;
     QVector<int> planeIndices;
-    QVector<int> edgeIndices;
-    QVector<PlaneContour> contours;
     QVector<Point3D> controlPoints;
     QVector<Point3D> planePoints;
     float rmsError = 0.0f;
     float usedThreshold = 0.0f;
-    float edgeGridSize = 0.0f;
     float planarity = 0.0f;
     int pcaRefinementCount = 0;
+    QString error;
+    bool ok = false;
+};
+struct PlaneEdgeResult {
+    QVector<int> edgeIndices;
+    QVector<PlaneContour> contours;
+    QImage image;
+    float gridSize = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+    int occupiedCellCount = 0;
     QString error;
     bool ok = false;
 };
@@ -135,5 +146,7 @@ PlaneSegmentationResult segmentPlanes(const QVector<Point3D>&, const PlaneSegmen
 EdgePipelineResult runEdgeAwarePipeline(const QVector<Point3D>&, const EdgePipelineOptions& = {});
 ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D>&, const QVector<int>&, const ThreePointPlaneOptions& = {});
 ThreePointPlaneResult selectPlaneFromThreeSeeds(const QVector<Point3D>&, const QVector<int>&, const ThreePointPlaneOptions& = {});
+PlaneEdgeResult segmentPlaneEdges(const QVector<Point3D>&, const QVector<int>&,
+                                  const PlaneModel&, const PlaneEdgeOptions& = {});
 
 } // namespace pointcloud

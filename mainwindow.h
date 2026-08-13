@@ -38,12 +38,17 @@ private slots:
     void cancelPlaneCandidate();
     void handleCanvasPointPicked(int index);
     void planeExtractionFinished();
+    void applyPlaneEdgeSegmentation();
+    void planeEdgeSegmentationFinished();
+    void savePlaneImage();
 
 private:
     void closeEvent(QCloseEvent *event) override;
     void buildUi();
     void publishCanvasCache(QVector<pointcloud::Point3D> points);
     void updatePlaneExtractionUi();
+    void updatePlaneEdgeUi();
+    void clearPlaneEdgeUi();
     bool pointTaskRunning() const;
     QListWidget *m_fileList = nullptr;
     QLabel *m_fileInfo = nullptr;
@@ -67,6 +72,13 @@ private:
     QPushButton *m_confirmCandidateButton = nullptr;
     QPushButton *m_cancelCandidateButton = nullptr;
     QPlainTextEdit *m_threeOutput = nullptr;
+    QDoubleSpinBox *m_edgeGridSize = nullptr;
+    QSpinBox *m_edgeCloseRadius = nullptr;
+    QSpinBox *m_edgeOpenRadius = nullptr;
+    QPushButton *m_edgeApplyButton = nullptr;
+    QPushButton *m_savePlaneImageButton = nullptr;
+    QLabel *m_planeImagePreview = nullptr;
+    QPlainTextEdit *m_edgeOutput = nullptr;
     PointCloudCanvas *m_canvas = nullptr;
     QVector<pointcloud::Point3D> m_rawPoints;
     QVector<pointcloud::Point3D> m_points;
@@ -75,11 +87,14 @@ private:
     QFutureWatcher<pointcloud::LoadResult> *m_loadWatcher = nullptr;
     QFutureWatcher<pointcloud::NoiseResult> *m_noiseWatcher = nullptr;
     QFutureWatcher<pointcloud::ThreePointPlaneResult> *m_threePlaneWatcher = nullptr;
+    QFutureWatcher<pointcloud::PlaneEdgeResult> *m_edgeWatcher = nullptr;
     qsizetype m_noiseInputCount = 0;
     quint64 m_canvasRevision = 0;
     quint64 m_noiseInputRevision = 0;
     quint64 m_threePlaneInputRevision = 0;
+    quint64 m_edgeInputRevision = 0;
     pointcloud::ThreePointPlaneResult m_threePlaneResult;
+    pointcloud::PlaneEdgeResult m_planeEdgeResult;
     QVector<int> m_selectedPointIndices;
     bool m_threePointSelectionActive = false;
     bool m_planeCandidateConfirmed = false;

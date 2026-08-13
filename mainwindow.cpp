@@ -41,6 +41,7 @@
 #include <QWheelEvent>
 #include <QKeyEvent>
 #include <QCloseEvent>
+#include <QPixmap>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
 #include <limits>
@@ -119,6 +120,10 @@ public:
         m_stateUploadPending = true;
         m_contourUploadPending = true;
         update();
+    }
+
+    void setExtractedPlane(const QVector<int> &planeIndices) {
+        setPlaneResult(planeIndices, {}, {});
     }
 
     void clearPlaneResult() {
@@ -740,6 +745,9 @@ MainWindow::~MainWindow() {
     if (m_threePlaneWatcher && m_threePlaneWatcher->isRunning()) {
         m_threePlaneWatcher->waitForFinished();
     }
+    if (m_edgeWatcher && m_edgeWatcher->isRunning()) {
+        m_edgeWatcher->waitForFinished();
+    }
     if (m_loadWatcher) {
         disconnect(m_loadWatcher, nullptr, this, nullptr);
         m_loadWatcher->disconnect(this);
@@ -751,6 +759,10 @@ MainWindow::~MainWindow() {
     if (m_threePlaneWatcher) {
         disconnect(m_threePlaneWatcher, nullptr, this, nullptr);
         m_threePlaneWatcher->disconnect(this);
+    }
+    if (m_edgeWatcher) {
+        disconnect(m_edgeWatcher, nullptr, this, nullptr);
+        m_edgeWatcher->disconnect(this);
     }
     if (m_canvas) {
         m_canvas->setUpdatesEnabled(false);
@@ -1004,6 +1016,51 @@ void MainWindow::buildUi() {
     tabs->addTab(threePage, tr("平面提取"));
     updatePlaneExtractionUi();
 
+    auto *edgePage = new QWidget;
+    auto *edgeLayout = new QVBoxLayout(edgePage);
+    edgeLayout->setContentsMargins(8, 14, 8, 8);
+    auto *edgeTitle = new QLabel(tr("平面边缘分割"));
+    edgeTitle->setObjectName(QStringLiteral("sectionTitle"));
+    edgeLayout->addWidget(edgeTitle);
+    auto *edgeForm = new QFormLayout;
+    m_edgeGridSize = new QDoubleSpinBox;
+    m_edgeGridSize->setRange(0.0, 1000.0);
+    m_edgeGridSize->setDecimals(4);
+    m_edgeGridSize->setSpecialValueText(tr("自动"));
+    m_edgeGridSize->setToolTip(tr("0 表示根据平面点密度自动估计像素尺寸"));
+    edgeForm->addRow(tr("栅格尺寸 mm"), m_edgeGridSize);
+    m_edgeCloseRadius = new QSpinBox;
+    m_edgeCloseRadius->setRange(0, 4);
+    m_edgeCloseRadius->setValue(1);
+    edgeForm->addRow(tr("闭运算半径"), m_edgeCloseRadius);
+    m_edgeOpenRadius = new QSpinBox;
+    m_edgeOpenRadius->setRange(0, 4);
+    m_edgeOpenRadius->setValue(1);
+    edgeForm->addRow(tr("开运算半径"), m_edgeOpenRadius);
+    edgeLayout->addLayout(edgeForm);
+    m_edgeApplyButton = new QPushButton(tr("执行边缘分割"));
+    m_edgeApplyButton->setObjectName(QStringLiteral("primaryButton"));
+    m_savePlaneImageButton = new QPushButton(tr("保存 2D 图片"));
+    edgeLayout->addWidget(m_edgeApplyButton);
+    edgeLayout->addWidget(m_savePlaneImageButton);
+    m_planeImagePreview = new QLabel;
+    m_planeImagePreview->setMinimumHeight(150);
+    m_planeImagePreview->setAlignment(Qt::AlignCenter);
+    m_planeImagePreview->setStyleSheet(QStringLiteral(
+        "border: 1px solid #303640; background: #0d0f12; color: #8795a8;"));
+    m_planeImagePreview->setText(tr("确认平面后执行边缘分割"));
+    edgeLayout->addWidget(m_planeImagePreview);
+    m_edgeOutput = new QPlainTextEdit;
+    m_edgeOutput->setReadOnly(true);
+    m_edgeOutput->setPlaceholderText(tr("边缘和 2D 图像统计将在此显示"));
+    edgeLayout->addWidget(m_edgeOutput, 1);
+    connect(m_edgeApplyButton, &QPushButton::clicked,
+            this, &MainWindow::applyPlaneEdgeSegmentation);
+    connect(m_savePlaneImageButton, &QPushButton::clicked,
+            this, &MainWindow::savePlaneImage);
+    tabs->addTab(edgePage, tr("边缘处理"));
+    updatePlaneEdgeUi();
+
     rightLayout->addWidget(tabs, 1);
     splitter->addWidget(rightPanel);
     splitter->setStretchFactor(0, 0);
@@ -1105,7 +1162,9 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points) {
         m_canvas->setCloud(m_points);
     }
     if (m_threeOutput) m_threeOutput->clear();
+    clearPlaneEdgeUi();
     updatePlaneExtractionUi();
+    updatePlaneEdgeUi();
     if (m_canvasInfo) {
         m_canvasInfo->setText(tr("当前显示 %1 个点  ·  原始 %2 个点  ·  全量直接标记")
                                   .arg(QLocale().toString(m_points.size()))
@@ -1115,7 +1174,8 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points) {
 
 bool MainWindow::pointTaskRunning() const {
     return m_loading || (m_noiseWatcher && m_noiseWatcher->isRunning())
-        || (m_threePlaneWatcher && m_threePlaneWatcher->isRunning());
+        || (m_threePlaneWatcher && m_threePlaneWatcher->isRunning())
+        || (m_edgeWatcher && m_edgeWatcher->isRunning());
 }
 
 void MainWindow::startPlanePointSelection() {
@@ -1129,12 +1189,14 @@ void MainWindow::startPlanePointSelection() {
     }
     m_selectedPointIndices.clear();
     m_threePlaneResult = {};
+    clearPlaneEdgeUi();
     m_planeCandidateConfirmed = false;
     m_threePointSelectionActive = true;
     m_canvas->clearPlaneResult();
     m_canvas->setSelectedIndices({});
     m_canvas->setSelectionMode(true);
     updatePlaneExtractionUi();
+    updatePlaneEdgeUi();
     statusBar()->showMessage(tr("请选择第 1 个点"));
 }
 
@@ -1145,6 +1207,7 @@ void MainWindow::abandonPlanePointSelection() {
     }
     m_selectedPointIndices.clear();
     m_threePlaneResult = {};
+    clearPlaneEdgeUi();
     m_planeCandidateConfirmed = false;
     m_threePointSelectionActive = false;
     if (m_canvas) {
@@ -1154,6 +1217,7 @@ void MainWindow::abandonPlanePointSelection() {
     }
     if (m_threeOutput) m_threeOutput->clear();
     updatePlaneExtractionUi();
+    updatePlaneEdgeUi();
     statusBar()->showMessage(tr("已放弃取点"));
 }
 
@@ -1165,12 +1229,14 @@ void MainWindow::undoPlanePointSelection() {
     if (m_selectedPointIndices.isEmpty()) return;
     m_selectedPointIndices.removeLast();
     m_threePlaneResult = {};
+    clearPlaneEdgeUi();
     m_planeCandidateConfirmed = false;
     m_threePointSelectionActive = true;
     m_canvas->clearPlaneResult();
     m_canvas->setSelectedIndices(m_selectedPointIndices);
     m_canvas->setSelectionMode(true);
     updatePlaneExtractionUi();
+    updatePlaneEdgeUi();
     statusBar()->showMessage(tr("请选择第 %1 个点").arg(m_selectedPointIndices.size() + 1));
 }
 
@@ -1204,6 +1270,25 @@ void MainWindow::updatePlaneExtractionUi() {
     else if (hasThreePoints)
         lines << QString() << tr("三个点已就绪，请点击“确定平面”");
     m_threeOutput->setPlainText(lines.join(QLatin1Char('\n')));
+}
+
+void MainWindow::updatePlaneEdgeUi() {
+    const bool running = m_edgeWatcher && m_edgeWatcher->isRunning();
+    const bool planeReady = m_planeCandidateConfirmed && m_threePlaneResult.ok;
+    if (m_edgeApplyButton) m_edgeApplyButton->setEnabled(!running && planeReady);
+    if (m_savePlaneImageButton)
+        m_savePlaneImageButton->setEnabled(!running && m_planeEdgeResult.ok
+                                           && !m_planeEdgeResult.image.isNull());
+}
+
+void MainWindow::clearPlaneEdgeUi() {
+    m_planeEdgeResult = {};
+    if (m_edgeOutput) m_edgeOutput->clear();
+    if (m_planeImagePreview) {
+        m_planeImagePreview->setPixmap({});
+        m_planeImagePreview->setText(tr("确认平面后执行边缘分割"));
+    }
+    updatePlaneEdgeUi();
 }
 
 void MainWindow::handleCanvasPointPicked(int index) {
@@ -1284,8 +1369,9 @@ void MainWindow::planeExtractionFinished() {
         return;
     }
     m_threePlaneResult = result;
+    clearPlaneEdgeUi();
     m_planeCandidateConfirmed = false;
-    m_canvas->setPlaneResult(result.planeIndices, result.edgeIndices, result.contours);
+    m_canvas->setExtractedPlane(result.planeIndices);
     const auto &plane = result.model;
     QStringList lines;
     for (int i = 0; i < m_selectedPointIndices.size(); ++i) {
@@ -1299,19 +1385,13 @@ void MainWindow::planeExtractionFinished() {
                  .arg(plane.c, 0, 'g', 9).arg(plane.d, 0, 'g', 9)
           << tr("初始候选点：%1").arg(QLocale().toString(result.candidateIndices.size()))
           << tr("候选平面点：%1").arg(QLocale().toString(result.planeIndices.size()))
-          << tr("边缘点：%1").arg(QLocale().toString(result.edgeIndices.size()))
-          << tr("有序轮廓：%1（孔洞 %2）")
-                 .arg(QLocale().toString(result.contours.size()))
-                 .arg(QLocale().toString(std::count_if(
-                     result.contours.cbegin(), result.contours.cend(),
-                     [](const pointcloud::PlaneContour &contour) { return contour.hole; })))
-          << tr("边缘栅格：%1 mm").arg(result.edgeGridSize, 0, 'g', 6)
           << tr("PCA 平面性：%1").arg(result.planarity, 0, 'f', 6)
           << tr("PCA 精拟合轮次：%1").arg(result.pcaRefinementCount)
           << tr("Z 方向 RMS：%1 mm").arg(result.rmsError, 0, 'g', 7)
           << QString() << tr("候选平面已生成，请确认或取消");
     m_threeOutput->setPlainText(lines.join(QLatin1Char('\n')));
     updatePlaneExtractionUi();
+    updatePlaneEdgeUi();
     statusBar()->showMessage(tr("候选平面已生成"));
 }
 
@@ -1322,18 +1402,112 @@ void MainWindow::confirmPlaneCandidate() {
     m_canvas->setSelectionMode(false);
     m_threeOutput->appendPlainText(tr("\n候选平面已确定"));
     updatePlaneExtractionUi();
+    updatePlaneEdgeUi();
     statusBar()->showMessage(tr("平面提取已确定"));
 }
 
 void MainWindow::cancelPlaneCandidate() {
     if (!m_threePlaneResult.ok || pointTaskRunning()) return;
     m_threePlaneResult = {};
+    clearPlaneEdgeUi();
     m_planeCandidateConfirmed = false;
     m_threePointSelectionActive = false;
     m_canvas->clearPlaneResult();
     m_canvas->setSelectionMode(false);
     updatePlaneExtractionUi();
+    updatePlaneEdgeUi();
     statusBar()->showMessage(tr("已取消确定平面，可重新确定或撤销取点"));
+}
+
+void MainWindow::applyPlaneEdgeSegmentation() {
+    if (pointTaskRunning()) {
+        statusBar()->showMessage(tr("已有点云处理任务正在运行"));
+        return;
+    }
+    if (!m_planeCandidateConfirmed || !m_threePlaneResult.ok) {
+        statusBar()->showMessage(tr("请先在平面提取页确定候选平面"));
+        return;
+    }
+    pointcloud::PlaneEdgeOptions options;
+    options.edgeGridSize = float(m_edgeGridSize->value());
+    options.morphologyCloseRadius = m_edgeCloseRadius->value();
+    options.morphologyOpenRadius = m_edgeOpenRadius->value();
+    if (!m_edgeWatcher) {
+        m_edgeWatcher = new QFutureWatcher<pointcloud::PlaneEdgeResult>(this);
+        connect(m_edgeWatcher, &QFutureWatcher<pointcloud::PlaneEdgeResult>::finished,
+                this, &MainWindow::planeEdgeSegmentationFinished);
+    }
+    const QVector<pointcloud::Point3D> source = m_points;
+    const QVector<int> planeIndices = m_threePlaneResult.planeIndices;
+    const pointcloud::PlaneModel model = m_threePlaneResult.model;
+    m_edgeInputRevision = m_canvasRevision;
+    clearPlaneEdgeUi();
+    m_progress->show();
+    m_progress->setRange(0, 0);
+    m_edgeOutput->setPlainText(tr("正在生成平面 Mask、边缘和 2D 图像..."));
+    updatePlaneEdgeUi();
+    statusBar()->showMessage(tr("后台执行平面边缘分割..."));
+    m_edgeWatcher->setFuture(QtConcurrent::run([source, planeIndices, model, options]() {
+        return pointcloud::segmentPlaneEdges(source, planeIndices, model, options);
+    }));
+}
+
+void MainWindow::planeEdgeSegmentationFinished() {
+    const pointcloud::PlaneEdgeResult result = m_edgeWatcher->result();
+    m_progress->hide();
+    if (m_edgeInputRevision != m_canvasRevision) {
+        m_edgeOutput->setPlainText(tr("画布缓存已变化，旧边缘结果已丢弃。"));
+        updatePlaneEdgeUi();
+        statusBar()->showMessage(tr("画布缓存已变化，已丢弃旧边缘结果"));
+        return;
+    }
+    if (!result.ok) {
+        m_planeEdgeResult = {};
+        m_edgeOutput->setPlainText(result.error);
+        updatePlaneEdgeUi();
+        statusBar()->showMessage(tr("边缘分割失败"));
+        return;
+    }
+    m_planeEdgeResult = result;
+    m_canvas->setPlaneResult(m_threePlaneResult.planeIndices,
+                             result.edgeIndices, result.contours);
+    const int holeCount = int(std::count_if(
+        result.contours.cbegin(), result.contours.cend(),
+        [](const pointcloud::PlaneContour &contour) { return contour.hole; }));
+    m_edgeOutput->setPlainText(
+        tr("边缘点：%1\n有序轮廓：%2\n孔洞轮廓：%3\n占用栅格：%4\n"
+           "栅格尺寸：%5 mm\n图像尺寸：%6 × %7 px\n物理范围：%8 × %9 mm")
+            .arg(QLocale().toString(result.edgeIndices.size()))
+            .arg(QLocale().toString(result.contours.size()))
+            .arg(QLocale().toString(holeCount))
+            .arg(QLocale().toString(result.occupiedCellCount))
+            .arg(result.gridSize, 0, 'g', 6)
+            .arg(result.image.width()).arg(result.image.height())
+            .arg(result.width, 0, 'g', 7).arg(result.height, 0, 'g', 7));
+    const QSize previewSize(qMax(1, m_planeImagePreview->width() - 8),
+                            qMax(1, m_planeImagePreview->height() - 8));
+    m_planeImagePreview->setText({});
+    m_planeImagePreview->setPixmap(QPixmap::fromImage(result.image).scaled(
+        previewSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    updatePlaneEdgeUi();
+    statusBar()->showMessage(tr("边缘分割和 2D 平面图生成完成"));
+}
+
+void MainWindow::savePlaneImage() {
+    if (!m_planeEdgeResult.ok || m_planeEdgeResult.image.isNull()) {
+        statusBar()->showMessage(tr("请先执行边缘分割生成 2D 图片"));
+        return;
+    }
+    const QString path = QFileDialog::getSaveFileName(
+        this, tr("保存平面 2D 图片"), QStringLiteral("plane_2d.png"),
+        tr("PNG 图片 (*.png);;BMP 图片 (*.bmp)"));
+    if (path.isEmpty()) return;
+    if (!m_planeEdgeResult.image.save(path)) {
+        QMessageBox::warning(this, tr("保存失败"), tr("无法写入图片：%1").arg(path));
+        statusBar()->showMessage(tr("2D 图片保存失败"));
+        return;
+    }
+    statusBar()->showMessage(tr("2D 平面图片已保存：%1").arg(path));
 }
 
 void MainWindow::applyNoiseRemoval() {
@@ -1408,6 +1582,10 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     if (m_threePlaneWatcher && m_threePlaneWatcher->isRunning()) {
         statusBar()->showMessage(tr("正在结束后台三点平面拟合，请稍候..."));
         m_threePlaneWatcher->waitForFinished();
+    }
+    if (m_edgeWatcher && m_edgeWatcher->isRunning()) {
+        statusBar()->showMessage(tr("正在结束后台边缘处理，请稍候..."));
+        m_edgeWatcher->waitForFinished();
     }
     event->accept();
 }
