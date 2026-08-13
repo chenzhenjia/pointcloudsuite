@@ -235,6 +235,47 @@ void runGeometryTests() {
     expect(selected.candidateIndices.size() == 256, "initial plane candidates exclude outlier");
     expect(selected.rmsError < 0.001f, "refined plane RMS error");
     expect(!selected.edgeIndices.isEmpty(), "extract plane edge points");
+    expect(selected.pcaRefinementCount >= 1 && selected.planarity > 0.99f,
+           "PCA refinement reports a planar model");
+    expect(selected.edgeGridSize > 0.0f && !selected.contours.isEmpty(),
+           "extract ordered mask contours");
+    if (!selected.contours.isEmpty()) {
+        expect(selected.contours.first().points.size() >= 4,
+               "ordered contour contains a closed polyline");
+        const auto &first = selected.contours.first().points.first();
+        const auto &last = selected.contours.first().points.last();
+        expect(closeTo(first.x, last.x, 0.0001f)
+                   && closeTo(first.y, last.y, 0.0001f)
+                   && closeTo(first.z, last.z, 0.0001f),
+               "Marching Squares contour is closed");
+        for (const auto &point : selected.contours.first().points) {
+            expect(std::fabs(selected.model.a * point.x + selected.model.b * point.y
+                             + selected.model.c * point.z + selected.model.d) < 0.0001f,
+                   "contour vertices lie on fitted plane");
+        }
+    }
+
+    QVector<pointcloud::Point3D> planeWithHole;
+    for (int y = 0; y < 24; ++y) {
+        for (int x = 0; x < 24; ++x) {
+            if (x >= 9 && x <= 14 && y >= 9 && y <= 14) continue;
+            planeWithHole.push_back({float(x) * 0.1f, float(y) * 0.1f, 0.5f, 0, 0, 1});
+        }
+    }
+    pointcloud::ThreePointPlaneOptions holeOptions = seedOptions;
+    holeOptions.initialTolerance = 0.02f;
+    holeOptions.surfaceTolerance = 0.01f;
+    holeOptions.connectivityRadius = 0.16f;
+    holeOptions.minInliers = 400;
+    holeOptions.edgeGridSize = 0.1f;
+    holeOptions.morphologyCloseRadius = 1;
+    holeOptions.morphologyOpenRadius = 0;
+    const pointcloud::ThreePointPlaneResult withHole =
+        pointcloud::extractPlaneFromThreePoints(planeWithHole, {0, 23, 539}, holeOptions);
+    expect(withHole.ok, "extract plane containing a hole");
+    expect(std::count_if(withHole.contours.cbegin(), withHole.contours.cend(),
+                         [](const pointcloud::PlaneContour &contour) { return contour.hole; }) >= 1,
+           "classify an interior Marching Squares contour as a hole");
 
     const QVector<pointcloud::Point3D> collinearCloud = {
         {0.0f, 0.0f, 0.0f, 0, 0, 1},

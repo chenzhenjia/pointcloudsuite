@@ -56,7 +56,8 @@ public:
 
     explicit PointCloudCanvas(QWidget *parent = nullptr)
         : QOpenGLWidget(parent), m_vertexBuffer(QOpenGLBuffer::VertexBuffer),
-          m_stateBuffer(QOpenGLBuffer::VertexBuffer) {
+          m_stateBuffer(QOpenGLBuffer::VertexBuffer),
+          m_contourBuffer(QOpenGLBuffer::VertexBuffer) {
         setMinimumSize(620, 480);
         setMouseTracking(true);
         setFocusPolicy(Qt::StrongFocus);
@@ -67,6 +68,8 @@ public:
         if (!context()) return;
         makeCurrent();
         m_pickingFbo.reset();
+        if (m_contourBuffer.isCreated()) m_contourBuffer.destroy();
+        if (m_contourVertexArray.isCreated()) m_contourVertexArray.destroy();
         if (m_stateBuffer.isCreated()) m_stateBuffer.destroy();
         if (m_vertexBuffer.isCreated()) m_vertexBuffer.destroy();
         if (m_vertexArray.isCreated()) m_vertexArray.destroy();
@@ -77,6 +80,9 @@ public:
         m_points = points;
         m_pointStates.fill(NormalPoint, points.size());
         m_selectedIndices.clear();
+        m_contourVertices.clear();
+        m_contourRanges.clear();
+        m_contourUploadPending = true;
         updateBounds();
         m_uploadError.clear();
         m_uploadPending = true;
@@ -95,19 +101,32 @@ public:
         update();
     }
 
-    void setPlaneResult(const QVector<int> &planeIndices, const QVector<int> &edgeIndices) {
+    void setPlaneResult(const QVector<int> &planeIndices, const QVector<int> &edgeIndices,
+                        const QVector<pointcloud::PlaneContour> &contours) {
         m_pointStates.fill(NormalPoint, m_points.size());
         for (int index : planeIndices)
             if (index >= 0 && index < m_pointStates.size()) m_pointStates[index] = PlanePoint;
         for (int index : edgeIndices)
             if (index >= 0 && index < m_pointStates.size()) m_pointStates[index] = EdgePoint;
+        m_contourVertices.clear();
+        m_contourRanges.clear();
+        for (const pointcloud::PlaneContour &contour : contours) {
+            if (contour.points.size() < 2) continue;
+            const int start = m_contourVertices.size();
+            m_contourVertices += contour.points;
+            m_contourRanges.push_back({start, int(contour.points.size())});
+        }
         m_stateUploadPending = true;
+        m_contourUploadPending = true;
         update();
     }
 
     void clearPlaneResult() {
         m_pointStates.fill(NormalPoint, m_points.size());
+        m_contourVertices.clear();
+        m_contourRanges.clear();
         m_stateUploadPending = true;
+        m_contourUploadPending = true;
         update();
     }
 
@@ -252,20 +271,43 @@ protected:
                     float((pointId >> 24u) & 255u)) / 255.0;
             }
         )";
+        static const char *contourVertexShader = R"(
+            #version 330 core
+            layout(location = 0) in vec3 vertexPosition;
+            uniform mat4 transform;
+            uniform vec3 cloudCenter;
+            uniform float cloudSpan;
+            uniform vec2 viewPan;
+            void main() {
+                vec3 normalized = (vertexPosition - cloudCenter) * (2.0 / cloudSpan);
+                gl_Position = transform * vec4(normalized, 1.0);
+                gl_Position.xy += viewPan * gl_Position.w;
+            }
+        )";
+        static const char *contourFragmentShader = R"(
+            #version 330 core
+            out vec4 fragmentColor;
+            void main() { fragmentColor = vec4(1.0, 0.86, 0.18, 1.0); }
+        )";
 
         if (!m_program.addShaderFromSourceCode(QOpenGLShader::Vertex, vertexShader)
             || !m_program.addShaderFromSourceCode(QOpenGLShader::Fragment, fragmentShader)
             || !m_program.link()
             || !m_pickingProgram.addShaderFromSourceCode(QOpenGLShader::Vertex, pickingVertexShader)
             || !m_pickingProgram.addShaderFromSourceCode(QOpenGLShader::Fragment, pickingFragmentShader)
-            || !m_pickingProgram.link()) {
-            m_initializationError = tr("OpenGL 着色器初始化失败\n主渲染：%1\n拾取：%2")
-                                        .arg(m_program.log(), m_pickingProgram.log());
+            || !m_pickingProgram.link()
+            || !m_contourProgram.addShaderFromSourceCode(QOpenGLShader::Vertex, contourVertexShader)
+            || !m_contourProgram.addShaderFromSourceCode(QOpenGLShader::Fragment, contourFragmentShader)
+            || !m_contourProgram.link()) {
+            m_initializationError = tr("OpenGL 着色器初始化失败\n主渲染：%1\n拾取：%2\n轮廓：%3")
+                                        .arg(m_program.log(), m_pickingProgram.log(),
+                                             m_contourProgram.log());
             qWarning().noquote() << m_initializationError;
             return;
         }
 
-        if (!m_vertexArray.create() || !m_vertexBuffer.create() || !m_stateBuffer.create()) {
+        if (!m_vertexArray.create() || !m_vertexBuffer.create() || !m_stateBuffer.create()
+            || !m_contourVertexArray.create() || !m_contourBuffer.create()) {
             m_initializationError = tr("无法创建 OpenGL 顶点缓冲区");
             return;
         }
@@ -279,6 +321,7 @@ protected:
             uploadCloudIfNeeded();
             if (m_uploadError.isEmpty()) {
                 uploadStatesIfNeeded();
+                uploadContoursIfNeeded();
                 const QMatrix4x4 transform = viewTransform();
                 m_program.bind();
                 m_program.setUniformValue("transform", transform);
@@ -306,6 +349,22 @@ protected:
                 }
                 m_vertexArray.release();
                 m_program.release();
+                if (!m_contourRanges.isEmpty()) {
+                    m_contourProgram.bind();
+                    m_contourProgram.setUniformValue("transform", transform);
+                    m_contourProgram.setUniformValue("cloudCenter", m_center);
+                    m_contourProgram.setUniformValue("cloudSpan", m_span);
+                    m_contourProgram.setUniformValue("viewPan", QVector2D(m_pan));
+                    m_contourVertexArray.bind();
+                    glDepthFunc(GL_LEQUAL);
+                    glLineWidth(2.0f);
+                    for (const auto &range : m_contourRanges)
+                        glDrawArrays(GL_LINE_STRIP, range.first, range.second);
+                    glLineWidth(1.0f);
+                    glDepthFunc(GL_LESS);
+                    m_contourVertexArray.release();
+                    m_contourProgram.release();
+                }
             }
         }
 
@@ -438,6 +497,23 @@ private:
         m_stateBuffer.release();
         m_vertexArray.release();
         m_stateUploadPending = false;
+    }
+
+    void uploadContoursIfNeeded() {
+        if (!m_contourUploadPending || !m_contourBuffer.isCreated()) return;
+        m_contourVertexArray.bind();
+        m_contourBuffer.bind();
+        m_contourBuffer.setUsagePattern(QOpenGLBuffer::DynamicDraw);
+        m_contourBuffer.allocate(m_contourVertices.constData(),
+            int(m_contourVertices.size() * qsizetype(sizeof(pointcloud::Point3D))));
+        m_contourProgram.bind();
+        m_contourProgram.enableAttributeArray(0);
+        m_contourProgram.setAttributeBuffer(0, GL_FLOAT, 0, 3,
+                                             sizeof(pointcloud::Point3D));
+        m_contourProgram.release();
+        m_contourBuffer.release();
+        m_contourVertexArray.release();
+        m_contourUploadPending = false;
     }
 
     int pickPoint(const QPointF &position) {
@@ -612,11 +688,16 @@ private:
     QVector<pointcloud::Point3D> m_points;
     QVector<quint8> m_pointStates;
     QVector<int> m_selectedIndices;
+    QVector<pointcloud::Point3D> m_contourVertices;
+    QVector<QPair<int, int>> m_contourRanges;
     QOpenGLShaderProgram m_program;
     QOpenGLShaderProgram m_pickingProgram;
+    QOpenGLShaderProgram m_contourProgram;
     QOpenGLVertexArrayObject m_vertexArray;
+    QOpenGLVertexArrayObject m_contourVertexArray;
     QOpenGLBuffer m_vertexBuffer;
     QOpenGLBuffer m_stateBuffer;
+    QOpenGLBuffer m_contourBuffer;
     std::unique_ptr<QOpenGLFramebufferObject> m_pickingFbo;
     QVector3D m_center;
     QPointF m_lastMousePosition;
@@ -640,6 +721,7 @@ private:
     float m_mapMax = 1.0f;
     bool m_uploadPending = false;
     bool m_stateUploadPending = false;
+    bool m_contourUploadPending = false;
     bool m_selectionMode = false;
     bool m_mouseMoved = false;
 };
@@ -1203,7 +1285,7 @@ void MainWindow::planeExtractionFinished() {
     }
     m_threePlaneResult = result;
     m_planeCandidateConfirmed = false;
-    m_canvas->setPlaneResult(result.planeIndices, result.edgeIndices);
+    m_canvas->setPlaneResult(result.planeIndices, result.edgeIndices, result.contours);
     const auto &plane = result.model;
     QStringList lines;
     for (int i = 0; i < m_selectedPointIndices.size(); ++i) {
@@ -1218,6 +1300,14 @@ void MainWindow::planeExtractionFinished() {
           << tr("初始候选点：%1").arg(QLocale().toString(result.candidateIndices.size()))
           << tr("候选平面点：%1").arg(QLocale().toString(result.planeIndices.size()))
           << tr("边缘点：%1").arg(QLocale().toString(result.edgeIndices.size()))
+          << tr("有序轮廓：%1（孔洞 %2）")
+                 .arg(QLocale().toString(result.contours.size()))
+                 .arg(QLocale().toString(std::count_if(
+                     result.contours.cbegin(), result.contours.cend(),
+                     [](const pointcloud::PlaneContour &contour) { return contour.hole; })))
+          << tr("边缘栅格：%1 mm").arg(result.edgeGridSize, 0, 'g', 6)
+          << tr("PCA 平面性：%1").arg(result.planarity, 0, 'f', 6)
+          << tr("PCA 精拟合轮次：%1").arg(result.pcaRefinementCount)
           << tr("Z 方向 RMS：%1 mm").arg(result.rmsError, 0, 'g', 7)
           << QString() << tr("候选平面已生成，请确认或取消");
     m_threeOutput->setPlainText(lines.join(QLatin1Char('\n')));

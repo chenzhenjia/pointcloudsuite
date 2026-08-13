@@ -68,16 +68,29 @@ struct ThreePointPlaneOptions {
     bool keepSeedComponentOnly = true;
     bool useZAxisResidual = false;
     float maxNormalTiltDegrees = 45.0f;
+    int pcaRefinementIterations = 2;
+    float edgeGridSize = 0.0f;
+    int morphologyCloseRadius = 1;
+    int morphologyOpenRadius = 1;
+    int maximumEdgeGridCells = 4000000;
+};
+struct PlaneContour {
+    QVector<Point3D> points;
+    bool hole = false;
 };
 struct ThreePointPlaneResult {
     PlaneModel model;
     QVector<int> candidateIndices;
     QVector<int> planeIndices;
     QVector<int> edgeIndices;
+    QVector<PlaneContour> contours;
     QVector<Point3D> controlPoints;
     QVector<Point3D> planePoints;
     float rmsError = 0.0f;
     float usedThreshold = 0.0f;
+    float edgeGridSize = 0.0f;
+    float planarity = 0.0f;
+    int pcaRefinementCount = 0;
     QString error;
     bool ok = false;
 };
