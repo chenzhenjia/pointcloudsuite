@@ -28,6 +28,7 @@ public:
 
 private slots:
     void openPointCloud();
+    void openPointCloudSource();
     void mergeWorldPointClouds();
     void worldMergeFinished();
     void loadFinished();
@@ -100,6 +101,7 @@ private:
     bool m_loading = false;
     QString m_pendingPath;
     QVector<pointcloud::WorldCloudInput> m_pendingWorldInputs;
+    bool m_folderScanOnly = false;
     QFutureWatcher<pointcloud::LoadResult> *m_loadWatcher = nullptr;
     QFutureWatcher<pointcloud::WorldCloudMergeResult> *m_worldMergeWatcher = nullptr;
     QFutureWatcher<pointcloud::NoiseResult> *m_noiseWatcher = nullptr;

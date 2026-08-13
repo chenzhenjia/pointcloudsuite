@@ -924,9 +924,9 @@ void MainWindow::buildUi() {
     )");
 
     auto *fileMenu = menuBar()->addMenu(tr("文件"));
-    auto *openAction = fileMenu->addAction(tr("打开 PLY..."));
+    auto *openAction = fileMenu->addAction(tr("打开点云..."));
     openAction->setShortcut(QKeySequence::Open);
-    connect(openAction, &QAction::triggered, this, &MainWindow::openPointCloud);
+    connect(openAction, &QAction::triggered, this, &MainWindow::openPointCloudSource);
     auto *mergeAction = fileMenu->addAction(tr("合并文件夹 PLY（世界坐标）..."));
     mergeAction->setToolTip(tr("为每个扫描文件输入固定世界坐标起点后合并真实点"));
     connect(mergeAction, &QAction::triggered, this, &MainWindow::mergeWorldPointClouds);
@@ -949,10 +949,10 @@ void MainWindow::buildUi() {
     titleColumn->addWidget(subtitle);
     header->addLayout(titleColumn);
     header->addStretch();
-    auto *openButton = new QPushButton(tr("打开 PLY"));
+    auto *openButton = new QPushButton(tr("打开点云"));
     openButton->setObjectName(QStringLiteral("primaryButton"));
     openButton->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
-    connect(openButton, &QPushButton::clicked, this, &MainWindow::openPointCloud);
+    connect(openButton, &QPushButton::clicked, this, &MainWindow::openPointCloudSource);
     header->addWidget(openButton);
     layout->addLayout(header);
 
@@ -1229,6 +1229,54 @@ void MainWindow::buildUi() {
     statusBar()->showMessage(tr("就绪"));
 }
 
+void MainWindow::openPointCloudSource() {
+    if (pointTaskRunning()) {
+        statusBar()->showMessage(tr("点云处理任务正在运行"));
+        return;
+    }
+    QMessageBox dialog(QMessageBox::Question, tr("打开点云"),
+                       tr("请选择点云来源"), QMessageBox::Cancel, this);
+    QPushButton *fileButton = dialog.addButton(tr("打开单个 PLY"), QMessageBox::AcceptRole);
+    QPushButton *folderButton = dialog.addButton(tr("扫描文件夹 PLY"), QMessageBox::AcceptRole);
+    dialog.exec();
+    if (dialog.clickedButton() == fileButton) openPointCloud();
+    else if (dialog.clickedButton() == folderButton) {
+        const QString directory = QFileDialog::getExistingDirectory(
+            this, tr("选择包含 PLY 的文件夹"));
+        if (directory.isEmpty()) return;
+        QDir dir(directory);
+        const QStringList files = dir.entryList({QStringLiteral("*.ply"), QStringLiteral("*.PLY")},
+                                                 QDir::Files, QDir::Name);
+        if (files.isEmpty()) {
+            QMessageBox::information(this, tr("没有 PLY 文件"),
+                                     tr("所选文件夹中没有 .ply 文件"));
+            return;
+        }
+        QVector<pointcloud::WorldCloudInput> inputs;
+        inputs.reserve(files.size());
+        for (const QString &name : files) {
+            pointcloud::WorldCloudInput input;
+            input.filePath = dir.absoluteFilePath(name);
+            input.worldFromLocal.setToIdentity();
+            inputs.push_back(std::move(input));
+        }
+        m_folderScanOnly = true;
+        m_pendingWorldInputs = inputs;
+        if (!m_worldMergeWatcher) {
+            m_worldMergeWatcher = new QFutureWatcher<pointcloud::WorldCloudMergeResult>(this);
+            connect(m_worldMergeWatcher, &QFutureWatcher<pointcloud::WorldCloudMergeResult>::finished,
+                    this, &MainWindow::worldMergeFinished);
+        }
+        m_loading = true;
+        m_progress->show(); m_progress->setRange(0, 0);
+        statusBar()->showMessage(tr("正在扫描并加载文件夹中的 PLY..."));
+        const auto taskInputs = m_pendingWorldInputs;
+        m_worldMergeWatcher->setFuture(QtConcurrent::run([taskInputs]() {
+            return pointcloud::mergePlyCloudsInWorld(taskInputs);
+        }));
+    }
+}
+
 void MainWindow::openPointCloud() {
     if (pointTaskRunning()) {
         statusBar()->showMessage(tr("点云处理任务正在运行"));
@@ -1377,6 +1425,7 @@ void MainWindow::mergeWorldPointClouds() {
                 this, &MainWindow::worldMergeFinished);
     }
     m_loading = true;
+    m_folderScanOnly = false;
     m_progress->show(); m_progress->setRange(0, 0);
     statusBar()->showMessage(tr("正在转换并合并世界坐标点云..."));
     const auto taskInputs = m_pendingWorldInputs;
@@ -1404,9 +1453,15 @@ void MainWindow::worldMergeFinished() {
     m_fileInfo->setText(tr("世界坐标合并\n扫描文件  %1\n真实点数  %2")
                         .arg(result.sourceFiles.size())
                         .arg(QLocale().toString(result.points.size())));
-    statusBar()->showMessage(tr("已合并 %1 个 PLY，共 %2 个真实点；当前未执行 ICP")
-                             .arg(result.sourceFiles.size())
-                             .arg(QLocale().toString(result.points.size())));
+    const QString message = m_folderScanOnly
+        ? tr("已扫描并加载 %1 个 PLY，共 %2 个真实点；可继续进行配准")
+              .arg(result.sourceFiles.size())
+              .arg(QLocale().toString(result.points.size()))
+        : tr("已合并 %1 个 PLY，共 %2 个真实点；当前未执行 ICP")
+              .arg(result.sourceFiles.size())
+              .arg(QLocale().toString(result.points.size()));
+    statusBar()->showMessage(message);
+    m_folderScanOnly = false;
 }
 
 bool MainWindow::pointTaskRunning() const {
