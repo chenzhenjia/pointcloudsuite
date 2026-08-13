@@ -460,9 +460,50 @@ struct StatisticalFilterResult {
     QString warning;
 };
 
+constexpr quint32 MergeCacheMagic = 0x314D4350; // PCM1
+constexpr quint32 MergeCacheVersion = 1;
+QString mergeCachePath(const QVector<WorldCloudInput> &inputs) {
+    if (inputs.isEmpty()) return {};
+    return QFileInfo(inputs.first().filePath).absolutePath() + QStringLiteral("/.pointcloudview-merge.pcvbin");
+}
+bool sameTransform(const QMatrix4x4 &a, const QMatrix4x4 &b) {
+    const float *x = a.constData(), *y = b.constData();
+    for (int i = 0; i < 16; ++i) if (std::abs(x[i] - y[i]) > 1.0e-6f) return false;
+    return true;
+}
+bool readMergeCache(const QVector<WorldCloudInput> &inputs, WorldCloudMergeResult &result) {
+    QFile file(mergeCachePath(inputs));
+    if (!file.open(QIODevice::ReadOnly)) return false;
+    QDataStream stream(&file); stream.setByteOrder(QDataStream::LittleEndian);
+    quint32 magic = 0, version = 0; quint32 fileCount = 0; quint64 pointCount = 0;
+    stream >> magic >> version >> fileCount >> pointCount;
+    if (magic != MergeCacheMagic || version != MergeCacheVersion || fileCount != quint32(inputs.size())) return false;
+    for (const auto &input : inputs) {
+        QString path; quint64 size = 0; qint64 stamp = 0; stream >> path >> size >> stamp;
+        QFileInfo info(input.filePath);
+        if (path != input.filePath || size != quint64(info.size()) || stamp != info.lastModified().toMSecsSinceEpoch()) return false;
+        for (int i = 0; i < 16; ++i) { float value = 0; stream >> value; if (std::abs(value - input.worldFromLocal.constData()[i]) > 1.0e-6f) return false; }
+    }
+    if (pointCount > quint64(std::numeric_limits<qsizetype>::max())) return false;
+    result.points.resize(qsizetype(pointCount)); result.cloudIds.resize(qsizetype(pointCount)); result.sourceIndices.resize(qsizetype(pointCount));
+    for (qsizetype i = 0; i < result.points.size(); ++i) { qint32 cloud = -1; qint64 source = -1; stream >> result.points[i].x >> result.points[i].y >> result.points[i].z >> result.points[i].nx >> result.points[i].ny >> result.points[i].nz >> cloud >> source; result.cloudIds[i] = cloud; result.sourceIndices[i] = source; }
+    result.sourceFiles.clear(); for (const auto &input : inputs) result.sourceFiles.push_back(input.filePath);
+    result.ok = stream.status() == QDataStream::Ok; return result.ok;
+}
+void writeMergeCache(const QVector<WorldCloudInput> &inputs, const WorldCloudMergeResult &result) {
+    const QString path = mergeCachePath(inputs), temp = path + QStringLiteral(".tmp");
+    QFile file(temp); if (!file.open(QIODevice::WriteOnly)) return;
+    QDataStream stream(&file); stream.setByteOrder(QDataStream::LittleEndian);
+    stream << MergeCacheMagic << MergeCacheVersion << quint32(inputs.size()) << quint64(result.points.size());
+    for (const auto &input : inputs) { QFileInfo info(input.filePath); stream << input.filePath << quint64(info.size()) << info.lastModified().toMSecsSinceEpoch(); for (int i = 0; i < 16; ++i) stream << input.worldFromLocal.constData()[i]; }
+    for (qsizetype i = 0; i < result.points.size(); ++i) { const auto &p = result.points[i]; stream << p.x << p.y << p.z << p.nx << p.ny << p.nz << qint32(result.cloudIds[i]) << qint64(result.sourceIndices[i]); }
+    file.flush(); file.close(); QFile::remove(path); QFile::rename(temp, path);
+}
+
 WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &inputs) {
     WorldCloudMergeResult result;
     if (inputs.isEmpty()) { result.error = QStringLiteral("未选择 PLY 文件"); return result; }
+    if (readMergeCache(inputs, result)) return result;
     qsizetype total = 0;
     std::vector<std::future<LoadResult>> futures;
     futures.reserve(inputs.size());
@@ -491,6 +532,7 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
         }
     }
     result.ok = !result.points.isEmpty();
+    if (result.ok) writeMergeCache(inputs, result);
     return result;
 }
 
