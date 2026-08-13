@@ -51,6 +51,7 @@
 #include <QDialog>
 #include <QInputDialog>
 #include <QLineEdit>
+#include <QSignalBlocker>
 #include <QRegularExpression>
 #include <QDir>
 #include <QDirIterator>
@@ -959,6 +960,7 @@ void MainWindow::buildUi() {
     m_registrationPrepare = ui->primaryButton1;
     m_registrationStart = ui->registrationStart;
     m_registrationOutput = ui->registrationOutput;
+    m_registrationOutput->setReadOnly(true);
     m_registrationVoxelEnabled = ui->registrationVoxelEnabled;
     m_registrationVoxelSize = ui->registrationVoxelSize;
     m_fileInfo = ui->subTitle1;
@@ -1497,11 +1499,34 @@ void MainWindow::preparePointCloudRegistration() {
     for (int row = 0; row < selected.size(); ++row) {
         const int sourceRow = m_fileList->row(selected[row]);
         m_registrationTable->setItem(row, 0, new QTableWidgetItem(m_sourceFiles.value(sourceRow)));
-        for (int c = 1; c < 13; ++c) setPoseCell(m_registrationTable, row, c, QStringLiteral("0"));
-        text += QStringLiteral("%1 Start 0 0 0 0 0 0 ; END 0 0 0 0 0 0\n")
-                    .arg(row + 1, 2, 10, QLatin1Char('0'));
+        for (int c = 1; c < 13; ++c) {
+            setPoseCell(m_registrationTable, row, c, QStringLiteral("0"));
+            if (auto *edit = qobject_cast<QLineEdit *>(m_registrationTable->cellWidget(row, c)))
+                connect(edit, &QLineEdit::textChanged, this, &MainWindow::syncRegistrationPoseText);
+        }
     }
-    m_registrationOutput->setPlainText(text);
+    syncRegistrationPoseText();
+}
+
+void MainWindow::syncRegistrationPoseText() {
+    if (!m_registrationTable || !m_registrationOutput) return;
+    QString text = QStringLiteral("Image_Set_A\n");
+    for (int row = 0; row < m_registrationTable->rowCount(); ++row) {
+        QStringList start, end;
+        for (int c = 1; c <= 6; ++c) {
+            auto *edit = qobject_cast<QLineEdit *>(m_registrationTable->cellWidget(row, c));
+            start << (edit ? edit->text().trimmed() : QStringLiteral("0"));
+        }
+        for (int c = 7; c <= 12; ++c) {
+            auto *edit = qobject_cast<QLineEdit *>(m_registrationTable->cellWidget(row, c));
+            end << (edit ? edit->text().trimmed() : QStringLiteral("0"));
+        }
+        text += QStringLiteral("%1 Start %2 ; END %3\n")
+                    .arg(row + 1, 2, 10, QLatin1Char('0'))
+                    .arg(start.join(QLatin1Char(' ')), end.join(QLatin1Char(' ')));
+    }
+    const QSignalBlocker blocker(m_registrationOutput);
+    m_registrationOutput->setPlainText(text.trimmed());
 }
 
 void MainWindow::startPointCloudRegistration() {
@@ -1512,25 +1537,11 @@ void MainWindow::startPointCloudRegistration() {
     QVector<pointcloud::WorldCloudInput> inputs;
     inputs.reserve(m_registrationTable->rowCount());
     QStringList errors;
-    const QStringList lines = m_registrationOutput->toPlainText().split(QRegularExpression(QStringLiteral("[\\r\\n]+")), Qt::SkipEmptyParts);
-    QVector<QVector<double>> poses;
-    const QRegularExpression number(QStringLiteral("[-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?"));
-    for (const QString &line : lines) {
-        if (!line.contains(QStringLiteral("Start"), Qt::CaseInsensitive)
-            || !line.contains(QStringLiteral("END"), Qt::CaseInsensitive)) continue;
-        QVector<double> values;
-        auto it = number.globalMatch(line);
-        while (it.hasNext()) values.push_back(it.next().captured().toDouble());
-        if (values.size() < 12) { errors << tr("位姿行格式错误：%1").arg(line); continue; }
-        poses.push_back(values.mid(values.size() - 12));
-    }
-    if (poses.size() != m_registrationTable->rowCount()) {
-        errors << tr("需要为每个选中的 PLY 提供一行 Start/END 位姿");
-    }
-    for (int row = 0; row < m_registrationTable->rowCount() && row < poses.size(); ++row) {
-        const QVector<double> &values = poses[row];
-        const QVector<double> start = values.mid(0, 6);
-        const QVector<double> end = values.mid(6, 6);
+    for (int row = 0; row < m_registrationTable->rowCount(); ++row) {
+        bool startOk = false, endOk = false;
+        const QVector<double> start = parsePoseCells(m_registrationTable, row, 1, &startOk);
+        const QVector<double> end = parsePoseCells(m_registrationTable, row, 7, &endOk);
+        if (!startOk || !endOk) { errors << tr("第 %1 行位姿包含无效数字").arg(row + 1); continue; }
         QVector<double> mid(6);
         for (int i = 0; i < 6; ++i) {
             double delta = end[i] - start[i];

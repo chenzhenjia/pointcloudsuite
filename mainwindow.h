@@ -63,6 +63,7 @@ private:
     void publishCanvasCache(QVector<pointcloud::Point3D> points);
     void updatePlaneExtractionUi();
     void updatePlaneEdgeUi();
+    void syncRegistrationPoseText();
     void clearPlaneEdgeUi();
     void runPlaneExtraction(bool deferFinalClassification);
     bool pointTaskRunning() const;
