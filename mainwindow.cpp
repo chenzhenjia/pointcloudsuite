@@ -38,6 +38,7 @@
 #include <QVector4D>
 #include <QVector2D>
 #include <QVector3D>
+#include <QSet>
 #include <QWheelEvent>
 #include <QKeyEvent>
 #include <QCloseEvent>
@@ -54,6 +55,7 @@ class PointCloudCanvas final : public QOpenGLWidget,
 public:
     enum PointState : quint8 { NormalPoint = 0, PlanePoint = 1, EdgePoint = 2 };
     std::function<void(int)> pointPicked;
+    std::function<void(const QRectF &)> edgeRectanglePicked;
 
     explicit PointCloudCanvas(QWidget *parent = nullptr)
         : QOpenGLWidget(parent), m_vertexBuffer(QOpenGLBuffer::VertexBuffer),
@@ -108,6 +110,10 @@ public:
     void setSelectedEdgeIndices(const QVector<int> &indices) {
         m_selectedEdgeIndices = indices;
         update();
+    }
+
+    QVector<int> pickRectangleForSelection(const QRectF &selection) {
+        return pickRectangle(selection);
     }
 
     void setSelectedIndices(const QVector<int> &indices) {
@@ -400,6 +406,7 @@ protected:
 
     void mousePressEvent(QMouseEvent *event) override {
         m_lastMousePosition = event->position();
+        m_selectionOrigin = event->position();
         m_pressedButton = event->button();
         m_mouseMoved = false;
     }
@@ -419,7 +426,10 @@ protected:
     }
 
     void mouseReleaseEvent(QMouseEvent *event) override {
-        if ((m_selectionMode || m_edgeSelectionMode) && event->button() == Qt::LeftButton && !m_mouseMoved
+        if (m_edgeSelectionMode && event->button() == Qt::LeftButton && m_mouseMoved
+            && edgeRectanglePicked) {
+            edgeRectanglePicked(QRectF(m_selectionOrigin, event->position()).normalized());
+        } else if ((m_selectionMode || m_edgeSelectionMode) && event->button() == Qt::LeftButton && !m_mouseMoved
             && pointPicked) {
             pointPicked(pickPoint(event->position()));
         }
@@ -626,6 +636,58 @@ private:
         return id > 0 && id <= quint32(m_points.size()) ? int(id - 1) : -1;
     }
 
+    QVector<int> pickRectangle(const QRectF &selection) {
+        QVector<int> result;
+        if (m_points.isEmpty() || !context() || !isValid()) return result;
+        makeCurrent();
+        uploadCloudIfNeeded();
+        if (!m_uploadError.isEmpty()) { doneCurrent(); return result; }
+        const qreal dpr = devicePixelRatioF();
+        const QSize pixelSize(qMax(1, qRound(width() * dpr)), qMax(1, qRound(height() * dpr)));
+        if (!m_pickingFbo || m_pickingFbo->size() != pixelSize) {
+            QOpenGLFramebufferObjectFormat format;
+            format.setAttachment(QOpenGLFramebufferObject::Depth);
+            format.setInternalTextureFormat(GL_RGBA8);
+            m_pickingFbo = std::make_unique<QOpenGLFramebufferObject>(pixelSize, format);
+        }
+        if (!m_pickingFbo || !m_pickingFbo->isValid()) { doneCurrent(); return result; }
+        const QRectF clipped = selection.intersected(rect());
+        const int x0 = qBound(0, qFloor(clipped.left() * dpr), pixelSize.width() - 1);
+        const int x1 = qBound(0, qCeil(clipped.right() * dpr), pixelSize.width() - 1);
+        const int top = qBound(0, qFloor(clipped.top() * dpr), pixelSize.height() - 1);
+        const int bottom = qBound(0, qCeil(clipped.bottom() * dpr), pixelSize.height() - 1);
+        const int readWidth = qMax(1, x1 - x0 + 1);
+        const int readHeight = qMax(1, bottom - top + 1);
+        const int y0 = pixelSize.height() - 1 - bottom;
+        m_pickingFbo->bind();
+        glViewport(0, 0, pixelSize.width(), pixelSize.height());
+        glDisable(GL_BLEND); glDisable(GL_DITHER); glEnable(GL_DEPTH_TEST);
+        glClearColor(0, 0, 0, 0); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        m_pickingProgram.bind();
+        m_pickingProgram.setUniformValue("transform", viewTransform());
+        m_pickingProgram.setUniformValue("cloudCenter", m_center);
+        m_pickingProgram.setUniformValue("cloudSpan", m_span);
+        m_pickingProgram.setUniformValue("viewPan", QVector2D(m_pan));
+        m_pickingProgram.setUniformValue("pointSize", float(m_pointSize));
+        m_vertexArray.bind(); glDrawArrays(GL_POINTS, 0, int(m_points.size()));
+        m_vertexArray.release(); m_pickingProgram.release();
+        QByteArray pixels(readWidth * readHeight * 4, Qt::Uninitialized);
+        glReadPixels(x0, y0, readWidth, readHeight, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+        glViewport(0, 0, pixelSize.width(), pixelSize.height());
+        glEnable(GL_DITHER); glEnable(GL_BLEND); doneCurrent();
+        QSet<int> unique;
+        for (int i = 0; i < readWidth * readHeight; ++i) {
+            const uchar *rgba = reinterpret_cast<const uchar *>(pixels.constData() + i * 4);
+            const quint32 id = quint32(rgba[0]) | (quint32(rgba[1]) << 8)
+                | (quint32(rgba[2]) << 16) | (quint32(rgba[3]) << 24);
+            if (id > 0 && id <= quint32(m_points.size())) unique.insert(int(id - 1));
+        }
+        result = unique.values().toVector();
+        std::sort(result.begin(), result.end());
+        return result;
+    }
+
     QMatrix4x4 rotationTransform() const {
         QMatrix4x4 rotation;
         rotation.rotate(m_pitch, 1.0f, 0.0f, 0.0f);
@@ -649,6 +711,11 @@ private:
     void drawOverlay() {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
+        if (m_edgeSelectionMode && m_mouseMoved && m_pressedButton == Qt::LeftButton) {
+            painter.setPen(QPen(QColor(90, 210, 255), 1.5, Qt::DashLine));
+            painter.setBrush(QColor(90, 210, 255, 35));
+            painter.drawRect(QRectF(m_selectionOrigin, m_lastMousePosition).normalized());
+        }
         painter.setPen(QColor(231, 237, 246));
         QFont titleFont = painter.font();
         titleFont.setPointSize(11);
@@ -730,6 +797,7 @@ private:
     std::unique_ptr<QOpenGLFramebufferObject> m_pickingFbo;
     QVector3D m_center;
     QPointF m_lastMousePosition;
+    QPointF m_selectionOrigin;
     QPointF m_pan;
     Qt::MouseButton m_pressedButton = Qt::NoButton;
     QString m_initializationError;
@@ -891,6 +959,19 @@ void MainWindow::buildUi() {
     m_canvas->pointPicked = [this](int index) {
         if (m_edgeSelectionActive) handleCanvasEdgePointPicked(index);
         else handleCanvasPointPicked(index);
+    };
+    m_canvas->edgeRectanglePicked = [this](const QRectF &rect) {
+        if (!m_edgeSelectionActive || pointTaskRunning()) return;
+        const QVector<int> picked = m_canvas->pickRectangleForSelection(rect);
+        for (int index : picked)
+            if (m_planeEdgeResult.edgeIndices.contains(index)
+                && !m_selectedEdgeIndices.contains(index))
+                m_selectedEdgeIndices.push_back(index);
+        m_canvas->setSelectedEdgeIndices(m_selectedEdgeIndices);
+        updatePlaneEdgeUi();
+        statusBar()->showMessage(m_selectedEdgeIndices.isEmpty()
+            ? tr("框选区域没有黄色边缘点")
+            : tr("框选边缘点：%1").arg(m_selectedEdgeIndices.size()));
     };
     centerLayout->addWidget(m_canvas, 1);
     m_canvasInfo = new QLabel(tr("就绪"));
