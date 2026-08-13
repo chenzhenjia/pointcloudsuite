@@ -60,7 +60,12 @@ int main(int argc, char *argv[])
     w->show();
     qInfo() << "startup: MainWindow shown";
     if (qEnvironmentVariableIsSet("POINTCLOUDVIEW_SELFTEST_CLOSE")) {
-        QTimer::singleShot(100, w, &QWidget::close);
+        // Closing a QOpenGLWidget a few milliseconds after show() races its
+        // first native surface/GL initialization on some Qt 6 debug builds.
+        // Use the normal application quit path for the startup smoke test;
+        // this still verifies QApplication, MainWindow construction and the
+        // event loop without forcing a mid-initialization widget close.
+        QTimer::singleShot(500, qApp, &QCoreApplication::quit);
     }
     const int result = QApplication::exec();
     delete w;
