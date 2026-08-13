@@ -60,7 +60,6 @@ private slots:
 private:
     void closeEvent(QCloseEvent *event) override;
     void buildUi();
-    void buildUiLegacy();
     void publishCanvasCache(QVector<pointcloud::Point3D> points);
     void updatePlaneExtractionUi();
     void updatePlaneEdgeUi();

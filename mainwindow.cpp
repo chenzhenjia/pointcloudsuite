@@ -956,11 +956,11 @@ void MainWindow::buildUi() {
     ui->setupUi(this);
     m_fileList = ui->fileList;
     m_registrationTable = ui->registrationTable;
-    m_registrationPrepare = ui->registrationPrepare;
+    m_registrationPrepare = ui->primaryButton1;
     m_registrationStart = ui->registrationStart;
     m_registrationOutput = ui->registrationOutput;
-    m_fileInfo = ui->fileInfo;
-    m_canvasInfo = ui->canvasInfo;
+    m_fileInfo = ui->subTitle1;
+    m_canvasInfo = ui->subTitle2;
     m_progress = ui->progress;
     m_pointSize = ui->pointSize;
     m_colorMode = ui->colorMode;
@@ -997,7 +997,7 @@ void MainWindow::buildUi() {
     canvasLayout->addWidget(m_canvas);
     connect(ui->openAction, &QAction::triggered, this, &MainWindow::openPointCloudSource);
     connect(ui->exitAction, &QAction::triggered, qApp, &QApplication::quit);
-    connect(ui->openButton, &QPushButton::clicked, this, &MainWindow::openPointCloudSource);
+    connect(ui->primaryButton, &QPushButton::clicked, this, &MainWindow::openPointCloudSource);
     connect(m_fileList, &QListWidget::currentRowChanged, this, &MainWindow::loadSelectedSource);
     connect(m_registrationPrepare, &QPushButton::clicked, this, &MainWindow::preparePointCloudRegistration);
     connect(m_registrationStart, &QPushButton::clicked, this, &MainWindow::startPointCloudRegistration);
@@ -1059,6 +1059,7 @@ void MainWindow::buildUi() {
     statusBar()->showMessage(tr("就绪"));
 }
 
+#if 0 // Legacy programmatic UI retained only as historical reference; Designer is authoritative.
 void MainWindow::buildUiLegacy() {
     setWindowTitle(tr("点云预览工作台"));
     resize(1400, 860);
@@ -1427,6 +1428,7 @@ void MainWindow::buildUiLegacy() {
     setCentralWidget(root);
     statusBar()->showMessage(tr("就绪"));
 }
+#endif
 
 void MainWindow::openPointCloudSource() {
     if (pointTaskRunning()) {
