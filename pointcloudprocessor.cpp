@@ -432,6 +432,38 @@ struct StatisticalFilterResult {
     QString warning;
 };
 
+WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &inputs) {
+    WorldCloudMergeResult result;
+    if (inputs.isEmpty()) { result.error = QStringLiteral("未选择 PLY 文件"); return result; }
+    qsizetype total = 0;
+    QVector<QVector<Point3D>> loaded;
+    loaded.reserve(inputs.size());
+    for (const WorldCloudInput &input : inputs) {
+        if (input.filePath.trimmed().isEmpty()) { result.error = QStringLiteral("存在空的 PLY 路径"); return result; }
+        QVector<Point3D> points;
+        QString error;
+        if (!loadPlyCached(input.filePath, points, &error, nullptr)) {
+            result.error = QStringLiteral("加载 %1 失败：%2").arg(input.filePath, error); return result;
+        }
+        if (points.isEmpty()) { result.error = QStringLiteral("%1 不包含可显示的顶点").arg(input.filePath); return result; }
+        total += points.size(); loaded.push_back(std::move(points));
+    }
+    result.points.reserve(total); result.cloudIds.reserve(total); result.sourceIndices.reserve(total);
+    result.sourceFiles.reserve(inputs.size());
+    for (int cloudId = 0; cloudId < inputs.size(); ++cloudId) {
+        result.sourceFiles.push_back(inputs[cloudId].filePath);
+        const auto &points = loaded[cloudId];
+        for (qsizetype sourceIndex = 0; sourceIndex < points.size(); ++sourceIndex) {
+            const Point3D &source = points[sourceIndex];
+            const QVector3D world = inputs[cloudId].worldFromLocal.map(QVector3D(source.x, source.y, source.z));
+            Point3D point = source; point.x = world.x(); point.y = world.y(); point.z = world.z();
+            result.points.push_back(point); result.cloudIds.push_back(cloudId); result.sourceIndices.push_back(sourceIndex);
+        }
+    }
+    result.ok = !result.points.isEmpty();
+    return result;
+}
+
 // The statistical filter visits voxel shells in increasing distance from the
 // query cell.  Build the integer offsets once instead of recalculating three
 // absolute values and a max() expression for every point/radius combination.
@@ -2139,6 +2171,10 @@ QVector<QVector<QVector2D>> marchingSquaresContours(const QVector<quint8> &mask,
 }
 
 } // namespace
+
+WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inputs) {
+    return mergePlyCloudsInWorldImpl(inputs);
+}
 
 ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points,
                                                   const QVector<int> &seedIndices,

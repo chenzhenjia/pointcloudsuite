@@ -1,12 +1,14 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QStringList>
 #include "pointcloudprocessor.h"
 
 class QListWidget;
 class QLabel;
 class QAction;
 class QCloseEvent;
+class QDialog;
 class QProgressBar;
 class QComboBox;
 class QSpinBox;
@@ -26,6 +28,8 @@ public:
 
 private slots:
     void openPointCloud();
+    void mergeWorldPointClouds();
+    void worldMergeFinished();
     void loadFinished();
     void updateRenderSettings();
     void applyNoiseRemoval();
@@ -90,9 +94,14 @@ private:
     PointCloudCanvas *m_canvas = nullptr;
     QVector<pointcloud::Point3D> m_rawPoints;
     QVector<pointcloud::Point3D> m_points;
+    QVector<int> m_pointCloudIds;
+    QVector<qsizetype> m_pointSourceIndices;
+    QStringList m_pointSourceFiles;
     bool m_loading = false;
     QString m_pendingPath;
+    QVector<pointcloud::WorldCloudInput> m_pendingWorldInputs;
     QFutureWatcher<pointcloud::LoadResult> *m_loadWatcher = nullptr;
+    QFutureWatcher<pointcloud::WorldCloudMergeResult> *m_worldMergeWatcher = nullptr;
     QFutureWatcher<pointcloud::NoiseResult> *m_noiseWatcher = nullptr;
     QFutureWatcher<pointcloud::ThreePointPlaneResult> *m_threePlaneWatcher = nullptr;
     QFutureWatcher<pointcloud::PlaneEdgeResult> *m_edgeWatcher = nullptr;

@@ -42,6 +42,12 @@
 #include <QWheelEvent>
 #include <QKeyEvent>
 #include <QCloseEvent>
+#include <QDialog>
+#include <QInputDialog>
+#include <QLineEdit>
+#include <QRegularExpression>
+#include <QDir>
+#include <QDirIterator>
 #include <QPixmap>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
@@ -832,6 +838,9 @@ MainWindow::~MainWindow() {
     if (m_loadWatcher && m_loadWatcher->isRunning()) {
         m_loadWatcher->waitForFinished();
     }
+    if (m_worldMergeWatcher && m_worldMergeWatcher->isRunning()) {
+        m_worldMergeWatcher->waitForFinished();
+    }
     if (m_noiseWatcher && m_noiseWatcher->isRunning()) {
         m_noiseWatcher->waitForFinished();
     }
@@ -903,6 +912,9 @@ void MainWindow::buildUi() {
     auto *openAction = fileMenu->addAction(tr("打开 PLY..."));
     openAction->setShortcut(QKeySequence::Open);
     connect(openAction, &QAction::triggered, this, &MainWindow::openPointCloud);
+    auto *mergeAction = fileMenu->addAction(tr("合并文件夹 PLY（世界坐标）..."));
+    mergeAction->setToolTip(tr("为每个扫描文件输入固定世界坐标起点后合并真实点"));
+    connect(mergeAction, &QAction::triggered, this, &MainWindow::mergeWorldPointClouds);
     fileMenu->addSeparator();
     fileMenu->addAction(tr("退出"), qApp, &QApplication::quit);
     auto *root = new QWidget(this);
@@ -1241,6 +1253,10 @@ void MainWindow::loadFinished() {
         return;
     }
     m_rawPoints = result.points;
+    m_pointCloudIds.clear();
+    m_pointSourceIndices.resize(result.points.size());
+    for (qsizetype i = 0; i < m_pointSourceIndices.size(); ++i) m_pointSourceIndices[i] = i;
+    m_pointSourceFiles = {m_pendingPath};
     float minZ = m_rawPoints.first().z;
     float maxZ = minZ;
     for (const auto &point : m_rawPoints) {
@@ -1295,8 +1311,92 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points) {
     }
 }
 
+void MainWindow::mergeWorldPointClouds() {
+    if (pointTaskRunning()) {
+        statusBar()->showMessage(tr("点云处理任务正在运行"));
+        return;
+    }
+    const QString directory = QFileDialog::getExistingDirectory(
+        this, tr("选择包含 PLY 的文件夹"));
+    if (directory.isEmpty()) return;
+    QDir dir(directory);
+    const QStringList files = dir.entryList({QStringLiteral("*.ply"), QStringLiteral("*.PLY")},
+                                             QDir::Files, QDir::Name);
+    if (files.isEmpty()) {
+        QMessageBox::information(this, tr("没有 PLY 文件"),
+                                 tr("所选文件夹中没有 .ply 文件"));
+        return;
+    }
+    QVector<pointcloud::WorldCloudInput> inputs;
+    inputs.reserve(files.size());
+    for (const QString &fileName : files) {
+        bool accepted = false;
+        const QString text = QInputDialog::getText(
+            this, tr("输入世界坐标起点"),
+            tr("%1\n请输入固定起点 X Y Z（单位与 PLY 一致，例如：500 150 700）：")
+                .arg(fileName), QLineEdit::Normal, QStringLiteral("0 0 0"), &accepted);
+        if (!accepted) return;
+        const QStringList values = text.split(QRegularExpression(QStringLiteral("[,;\\s]+")),
+                                              Qt::SkipEmptyParts);
+        if (values.size() != 3) {
+            QMessageBox::warning(this, tr("坐标格式错误"),
+                                 tr("%1 的起点必须填写三个数字：X Y Z").arg(fileName));
+            return;
+        }
+        bool okX = false, okY = false, okZ = false;
+        const float x = values[0].toFloat(&okX), y = values[1].toFloat(&okY), z = values[2].toFloat(&okZ);
+        if (!okX || !okY || !okZ) {
+            QMessageBox::warning(this, tr("坐标格式错误"), tr("%1 的起点包含非数字内容").arg(fileName));
+            return;
+        }
+        pointcloud::WorldCloudInput input;
+        input.filePath = dir.absoluteFilePath(fileName);
+        input.worldFromLocal.setToIdentity();
+        input.worldFromLocal.translate(x, y, z);
+        inputs.push_back(input);
+    }
+    m_pendingWorldInputs = inputs;
+    if (!m_worldMergeWatcher) {
+        m_worldMergeWatcher = new QFutureWatcher<pointcloud::WorldCloudMergeResult>(this);
+        connect(m_worldMergeWatcher, &QFutureWatcher<pointcloud::WorldCloudMergeResult>::finished,
+                this, &MainWindow::worldMergeFinished);
+    }
+    m_loading = true;
+    m_progress->show(); m_progress->setRange(0, 0);
+    statusBar()->showMessage(tr("正在转换并合并世界坐标点云..."));
+    const auto taskInputs = m_pendingWorldInputs;
+    m_worldMergeWatcher->setFuture(QtConcurrent::run([taskInputs]() {
+        return pointcloud::mergePlyCloudsInWorld(taskInputs);
+    }));
+}
+
+void MainWindow::worldMergeFinished() {
+    const auto result = m_worldMergeWatcher->result();
+    m_loading = false; m_progress->hide();
+    if (!result.ok) {
+        QMessageBox::critical(this, tr("世界坐标合并失败"), result.error);
+        statusBar()->showMessage(tr("世界坐标合并失败"));
+        return;
+    }
+    m_rawPoints = result.points;
+    m_pointCloudIds = result.cloudIds;
+    m_pointSourceIndices = result.sourceIndices;
+    m_pointSourceFiles = result.sourceFiles;
+    publishCanvasCache(result.points);
+    m_fileList->clear();
+    for (const QString &file : result.sourceFiles)
+        m_fileList->addItem(QFileInfo(file).fileName());
+    m_fileInfo->setText(tr("世界坐标合并\n扫描文件  %1\n真实点数  %2")
+                        .arg(result.sourceFiles.size())
+                        .arg(QLocale().toString(result.points.size())));
+    statusBar()->showMessage(tr("已合并 %1 个 PLY，共 %2 个真实点；当前未执行 ICP")
+                             .arg(result.sourceFiles.size())
+                             .arg(QLocale().toString(result.points.size())));
+}
+
 bool MainWindow::pointTaskRunning() const {
-    return m_loading || (m_noiseWatcher && m_noiseWatcher->isRunning())
+    return m_loading || (m_worldMergeWatcher && m_worldMergeWatcher->isRunning())
+        || (m_noiseWatcher && m_noiseWatcher->isRunning())
         || (m_threePlaneWatcher && m_threePlaneWatcher->isRunning())
         || (m_edgeWatcher && m_edgeWatcher->isRunning())
         || (m_planeImageWatcher && m_planeImageWatcher->isRunning());
@@ -1791,6 +1891,11 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     if (m_loading && m_loadWatcher && m_loadWatcher->isRunning()) {
         statusBar()->showMessage(tr("正在结束后台加载，请稍候..."));
         m_loadWatcher->waitForFinished();
+        m_loading = false;
+    }
+    if (m_worldMergeWatcher && m_worldMergeWatcher->isRunning()) {
+        statusBar()->showMessage(tr("正在结束世界坐标合并，请稍候..."));
+        m_worldMergeWatcher->waitForFinished();
         m_loading = false;
     }
     if (m_noiseWatcher && m_noiseWatcher->isRunning()) {

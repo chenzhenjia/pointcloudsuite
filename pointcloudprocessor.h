@@ -3,6 +3,8 @@
 #include <QString>
 #include <QVector>
 #include <QImage>
+#include <QMatrix4x4>
+#include <QVector3D>
 #include <QtGlobal>
 
 namespace pointcloud {
@@ -30,6 +32,23 @@ struct NoiseOptions {
     bool statisticalEnabled = true;
     int meanK = 45;
     float stddevMultiplier = 1.30f;
+};
+
+// One scan file and its fixed transform into the robot/world frame.  The
+// first integration stage intentionally treats each PLY as a rigid snapshot;
+// no per-point robot trajectory compensation is implied.
+struct WorldCloudInput {
+    QString filePath;
+    QMatrix4x4 worldFromLocal;
+};
+
+struct WorldCloudMergeResult {
+    QVector<Point3D> points;
+    QVector<int> cloudIds;
+    QVector<qsizetype> sourceIndices;
+    QVector<QString> sourceFiles;
+    QString error;
+    bool ok = false;
 };
 
 struct GeometryFeatureOptions { int neighborCount = 24; float searchRadius = 0.0f; int minNeighbors = 3; bool useExistingNormals = true; int neighbors = 24; float radius = 0.0f; bool estimateNormals = true; };
@@ -132,6 +151,10 @@ bool loadPlyCached(const QString &fileName, QVector<Point3D> &points,
                    QString *error = nullptr, bool *usedCache = nullptr);
 
 LoadResult loadPlyCachedResult(const QString &fileName);
+
+// Loads each PLY once, applies its supplied rigid world transform, and
+// concatenates the measured points.  No virtual/centroid points are created.
+WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inputs);
 
 // HiViewer-style proportional thinning. denominator=1 keeps all points,
 // denominator=2 keeps approximately 1/2, denominator=16 keeps approximately 1/16.
