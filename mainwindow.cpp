@@ -52,6 +52,8 @@
 #include <QInputDialog>
 #include <QLineEdit>
 #include <QSignalBlocker>
+#include <QXmlStreamReader>
+#include <QtMath>
 #include <QRegularExpression>
 #include <QDir>
 #include <QDirIterator>
@@ -78,6 +80,41 @@ QMatrix4x4 poseMatrixZYX(const QVector<double> &v) {
     result(1, 3) = float(v[1]);
     result(2, 3) = float(v[2]);
     return result;
+}
+bool readDepthInRobotTransform(const QString &path, QMatrix4x4 *transform, QString *error) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        if (error) *error = QObject::tr("无法打开标定文件：%1").arg(path);
+        return false;
+    }
+    QXmlStreamReader xml(&file);
+    while (!xml.atEnd()) {
+        xml.readNext();
+        if (!xml.isStartElement() || xml.name() != QStringLiteral("DepthInRobotPose")) continue;
+        const auto a = xml.attributes();
+        bool ok[6]{};
+        const double tx=a.value(QStringLiteral("tx")).toDouble(&ok[0]);
+        const double ty=a.value(QStringLiteral("ty")).toDouble(&ok[1]);
+        const double tz=a.value(QStringLiteral("tz")).toDouble(&ok[2]);
+        const double rx=a.value(QStringLiteral("rx")).toDouble(&ok[3]);
+        const double ry=a.value(QStringLiteral("ry")).toDouble(&ok[4]);
+        const double rz=a.value(QStringLiteral("rz")).toDouble(&ok[5]);
+        if (!std::all_of(std::begin(ok), std::end(ok), [](bool value){ return value; })) {
+            if (error) *error = QObject::tr("DepthInRobotPose 属性不完整");
+            return false;
+        }
+        // The calibration XML stores fixed-XYZ angles in radians. This is
+        // exactly Rz(rz) * Ry(ry) * Rx(rx), matching the Python converter.
+        QMatrix4x4 result; result.setToIdentity();
+        result.rotate(float(qRadiansToDegrees(rz)), 0, 0, 1);
+        result.rotate(float(qRadiansToDegrees(ry)), 0, 1, 0);
+        result.rotate(float(qRadiansToDegrees(rx)), 1, 0, 0);
+        result(0,3)=float(tx); result(1,3)=float(ty); result(2,3)=float(tz);
+        *transform = result;
+        return true;
+    }
+    if (error) *error = xml.hasError() ? xml.errorString() : QObject::tr("XML 中未找到 DepthInRobotPose");
+    return false;
 }
 QVector<double> parsePoseCells(QTableWidget *table, int row, int firstColumn, bool *ok) {
     QVector<double> values;
@@ -967,6 +1004,8 @@ void MainWindow::buildUi() {
     m_registrationIcpIterations = ui->spb_icp_iterations;
     m_registrationIcpDistance = ui->dsb_icp_distance;
     m_registrationIcpTolerance = ui->dsb_icp_tolerance;
+    m_handEyeXmlPath = ui->le_hand_eye_xml;
+    m_browseHandEyeButton = ui->btn_browse_hand_eye;
     m_fileInfo = ui->lbl_subtitle1;
     m_canvasInfo = ui->lbl_subtitle2;
     m_progress = ui->pbar_progress;
@@ -1009,6 +1048,7 @@ void MainWindow::buildUi() {
     connect(m_fileList, &QListWidget::currentRowChanged, this, &MainWindow::loadSelectedSource);
     connect(m_registrationPrepare, &QPushButton::clicked, this, &MainWindow::preparePointCloudRegistration);
     connect(m_registrationStart, &QPushButton::clicked, this, &MainWindow::startPointCloudRegistration);
+    connect(m_browseHandEyeButton, &QPushButton::clicked, this, &MainWindow::browseHandEyeCalibration);
     connect(m_pointSize, qOverload<int>(&QSpinBox::valueChanged), m_canvas, &PointCloudCanvas::setPointSize);
     connect(ui->btn_reset_view, &QPushButton::clicked, m_canvas, &PointCloudCanvas::resetView);
     connect(m_colorMode, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::updateRenderSettings);
@@ -1512,6 +1552,20 @@ void MainWindow::preparePointCloudRegistration() {
     syncRegistrationPoseText();
 }
 
+void MainWindow::browseHandEyeCalibration() {
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("选择 Eye-in-Hand 标定文件"), m_handEyeXmlPath->text(), tr("XML 文件 (*.xml)"));
+    if (path.isEmpty()) return;
+    QMatrix4x4 calibration;
+    QString error;
+    if (!readDepthInRobotTransform(path, &calibration, &error)) {
+        QMessageBox::warning(this, tr("标定文件无效"), error);
+        return;
+    }
+    m_handEyeXmlPath->setText(path);
+    statusBar()->showMessage(tr("Eye-in-Hand 标定文件已加载"));
+}
+
 void MainWindow::syncRegistrationPoseText() {
     if (!m_registrationTable || !m_registrationOutput) return;
     QString text = QStringLiteral("Image_Set_A\n");
@@ -1541,6 +1595,13 @@ void MainWindow::startPointCloudRegistration() {
     QVector<pointcloud::WorldCloudInput> inputs;
     inputs.reserve(m_registrationTable->rowCount());
     QStringList errors;
+    QMatrix4x4 flangeFromDepth;
+    QString calibrationError;
+    if (!readDepthInRobotTransform(m_handEyeXmlPath ? m_handEyeXmlPath->text().trimmed() : QString(),
+                                   &flangeFromDepth, &calibrationError)) {
+        QMessageBox::warning(this, tr("缺少 Eye-in-Hand 标定"), calibrationError);
+        return;
+    }
     for (int row = 0; row < m_registrationTable->rowCount(); ++row) {
         bool startOk = false, endOk = false;
         const QVector<double> start = parsePoseCells(m_registrationTable, row, 1, &startOk);
@@ -1555,7 +1616,7 @@ void MainWindow::startPointCloudRegistration() {
         }
         pointcloud::WorldCloudInput input;
         input.filePath = m_registrationTable->item(row, 0)->text();
-        input.worldFromLocal = poseMatrixZYX(mid);
+        input.worldFromLocal = poseMatrixZYX(mid) * flangeFromDepth;
         input.voxelDownsample = m_registrationVoxelEnabled && m_registrationVoxelEnabled->isChecked();
         input.voxelSize = m_registrationVoxelSize ? float(m_registrationVoxelSize->value()) : 0.25f;
         inputs.push_back(std::move(input));

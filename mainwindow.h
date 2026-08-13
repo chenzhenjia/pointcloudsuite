@@ -17,6 +17,7 @@ class QCheckBox;
 class QPushButton;
 class QPlainTextEdit;
 class QTableWidget;
+class QLineEdit;
 class PointCloudCanvas;
 namespace Ui { class MainWindow; }
 namespace pointcloud { struct LoadResult; }
@@ -34,6 +35,7 @@ private slots:
     void loadSelectedSource();
     void preparePointCloudRegistration();
     void startPointCloudRegistration();
+    void browseHandEyeCalibration();
     void mergeWorldPointClouds();
     void worldMergeFinished();
     void loadFinished();
@@ -78,6 +80,8 @@ private:
     QSpinBox *m_registrationIcpIterations = nullptr;
     QDoubleSpinBox *m_registrationIcpDistance = nullptr;
     QDoubleSpinBox *m_registrationIcpTolerance = nullptr;
+    QLineEdit *m_handEyeXmlPath = nullptr;
+    QPushButton *m_browseHandEyeButton = nullptr;
     QLabel *m_fileInfo = nullptr;
     QLabel *m_canvasInfo = nullptr;
     QProgressBar *m_progress = nullptr;

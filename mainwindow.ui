@@ -185,6 +185,7 @@
               </property>
              </widget>
             </item>
+            <item><layout class="QHBoxLayout" name="hbl_hand_eye_xml"><item><widget class="QLineEdit" name="le_hand_eye_xml"><property name="placeholderText"><string>选择 Eye-in-Hand 标定 XML</string></property></widget></item><item><widget class="QPushButton" name="btn_browse_hand_eye"><property name="text"><string>标定文件</string></property></widget></item></layout></item>
             <item>
              <widget class="QPushButton" name="btn_open_point_cloud">
               <property name="text">
