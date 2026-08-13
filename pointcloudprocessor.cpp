@@ -432,6 +432,32 @@ struct StatisticalFilterResult {
     QString warning;
 };
 
+// The statistical filter visits voxel shells in increasing distance from the
+// query cell.  Build the integer offsets once instead of recalculating three
+// absolute values and a max() expression for every point/radius combination.
+// This keeps the existing adaptive search behavior while making the hot loop
+// mostly hash lookups and distance arithmetic.
+const std::array<std::vector<NoiseKey>, 9> &statisticalShellOffsets() {
+    static const std::array<std::vector<NoiseKey>, 9> shells = [] {
+        std::array<std::vector<NoiseKey>, 9> result;
+        for (int radius = 0; radius <= 8; ++radius) {
+            auto &shell = result[size_t(radius)];
+            const int side = 2 * radius + 1;
+            shell.reserve(size_t(side * side * side));
+            for (qint64 dz = -radius; dz <= radius; ++dz) {
+                for (qint64 dy = -radius; dy <= radius; ++dy) {
+                    for (qint64 dx = -radius; dx <= radius; ++dx) {
+                        if (std::max({qAbs(dx), qAbs(dy), qAbs(dz)}) == radius)
+                            shell.push_back({dx, dy, dz});
+                    }
+                }
+            }
+        }
+        return result;
+    }();
+    return shells;
+}
+
 // Approximate K-nearest-neighbour search over expanding voxel shells. The
 // distance threshold is derived from the cloud-wide mean and standard
 // deviation, so it remains valid when point spacing or voxel size changes.
@@ -458,36 +484,37 @@ StatisticalFilterResult statisticalOutlierFilter(const QVector<Point3D> &points,
     for (int i = 0; i < points.size(); ++i) {
         if (!usablePoint(points[i])) continue;
         const NoiseKey key = noiseKey(points[i], cellSize);
-        std::priority_queue<float> nearestSquared;
+        // Keep all distances from the visited shells and select only the K
+        // smallest ones once.  Compared with a heap push/pop for every
+        // neighbor this is substantially cheaper for dense voxel cells, while
+        // preserving the same K-nearest result.
+        std::vector<float> nearestSquared;
+        nearestSquared.reserve(size_t(k) * 2);
+        const auto &shells = statisticalShellOffsets();
         for (qint64 radius = 0; radius <= maximumCellRadius; ++radius) {
-            for (qint64 dz = -radius; dz <= radius; ++dz)
-                for (qint64 dy = -radius; dy <= radius; ++dy)
-                    for (qint64 dx = -radius; dx <= radius; ++dx) {
-                    if (std::max({std::abs(dx), std::abs(dy), std::abs(dz)}) != radius)
-                        continue;
-                    const auto it = grid.find({key.x + dx, key.y + dy, key.z + dz});
+            for (const NoiseKey &offset : shells[size_t(radius)]) {
+                    const auto it = grid.find({key.x + offset.x, key.y + offset.y,
+                                               key.z + offset.z});
                     if (it == grid.end()) continue;
                     for (int index : it->second) {
                         if (index == i) continue;
                         const Point3D &a = points[i], &b = points[index];
                         const float ddx = a.x - b.x, ddy = a.y - b.y, ddz = a.z - b.z;
                         const float squared = ddx * ddx + ddy * ddy + ddz * ddz;
-                        if (nearestSquared.size() < size_t(k)) nearestSquared.push(squared);
-                        else if (squared < nearestSquared.top()) {
-                            nearestSquared.pop();
-                            nearestSquared.push(squared);
-                        }
+                        nearestSquared.push_back(squared);
                     }
-                }
+            }
             if (nearestSquared.size() >= size_t(k)) break;
         }
         if (nearestSquared.size() < size_t(minimumNeighbors)) continue;
-        double sum = 0.0;
-        const int count = int(nearestSquared.size());
-        while (!nearestSquared.empty()) {
-            sum += std::sqrt(double(nearestSquared.top()));
-            nearestSquared.pop();
+        const int count = qMin(k, int(nearestSquared.size()));
+        if (nearestSquared.size() > size_t(count)) {
+            std::nth_element(nearestSquared.begin(), nearestSquared.begin() + count,
+                             nearestSquared.end());
         }
+        double sum = 0.0;
+        for (int neighbor = 0; neighbor < count; ++neighbor)
+            sum += std::sqrt(double(nearestSquared[size_t(neighbor)]));
         meanDistances[i] = float(sum / double(count));
         ++measuredCount;
     }
