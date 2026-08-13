@@ -1437,6 +1437,11 @@ void MainWindow::openPointCloud() {
         this, tr("打开 PLY"), QString(), tr("PLY 文件 (*.ply);;所有文件 (*.*)"));
     if (path.isEmpty()) return;
 
+    // A direct single-file open starts a new data-source session. Folder
+    // scans keep their complete source list so it can be used for registration.
+    m_sourceFiles = {path};
+    m_sourceDirectory = QFileInfo(path).absolutePath();
+
     m_loading = true;
     m_progress->show();
     m_progress->setRange(0, 0);
@@ -1484,9 +1489,15 @@ void MainWindow::loadFinished() {
     m_pointSourceFiles = {m_pendingPath};
 
     const QFileInfo fileInfo(m_pendingPath);
-    m_fileList->clear();
-    m_fileList->addItem(fileInfo.fileName());
-    m_fileList->setCurrentRow(0);
+    const bool keepFolderSources = m_sourceFiles.size() > 1
+        && m_sourceFiles.contains(m_pendingPath);
+    if (!keepFolderSources) {
+        m_sourceFiles = {m_pendingPath};
+        m_sourceDirectory = fileInfo.absolutePath();
+        m_fileList->clear();
+        m_fileList->addItem(fileInfo.fileName());
+        m_fileList->setCurrentRow(0);
+    }
     m_fileInfo->setText(tr("%1 MB\n原始点数  %2")
                             .arg(fileInfo.size() / 1048576.0, 0, 'f', 1)
                             .arg(QLocale().toString(m_rawPoints.size())));
