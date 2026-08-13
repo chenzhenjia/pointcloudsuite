@@ -1253,10 +1253,6 @@ void MainWindow::loadFinished() {
         return;
     }
     m_rawPoints = result.points;
-    m_pointCloudIds.clear();
-    m_pointSourceIndices.resize(result.points.size());
-    for (qsizetype i = 0; i < m_pointSourceIndices.size(); ++i) m_pointSourceIndices[i] = i;
-    m_pointSourceFiles = {m_pendingPath};
     float minZ = m_rawPoints.first().z;
     float maxZ = minZ;
     for (const auto &point : m_rawPoints) {
@@ -1266,6 +1262,10 @@ void MainWindow::loadFinished() {
     m_mapMin->setValue(minZ);
     m_mapMax->setValue(maxZ > minZ ? maxZ : minZ + 1.0);
     publishCanvasCache(m_rawPoints);
+    m_pointCloudIds.clear();
+    m_pointSourceIndices.resize(m_rawPoints.size());
+    for (qsizetype i = 0; i < m_pointSourceIndices.size(); ++i) m_pointSourceIndices[i] = i;
+    m_pointSourceFiles = {m_pendingPath};
 
     const QFileInfo fileInfo(m_pendingPath);
     m_fileList->clear();
@@ -1379,10 +1379,10 @@ void MainWindow::worldMergeFinished() {
         return;
     }
     m_rawPoints = result.points;
+    publishCanvasCache(result.points);
     m_pointCloudIds = result.cloudIds;
     m_pointSourceIndices = result.sourceIndices;
     m_pointSourceFiles = result.sourceFiles;
-    publishCanvasCache(result.points);
     m_fileList->clear();
     for (const QString &file : result.sourceFiles)
         m_fileList->addItem(QFileInfo(file).fileName());
