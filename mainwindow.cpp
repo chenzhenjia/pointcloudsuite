@@ -97,6 +97,19 @@ public:
         setFocus();
     }
 
+    void setEdgeSelectionMode(bool enabled, const QVector<int> &edgeIndices) {
+        m_edgeSelectionMode = enabled;
+        m_edgeIndices = edgeIndices;
+        setToolTip(enabled ? tr("左键选择边缘真实点，Esc 取消")
+                           : tr("左键旋转，右键平移，滚轮缩放"));
+        setFocus();
+    }
+
+    void setSelectedEdgeIndices(const QVector<int> &indices) {
+        m_selectedEdgeIndices = indices;
+        update();
+    }
+
     void setSelectedIndices(const QVector<int> &indices) {
         m_selectedIndices = indices;
         update();
@@ -352,6 +365,15 @@ protected:
                     }
                     glDepthFunc(GL_LESS);
                 }
+                if (!m_selectedEdgeIndices.isEmpty()) {
+                    glDepthFunc(GL_LEQUAL);
+                    m_program.setUniformValue("renderPass", 1);
+                    for (int index : m_selectedEdgeIndices) {
+                        if (index >= 0 && index < m_points.size())
+                            glDrawArrays(GL_POINTS, index, 1);
+                    }
+                    glDepthFunc(GL_LESS);
+                }
                 m_vertexArray.release();
                 m_program.release();
                 if (!m_contourRanges.isEmpty()) {
@@ -386,7 +408,7 @@ protected:
         const QPointF delta = event->position() - m_lastMousePosition;
         if (std::abs(delta.x()) + std::abs(delta.y()) > 1.0) m_mouseMoved = true;
         m_lastMousePosition = event->position();
-        if (m_pressedButton == Qt::LeftButton && !m_selectionMode) {
+        if (m_pressedButton == Qt::LeftButton && !m_selectionMode && !m_edgeSelectionMode) {
             m_yaw += float(delta.x()) * 0.45f;
             m_pitch = qBound(-89.0f, m_pitch + float(delta.y()) * 0.45f, 89.0f);
         } else if (m_pressedButton == Qt::RightButton) {
@@ -397,7 +419,7 @@ protected:
     }
 
     void mouseReleaseEvent(QMouseEvent *event) override {
-        if (m_selectionMode && event->button() == Qt::LeftButton && !m_mouseMoved
+        if ((m_selectionMode || m_edgeSelectionMode) && event->button() == Qt::LeftButton && !m_mouseMoved
             && pointPicked) {
             pointPicked(pickPoint(event->position()));
         }
@@ -693,6 +715,8 @@ private:
     QVector<pointcloud::Point3D> m_points;
     QVector<quint8> m_pointStates;
     QVector<int> m_selectedIndices;
+    QVector<int> m_edgeIndices;
+    QVector<int> m_selectedEdgeIndices;
     QVector<pointcloud::Point3D> m_contourVertices;
     QVector<QPair<int, int>> m_contourRanges;
     QOpenGLShaderProgram m_program;
@@ -728,6 +752,7 @@ private:
     bool m_stateUploadPending = false;
     bool m_contourUploadPending = false;
     bool m_selectionMode = false;
+    bool m_edgeSelectionMode = false;
     bool m_mouseMoved = false;
 };
 
@@ -863,7 +888,10 @@ void MainWindow::buildUi() {
     centerLayout->setContentsMargins(0, 0, 0, 0);
     centerLayout->setSpacing(6);
     m_canvas = new PointCloudCanvas;
-    m_canvas->pointPicked = [this](int index) { handleCanvasPointPicked(index); };
+    m_canvas->pointPicked = [this](int index) {
+        if (m_edgeSelectionActive) handleCanvasEdgePointPicked(index);
+        else handleCanvasPointPicked(index);
+    };
     centerLayout->addWidget(m_canvas, 1);
     m_canvasInfo = new QLabel(tr("就绪"));
     m_canvasInfo->setObjectName(QStringLiteral("subTitle"));
@@ -1042,10 +1070,14 @@ void MainWindow::buildUi() {
     edgeLayout->addLayout(edgeForm);
     m_edgeApplyButton = new QPushButton(tr("执行边缘分割"));
     m_edgeApplyButton->setObjectName(QStringLiteral("primaryButton"));
+    m_selectEdgeButton = new QPushButton(tr("选择边缘点"));
+    m_clearEdgeSelectionButton = new QPushButton(tr("清除边缘选择"));
     m_extractPlaneImageButton = new QPushButton(tr("提取平面 2D 图像"));
     m_savePlaneImageButton = new QPushButton(tr("保存 2D 图片"));
     edgeLayout->addWidget(m_extractPlaneImageButton);
     edgeLayout->addWidget(m_edgeApplyButton);
+    edgeLayout->addWidget(m_selectEdgeButton);
+    edgeLayout->addWidget(m_clearEdgeSelectionButton);
     edgeLayout->addWidget(m_savePlaneImageButton);
     m_planeImagePreview = new QLabel;
     m_planeImagePreview->setMinimumHeight(150);
@@ -1060,6 +1092,10 @@ void MainWindow::buildUi() {
     edgeLayout->addWidget(m_edgeOutput, 1);
     connect(m_edgeApplyButton, &QPushButton::clicked,
             this, &MainWindow::applyPlaneEdgeSegmentation);
+    connect(m_selectEdgeButton, &QPushButton::clicked,
+            this, &MainWindow::startEdgePointSelection);
+    connect(m_clearEdgeSelectionButton, &QPushButton::clicked,
+            this, &MainWindow::clearEdgePointSelection);
     connect(m_extractPlaneImageButton, &QPushButton::clicked,
             this, &MainWindow::extractPlaneImage);
     connect(m_savePlaneImageButton, &QPushButton::clicked,
@@ -1284,6 +1320,11 @@ void MainWindow::updatePlaneEdgeUi() {
     const bool imageRunning = m_planeImageWatcher && m_planeImageWatcher->isRunning();
     const bool planeReady = m_planeCandidateConfirmed && m_threePlaneResult.ok;
     if (m_edgeApplyButton) m_edgeApplyButton->setEnabled(!running && planeReady);
+    if (m_selectEdgeButton)
+        m_selectEdgeButton->setEnabled(!running && m_planeEdgeResult.ok
+                                       && !m_planeEdgeResult.edgeIndices.isEmpty());
+    if (m_clearEdgeSelectionButton)
+        m_clearEdgeSelectionButton->setEnabled(!running && !m_selectedEdgeIndices.isEmpty());
     if (m_extractPlaneImageButton) m_extractPlaneImageButton->setEnabled(!running && !imageRunning && planeReady);
     if (m_savePlaneImageButton)
         m_savePlaneImageButton->setEnabled(!running && !imageRunning
@@ -1294,6 +1335,12 @@ void MainWindow::updatePlaneEdgeUi() {
 void MainWindow::clearPlaneEdgeUi() {
     m_planeEdgeResult = {};
     m_planeImageResult = {};
+    m_edgeSelectionActive = false;
+    m_selectedEdgeIndices.clear();
+    if (m_canvas) {
+        m_canvas->setEdgeSelectionMode(false, {});
+        m_canvas->setSelectedEdgeIndices({});
+    }
     if (m_edgeOutput) m_edgeOutput->clear();
     if (m_planeImagePreview) {
         m_planeImagePreview->setPixmap({});
@@ -1546,6 +1593,40 @@ void MainWindow::planeEdgeSegmentationFinished() {
         previewSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
     updatePlaneEdgeUi();
     statusBar()->showMessage(tr("边缘分割和 2D 平面图生成完成"));
+}
+
+void MainWindow::startEdgePointSelection() {
+    if (pointTaskRunning() || !m_planeEdgeResult.ok) return;
+    m_edgeSelectionActive = true;
+    m_selectedEdgeIndices.clear();
+    m_canvas->setEdgeSelectionMode(true, m_planeEdgeResult.edgeIndices);
+    m_canvas->setSelectedEdgeIndices({});
+    updatePlaneEdgeUi();
+    statusBar()->showMessage(tr("请在画布中选择边缘真实点，Esc 取消"));
+}
+
+void MainWindow::clearEdgePointSelection() {
+    m_edgeSelectionActive = false;
+    m_selectedEdgeIndices.clear();
+    if (m_canvas) {
+        m_canvas->setEdgeSelectionMode(false, {});
+        m_canvas->setSelectedEdgeIndices({});
+    }
+    updatePlaneEdgeUi();
+    statusBar()->showMessage(tr("已清除边缘点选择"));
+}
+
+void MainWindow::handleCanvasEdgePointPicked(int index) {
+    if (!m_edgeSelectionActive || pointTaskRunning()) return;
+    if (index < 0 || !m_planeEdgeResult.edgeIndices.contains(index)) {
+        statusBar()->showMessage(tr("请选择黄色边缘真实点"));
+        return;
+    }
+    if (!m_selectedEdgeIndices.contains(index))
+        m_selectedEdgeIndices.push_back(index);
+    m_canvas->setSelectedEdgeIndices(m_selectedEdgeIndices);
+    updatePlaneEdgeUi();
+    statusBar()->showMessage(tr("已选择边缘点：%1").arg(m_selectedEdgeIndices.size()));
 }
 
 void MainWindow::savePlaneImage() {

@@ -40,6 +40,9 @@ private slots:
     void planeExtractionFinished();
     void applyPlaneEdgeSegmentation();
     void planeEdgeSegmentationFinished();
+    void startEdgePointSelection();
+    void clearEdgePointSelection();
+    void handleCanvasEdgePointPicked(int index);
     void extractPlaneImage();
     void planeImageExtractionFinished();
     void savePlaneImage();
@@ -78,6 +81,8 @@ private:
     QSpinBox *m_edgeCloseRadius = nullptr;
     QSpinBox *m_edgeOpenRadius = nullptr;
     QPushButton *m_edgeApplyButton = nullptr;
+    QPushButton *m_selectEdgeButton = nullptr;
+    QPushButton *m_clearEdgeSelectionButton = nullptr;
     QPushButton *m_extractPlaneImageButton = nullptr;
     QPushButton *m_savePlaneImageButton = nullptr;
     QLabel *m_planeImagePreview = nullptr;
@@ -102,6 +107,8 @@ private:
     pointcloud::PlaneEdgeResult m_planeEdgeResult;
     pointcloud::PlaneImageResult m_planeImageResult;
     QVector<int> m_selectedPointIndices;
+    QVector<int> m_selectedEdgeIndices;
+    bool m_edgeSelectionActive = false;
     bool m_threePointSelectionActive = false;
     bool m_planeCandidateConfirmed = false;
 };
