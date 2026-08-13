@@ -5,7 +5,6 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QFile>
-#include <QPointer>
 #include <QSurfaceFormat>
 #include <QTextStream>
 #include <QTimer>
@@ -49,24 +48,13 @@ int main(int argc, char *argv[])
     // trigger a Qt QObject sender assertion in debug builds.
     qInstallMessageHandler(startupMessageHandler);
     qInfo() << "startup: QApplication created";
-    // Keep the top-level window in a guarded QPointer.  QOpenGLWidget owns
-    // native GL resources and must be destroyed while the Qt application and
-    // platform integration are still alive.  The previous unconditional
-    // delete after exec could run after Qt had torn down the GUI platform,
-    // producing an access violation at 0xFFFFFFFFFFFFFFFF on Windows.
-    QPointer<MainWindow> w = new MainWindow;
+    // Keep the window as an automatic object. It is constructed after
+    // QApplication and is destroyed before QApplication tears down the
+    // platform/OpenGL integration. Deleting a QOpenGLWidget from an
+    // aboutToQuit callback can race native surface destruction on Windows.
+    MainWindow w;
     qInfo() << "startup: MainWindow constructed";
-    QObject::connect(qApp, &QCoreApplication::aboutToQuit, [&w]() {
-        // Destroy the OpenGL widget tree while QApplication and its platform
-        // context are still alive.  Deleting it after exec() returns races
-        // Qt's native window teardown on some MSVC/Qt 6 builds.
-        if (w) {
-            w->close();
-            delete w;
-            w = nullptr;
-        }
-    });
-    w->show();
+    w.show();
     qInfo() << "startup: MainWindow shown";
     if (qEnvironmentVariableIsSet("POINTCLOUDVIEW_SELFTEST_CLOSE")) {
         // Closing a QOpenGLWidget a few milliseconds after show() races its

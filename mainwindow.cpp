@@ -46,6 +46,7 @@
 #include <QWheelEvent>
 #include <QKeyEvent>
 #include <QCloseEvent>
+#include <QThread>
 #include <QDialog>
 #include <QInputDialog>
 #include <QLineEdit>
@@ -114,9 +115,9 @@ public:
     }
 
     ~PointCloudCanvas() override {
-        if (!context() || !context()->isValid()) return;
+        if (QCoreApplication::closingDown() || !context() || !context()->isValid()) return;
         makeCurrent();
-        if (!QOpenGLContext::currentContext()) return;
+        if (QOpenGLContext::currentContext() != context()) return;
         m_pickingFbo.reset();
         if (m_contourBuffer.isCreated()) m_contourBuffer.destroy();
         if (m_contourVertexArray.isCreated()) m_contourVertexArray.destroy();
@@ -127,6 +128,10 @@ public:
     }
 
     void setCloud(const QVector<pointcloud::Point3D> &points) {
+        if (QThread::currentThread() != thread()) {
+            qWarning() << "PointCloudCanvas::setCloud called outside GUI thread";
+            return;
+        }
         m_points = points;
         m_pointStates.fill(NormalPoint, points.size());
         m_selectedIndices.clear();
@@ -140,6 +145,7 @@ public:
     }
 
     void setSelectionMode(bool enabled) {
+        if (QThread::currentThread() != thread()) return;
         m_selectionMode = enabled;
         setToolTip(enabled ? tr("左键选择点，右键平移，Esc 取消，Backspace 撤销")
                            : tr("左键旋转，右键平移，滚轮缩放"));
@@ -147,6 +153,7 @@ public:
     }
 
     void setEdgeSelectionMode(bool enabled, const QVector<int> &edgeIndices) {
+        if (QThread::currentThread() != thread()) return;
         m_edgeSelectionMode = enabled;
         m_edgeIndices = edgeIndices;
         setToolTip(enabled ? tr("左键选择边缘真实点，Esc 取消")
@@ -155,6 +162,7 @@ public:
     }
 
     void setSelectedEdgeIndices(const QVector<int> &indices) {
+        if (QThread::currentThread() != thread()) return;
         m_selectedEdgeIndices = indices;
         update();
     }
@@ -164,12 +172,14 @@ public:
     }
 
     void setSelectedIndices(const QVector<int> &indices) {
+        if (QThread::currentThread() != thread()) return;
         m_selectedIndices = indices;
         update();
     }
 
     void setPlaneResult(const QVector<int> &planeIndices, const QVector<int> &edgeIndices,
                         const QVector<pointcloud::PlaneContour> &contours) {
+        if (QThread::currentThread() != thread()) return;
         m_pointStates.fill(NormalPoint, m_points.size());
         for (int index : planeIndices)
             if (index >= 0 && index < m_pointStates.size()) m_pointStates[index] = PlanePoint;
@@ -193,6 +203,7 @@ public:
     }
 
     void clearPlaneResult() {
+        if (QThread::currentThread() != thread()) return;
         m_pointStates.fill(NormalPoint, m_points.size());
         m_contourVertices.clear();
         m_contourRanges.clear();
@@ -202,12 +213,14 @@ public:
     }
 
     void setPointSize(int size) {
+        if (QThread::currentThread() != thread()) return;
         m_pointSize = qBound(1, size, 8);
         update();
     }
 
     void setDisplayOptions(int colorMode, double overlay, double mapMin,
                            double mapMax) {
+        if (QThread::currentThread() != thread()) return;
         m_colorMode = colorMode;
         m_overlay = float(qBound(0.0, overlay, 1.0));
         m_mapMin = float(mapMin);
@@ -216,6 +229,7 @@ public:
     }
 
     void resetView() {
+        if (QThread::currentThread() != thread()) return;
         m_yaw = 38.0f;
         m_pitch = -28.0f;
         m_zoom = 1.0f;
@@ -614,8 +628,10 @@ private:
     }
 
     int pickPoint(const QPointF &position) {
-        if (m_points.isEmpty() || !context() || !isValid()) return -1;
+        if (QThread::currentThread() != thread() || !m_initializationError.isEmpty()
+            || m_points.isEmpty() || !context() || !isValid()) return -1;
         makeCurrent();
+        if (QOpenGLContext::currentContext() != context()) return -1;
         uploadCloudIfNeeded();
         if (!m_uploadError.isEmpty()) { doneCurrent(); return -1; }
         const qreal dpr = devicePixelRatioF();
@@ -698,8 +714,10 @@ private:
 
     QVector<int> pickRectangle(const QRectF &selection) {
         QVector<int> result;
-        if (m_points.isEmpty() || !context() || !isValid()) return result;
+        if (QThread::currentThread() != thread() || !m_initializationError.isEmpty()
+            || m_points.isEmpty() || !context() || !isValid()) return result;
         makeCurrent();
+        if (QOpenGLContext::currentContext() != context()) return result;
         uploadCloudIfNeeded();
         if (!m_uploadError.isEmpty()) { doneCurrent(); return result; }
         const qreal dpr = devicePixelRatioF();
@@ -909,6 +927,9 @@ MainWindow::~MainWindow() {
     }
     if (m_loadWatcher) {
         disconnect(m_loadWatcher, nullptr, this, nullptr);
+    }
+    if (m_worldMergeWatcher) {
+        disconnect(m_worldMergeWatcher, nullptr, this, nullptr);
     }
     if (m_noiseWatcher) {
         disconnect(m_noiseWatcher, nullptr, this, nullptr);
@@ -1486,6 +1507,7 @@ void MainWindow::updateRenderSettings() {
 }
 
 void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points) {
+    if (m_closing || !m_canvas) return;
     m_points = std::move(points);
     ++m_canvasRevision;
     m_selectedPointIndices.clear();
@@ -2103,6 +2125,7 @@ void MainWindow::noiseFinished() {
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
+    m_closing = true;
     setEnabled(false);
     if (m_canvas) {
         m_canvas->setUpdatesEnabled(false);

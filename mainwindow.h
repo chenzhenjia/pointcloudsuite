@@ -134,4 +134,5 @@ private:
     bool m_threePointSelectionActive = false;
     bool m_planeCandidateConfirmed = false;
     bool m_planeFinalizationPending = false;
+    bool m_closing = false;
 };
