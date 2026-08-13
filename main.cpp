@@ -44,12 +44,21 @@ int main(int argc, char *argv[])
     QApplication a(argc, argv);
     qInstallMessageHandler(startupMessageHandler);
     qInfo() << "startup: QApplication created";
-    MainWindow w;
+    // Keep the top-level window on the heap.  QOpenGLWidget and its native
+    // context are destroyed after the event loop has stopped; placing the
+    // complete widget tree in main's stack makes MSVC's /RTC1 stack guard
+    // report a false-looking "stack around w was corrupted" during Qt's
+    // deferred native-window cleanup.  Explicit destruction after exec also
+    // gives the widget a well-defined lifetime and keeps the stack frame
+    // free of Qt/OpenGL-owned state.
+    auto *w = new MainWindow;
     qInfo() << "startup: MainWindow constructed";
-    w.show();
+    w->show();
     qInfo() << "startup: MainWindow shown";
     if (qEnvironmentVariableIsSet("POINTCLOUDVIEW_SELFTEST_CLOSE")) {
-        QTimer::singleShot(100, &w, &QWidget::close);
+        QTimer::singleShot(100, w, &QWidget::close);
     }
-    return QApplication::exec();
+    const int result = QApplication::exec();
+    delete w;
+    return result;
 }
