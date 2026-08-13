@@ -16,6 +16,7 @@ class QDoubleSpinBox;
 class QCheckBox;
 class QPushButton;
 class QPlainTextEdit;
+class QTableWidget;
 class PointCloudCanvas;
 namespace pointcloud { struct LoadResult; }
 template <typename T> class QFutureWatcher;
@@ -29,6 +30,9 @@ public:
 private slots:
     void openPointCloud();
     void openPointCloudSource();
+    void loadSelectedSource();
+    void preparePointCloudRegistration();
+    void startPointCloudRegistration();
     void mergeWorldPointClouds();
     void worldMergeFinished();
     void loadFinished();
@@ -61,6 +65,10 @@ private:
     void clearPlaneEdgeUi();
     bool pointTaskRunning() const;
     QListWidget *m_fileList = nullptr;
+    QTableWidget *m_registrationTable = nullptr;
+    QPushButton *m_registrationPrepare = nullptr;
+    QPushButton *m_registrationStart = nullptr;
+    QPlainTextEdit *m_registrationOutput = nullptr;
     QLabel *m_fileInfo = nullptr;
     QLabel *m_canvasInfo = nullptr;
     QProgressBar *m_progress = nullptr;
@@ -100,6 +108,8 @@ private:
     QStringList m_pointSourceFiles;
     bool m_loading = false;
     QString m_pendingPath;
+    QStringList m_sourceFiles;
+    QString m_sourceDirectory;
     QVector<pointcloud::WorldCloudInput> m_pendingWorldInputs;
     bool m_folderScanOnly = false;
     QFutureWatcher<pointcloud::LoadResult> *m_loadWatcher = nullptr;

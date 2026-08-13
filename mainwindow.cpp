@@ -30,6 +30,9 @@
 #include <QProgressBar>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QTableWidget>
+#include <QHeaderView>
+#include <QAbstractItemView>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStatusBar>
@@ -56,6 +59,42 @@
 #include <cmath>
 #include <functional>
 #include <memory>
+
+namespace {
+QMatrix4x4 poseMatrixZYX(const QVector<double> &v) {
+    QMatrix4x4 m;
+    m.setToIdentity();
+    if (v.size() < 6) return m;
+    QMatrix4x4 r;
+    r.setToIdentity();
+    r.rotate(float(v[5]), 0, 0, 1);
+    r.rotate(float(v[4]), 0, 1, 0);
+    r.rotate(float(v[3]), 1, 0, 0);
+    QMatrix4x4 result = r;
+    result(0, 3) = float(v[0]);
+    result(1, 3) = float(v[1]);
+    result(2, 3) = float(v[2]);
+    return result;
+}
+QVector<double> parsePoseCells(QTableWidget *table, int row, int firstColumn, bool *ok) {
+    QVector<double> values;
+    values.reserve(6);
+    *ok = true;
+    for (int c = firstColumn; c < firstColumn + 6; ++c) {
+        auto *edit = qobject_cast<QLineEdit *>(table->cellWidget(row, c));
+        bool valueOk = false;
+        const double value = edit ? edit->text().trimmed().toDouble(&valueOk) : 0.0;
+        if (!valueOk) *ok = false;
+        values.push_back(value);
+    }
+    return values;
+}
+void setPoseCell(QTableWidget *table, int row, int column, const QString &text) {
+    auto *edit = new QLineEdit(text, table);
+    edit->setAlignment(Qt::AlignRight);
+    table->setCellWidget(row, column, edit);
+}
+}
 
 class PointCloudCanvas final : public QOpenGLWidget,
                                protected QOpenGLFunctions_3_3_Core {
@@ -927,9 +966,6 @@ void MainWindow::buildUi() {
     auto *openAction = fileMenu->addAction(tr("打开点云..."));
     openAction->setShortcut(QKeySequence::Open);
     connect(openAction, &QAction::triggered, this, &MainWindow::openPointCloudSource);
-    auto *mergeAction = fileMenu->addAction(tr("合并文件夹 PLY（世界坐标）..."));
-    mergeAction->setToolTip(tr("为每个扫描文件输入固定世界坐标起点后合并真实点"));
-    connect(mergeAction, &QAction::triggered, this, &MainWindow::mergeWorldPointClouds);
     fileMenu->addSeparator();
     fileMenu->addAction(tr("退出"), qApp, &QApplication::quit);
     auto *root = new QWidget(this);
@@ -971,6 +1007,8 @@ void MainWindow::buildUi() {
     fileTitle->setObjectName(QStringLiteral("sectionTitle"));
     leftLayout->addWidget(fileTitle);
     m_fileList = new QListWidget;
+    m_fileList->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    connect(m_fileList, &QListWidget::currentRowChanged, this, &MainWindow::loadSelectedSource);
     leftLayout->addWidget(m_fileList, 1);
     m_fileInfo = new QLabel(tr("尚未加载点云"));
     m_fileInfo->setWordWrap(true);
@@ -1013,6 +1051,36 @@ void MainWindow::buildUi() {
     auto *rightLayout = new QVBoxLayout(rightPanel);
     rightLayout->setContentsMargins(10, 8, 10, 12);
     auto *tabs = new QTabWidget;
+
+    auto *registrationPage = new QWidget;
+    auto *registrationLayout = new QVBoxLayout(registrationPage);
+    registrationLayout->setContentsMargins(8, 14, 8, 8);
+    auto *registrationTitle = new QLabel(tr("点云配准 · 世界坐标"));
+    registrationTitle->setObjectName(QStringLiteral("sectionTitle"));
+    registrationLayout->addWidget(registrationTitle);
+    auto *registrationHint = new QLabel(tr("先在数据源中多选 PLY，输入每次扫描起止位姿（mm、度）。整幅扫描采用起止位姿中间值进行刚体变换。"));
+    registrationHint->setWordWrap(true);
+    registrationLayout->addWidget(registrationHint);
+    m_registrationPrepare = new QPushButton(tr("确认点云配准"));
+    m_registrationPrepare->setObjectName(QStringLiteral("primaryButton"));
+    registrationLayout->addWidget(m_registrationPrepare);
+    m_registrationTable = new QTableWidget;
+    m_registrationTable->setColumnCount(13);
+    QStringList headers{tr("PLY"), tr("Start X"), tr("Start Y"), tr("Start Z"), tr("Start RX"), tr("Start RY"), tr("Start RZ"),
+                        tr("End X"), tr("End Y"), tr("End Z"), tr("End RX"), tr("End RY"), tr("End RZ")};
+    m_registrationTable->setHorizontalHeaderLabels(headers);
+    m_registrationTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    m_registrationTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    m_registrationTable->setMinimumHeight(190);
+    registrationLayout->addWidget(m_registrationTable, 1);
+    m_registrationStart = new QPushButton(tr("开始点云配准"));
+    registrationLayout->addWidget(m_registrationStart);
+    m_registrationOutput = new QPlainTextEdit;
+    m_registrationOutput->setReadOnly(true);
+    registrationLayout->addWidget(m_registrationOutput, 1);
+    connect(m_registrationPrepare, &QPushButton::clicked, this, &MainWindow::preparePointCloudRegistration);
+    connect(m_registrationStart, &QPushButton::clicked, this, &MainWindow::startPointCloudRegistration);
+    tabs->addTab(registrationPage, tr("点云配准"));
 
     auto *renderPage = new QWidget;
     auto *renderForm = new QFormLayout(renderPage);
@@ -1252,29 +1320,91 @@ void MainWindow::openPointCloudSource() {
                                      tr("所选文件夹中没有 .ply 文件"));
             return;
         }
-        QVector<pointcloud::WorldCloudInput> inputs;
-        inputs.reserve(files.size());
-        for (const QString &name : files) {
-            pointcloud::WorldCloudInput input;
-            input.filePath = dir.absoluteFilePath(name);
-            input.worldFromLocal.setToIdentity();
-            inputs.push_back(std::move(input));
-        }
-        m_folderScanOnly = true;
-        m_pendingWorldInputs = inputs;
-        if (!m_worldMergeWatcher) {
-            m_worldMergeWatcher = new QFutureWatcher<pointcloud::WorldCloudMergeResult>(this);
-            connect(m_worldMergeWatcher, &QFutureWatcher<pointcloud::WorldCloudMergeResult>::finished,
-                    this, &MainWindow::worldMergeFinished);
-        }
-        m_loading = true;
-        m_progress->show(); m_progress->setRange(0, 0);
-        statusBar()->showMessage(tr("正在扫描并加载文件夹中的 PLY..."));
-        const auto taskInputs = m_pendingWorldInputs;
-        m_worldMergeWatcher->setFuture(QtConcurrent::run([taskInputs]() {
-            return pointcloud::mergePlyCloudsInWorld(taskInputs);
-        }));
+        m_sourceDirectory = directory;
+        m_sourceFiles.clear();
+        for (const QString &name : files) m_sourceFiles.push_back(dir.absoluteFilePath(name));
+        m_fileList->clear();
+        for (const QString &path : m_sourceFiles) m_fileList->addItem(QFileInfo(path).fileName());
+        m_fileInfo->setText(tr("文件夹扫描完成\nPLY 文件数  %1\n请在列表中选择文件查看，或进入“点云配准”页进行多选。")
+                                .arg(m_sourceFiles.size()));
+        m_registrationTable->setRowCount(0);
+        m_registrationOutput->clear();
+        statusBar()->showMessage(tr("已扫描 %1 个 PLY，未自动加载或合并").arg(m_sourceFiles.size()));
+        m_fileList->setCurrentRow(0);
     }
+}
+
+void MainWindow::loadSelectedSource() {
+    const int row = m_fileList ? m_fileList->currentRow() : -1;
+    if (row < 0 || row >= m_sourceFiles.size() || pointTaskRunning()) return;
+    m_pendingPath = m_sourceFiles[row];
+    m_loading = true;
+    m_progress->show(); m_progress->setRange(0, 0);
+    statusBar()->showMessage(tr("正在加载 %1...").arg(QFileInfo(m_pendingPath).fileName()));
+    if (!m_loadWatcher) {
+        m_loadWatcher = new QFutureWatcher<pointcloud::LoadResult>(this);
+        connect(m_loadWatcher, &QFutureWatcher<pointcloud::LoadResult>::finished,
+                this, &MainWindow::loadFinished);
+    }
+    m_loadWatcher->setFuture(QtConcurrent::run(pointcloud::loadPlyCachedResult, m_pendingPath));
+}
+
+void MainWindow::preparePointCloudRegistration() {
+    if (!m_fileList || m_fileList->selectedItems().size() < 2) {
+        statusBar()->showMessage(tr("请在数据源中至少选择两个 PLY 文件"));
+        return;
+    }
+    const auto selected = m_fileList->selectedItems();
+    m_registrationTable->setRowCount(selected.size());
+    for (int row = 0; row < selected.size(); ++row) {
+        const int sourceRow = m_fileList->row(selected[row]);
+        m_registrationTable->setItem(row, 0, new QTableWidgetItem(m_sourceFiles.value(sourceRow)));
+        for (int c = 1; c < 13; ++c) setPoseCell(m_registrationTable, row, c, QStringLiteral("0"));
+    }
+    m_registrationOutput->setPlainText(tr("已准备 %1 个 PLY 的起止位姿输入。机器人姿态单位为度，位置单位为 mm。")
+                                       .arg(selected.size()));
+}
+
+void MainWindow::startPointCloudRegistration() {
+    if (pointTaskRunning()) { statusBar()->showMessage(tr("点云处理任务正在运行")); return; }
+    if (!m_registrationTable || m_registrationTable->rowCount() < 2) {
+        statusBar()->showMessage(tr("请先确认至少两个 PLY 文件")); return;
+    }
+    QVector<pointcloud::WorldCloudInput> inputs;
+    inputs.reserve(m_registrationTable->rowCount());
+    QStringList errors;
+    for (int row = 0; row < m_registrationTable->rowCount(); ++row) {
+        bool startOk = false, endOk = false;
+        const QVector<double> start = parsePoseCells(m_registrationTable, row, 1, &startOk);
+        const QVector<double> end = parsePoseCells(m_registrationTable, row, 7, &endOk);
+        if (!startOk || !endOk) { errors << tr("第 %1 行位姿包含无效数字").arg(row + 1); continue; }
+        QVector<double> mid(6);
+        for (int i = 0; i < 6; ++i) {
+            double delta = end[i] - start[i];
+            if (i >= 3) while (delta > 180.0) delta -= 360.0;
+            if (i >= 3) while (delta < -180.0) delta += 360.0;
+            mid[i] = start[i] + delta * 0.5;
+        }
+        pointcloud::WorldCloudInput input;
+        input.filePath = m_registrationTable->item(row, 0)->text();
+        input.worldFromLocal = poseMatrixZYX(mid);
+        inputs.push_back(std::move(input));
+    }
+    if (!errors.isEmpty()) { QMessageBox::warning(this, tr("位姿输入错误"), errors.join(QLatin1Char('\n'))); return; }
+    m_pendingWorldInputs = inputs;
+    if (!m_worldMergeWatcher) {
+        m_worldMergeWatcher = new QFutureWatcher<pointcloud::WorldCloudMergeResult>(this);
+        connect(m_worldMergeWatcher, &QFutureWatcher<pointcloud::WorldCloudMergeResult>::finished,
+                this, &MainWindow::worldMergeFinished);
+    }
+    m_loading = true; m_folderScanOnly = false;
+    m_progress->show(); m_progress->setRange(0, 0);
+    m_registrationStart->setEnabled(false);
+    statusBar()->showMessage(tr("正在按中间机器人位姿配准并合并..."));
+    const auto taskInputs = m_pendingWorldInputs;
+    m_worldMergeWatcher->setFuture(QtConcurrent::run([taskInputs]() {
+        return pointcloud::mergePlyCloudsInWorld(taskInputs);
+    }));
 }
 
 void MainWindow::openPointCloud() {
@@ -1316,6 +1446,8 @@ void MainWindow::loadFinished() {
         return;
     }
     m_rawPoints = result.points;
+    m_sourceFiles = {m_pendingPath};
+    m_sourceDirectory = QFileInfo(m_pendingPath).absolutePath();
     float minZ = m_rawPoints.first().z;
     float maxZ = minZ;
     for (const auto &point : m_rawPoints) {
@@ -1333,6 +1465,7 @@ void MainWindow::loadFinished() {
     const QFileInfo fileInfo(m_pendingPath);
     m_fileList->clear();
     m_fileList->addItem(fileInfo.fileName());
+    m_fileList->setCurrentRow(0);
     m_fileInfo->setText(tr("%1 MB\n原始点数  %2")
                             .arg(fileInfo.size() / 1048576.0, 0, 'f', 1)
                             .arg(QLocale().toString(m_rawPoints.size())));
@@ -1461,6 +1594,7 @@ void MainWindow::worldMergeFinished() {
               .arg(result.sourceFiles.size())
               .arg(QLocale().toString(result.points.size()));
     statusBar()->showMessage(message);
+    if (m_registrationStart) m_registrationStart->setEnabled(true);
     m_folderScanOnly = false;
 }
 
