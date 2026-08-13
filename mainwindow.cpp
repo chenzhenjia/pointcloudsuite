@@ -753,23 +753,18 @@ MainWindow::~MainWindow() {
     }
     if (m_loadWatcher) {
         disconnect(m_loadWatcher, nullptr, this, nullptr);
-        m_loadWatcher->disconnect(this);
     }
     if (m_noiseWatcher) {
         disconnect(m_noiseWatcher, nullptr, this, nullptr);
-        m_noiseWatcher->disconnect(this);
     }
     if (m_threePlaneWatcher) {
         disconnect(m_threePlaneWatcher, nullptr, this, nullptr);
-        m_threePlaneWatcher->disconnect(this);
     }
     if (m_edgeWatcher) {
         disconnect(m_edgeWatcher, nullptr, this, nullptr);
-        m_edgeWatcher->disconnect(this);
     }
     if (m_planeImageWatcher) {
         disconnect(m_planeImageWatcher, nullptr, this, nullptr);
-        m_planeImageWatcher->disconnect(this);
     }
     if (m_canvas) {
         m_canvas->setUpdatesEnabled(false);

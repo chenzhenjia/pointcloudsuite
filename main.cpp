@@ -42,6 +42,10 @@ int main(int argc, char *argv[])
     QSurfaceFormat::setDefaultFormat(format);
 
     QApplication a(argc, argv);
+    // Install diagnostics only after the event loop is ready.  Qt may emit
+    // startup/destruction messages while QApplication is still wiring its
+    // internal event dispatchers; replacing that handler at that point can
+    // trigger a Qt QObject sender assertion in debug builds.
     qInstallMessageHandler(startupMessageHandler);
     qInfo() << "startup: QApplication created";
     // Keep the top-level window on the heap.  QOpenGLWidget and its native
