@@ -1803,6 +1803,10 @@ void MainWindow::handleCanvasPointPicked(int index) {
 }
 
 void MainWindow::determinePlaneCandidate() {
+    runPlaneExtraction(true);
+}
+
+void MainWindow::runPlaneExtraction(bool deferFinalClassification) {
     if (pointTaskRunning()) return;
     if (m_selectedPointIndices.size() != 3) {
         statusBar()->showMessage(tr("请先在画布中指定三个点"));
@@ -1815,6 +1819,7 @@ void MainWindow::determinePlaneCandidate() {
     options.minInliers = qMin(100, qMax(3, int(m_points.size() / 4)));
     options.useZAxisResidual = true;
     options.maxNormalTiltDegrees = 45.0f;
+    options.deferFinalClassification = deferFinalClassification;
     if (!m_threePlaneWatcher) {
         m_threePlaneWatcher = new QFutureWatcher<pointcloud::ThreePointPlaneResult>(this);
         connect(m_threePlaneWatcher, &QFutureWatcher<pointcloud::ThreePointPlaneResult>::finished,
@@ -1827,7 +1832,8 @@ void MainWindow::determinePlaneCandidate() {
     m_canvas->setSelectionMode(false);
     m_progress->show();
     m_progress->setRange(0, 0);
-    statusBar()->showMessage(tr("后台拟合目标平面..."));
+    statusBar()->showMessage(deferFinalClassification
+        ? tr("快速拟合候选平面...") : tr("正在完成平面分类和连通域处理..."));
     updatePlaneExtractionUi();
     m_threePlaneWatcher->setFuture(QtConcurrent::run([source, seeds, options]() {
         return pointcloud::extractPlaneFromThreePoints(source, seeds, options);
@@ -1855,9 +1861,12 @@ void MainWindow::planeExtractionFinished() {
         statusBar()->showMessage(result.error);
         return;
     }
+    const bool completingCandidate = m_planeFinalizationPending && !result.deferred;
     m_threePlaneResult = result;
     clearPlaneEdgeUi();
     m_planeCandidateConfirmed = false;
+    m_planeFinalizationPending = result.deferred;
+    m_planeCandidateConfirmed = completingCandidate;
     m_canvas->setExtractedPlane(result.planeIndices);
     const auto &plane = result.model;
     QStringList lines;
@@ -1875,7 +1884,10 @@ void MainWindow::planeExtractionFinished() {
           << tr("PCA 平面性：%1").arg(result.planarity, 0, 'f', 6)
           << tr("PCA 精拟合轮次：%1").arg(result.pcaRefinementCount)
           << tr("Z 方向 RMS：%1 mm").arg(result.rmsError, 0, 'g', 7)
-          << QString() << tr("候选平面已生成，请确认或取消");
+          << QString() << (result.deferred
+              ? tr("快速候选平面已生成，请确认后完成全量分类")
+              : (completingCandidate ? tr("候选平面已完成全量分类并确定")
+                                     : tr("候选平面已生成，请确认或取消")));
     m_threeOutput->setPlainText(lines.join(QLatin1Char('\n')));
     updatePlaneExtractionUi();
     updatePlaneEdgeUi();
@@ -1884,6 +1896,10 @@ void MainWindow::planeExtractionFinished() {
 
 void MainWindow::confirmPlaneCandidate() {
     if (!m_threePlaneResult.ok || pointTaskRunning()) return;
+    if (m_planeFinalizationPending) {
+        runPlaneExtraction(false);
+        return;
+    }
     m_planeCandidateConfirmed = true;
     m_threePointSelectionActive = false;
     m_canvas->setSelectionMode(false);

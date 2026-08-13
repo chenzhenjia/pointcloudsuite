@@ -63,6 +63,7 @@ private:
     void updatePlaneExtractionUi();
     void updatePlaneEdgeUi();
     void clearPlaneEdgeUi();
+    void runPlaneExtraction(bool deferFinalClassification);
     bool pointTaskRunning() const;
     QListWidget *m_fileList = nullptr;
     QTableWidget *m_registrationTable = nullptr;
@@ -132,4 +133,5 @@ private:
     bool m_edgeSelectionActive = false;
     bool m_threePointSelectionActive = false;
     bool m_planeCandidateConfirmed = false;
+    bool m_planeFinalizationPending = false;
 };

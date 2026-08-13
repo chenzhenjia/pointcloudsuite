@@ -2465,6 +2465,27 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points
     result.planarity = float(1.0 - finalEigenvalues[2]
         / qMax(finalEigenvalues[1], 1.0e-20));
 
+    // Preview path: return the fitted plane and candidate inliers without
+    // scanning the complete display cache or building connectivity grids.
+    // The caller can rerun with deferFinalClassification=false on confirm.
+    if (options.deferFinalClassification) {
+        result.planeIndices = refinedInliers;
+        result.planePoints.reserve(refinedInliers.size());
+        double squaredError = 0.0;
+        for (int index : refinedInliers) {
+            result.planePoints.push_back(points[index]);
+            const float distance = residual(finalNormal, finalD, points[index]);
+            squaredError += double(distance) * distance;
+        }
+        result.rmsError = float(std::sqrt(squaredError / qMax(1, refinedInliers.size())));
+        result.usedThreshold = surfaceTolerance;
+        result.model = {finalNormal.x(), finalNormal.y(), finalNormal.z(), finalD,
+                        int(refinedInliers.size()), result.rmsError, surfaceTolerance};
+        result.deferred = true;
+        result.ok = true;
+        return result;
+    }
+
     QVector<int> classified;
     classified.reserve(bestInliers.size());
     for (int i = 0; i < points.size(); ++i) {

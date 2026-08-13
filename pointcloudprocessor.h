@@ -89,6 +89,9 @@ struct ThreePointPlaneOptions {
     bool useZAxisResidual = false;
     float maxNormalTiltDegrees = 45.0f;
     int pcaRefinementIterations = 2;
+    // Fast preview mode: fit the model but defer full-cloud classification and
+    // connected-component traversal until the user confirms the candidate.
+    bool deferFinalClassification = false;
 };
 struct PlaneEdgeOptions {
     float edgeGridSize = 0.0f;
@@ -110,6 +113,7 @@ struct ThreePointPlaneResult {
     float usedThreshold = 0.0f;
     float planarity = 0.0f;
     int pcaRefinementCount = 0;
+    bool deferred = false;
     QString error;
     bool ok = false;
 };
