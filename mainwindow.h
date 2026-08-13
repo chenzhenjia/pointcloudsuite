@@ -40,6 +40,8 @@ private slots:
     void planeExtractionFinished();
     void applyPlaneEdgeSegmentation();
     void planeEdgeSegmentationFinished();
+    void extractPlaneImage();
+    void planeImageExtractionFinished();
     void savePlaneImage();
 
 private:
@@ -76,6 +78,7 @@ private:
     QSpinBox *m_edgeCloseRadius = nullptr;
     QSpinBox *m_edgeOpenRadius = nullptr;
     QPushButton *m_edgeApplyButton = nullptr;
+    QPushButton *m_extractPlaneImageButton = nullptr;
     QPushButton *m_savePlaneImageButton = nullptr;
     QLabel *m_planeImagePreview = nullptr;
     QPlainTextEdit *m_edgeOutput = nullptr;
@@ -88,13 +91,16 @@ private:
     QFutureWatcher<pointcloud::NoiseResult> *m_noiseWatcher = nullptr;
     QFutureWatcher<pointcloud::ThreePointPlaneResult> *m_threePlaneWatcher = nullptr;
     QFutureWatcher<pointcloud::PlaneEdgeResult> *m_edgeWatcher = nullptr;
+    QFutureWatcher<pointcloud::PlaneImageResult> *m_planeImageWatcher = nullptr;
     qsizetype m_noiseInputCount = 0;
     quint64 m_canvasRevision = 0;
     quint64 m_noiseInputRevision = 0;
     quint64 m_threePlaneInputRevision = 0;
     quint64 m_edgeInputRevision = 0;
+    quint64 m_planeImageInputRevision = 0;
     pointcloud::ThreePointPlaneResult m_threePlaneResult;
     pointcloud::PlaneEdgeResult m_planeEdgeResult;
+    pointcloud::PlaneImageResult m_planeImageResult;
     QVector<int> m_selectedPointIndices;
     bool m_threePointSelectionActive = false;
     bool m_planeCandidateConfirmed = false;

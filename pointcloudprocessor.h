@@ -105,6 +105,15 @@ struct PlaneEdgeResult {
     QString error;
     bool ok = false;
 };
+struct PlaneImageResult {
+    QImage image;
+    float gridSize = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+    int occupiedCellCount = 0;
+    QString error;
+    bool ok = false;
+};
 
 struct NoiseResult {
     QVector<Point3D> points;
@@ -148,5 +157,10 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D>&, const
 ThreePointPlaneResult selectPlaneFromThreeSeeds(const QVector<Point3D>&, const QVector<int>&, const ThreePointPlaneOptions& = {});
 PlaneEdgeResult segmentPlaneEdges(const QVector<Point3D>&, const QVector<int>&,
                                   const PlaneModel&, const PlaneEdgeOptions& = {});
+// Projects the selected plane from the current display cache into a 2D image
+// without changing edge states.  The image is suitable for preview/export
+// and can be passed to a later, independent edge-processing stage.
+PlaneImageResult extractPlaneImage(const QVector<Point3D>&, const QVector<int>&,
+                                   const PlaneModel&, const PlaneEdgeOptions& = {});
 
 } // namespace pointcloud

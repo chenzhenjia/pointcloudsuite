@@ -2662,6 +2662,84 @@ PlaneEdgeResult segmentPlaneEdges(const QVector<Point3D> &points,
     return result;
 }
 
+PlaneImageResult extractPlaneImage(const QVector<Point3D> &points,
+                                   const QVector<int> &planeIndices,
+                                   const PlaneModel &model,
+                                   const PlaneEdgeOptions &options) {
+    PlaneImageResult result;
+    if (points.isEmpty() || planeIndices.size() < 3) {
+        result.error = QStringLiteral("需要已提取且包含至少三个点的平面");
+        return result;
+    }
+    QVector3D normal(model.a, model.b, model.c);
+    const float length = normal.length();
+    if (!std::isfinite(length) || length <= 1.0e-8f) {
+        result.error = QStringLiteral("平面模型无效");
+        return result;
+    }
+    normal /= length;
+    float d = model.d / length;
+    if (normal.z() < 0.0f) { normal = -normal; d = -d; }
+    const QVector3D origin = -d * normal;
+    QVector3D axisU = QVector3D::crossProduct(normal,
+        std::abs(normal.z()) < 0.9f ? QVector3D(0, 0, 1) : QVector3D(0, 1, 0));
+    if (axisU.lengthSquared() <= 1.0e-12f) axisU = QVector3D(1, 0, 0);
+    axisU.normalize();
+    const QVector3D axisV = QVector3D::crossProduct(normal, axisU).normalized();
+    QVector<QVector2D> projected;
+    projected.reserve(planeIndices.size());
+    float minU = std::numeric_limits<float>::max(), minV = minU;
+    float maxU = std::numeric_limits<float>::lowest(), maxV = maxU;
+    for (int index : planeIndices) {
+        if (index < 0 || index >= points.size() || !usablePoint(points[index])) continue;
+        const QVector3D p(points[index].x, points[index].y, points[index].z);
+        const QVector3D delta = p - origin;
+        const QVector2D uv(QVector3D::dotProduct(delta, axisU),
+                           QVector3D::dotProduct(delta, axisV));
+        projected.push_back(uv);
+        minU = qMin(minU, uv.x()); maxU = qMax(maxU, uv.x());
+        minV = qMin(minV, uv.y()); maxV = qMax(maxV, uv.y());
+    }
+    if (projected.size() < 3) { result.error = QStringLiteral("平面没有有效点"); return result; }
+    const double area = double(qMax(maxU - minU, 1.0e-6f)) * double(qMax(maxV - minV, 1.0e-6f));
+    float gridSize = options.edgeGridSize > 0.0f
+        ? options.edgeGridSize : qMax(float(std::sqrt(area / projected.size()) * 1.25), 1.0e-6f);
+    const int padding = 2;
+    const qsizetype maxCells = qMax(1024, options.maximumEdgeGridCells);
+    int width = 0, height = 0;
+    for (int attempt = 0; attempt < 16; ++attempt) {
+        const double w = std::ceil(double(maxU - minU) / gridSize) + 1 + 2 * padding;
+        const double h = std::ceil(double(maxV - minV) / gridSize) + 1 + 2 * padding;
+        if (w <= std::numeric_limits<int>::max() && h <= std::numeric_limits<int>::max()
+            && w * h <= double(maxCells)) { width = int(w); height = int(h); break; }
+        gridSize *= 2.0f;
+    }
+    if (width <= 2 || height <= 2) { result.error = QStringLiteral("平面范围过大，无法生成 2D 图像"); return result; }
+    minU -= padding * gridSize; minV -= padding * gridSize;
+    QVector<quint8> valid(width * height, 0);
+    for (const QVector2D &uv : projected) {
+        const int x = qBound(0, int(std::floor((uv.x() - minU) / gridSize)), width - 1);
+        const int y = qBound(0, int(std::floor((uv.y() - minV) / gridSize)), height - 1);
+        valid[y * width + x] = 1;
+    }
+    result.image = QImage(width, height, QImage::Format_RGB32);
+    result.image.fill(qRgb(16, 18, 21));
+    int occupied = 0;
+    for (int y = 0; y < height; ++y) {
+        QRgb *row = reinterpret_cast<QRgb *>(result.image.scanLine(height - 1 - y));
+        for (int x = 0; x < width; ++x) {
+            if (valid[y * width + x]) { row[x] = qRgb(190, 198, 210); ++occupied; }
+        }
+    }
+    result.gridSize = gridSize;
+    result.width = maxU - minU + padding * gridSize;
+    result.height = maxV - minV + padding * gridSize;
+    result.occupiedCellCount = occupied;
+    result.ok = !result.image.isNull();
+    if (!result.ok) result.error = QStringLiteral("无法创建平面 2D 图像");
+    return result;
+}
+
 ThreePointPlaneResult selectPlaneFromThreeSeeds(const QVector<Point3D> &points,
                                                 const QVector<int> &seedIndices,
                                                 const ThreePointPlaneOptions &options) {
