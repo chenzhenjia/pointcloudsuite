@@ -18,6 +18,7 @@ class QPushButton;
 class QPlainTextEdit;
 class QTableWidget;
 class PointCloudCanvas;
+namespace Ui { class MainWindow; }
 namespace pointcloud { struct LoadResult; }
 template <typename T> class QFutureWatcher;
 
@@ -59,6 +60,7 @@ private slots:
 private:
     void closeEvent(QCloseEvent *event) override;
     void buildUi();
+    void buildUiLegacy();
     void publishCanvasCache(QVector<pointcloud::Point3D> points);
     void updatePlaneExtractionUi();
     void updatePlaneEdgeUi();
@@ -135,4 +137,5 @@ private:
     bool m_planeCandidateConfirmed = false;
     bool m_planeFinalizationPending = false;
     bool m_closing = false;
+    Ui::MainWindow *ui = nullptr;
 };

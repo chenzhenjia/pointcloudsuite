@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "ui_mainwindow.h"
 
 #include <QAction>
 #include <QApplication>
@@ -947,9 +948,118 @@ MainWindow::~MainWindow() {
         m_canvas->setUpdatesEnabled(false);
         m_canvas->hide();
     }
+    delete ui;
 }
 
 void MainWindow::buildUi() {
+    ui = new Ui::MainWindow;
+    ui->setupUi(this);
+    m_fileList = ui->fileList;
+    m_registrationTable = ui->registrationTable;
+    m_registrationPrepare = ui->registrationPrepare;
+    m_registrationStart = ui->registrationStart;
+    m_registrationOutput = ui->registrationOutput;
+    m_fileInfo = ui->fileInfo;
+    m_canvasInfo = ui->canvasInfo;
+    m_progress = ui->progress;
+    m_pointSize = ui->pointSize;
+    m_colorMode = ui->colorMode;
+    m_overlay = ui->overlay;
+    m_mapMin = ui->mapMin;
+    m_mapMax = ui->mapMax;
+    m_voxelNoise = ui->voxelNoise;
+    m_voxelSize = ui->voxelSize;
+    m_statisticalNoise = ui->statisticalNoise;
+    m_meanK = ui->meanK;
+    m_stddev = ui->stddev;
+    m_noiseApply = ui->noiseApply;
+    m_pickPointsButton = ui->pickPointsButton;
+    m_abandonPointsButton = ui->abandonPointsButton;
+    m_undoPointButton = ui->undoPointButton;
+    m_determinePlaneButton = ui->determinePlaneButton;
+    m_confirmCandidateButton = ui->confirmCandidateButton;
+    m_cancelCandidateButton = ui->cancelCandidateButton;
+    m_threeOutput = ui->threeOutput;
+    m_edgeGridSize = ui->edgeGridSize;
+    m_edgeCloseRadius = ui->edgeCloseRadius;
+    m_edgeOpenRadius = ui->edgeOpenRadius;
+    m_edgeApplyButton = ui->edgeApplyButton;
+    m_selectEdgeButton = ui->selectEdgeButton;
+    m_clearEdgeSelectionButton = ui->clearEdgeSelectionButton;
+    m_extractPlaneImageButton = ui->extractPlaneImageButton;
+    m_savePlaneImageButton = ui->savePlaneImageButton;
+    m_planeImagePreview = ui->planeImagePreview;
+    m_edgeOutput = ui->edgeOutput;
+
+    m_canvas = new PointCloudCanvas(ui->canvasHost);
+    auto *canvasLayout = new QVBoxLayout(ui->canvasHost);
+    canvasLayout->setContentsMargins(0, 0, 0, 0);
+    canvasLayout->addWidget(m_canvas);
+    connect(ui->openAction, &QAction::triggered, this, &MainWindow::openPointCloudSource);
+    connect(ui->exitAction, &QAction::triggered, qApp, &QApplication::quit);
+    connect(ui->openButton, &QPushButton::clicked, this, &MainWindow::openPointCloudSource);
+    connect(m_fileList, &QListWidget::currentRowChanged, this, &MainWindow::loadSelectedSource);
+    connect(m_registrationPrepare, &QPushButton::clicked, this, &MainWindow::preparePointCloudRegistration);
+    connect(m_registrationStart, &QPushButton::clicked, this, &MainWindow::startPointCloudRegistration);
+    connect(m_pointSize, qOverload<int>(&QSpinBox::valueChanged), m_canvas, &PointCloudCanvas::setPointSize);
+    connect(ui->resetViewButton, &QPushButton::clicked, m_canvas, &PointCloudCanvas::resetView);
+    connect(m_colorMode, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::updateRenderSettings);
+    connect(m_overlay, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &MainWindow::updateRenderSettings);
+    connect(m_mapMin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &MainWindow::updateRenderSettings);
+    connect(m_mapMax, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &MainWindow::updateRenderSettings);
+    connect(m_noiseApply, &QPushButton::clicked, this, &MainWindow::applyNoiseRemoval);
+    connect(ui->restoreButton, &QPushButton::clicked, this, [this]() {
+        if (pointTaskRunning()) { statusBar()->showMessage(tr("点云处理任务正在运行")); return; }
+        publishCanvasCache(m_rawPoints); statusBar()->showMessage(tr("已恢复原始点云"));
+    });
+    connect(m_pickPointsButton, &QPushButton::clicked, this, &MainWindow::startPlanePointSelection);
+    connect(m_abandonPointsButton, &QPushButton::clicked, this, &MainWindow::abandonPlanePointSelection);
+    connect(m_undoPointButton, &QPushButton::clicked, this, &MainWindow::undoPlanePointSelection);
+    connect(m_determinePlaneButton, &QPushButton::clicked, this, &MainWindow::determinePlaneCandidate);
+    connect(m_confirmCandidateButton, &QPushButton::clicked, this, &MainWindow::confirmPlaneCandidate);
+    connect(m_cancelCandidateButton, &QPushButton::clicked, this, &MainWindow::cancelPlaneCandidate);
+    auto *cancelThreeAction = new QAction(this);
+    cancelThreeAction->setShortcut(QKeySequence(Qt::Key_Escape));
+    cancelThreeAction->setShortcutContext(Qt::ApplicationShortcut);
+    connect(cancelThreeAction, &QAction::triggered, this, &MainWindow::abandonPlanePointSelection);
+    addAction(cancelThreeAction);
+    auto *undoThreeAction = new QAction(this);
+    undoThreeAction->setShortcut(QKeySequence(Qt::Key_Backspace));
+    undoThreeAction->setShortcutContext(Qt::ApplicationShortcut);
+    connect(undoThreeAction, &QAction::triggered, this, &MainWindow::undoPlanePointSelection);
+    addAction(undoThreeAction);
+    connect(m_edgeApplyButton, &QPushButton::clicked, this, &MainWindow::applyPlaneEdgeSegmentation);
+    connect(m_selectEdgeButton, &QPushButton::clicked, this, &MainWindow::startEdgePointSelection);
+    connect(m_clearEdgeSelectionButton, &QPushButton::clicked, this, &MainWindow::clearEdgePointSelection);
+    connect(m_extractPlaneImageButton, &QPushButton::clicked, this, &MainWindow::extractPlaneImage);
+    connect(m_savePlaneImageButton, &QPushButton::clicked, this, &MainWindow::savePlaneImage);
+    ui->mainSplitter->setStretchFactor(0, 0);
+    ui->mainSplitter->setStretchFactor(1, 1);
+    ui->mainSplitter->setStretchFactor(2, 0);
+    ui->mainSplitter->setSizes({245, 850, 290});
+    m_progress->setFixedHeight(3);
+    m_progress->hide();
+    m_canvas->pointPicked = [this](int index) {
+        if (m_edgeSelectionActive) handleCanvasEdgePointPicked(index);
+        else handleCanvasPointPicked(index);
+    };
+    m_canvas->edgeRectanglePicked = [this](const QRectF &rect) {
+        if (!m_edgeSelectionActive || pointTaskRunning()) return;
+        const QVector<int> picked = m_canvas->pickRectangleForSelection(rect);
+        for (int index : picked)
+            if (m_planeEdgeResult.edgeIndices.contains(index) && !m_selectedEdgeIndices.contains(index))
+                m_selectedEdgeIndices.push_back(index);
+        m_canvas->setSelectedEdgeIndices(m_selectedEdgeIndices);
+        updatePlaneEdgeUi();
+        statusBar()->showMessage(m_selectedEdgeIndices.isEmpty()
+            ? tr("框选区域没有黄色边缘点") : tr("框选边缘点：%1").arg(m_selectedEdgeIndices.size()));
+    };
+    updatePlaneExtractionUi();
+    updatePlaneEdgeUi();
+    statusBar()->showMessage(tr("就绪"));
+}
+
+void MainWindow::buildUiLegacy() {
     setWindowTitle(tr("点云预览工作台"));
     resize(1400, 860);
     setMinimumSize(1080, 680);

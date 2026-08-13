@@ -2,30 +2,92 @@
 <ui version="4.0">
  <class>MainWindow</class>
  <widget class="QMainWindow" name="MainWindow">
-  <property name="geometry">
-   <rect>
-    <x>0</x>
-    <y>0</y>
-    <width>800</width>
-    <height>600</height>
-   </rect>
-  </property>
-  <property name="windowTitle">
-   <string>MainWindow</string>
-  </property>
-  <widget class="QWidget" name="centralwidget"/>
-  <widget class="QMenuBar" name="menubar">
-   <property name="geometry">
-    <rect>
-     <x>0</x>
-     <y>0</y>
-     <width>800</width>
-     <height>17</height>
-    </rect>
-   </property>
+  <property name="geometry"><rect><x>0</x><y>0</y><width>1400</width><height>860</height></rect></property>
+  <property name="minimumSize"><size><width>1080</width><height>680</height></size></property>
+  <property name="windowTitle"><string>点云预览工作台</string></property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="rootLayout">
+    <property name="spacing"><size>10</size></property>
+    <item>
+     <layout class="QHBoxLayout" name="headerLayout">
+      <item><layout class="QVBoxLayout" name="titleLayout"><property name="spacing"><size>1</size></property>
+       <item><widget class="QLabel" name="titleLabel"><property name="text"><string>点云预览工作台</string></property><property name="objectName"><string>mainTitle</string></property></widget></item>
+       <item><widget class="QLabel" name="subtitleLabel"><property name="text"><string>PLY  ·  3D VIEW</string></property><property name="objectName"><string>subTitle</string></property></widget></item>
+      </layout></item>
+      <item><spacer name="headerSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
+      <item><widget class="QPushButton" name="openButton"><property name="text"><string>打开点云</string></property><property name="objectName"><string>primaryButton</string></property></widget></item>
+     </layout>
+    </item>
+    <item>
+     <widget class="QSplitter" name="mainSplitter">
+      <property name="orientation"><enum>Qt::Horizontal</enum></property>
+      <property name="childrenCollapsible"><bool>false</bool></property>
+      <widget class="QWidget" name="leftPanel"><property name="minimumSize"><size><width>220</width><height>0</height></size></property><property name="maximumSize"><size><width>310</width><height>16777215</height></size></property><property name="objectName"><string>sidePanel</string></property>
+       <layout class="QVBoxLayout" name="leftLayout"><property name="spacing"><size>9</size></property>
+        <item><widget class="QLabel" name="fileTitle"><property name="text"><string>数据源</string></property><property name="objectName"><string>sectionTitle</string></property></widget></item>
+        <item><widget class="QListWidget" name="fileList"><property name="selectionMode"><enum>QAbstractItemView::ExtendedSelection</enum></property></widget></item>
+        <item><widget class="QLabel" name="fileInfo"><property name="text"><string>尚未加载点云</string></property><property name="wordWrap"><bool>true</bool></property><property name="objectName"><string>subTitle</string></property></widget></item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="centerPanel">
+       <layout class="QVBoxLayout" name="centerLayout"><property name="spacing"><size>6</size></property>
+        <item><widget class="QWidget" name="canvasHost"><property name="sizePolicy"><sizepolicy hsizetype="Expanding" vsizetype="Expanding"/></property></widget></item>
+        <item><widget class="QLabel" name="canvasInfo"><property name="text"><string>就绪</string></property><property name="objectName"><string>subTitle</string></property></widget></item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="rightPanel"><property name="minimumSize"><size><width>270</width><height>0</height></size></property><property name="maximumSize"><size><width>340</width><height>16777215</height></size></property><property name="objectName"><string>sidePanel</string></property>
+        <layout class="QVBoxLayout" name="rightLayout">
+        <item><widget class="QTabWidget" name="tabs">
+         <widget class="QWidget" name="registrationPage"><attribute name="title"><string>点云配准</string></attribute><layout class="QVBoxLayout" name="registrationLayout">
+          <item><widget class="QLabel" name="registrationTitle"><property name="text"><string>点云配准 · 世界坐标</string></property><property name="objectName"><string>sectionTitle</string></property></widget></item>
+          <item><widget class="QLabel" name="registrationHint"><property name="text"><string>先在数据源中多选 PLY，输入每次扫描起止位姿（mm、度）。整幅扫描采用起止位姿中间值进行刚体变换。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+          <item><widget class="QPushButton" name="registrationPrepare"><property name="text"><string>确认点云配准</string></property><property name="objectName"><string>primaryButton</string></property></widget></item>
+          <item><widget class="QTableWidget" name="registrationTable"><property name="minimumSize"><size><width>0</width><height>190</height></size></property><property name="columnCount"><number>13</number></property><property name="rowCount"><number>0</number></property></widget></item>
+          <item><widget class="QPushButton" name="registrationStart"><property name="text"><string>开始点云配准</string></property></widget></item>
+          <item><widget class="QPlainTextEdit" name="registrationOutput"><property name="readOnly"><bool>true</bool></property></widget></item>
+         </layout></widget>
+         <widget class="QWidget" name="renderPage"><attribute name="title"><string>显示</string></attribute><layout class="QFormLayout" name="renderForm"><property name="verticalSpacing"><number>12</number></property>
+          <item row="0" column="0"><widget class="QLabel" name="pointSizeLabel"><property name="text"><string>像素标记尺寸</string></property></widget></item><item row="0" column="1"><widget class="QSpinBox" name="pointSize"><property name="minimum"><number>1</number></property><property name="maximum"><number>8</number></property><property name="value"><number>1</number></property></widget></item>
+          <item row="1" column="0" colspan="2"><widget class="QPushButton" name="resetViewButton"><property name="text"><string>重置视角</string></property></widget></item>
+          <item row="2" column="0" colspan="2"><widget class="QLabel" name="renderTitle"><property name="text"><string>渲染效果</string></property><property name="objectName"><string>sectionTitle</string></property></widget></item>
+          <item row="3" column="0"><widget class="QLabel" name="colorModeLabel"><property name="text"><string>颜色样式</string></property></widget></item><item row="3" column="1"><widget class="QComboBox" name="colorMode"><item><property name="text"><string>彩色高度</string></property></item><item><property name="text"><string>灰阶</string></property></item><item><property name="text"><string>法向量</string></property></item></widget></item>
+          <item row="4" column="0"><widget class="QLabel" name="overlayLabel"><property name="text"><string>叠加比例</string></property></widget></item><item row="4" column="1"><widget class="QDoubleSpinBox" name="overlay"><property name="maximum"><double>1.000000000000000</double></property><property name="singleStep"><double>0.050000000000000</double></property><property name="decimals"><number>3</number></property><property name="value"><double>1.000000000000000</double></property></widget></item>
+          <item row="5" column="0"><widget class="QLabel" name="mapMinLabel"><property name="text"><string>映射最小值</string></property></widget></item><item row="5" column="1"><widget class="QDoubleSpinBox" name="mapMin"><property name="minimum"><double>-1000000000.000000000000000</double></property><property name="maximum"><double>1000000000.000000000000000</double></property><property name="decimals"><number>2</number></property></widget></item>
+          <item row="6" column="0"><widget class="QLabel" name="mapMaxLabel"><property name="text"><string>映射最大值</string></property></widget></item><item row="6" column="1"><widget class="QDoubleSpinBox" name="mapMax"><property name="minimum"><double>-1000000000.000000000000000</double></property><property name="maximum"><double>1000000000.000000000000000</double></property><property name="decimals"><number>2</number></property></widget></item>
+         </layout></widget>
+         <widget class="QWidget" name="cleanPage"><attribute name="title"><string>点云清理</string></attribute><layout class="QVBoxLayout" name="cleanLayout">
+          <item><widget class="QLabel" name="cleanTitle"><property name="text"><string>点云清理 · 后台处理</string></property><property name="objectName"><string>sectionTitle</string></property></widget></item><item><widget class="QCheckBox" name="voxelNoise"><property name="text"><string>体素降采样（预处理）</string></property><property name="checked"><bool>true</bool></property></widget></item>
+          <item><layout class="QHBoxLayout" name="voxelRow"><item><widget class="QLabel" name="voxelLabel"><property name="text"><string>体素尺寸 mm</string></property></widget></item><item><widget class="QDoubleSpinBox" name="voxelSize"><property name="minimum"><double>0.001000000000000</double></property><property name="maximum"><double>1000.000000000000000</double></property><property name="decimals"><number>3</number></property><property name="value"><double>0.250000000000000</double></property></widget></item></layout></item>
+          <item><widget class="QCheckBox" name="statisticalNoise"><property name="text"><string>统计离群值去除（推荐）</string></property><property name="checked"><bool>true</bool></property></widget></item>
+          <item><layout class="QHBoxLayout" name="statRow"><item><widget class="QLabel" name="meanKLabel"><property name="text"><string>邻域 K</string></property></widget></item><item><widget class="QSpinBox" name="meanK"><property name="minimum"><number>1</number></property><property name="maximum"><number>128</number></property><property name="value"><number>45</number></property></widget></item><item><widget class="QLabel" name="stddevLabel"><property name="text"><string>阈值倍数</string></property></widget></item><item><widget class="QDoubleSpinBox" name="stddev"><property name="minimum"><double>0.100000000000000</double></property><property name="maximum"><double>5.000000000000000</double></property><property name="singleStep"><double>0.050000000000000</double></property><property name="decimals"><number>2</number></property><property name="value"><double>1.300000000000000</double></property></widget></item></layout></item>
+          <item><widget class="QPushButton" name="noiseApply"><property name="text"><string>应用噪点去除</string></property></widget></item><item><widget class="QPushButton" name="restoreButton"><property name="text"><string>恢复原始点云</string></property></widget></item><item><spacer name="cleanSpacer"><property name="orientation"><enum>Qt::Vertical</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>40</height></size></property></spacer></item>
+         </layout></widget>
+         <widget class="QWidget" name="threePage"><attribute name="title"><string>平面提取</string></attribute><layout class="QVBoxLayout" name="threeLayout">
+          <item><widget class="QLabel" name="threeTitle"><property name="text"><string>2.5D 平面提取</string></property><property name="objectName"><string>sectionTitle</string></property></widget></item><item><layout class="QHBoxLayout" name="pickButtons"><item><widget class="QPushButton" name="pickPointsButton"><property name="text"><string>取点</string></property></widget></item><item><widget class="QPushButton" name="abandonPointsButton"><property name="text"><string>放弃取点</string></property></widget></item><item><widget class="QPushButton" name="undoPointButton"><property name="text"><string>撤销选择的点</string></property></widget></item></layout></item>
+          <item><widget class="QPushButton" name="determinePlaneButton"><property name="text"><string>确定平面</string></property></widget></item><item><widget class="QPushButton" name="confirmCandidateButton"><property name="text"><string>确定候选平面</string></property></widget></item><item><widget class="QPushButton" name="cancelCandidateButton"><property name="text"><string>取消确定平面</string></property></widget></item><item><widget class="QPlainTextEdit" name="threeOutput"><property name="readOnly"><bool>true</bool></property><property name="placeholderText"><string>点击取点并在画布中指定三个点</string></property></widget></item>
+         </layout></widget>
+         <widget class="QWidget" name="edgePage"><attribute name="title"><string>边缘处理</string></attribute><layout class="QVBoxLayout" name="edgeLayout">
+          <item><widget class="QLabel" name="edgeTitle"><property name="text"><string>平面边缘分割</string></property><property name="objectName"><string>sectionTitle</string></property></widget></item><item><layout class="QFormLayout" name="edgeForm"><item row="0" column="0"><widget class="QLabel" name="edgeGridLabel"><property name="text"><string>栅格尺寸 mm</string></property></widget></item><item row="0" column="1"><widget class="QDoubleSpinBox" name="edgeGridSize"><property name="maximum"><double>1000.000000000000000</double></property><property name="decimals"><number>4</number></property></widget></item><item row="1" column="0"><widget class="QLabel" name="edgeCloseLabel"><property name="text"><string>闭运算半径</string></property></widget></item><item row="1" column="1"><widget class="QSpinBox" name="edgeCloseRadius"><property name="maximum"><number>4</number></property></widget></item><item row="2" column="0"><widget class="QLabel" name="edgeOpenLabel"><property name="text"><string>开运算半径</string></property></widget></item><item row="2" column="1"><widget class="QSpinBox" name="edgeOpenRadius"><property name="maximum"><number>4</number></property></widget></item></layout></item>
+          <item><widget class="QPushButton" name="extractPlaneImageButton"><property name="text"><string>提取平面 2D 图像</string></property></widget></item><item><widget class="QPushButton" name="edgeApplyButton"><property name="text"><string>执行边缘分割</string></property></widget></item><item><widget class="QPushButton" name="selectEdgeButton"><property name="text"><string>选择边缘点</string></property></widget></item><item><widget class="QPushButton" name="clearEdgeSelectionButton"><property name="text"><string>清除边缘选择</string></property></widget></item><item><widget class="QPushButton" name="savePlaneImageButton"><property name="text"><string>保存 2D 图片</string></property></widget></item><item><widget class="QLabel" name="planeImagePreview"><property name="minimumSize"><size><width>0</width><height>150</height></size></property><property name="text"><string>确认平面后执行边缘分割</string></property><property name="alignment"><set>Qt::AlignCenter</set></property></widget></item><item><widget class="QPlainTextEdit" name="edgeOutput"><property name="readOnly"><bool>true</bool></property><property name="placeholderText"><string>边缘和 2D 图像统计将在此显示</string></property></widget></item>
+         </layout></widget>
+        </widget></item>
+       </layout>
+      </widget>
+     </widget>
+    </item>
+    <item><widget class="QProgressBar" name="progress"><property name="maximum"><number>100</number></property><property name="textVisible"><bool>false</bool></property></widget></item>
+   </layout>
   </widget>
+  <widget class="QMenuBar" name="menubar"><property name="geometry"><rect><x>0</x><y>0</y><width>1400</width><height>22</height></rect></property><widget class="QMenu" name="fileMenu"><property name="title"><string>文件</string></property><addaction name="openAction"/><addaction name="separatorAction"/><addaction name="exitAction"/></widget></widget>
   <widget class="QStatusBar" name="statusbar"/>
+  <action name="openAction"><property name="text"><string>打开点云...</string></property><property name="shortcut"><string>Ctrl+O</string></property></action>
+  <action name="separatorAction"><property name="text"><string>separator</string></property></action>
+  <action name="exitAction"><property name="text"><string>退出</string></property></action>
  </widget>
- <resources/>
- <connections/>
+ <resources/><connections/>
 </ui>
+
+
+
+
+
