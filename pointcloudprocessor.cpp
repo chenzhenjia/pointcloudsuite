@@ -514,10 +514,44 @@ void writeMergeCache(const QVector<WorldCloudInput> &inputs, const WorldCloudMer
     file.flush(); file.close(); QFile::remove(path); QFile::rename(temp, path);
 }
 
-WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &inputs) {
+struct IcpCorrection { float r[3][3]{{1,0,0},{0,1,0},{0,0,1}}; QVector3D t; bool ok=false; float rms=0; };
+
+IcpCorrection estimateIcpCorrection(const QVector<Point3D> &moving,
+                                    const QVector<Point3D> &reference,
+                                    float maximumDistance, int maximumSamples) {
+    IcpCorrection out;
+    if (moving.size() < 3 || reference.size() < 3 || maximumDistance <= 0) return out;
+    std::unordered_map<NoiseKey, QVector<int>, NoiseKeyHash> cells;
+    cells.reserve(size_t(reference.size() / 2 + 1));
+    for (int i = 0; i < reference.size(); ++i) cells[noiseKey(reference[i], maximumDistance)].push_back(i);
+    QVector<QPair<QVector3D,QVector3D>> pairs;
+    const int step = qMax(1, int((moving.size() + maximumSamples - 1) / maximumSamples));
+    const float limit2 = maximumDistance * maximumDistance;
+    for (int i = 0; i < moving.size(); i += step) {
+        const Point3D &p = moving[i]; const NoiseKey key = noiseKey(p, maximumDistance);
+        float best = limit2; int bestIndex = -1;
+        for (qint64 dx=-1; dx<=1; ++dx) for (qint64 dy=-1; dy<=1; ++dy) for (qint64 dz=-1; dz<=1; ++dz) {
+            auto it = cells.find({key.x+dx,key.y+dy,key.z+dz}); if (it == cells.end()) continue;
+            for (int j : it->second) { const Point3D &q=reference[j]; const float ex=p.x-q.x,ey=p.y-q.y,ez=p.z-q.z; const float d=ex*ex+ey*ey+ez*ez; if(d<best){best=d;bestIndex=j;} }
+        }
+        if (bestIndex >= 0) pairs.push_back({QVector3D(p.x,p.y,p.z), QVector3D(reference[bestIndex].x,reference[bestIndex].y,reference[bestIndex].z)});
+    }
+    if (pairs.size() < 6) return out;
+    QVector3D cp, cq; for (const auto &v:pairs){cp+=v.first;cq+=v.second;} cp/=float(pairs.size()); cq/=float(pairs.size());
+    double s[3][3]{}; for(const auto &v:pairs){QVector3D a=v.first-cp,b=v.second-cq; s[0][0]+=a.x()*b.x();s[0][1]+=a.x()*b.y();s[0][2]+=a.x()*b.z();s[1][0]+=a.y()*b.x();s[1][1]+=a.y()*b.y();s[1][2]+=a.y()*b.z();s[2][0]+=a.z()*b.x();s[2][1]+=a.z()*b.y();s[2][2]+=a.z()*b.z();}
+    const double tr=s[0][0]+s[1][1]+s[2][2]; double n[4][4]={{tr,s[1][2]-s[2][1],s[2][0]-s[0][2],s[0][1]-s[1][0]},{s[1][2]-s[2][1],s[0][0]-s[1][1]-s[2][2],s[0][1]+s[1][0],s[0][2]+s[2][0]},{s[2][0]-s[0][2],s[0][1]+s[1][0],-s[0][0]+s[1][1]-s[2][2],s[1][2]+s[2][1]},{s[0][1]-s[1][0],s[0][2]+s[2][0],s[1][2]+s[2][1],-s[0][0]-s[1][1]+s[2][2]}};
+    double q[4]{1,0,0,0}; for(int k=0;k<32;++k){double v[4]{};for(int r=0;r<4;++r)for(int c=0;c<4;++c)v[r]+=n[r][c]*q[c];double len=std::sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]+v[3]*v[3]);if(len<1e-15)return out;for(int r=0;r<4;++r)q[r]=v[r]/len;}
+    const double w=q[0],x=q[1],y=q[2],z=q[3]; out.r[0][0]=float(1-2*(y*y+z*z));out.r[0][1]=float(2*(x*y-z*w));out.r[0][2]=float(2*(x*z+y*w));out.r[1][0]=float(2*(x*y+z*w));out.r[1][1]=float(1-2*(x*x+z*z));out.r[1][2]=float(2*(y*z-x*w));out.r[2][0]=float(2*(x*z-y*w));out.r[2][1]=float(2*(y*z+x*w));out.r[2][2]=float(1-2*(x*x+y*y));
+    auto rotate=[&](const QVector3D &v){return QVector3D(out.r[0][0]*v.x()+out.r[0][1]*v.y()+out.r[0][2]*v.z(),out.r[1][0]*v.x()+out.r[1][1]*v.y()+out.r[1][2]*v.z(),out.r[2][0]*v.x()+out.r[2][1]*v.y()+out.r[2][2]*v.z());}; out.t=cq-rotate(cp);
+    double error=0;for(const auto &v:pairs)error+=(rotate(v.first)+out.t-v.second).lengthSquared();out.rms=float(std::sqrt(error/pairs.size()));out.ok=true;return out;
+}
+
+void applyIcpCorrection(QVector<Point3D> &points, const IcpCorrection &c) { for(Point3D &p:points){const float x=p.x,y=p.y,z=p.z;p.x=c.r[0][0]*x+c.r[0][1]*y+c.r[0][2]*z+c.t.x();p.y=c.r[1][0]*x+c.r[1][1]*y+c.r[1][2]*z+c.t.y();p.z=c.r[2][0]*x+c.r[2][1]*y+c.r[2][2]*z+c.t.z();const float nx=p.nx,ny=p.ny,nz=p.nz;p.nx=c.r[0][0]*nx+c.r[0][1]*ny+c.r[0][2]*nz;p.ny=c.r[1][0]*nx+c.r[1][1]*ny+c.r[1][2]*nz;p.nz=c.r[2][0]*nx+c.r[2][1]*ny+c.r[2][2]*nz;} }
+
+WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &inputs, const IcpOptions &icp) {
     WorldCloudMergeResult result;
     if (inputs.isEmpty()) { result.error = QStringLiteral("未选择 PLY 文件"); return result; }
-    if (readMergeCache(inputs, result)) return result;
+    if (!icp.enabled && readMergeCache(inputs, result)) return result;
     qsizetype total = 0;
     std::vector<std::future<LoadResult>> futures;
     futures.reserve(inputs.size());
@@ -541,16 +575,22 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
     result.sourceFiles.reserve(inputs.size());
     for (int cloudId = 0; cloudId < inputs.size(); ++cloudId) {
         result.sourceFiles.push_back(inputs[cloudId].filePath);
-        const auto &points = loaded[cloudId];
-        for (qsizetype sourceIndex = 0; sourceIndex < points.size(); ++sourceIndex) {
-            const Point3D &source = points[sourceIndex];
+        QVector<Point3D> points = std::move(loaded[cloudId]);
+        for (Point3D &source : points) {
             const QVector3D world = inputs[cloudId].worldFromLocal.map(QVector3D(source.x, source.y, source.z));
-            Point3D point = source; point.x = world.x(); point.y = world.y(); point.z = world.z();
+            source.x=world.x();source.y=world.y();source.z=world.z();
+        }
+        if (icp.enabled && cloudId > 0) {
+            float previous=std::numeric_limits<float>::max();
+            for(int iteration=0;iteration<icp.maximumIterations;++iteration){IcpCorrection correction=estimateIcpCorrection(points,result.points,icp.maximumCorrespondenceDistance,icp.maximumSamples);if(!correction.ok)break;applyIcpCorrection(points,correction);if(std::abs(previous-correction.rms)<=icp.convergenceTolerance)break;previous=correction.rms;}
+        }
+        for (qsizetype sourceIndex = 0; sourceIndex < points.size(); ++sourceIndex) {
+            const Point3D &point = points[sourceIndex];
             result.points.push_back(point); result.cloudIds.push_back(cloudId); result.sourceIndices.push_back(sourceIndex);
         }
     }
     result.ok = !result.points.isEmpty();
-    if (result.ok) writeMergeCache(inputs, result);
+    if (result.ok && !icp.enabled) writeMergeCache(inputs, result);
     return result;
 }
 
@@ -2262,8 +2302,9 @@ QVector<QVector<QVector2D>> marchingSquaresContours(const QVector<quint8> &mask,
 
 } // namespace
 
-WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inputs) {
-    return mergePlyCloudsInWorldImpl(inputs);
+WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inputs,
+                                             const IcpOptions &icp) {
+    return mergePlyCloudsInWorldImpl(inputs, icp);
 }
 
 ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points,

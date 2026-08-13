@@ -963,6 +963,10 @@ void MainWindow::buildUi() {
     m_registrationOutput->setReadOnly(true);
     m_registrationVoxelEnabled = ui->chk_registration_voxel;
     m_registrationVoxelSize = ui->dsb_registration_voxel;
+    m_registrationIcpEnabled = ui->chk_registration_icp;
+    m_registrationIcpIterations = ui->spb_icp_iterations;
+    m_registrationIcpDistance = ui->dsb_icp_distance;
+    m_registrationIcpTolerance = ui->dsb_icp_tolerance;
     m_fileInfo = ui->lbl_subtitle1;
     m_canvasInfo = ui->lbl_subtitle2;
     m_progress = ui->pbar_progress;
@@ -1568,8 +1572,13 @@ void MainWindow::startPointCloudRegistration() {
     m_registrationStart->setEnabled(false);
     statusBar()->showMessage(tr("正在按中间机器人位姿配准并合并..."));
     const auto taskInputs = m_pendingWorldInputs;
-    m_worldMergeWatcher->setFuture(QtConcurrent::run([taskInputs]() {
-        return pointcloud::mergePlyCloudsInWorld(taskInputs);
+    pointcloud::IcpOptions icp;
+    icp.enabled = m_registrationIcpEnabled && m_registrationIcpEnabled->isChecked();
+    icp.maximumIterations = m_registrationIcpIterations->value();
+    icp.maximumCorrespondenceDistance = float(m_registrationIcpDistance->value());
+    icp.convergenceTolerance = float(m_registrationIcpTolerance->value());
+    m_worldMergeWatcher->setFuture(QtConcurrent::run([taskInputs, icp]() {
+        return pointcloud::mergePlyCloudsInWorld(taskInputs, icp);
     }));
 }
 

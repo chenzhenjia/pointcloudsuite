@@ -44,6 +44,14 @@ struct WorldCloudInput {
     float voxelSize = 0.25f;
 };
 
+struct IcpOptions {
+    bool enabled = true;
+    int maximumIterations = 30;
+    float maximumCorrespondenceDistance = 2.0f;
+    float convergenceTolerance = 0.001f;
+    int maximumSamples = 120000;
+};
+
 struct WorldCloudMergeResult {
     QVector<Point3D> points;
     QVector<int> cloudIds;
@@ -160,7 +168,8 @@ LoadResult loadPlyCachedResult(const QString &fileName);
 
 // Loads each PLY once, applies its supplied rigid world transform, and
 // concatenates the measured points.  No virtual/centroid points are created.
-WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inputs);
+WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inputs,
+                                             const IcpOptions &icp = {});
 
 // HiViewer-style proportional thinning. denominator=1 keeps all points,
 // denominator=2 keeps approximately 1/2, denominator=16 keeps approximately 1/16.

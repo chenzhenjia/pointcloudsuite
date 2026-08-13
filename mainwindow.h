@@ -74,6 +74,10 @@ private:
     QPlainTextEdit *m_registrationOutput = nullptr;
     QCheckBox *m_registrationVoxelEnabled = nullptr;
     QDoubleSpinBox *m_registrationVoxelSize = nullptr;
+    QCheckBox *m_registrationIcpEnabled = nullptr;
+    QSpinBox *m_registrationIcpIterations = nullptr;
+    QDoubleSpinBox *m_registrationIcpDistance = nullptr;
+    QDoubleSpinBox *m_registrationIcpTolerance = nullptr;
     QLabel *m_fileInfo = nullptr;
     QLabel *m_canvasInfo = nullptr;
     QProgressBar *m_progress = nullptr;
