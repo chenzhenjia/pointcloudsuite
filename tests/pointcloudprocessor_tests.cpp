@@ -196,20 +196,92 @@ void runGeometryTests() {
     }
 
     pointcloud::ThreePointPlaneOptions seedOptions;
-    seedOptions.neighborhoodSize = 12;
-    seedOptions.distanceThreshold = 0.02f;
-    const pointcloud::ThreePointPlaneResult selected = pointcloud::selectPlaneFromThreeSeeds(
+    seedOptions.initialTolerance = 0.05f;
+    seedOptions.surfaceTolerance = 0.02f;
+    seedOptions.connectivityRadius = 0.16f;
+    seedOptions.minInliers = 100;
+    const pointcloud::ThreePointPlaneResult selected = pointcloud::extractPlaneFromThreePoints(
         planePoints, {17, 30, 225}, seedOptions);
-    expect(selected.ok && selected.planePoints.size() >= 100, "select plane from three seeds");
+    expect(selected.ok && selected.planeIndices.size() == 256,
+           "extract complete connected plane from three points");
+    expect(selected.candidateIndices.size() == 256, "initial plane candidates exclude outlier");
+    expect(selected.rmsError < 0.001f, "refined plane RMS error");
+    expect(!selected.edgeIndices.isEmpty(), "extract plane edge points");
 
     const QVector<pointcloud::Point3D> collinearCloud = {
         {0.0f, 0.0f, 0.0f, 0, 0, 1},
         {1.0f, 0.0f, 0.0f, 0, 0, 1},
         {2.0f, 0.0f, 0.0f, 0, 0, 1}
     };
-    const pointcloud::ThreePointPlaneResult collinear = pointcloud::selectPlaneFromThreeSeeds(
+    seedOptions.minInliers = 3;
+    const pointcloud::ThreePointPlaneResult collinear = pointcloud::extractPlaneFromThreePoints(
         collinearCloud, {0, 1, 2}, seedOptions);
     expect(!collinear.ok, "reject collinear three seeds");
+
+    const QVector<pointcloud::Point3D> nearCoincidentCloud = {
+        {0.0f, 0.0f, 0.0f, 0, 0, 1},
+        {1.0e-9f, 0.0f, 0.0f, 0, 0, 1},
+        {0.0f, 1.0e-9f, 0.0f, 0, 0, 1}
+    };
+    const pointcloud::ThreePointPlaneResult nearCoincident =
+        pointcloud::extractPlaneFromThreePoints(nearCoincidentCloud, {0, 1, 2}, seedOptions);
+    expect(!nearCoincident.ok, "reject three seeds that are too close");
+
+    QVector<pointcloud::Point3D> noisyTilted;
+    for (int y = 0; y < 14; ++y) {
+        for (int x = 0; x < 14; ++x) {
+            const float px = float(x) * 0.1f;
+            const float py = float(y) * 0.1f;
+            const float noise = float((x * 7 + y * 11) % 9 - 4) * 0.0005f;
+            noisyTilted.push_back({px, py, 0.2f * px - 0.1f * py + 0.3f + noise,
+                                   0, 0, 1});
+        }
+    }
+    noisyTilted.push_back({0.5f, 0.5f, 0.8f, 0, 0, 1});
+    seedOptions.initialTolerance = 0.04f;
+    seedOptions.surfaceTolerance = 0.01f;
+    seedOptions.connectivityRadius = 0.16f;
+    seedOptions.minInliers = 150;
+    const pointcloud::ThreePointPlaneResult noisy = pointcloud::extractPlaneFromThreePoints(
+        noisyTilted, {0, 13, 195}, seedOptions);
+    expect(noisy.ok && noisy.planeIndices.size() == 196,
+           "refine noisy tilted plane and reject nearby outlier");
+    if (noisy.ok) {
+        float maximumEquationError = 0.0f;
+        for (int index : noisy.planeIndices) {
+            const auto &point = noisyTilted[index];
+            maximumEquationError = std::max(maximumEquationError,
+                std::abs(noisy.model.a * point.x + noisy.model.b * point.y
+                         + noisy.model.c * point.z + noisy.model.d));
+        }
+        expect(maximumEquationError <= seedOptions.surfaceTolerance,
+               "refined plane equation contains every returned point");
+        expect(noisy.model.c > 0.0f, "refined plane normal points toward positive Z");
+    }
+
+    QVector<pointcloud::Point3D> separated;
+    for (int region = 0; region < 2; ++region) {
+        const float offset = float(region) * 10.0f;
+        for (int y = 0; y < 8; ++y)
+            for (int x = 0; x < 8; ++x)
+                separated.push_back({offset + float(x) * 0.1f, float(y) * 0.1f,
+                                     float((x + y) % 3 - 1) * 0.002f, 0, 0, 1});
+    }
+    seedOptions.initialTolerance = 0.05f;
+    seedOptions.surfaceTolerance = 0.02f;
+    seedOptions.connectivityRadius = 0.16f;
+    seedOptions.minInliers = 40;
+    const pointcloud::ThreePointPlaneResult connected = pointcloud::extractPlaneFromThreePoints(
+        separated, {0, 7, 63}, seedOptions);
+    expect(connected.ok && connected.planeIndices.size() == 64,
+           "keep only seed connected component from coplanar regions");
+    bool containsRemote = false;
+    for (int index : connected.planeIndices) containsRemote = containsRemote || index >= 64;
+    expect(!containsRemote, "exclude remote coplanar component");
+
+    const pointcloud::ThreePointPlaneResult splitSeeds = pointcloud::extractPlaneFromThreePoints(
+        separated, {0, 7, 127}, seedOptions);
+    expect(!splitSeeds.ok, "reject seeds from different connected components");
 
     pointcloud::GeometryFeatureOptions featureOptions;
     featureOptions.neighborCount = 12;

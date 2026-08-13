@@ -15,6 +15,7 @@
 #include <QFileInfo>
 #include <QDataStream>
 #include <QLocale>
+#include <QVector2D>
 #include <QVector3D>
 #include <QtMath>
 #include <random>
@@ -1873,126 +1874,317 @@ EdgePipelineResult runEdgeAwarePipeline(const QVector<Point3D> &points,
     return result;
 }
 
+ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points,
+                                                  const QVector<int> &seedIndices,
+                                                  const ThreePointPlaneOptions &options) {
+    ThreePointPlaneResult result;
+    if (seedIndices.size() != 3 || points.size() < 3) {
+        result.error = QStringLiteral("需要三个有效采样点");
+        return result;
+    }
+    const auto finitePoint = [](const Point3D &point) {
+        return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
+    };
+    for (int seed : seedIndices) {
+        if (seed < 0 || seed >= points.size() || !finitePoint(points[seed])) {
+            result.error = QStringLiteral("采样点索引无效");
+            return result;
+        }
+        result.controlPoints.push_back(points[seed]);
+    }
+
+    const auto vectorFor = [&points](int index) {
+        const Point3D &p = points[index];
+        return QVector3D(p.x, p.y, p.z);
+    };
+    const QVector3D p1 = vectorFor(seedIndices[0]);
+    const QVector3D p2 = vectorFor(seedIndices[1]);
+    const QVector3D p3 = vectorFor(seedIndices[2]);
+    const float longestEdge = std::max({(p2 - p1).length(), (p3 - p1).length(),
+                                        (p3 - p2).length()});
+    if (longestEdge <= 1.0e-7f) {
+        result.error = QStringLiteral("三个采样点距离过近");
+        return result;
+    }
+    QVector3D initialNormal = QVector3D::crossProduct(p2 - p1, p3 - p1);
+    if (initialNormal.lengthSquared() <= longestEdge * longestEdge * longestEdge
+            * longestEdge * 1.0e-6f) {
+        result.error = QStringLiteral("三个采样点共线或距离过近");
+        return result;
+    }
+    initialNormal.normalize();
+    if (initialNormal.z() < 0.0f) initialNormal = -initialNormal;
+    const float initialD = -QVector3D::dotProduct(initialNormal, p1);
+    const float initialTolerance = qMax(1.0e-6f, options.initialTolerance);
+    const float surfaceTolerance = qMax(1.0e-6f, options.surfaceTolerance);
+
+    for (int i = 0; i < points.size(); ++i) {
+        const Point3D &p = points[i];
+        if (!finitePoint(p)) continue;
+        const float distance = std::abs(initialNormal.x() * p.x + initialNormal.y() * p.y
+                                        + initialNormal.z() * p.z + initialD);
+        if (distance <= initialTolerance) result.candidateIndices.push_back(i);
+    }
+    const int requiredInliers = qMax(3, options.minInliers);
+    if (result.candidateIndices.size() < requiredInliers) {
+        result.error = QStringLiteral("初始平面附近候选点不足：%1 / %2")
+                           .arg(result.candidateIndices.size()).arg(requiredInliers);
+        return result;
+    }
+
+    QVector<int> modelCandidates;
+    const int maximumModelPoints = 20000;
+    const int modelStep = qMax(1, int((result.candidateIndices.size()
+                                      + maximumModelPoints - 1) / maximumModelPoints));
+    modelCandidates.reserve(qMin(maximumModelPoints, int(result.candidateIndices.size())));
+    for (int i = 0; i < result.candidateIndices.size(); i += modelStep)
+        modelCandidates.push_back(result.candidateIndices[i]);
+    QVector<int> bestModelInliers;
+    QVector3D bestNormal = initialNormal;
+    float bestD = initialD;
+    // Treat the user-defined plane as the baseline model. Random RANSAC
+    // samples may replace it only when they explain more nearby points.
+    for (int index : modelCandidates) {
+        const Point3D &p = points[index];
+        if (std::abs(initialNormal.x() * p.x + initialNormal.y() * p.y
+                     + initialNormal.z() * p.z + initialD) <= surfaceTolerance) {
+            bestModelInliers.push_back(index);
+        }
+    }
+    std::mt19937 rng(options.randomSeed);
+    std::uniform_int_distribution<int> pick(0, modelCandidates.size() - 1);
+    for (int iteration = 0; iteration < qMax(1, options.ransacIterations); ++iteration) {
+        const int ia = pick(rng), ib = pick(rng), ic = pick(rng);
+        if (ia == ib || ia == ic || ib == ic) continue;
+        const QVector3D a = vectorFor(modelCandidates[ia]);
+        const QVector3D b = vectorFor(modelCandidates[ib]);
+        const QVector3D c = vectorFor(modelCandidates[ic]);
+        QVector3D normal = QVector3D::crossProduct(b - a, c - a);
+        if (normal.lengthSquared() <= 1.0e-14f) continue;
+        normal.normalize();
+        if (QVector3D::dotProduct(normal, initialNormal) < 0.0f) normal = -normal;
+        const float d = -QVector3D::dotProduct(normal, a);
+        bool containsSeeds = true;
+        for (int seed : seedIndices) {
+            const Point3D &p = points[seed];
+            if (std::abs(normal.x() * p.x + normal.y() * p.y + normal.z() * p.z + d)
+                > surfaceTolerance) {
+                containsSeeds = false;
+                break;
+            }
+        }
+        if (!containsSeeds) continue;
+        QVector<int> inliers;
+        inliers.reserve(modelCandidates.size());
+        for (int index : modelCandidates) {
+            const Point3D &p = points[index];
+            if (std::abs(normal.x() * p.x + normal.y() * p.y + normal.z() * p.z + d)
+                <= surfaceTolerance) {
+                inliers.push_back(index);
+            }
+        }
+        if (inliers.size() > bestModelInliers.size()) {
+            bestModelInliers = std::move(inliers);
+            bestNormal = normal;
+            bestD = d;
+        }
+    }
+    QVector<int> bestInliers;
+    bestInliers.reserve(result.candidateIndices.size());
+    for (int index : result.candidateIndices) {
+        const Point3D &p = points[index];
+        if (std::abs(bestNormal.x() * p.x + bestNormal.y() * p.y
+                     + bestNormal.z() * p.z + bestD) <= surfaceTolerance) {
+            bestInliers.push_back(index);
+        }
+    }
+    if (bestInliers.size() < requiredInliers) {
+        result.error = QStringLiteral("RANSAC 平面内点不足：%1 / %2")
+                           .arg(bestInliers.size()).arg(requiredInliers);
+        return result;
+    }
+
+    double mean[3] = {};
+    for (int index : bestInliers) {
+        const Point3D &p = points[index];
+        mean[0] += p.x; mean[1] += p.y; mean[2] += p.z;
+    }
+    for (double &value : mean) value /= bestInliers.size();
+    double covariance[3][3] = {};
+    for (int index : bestInliers) {
+        const Point3D &p = points[index];
+        const double delta[3] = {p.x - mean[0], p.y - mean[1], p.z - mean[2]};
+        for (int row = 0; row < 3; ++row)
+            for (int column = 0; column < 3; ++column)
+                covariance[row][column] += delta[row] * delta[column];
+    }
+    double eigenvalues[3], eigenvectors[3][3];
+    symmetricEigen3(covariance, eigenvalues, eigenvectors);
+    QVector3D finalNormal{float(eigenvectors[0][2]), float(eigenvectors[1][2]),
+                          float(eigenvectors[2][2])};
+    if (finalNormal.lengthSquared() <= 1.0e-14f) {
+        result.error = QStringLiteral("最小二乘平面拟合失败");
+        return result;
+    }
+    finalNormal.normalize();
+    if (QVector3D::dotProduct(finalNormal, bestNormal) < 0.0f) finalNormal = -finalNormal;
+    if (finalNormal.z() < 0.0f) finalNormal = -finalNormal;
+    const QVector3D origin{float(mean[0]), float(mean[1]), float(mean[2])};
+    const float finalD = -QVector3D::dotProduct(finalNormal, origin);
+
+    QVector<int> classified;
+    classified.reserve(bestInliers.size());
+    for (int i = 0; i < points.size(); ++i) {
+        const Point3D &p = points[i];
+        if (!finitePoint(p)) continue;
+        const float distance = finalNormal.x() * p.x + finalNormal.y() * p.y
+            + finalNormal.z() * p.z + finalD;
+        if (std::abs(distance) <= surfaceTolerance) {
+            classified.push_back(i);
+        }
+    }
+
+    QVector3D axisU = QVector3D::crossProduct(finalNormal,
+        std::abs(finalNormal.z()) < 0.9f ? QVector3D(0, 0, 1) : QVector3D(0, 1, 0));
+    axisU.normalize();
+    const QVector3D axisV = QVector3D::crossProduct(finalNormal, axisU).normalized();
+    struct Cell { int x = 0; int y = 0; bool operator==(const Cell &o) const { return x == o.x && y == o.y; } };
+    struct CellHash { std::size_t operator()(const Cell &cell) const noexcept {
+        return std::hash<int>{}(cell.x) ^ (std::hash<int>{}(cell.y) << 1);
+    }};
+
+    QVector<QVector2D> projected; projected.reserve(classified.size());
+    for (int index : classified) {
+        const QVector3D delta = vectorFor(index) - origin;
+        const QVector2D uv(QVector3D::dotProduct(delta, axisU),
+                           QVector3D::dotProduct(delta, axisV));
+        projected.push_back(uv);
+    }
+    QVector<float> spacingSamples;
+    const int spacingProbeCount = qMin(512, int(projected.size()));
+    const int spacingReferenceCount = qMin(4096, int(projected.size()));
+    spacingSamples.reserve(spacingProbeCount);
+    for (int probe = 0; probe < spacingProbeCount; ++probe) {
+        const int probeIndex = int((qint64(probe) * projected.size()) / spacingProbeCount);
+        float nearestSquared = std::numeric_limits<float>::max();
+        for (int reference = 0; reference < spacingReferenceCount; ++reference) {
+            const int referenceIndex = int((qint64(reference) * projected.size())
+                                           / spacingReferenceCount);
+            if (referenceIndex == probeIndex) continue;
+            nearestSquared = qMin(nearestSquared,
+                (projected[referenceIndex] - projected[probeIndex]).lengthSquared());
+        }
+        if (std::isfinite(nearestSquared) && nearestSquared > 1.0e-12f)
+            spacingSamples.push_back(std::sqrt(nearestSquared));
+    }
+    std::sort(spacingSamples.begin(), spacingSamples.end());
+    const float estimatedSpacing = spacingSamples.isEmpty() ? surfaceTolerance
+        : spacingSamples[spacingSamples.size() / 2];
+    const float radius = options.connectivityRadius > 0.0f
+        ? options.connectivityRadius : qMax(estimatedSpacing * 2.5f, 1.0e-6f);
+    const float radiusSquared = radius * radius;
+    std::unordered_map<Cell, QVector<int>, CellHash> grid;
+    for (int local = 0; local < projected.size(); ++local) {
+        const QVector2D uv = projected[local];
+        grid[{int(std::floor(uv.x() / radius)), int(std::floor(uv.y() / radius))}].push_back(local);
+    }
+    QVector<int> component(classified.size(), -1);
+    int componentCount = 0;
+    for (int start = 0; start < classified.size(); ++start) {
+        if (component[start] >= 0) continue;
+        QVector<int> queue{start}; component[start] = componentCount;
+        for (qsizetype head = 0; head < queue.size(); ++head) {
+            const int local = queue[head];
+            const QVector2D uv = projected[local];
+            const Cell cell{int(std::floor(uv.x() / radius)), int(std::floor(uv.y() / radius))};
+            for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
+                const auto found = grid.find({cell.x + dx, cell.y + dy});
+                if (found == grid.end()) continue;
+                for (int neighbor : found->second) {
+                    if (component[neighbor] >= 0) continue;
+                    if ((projected[neighbor] - uv).lengthSquared() <= radiusSquared) {
+                        component[neighbor] = componentCount;
+                        queue.push_back(neighbor);
+                    }
+                }
+            }
+        }
+        ++componentCount;
+    }
+
+    int selectedComponent = -1;
+    if (options.keepSeedComponentOnly) {
+        for (int seed : seedIndices) {
+            const int local = classified.indexOf(seed);
+            if (local < 0) {
+                result.error = QStringLiteral("拟合后采样点不在最终平面容差内");
+                return result;
+            }
+            if (selectedComponent < 0) selectedComponent = component[local];
+            else if (selectedComponent != component[local]) {
+                result.error = QStringLiteral("三个采样点不在同一连通区域");
+                return result;
+            }
+        }
+    }
+    for (int local = 0; local < classified.size(); ++local) {
+        if (!options.keepSeedComponentOnly || component[local] == selectedComponent)
+            result.planeIndices.push_back(classified[local]);
+    }
+    if (result.planeIndices.size() < requiredInliers) {
+        result.error = QStringLiteral("目标连通区域点数不足：%1 / %2")
+                           .arg(result.planeIndices.size()).arg(requiredInliers);
+        return result;
+    }
+
+    std::unordered_set<int> selectedSet;
+    selectedSet.reserve(std::size_t(result.planeIndices.size()));
+    for (int index : result.planeIndices) selectedSet.insert(index);
+    for (int local = 0; local < classified.size(); ++local) {
+        const int index = classified[local];
+        if (selectedSet.find(index) == selectedSet.end()) continue;
+        const QVector2D uv = projected[local];
+        const Cell cell{int(std::floor(uv.x() / radius)), int(std::floor(uv.y() / radius))};
+        bool boundary = false;
+        for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
+            if (dx == 0 && dy == 0) continue;
+            const auto found = grid.find({cell.x + dx, cell.y + dy});
+            if (found == grid.end()) {
+                boundary = true;
+                continue;
+            }
+            bool selectedNeighbor = false;
+            for (int neighbor : found->second)
+                if (selectedSet.find(classified[neighbor]) != selectedSet.end()) {
+                    selectedNeighbor = true;
+                    break;
+                }
+            if (!selectedNeighbor) boundary = true;
+        }
+        if (boundary) result.edgeIndices.push_back(index);
+    }
+
+    result.planePoints.reserve(result.planeIndices.size());
+    double squaredError = 0.0;
+    for (int index : result.planeIndices) {
+        const Point3D &p = points[index];
+        result.planePoints.push_back(p);
+        const float distance = finalNormal.x() * p.x + finalNormal.y() * p.y
+            + finalNormal.z() * p.z + finalD;
+        squaredError += double(distance) * distance;
+    }
+    result.rmsError = float(std::sqrt(squaredError / double(result.planeIndices.size())));
+    result.usedThreshold = surfaceTolerance;
+    result.model = {finalNormal.x(), finalNormal.y(), finalNormal.z(), finalD,
+                    int(result.planeIndices.size()), result.rmsError, surfaceTolerance};
+    result.ok = true;
+    return result;
+}
+
 ThreePointPlaneResult selectPlaneFromThreeSeeds(const QVector<Point3D> &points,
                                                 const QVector<int> &seedIndices,
                                                 const ThreePointPlaneOptions &options) {
-    ThreePointPlaneResult result;
-    if (seedIndices.size() != 3 || points.size() < 3) {
-        result.error = QStringLiteral("需要三个有效种子点"); return result;
-    }
-    // 三个种子点分别估计局部法向，再按法向夹角和选定轴向高度聚合成目标平面。
-    const int k = qBound(3, options.neighborhoodSize, qMax(3, points.size()));
-    const int preferredAxis = qBound(0, options.preferredAxis, 3);
-    const auto axisValue = [preferredAxis](const Point3D &p) {
-        if (preferredAxis == 1) return p.x;
-        if (preferredAxis == 2) return p.y;
-        return p.z;
-    };
-    QVector<float> seedHeights;
-    for (int seed : seedIndices) {
-        if (seed >= 0 && seed < points.size()) seedHeights.push_back(axisValue(points[seed]));
-    }
-    std::sort(seedHeights.begin(), seedHeights.end());
-    const float targetHeight = seedHeights.size() == 3 ? seedHeights[1] : 0.0f;
-    QVector<QVector3D> normals;
-    for (int seed : seedIndices) {
-        if (seed < 0 || seed >= points.size()) { result.error = QStringLiteral("种子点索引无效"); return result; }
-        QVector<std::pair<float,int>> distances; distances.reserve(points.size());
-        const Point3D &origin = points[seed];
-        for (int i = 0; i < points.size(); ++i) {
-            if (!usablePoint(points[i])) continue;
-            const float dx=points[i].x-origin.x, dy=points[i].y-origin.y, dz=points[i].z-origin.z;
-            // Penalize displacement along the selected plane normal. This is
-            // axis-independent: the old implementation always used Z and
-            // silently rejected valid Y-normal side planes.
-            const float normalDelta = preferredAxis == 1 ? dx : (preferredAxis == 2 ? dy : dz);
-            const float normalWeight = preferredAxis > 0 ? 9.0f : 1.0f;
-            distances.push_back({dx*dx+dy*dy+dz*dz + (normalWeight - 1.0f) * normalDelta * normalDelta,i});
-        }
-        if (distances.size() < 3) { result.error = QStringLiteral("有效邻域点不足"); return result; }
-        const int count = qMin(k, int(distances.size()));
-        std::nth_element(distances.begin(), distances.begin()+count-1, distances.end(),
-                         [](const auto &a,const auto &b){return a.first<b.first;});
-        double mean[3]={}; for(int i=0;i<count;++i){const auto&p=points[distances[i].second];mean[0]+=p.x;mean[1]+=p.y;mean[2]+=p.z;}
-        for(double &v:mean)v/=count;
-        double cov[3][3]={};
-        for(int i=0;i<count;++i){const auto&p=points[distances[i].second];const double d[3]={p.x-mean[0],p.y-mean[1],p.z-mean[2]};for(int r=0;r<3;++r)for(int c=0;c<3;++c)cov[r][c]+=d[r]*d[c]/count;}
-        double eig[3],vec[3][3]; symmetricEigen3(cov,eig,vec);
-        result.controlPoints.push_back({float(mean[0]),float(mean[1]),float(mean[2]),float(vec[0][2]),float(vec[1][2]),float(vec[2][2])});
-        normals.push_back(QVector3D(float(vec[0][2]),float(vec[1][2]),float(vec[2][2])).normalized());
-    }
-    const QVector3D p1(result.controlPoints[0].x,result.controlPoints[0].y,result.controlPoints[0].z);
-    const QVector3D p2(result.controlPoints[1].x,result.controlPoints[1].y,result.controlPoints[1].z);
-    const QVector3D p3(result.controlPoints[2].x,result.controlPoints[2].y,result.controlPoints[2].z);
-    QVector3D normal=QVector3D::crossProduct(p2-p1,p3-p1);
-    const float area2=normal.length();
-    const float scale=std::max({(p2-p1).length(),(p3-p1).length(),(p3-p2).length(),1.0e-6f});
-    if(area2<scale*scale*0.01f){result.error=QStringLiteral("三个控制区域过近或近似共线");return result;}
-    normal.normalize();
-    if (preferredAxis > 0) {
-        const QVector3D expected = preferredAxis == 1 ? QVector3D(1, 0, 0)
-            : (preferredAxis == 2 ? QVector3D(0, 1, 0) : QVector3D(0, 0, 1));
-        if (std::abs(QVector3D::dotProduct(normal, expected)) < 0.85f)
-            normal = expected * (QVector3D::dotProduct(normal, expected) < 0.0f ? -1.0f : 1.0f);
-    }
-    const float cosine=std::cos(qDegreesToRadians(qBound(1.0f,options.normalAngleDegrees,89.0f)));
-    for(QVector3D n:normals) if(std::abs(QVector3D::dotProduct(n,normal))<cosine){result.error=QStringLiteral("三个控制区域的局部法向量不一致");return result;}
-    float d=-QVector3D::dotProduct(normal,p1);
-    QVector<float> seedSpacing;
-    for(int s:seedIndices){float nearest=std::numeric_limits<float>::max();for(int i=0;i<points.size();++i)if(i!=s){const float dx=points[i].x-points[s].x,dy=points[i].y-points[s].y,dz=points[i].z-points[s].z;nearest=qMin(nearest,std::sqrt(dx*dx+dy*dy+dz*dz));}seedSpacing.push_back(nearest);}
-    std::sort(seedSpacing.begin(),seedSpacing.end());
-    QVector<float> heightResiduals; heightResiduals.reserve(points.size());
-    for (const Point3D &p : points) {
-        const float residual = std::abs(axisValue(p) - targetHeight);
-        if (residual < qMax(0.5f, seedSpacing[1] * 8.0f)) heightResiduals.push_back(residual);
-    }
-    std::sort(heightResiduals.begin(), heightResiduals.end());
-    const float heightNoise = heightResiduals.isEmpty() ? 0.0f
-        : heightResiduals[qBound(0, int(heightResiduals.size() * 0.80), heightResiduals.size() - 1)];
-    // Float quantization and scanner noise make a strict three-point plane
-    // too thin. Use a robust spread estimate and local point spacing, while
-    // keeping the explicit user threshold as a lower bound.
-    const float robustThreshold = std::max({heightNoise * 3.0f,
-                                            seedSpacing[1] * 5.0f,
-                                            0.08f});
-    const float threshold = options.distanceThreshold > 0.0f
-        ? qMax(options.distanceThreshold, robustThreshold)
-        : robustThreshold;
-    result.usedThreshold=threshold;
-    for(const Point3D&p:points) {
-        const float axisResidual = preferredAxis > 0 ? std::abs(axisValue(p) - targetHeight) : 0.0f;
-        const float planeResidual = std::abs(normal.x()*p.x+normal.y()*p.y+normal.z()*p.z+d);
-        if (planeResidual <= threshold && (preferredAxis == 0 || axisResidual <= threshold * 1.25f))
-            result.planePoints.push_back(p);
-    }
-    // Refine the seed plane from all selected inliers. PCA gives the least-
-    // squares supporting plane, then every retained point is orthogonally
-    // projected onto it so downstream processing receives a true 2-D layer.
-    if (result.planePoints.size() >= 3) {
-        double mean[3] = {};
-        for (const Point3D &p : result.planePoints) { mean[0] += p.x; mean[1] += p.y; mean[2] += p.z; }
-        for (double &v : mean) v /= result.planePoints.size();
-        double cov[3][3] = {};
-        for (const Point3D &p : result.planePoints) {
-            const double q[3] = {p.x - mean[0], p.y - mean[1], p.z - mean[2]};
-            for (int r = 0; r < 3; ++r) for (int c = 0; c < 3; ++c) cov[r][c] += q[r] * q[c];
-        }
-        double eig[3], vec[3][3]; symmetricEigen3(cov, eig, vec);
-        QVector3D fittedNormal{float(vec[0][2]), float(vec[1][2]), float(vec[2][2])};
-        fittedNormal.normalize();
-        if (QVector3D::dotProduct(fittedNormal, normal) < 0.0f) fittedNormal = -fittedNormal;
-        const float fittedD = -QVector3D::dotProduct(fittedNormal, QVector3D(float(mean[0]), float(mean[1]), float(mean[2])));
-        for (Point3D &p : result.planePoints) {
-            const float distance = fittedNormal.x()*p.x + fittedNormal.y()*p.y + fittedNormal.z()*p.z + fittedD;
-            p.x -= distance * fittedNormal.x(); p.y -= distance * fittedNormal.y(); p.z -= distance * fittedNormal.z();
-            p.nx = fittedNormal.x(); p.ny = fittedNormal.y(); p.nz = fittedNormal.z();
-        }
-        normal = fittedNormal; d = fittedD;
-    }
-    result.model={normal.x(),normal.y(),normal.z(),d,int(result.planePoints.size()),0,threshold};
-    result.ok=result.planePoints.size()>=3;
-    if(!result.ok)result.error=QStringLiteral("受约束平面内点不足");
-    return result;
+    return extractPlaneFromThreePoints(points, seedIndices, options);
 }
 
 } // namespace pointcloud

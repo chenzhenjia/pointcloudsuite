@@ -21,6 +21,7 @@
 #include <QMouseEvent>
 #include <QOpenGLBuffer>
 #include <QOpenGLFunctions_3_3_Core>
+#include <QOpenGLFramebufferObject>
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
 #include <QOpenGLWidget>
@@ -38,29 +39,75 @@
 #include <QVector2D>
 #include <QVector3D>
 #include <QWheelEvent>
+#include <QKeyEvent>
 #include <QCloseEvent>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
 #include <limits>
 #include <cmath>
+#include <functional>
+#include <memory>
 
 class PointCloudCanvas final : public QOpenGLWidget,
                                protected QOpenGLFunctions_3_3_Core {
 public:
+    enum PointState : quint8 { NormalPoint = 0, PlanePoint = 1, EdgePoint = 2 };
+    std::function<void(int)> pointPicked;
+
     explicit PointCloudCanvas(QWidget *parent = nullptr)
-        : QOpenGLWidget(parent), m_vertexBuffer(QOpenGLBuffer::VertexBuffer) {
+        : QOpenGLWidget(parent), m_vertexBuffer(QOpenGLBuffer::VertexBuffer),
+          m_stateBuffer(QOpenGLBuffer::VertexBuffer) {
         setMinimumSize(620, 480);
         setMouseTracking(true);
+        setFocusPolicy(Qt::StrongFocus);
         setToolTip(tr("左键旋转，右键平移，滚轮缩放"));
     }
 
-    ~PointCloudCanvas() override = default;
+    ~PointCloudCanvas() override {
+        if (!context()) return;
+        makeCurrent();
+        m_pickingFbo.reset();
+        if (m_stateBuffer.isCreated()) m_stateBuffer.destroy();
+        if (m_vertexBuffer.isCreated()) m_vertexBuffer.destroy();
+        if (m_vertexArray.isCreated()) m_vertexArray.destroy();
+        doneCurrent();
+    }
 
     void setCloud(const QVector<pointcloud::Point3D> &points) {
         m_points = points;
+        m_pointStates.fill(NormalPoint, points.size());
+        m_selectedIndices.clear();
         updateBounds();
         m_uploadError.clear();
         m_uploadPending = true;
+        update();
+    }
+
+    void setSelectionMode(bool enabled) {
+        m_selectionMode = enabled;
+        setToolTip(enabled ? tr("左键选择点，右键平移，Esc 取消，Backspace 撤销")
+                           : tr("左键旋转，右键平移，滚轮缩放"));
+        setFocus();
+    }
+
+    void setSelectedIndices(const QVector<int> &indices) {
+        m_selectedIndices = indices;
+        update();
+    }
+
+    void setPlaneResult(const QVector<int> &planeIndices, const QVector<int> &edgeIndices) {
+        m_pointStates.fill(NormalPoint, m_points.size());
+        for (int index : planeIndices)
+            if (index >= 0 && index < m_pointStates.size()) m_pointStates[index] = PlanePoint;
+        for (int index : edgeIndices)
+            if (index >= 0 && index < m_pointStates.size()) m_pointStates[index] = EdgePoint;
+        m_stateUploadPending = true;
+        update();
+    }
+
+    void clearPlaneResult() {
+        m_pointStates.fill(NormalPoint, m_points.size());
+        m_stateUploadPending = true;
         update();
     }
 
@@ -89,6 +136,22 @@ public:
 protected:
     void initializeGL() override {
         initializeOpenGLFunctions();
+        const QString vendor = QString::fromLatin1(
+            reinterpret_cast<const char *>(glGetString(GL_VENDOR)));
+        const QString renderer = QString::fromLatin1(
+            reinterpret_cast<const char *>(glGetString(GL_RENDERER)));
+        const QString version = QString::fromLatin1(
+            reinterpret_cast<const char *>(glGetString(GL_VERSION)));
+        qInfo().noquote() << "OpenGL vendor:" << vendor;
+        qInfo().noquote() << "OpenGL renderer:" << renderer;
+        qInfo().noquote() << "OpenGL version:" << version;
+        const QString rendererLower = renderer.toLower();
+        if (rendererLower.contains(QStringLiteral("llvmpipe"))
+            || rendererLower.contains(QStringLiteral("softpipe"))
+            || rendererLower.contains(QStringLiteral("software"))
+            || rendererLower.contains(QStringLiteral("gdi generic"))) {
+            qWarning().noquote() << "OpenGL software renderer detected:" << renderer;
+        }
         glClearColor(0.018f, 0.025f, 0.035f, 1.0f);
         glEnable(GL_DEPTH_TEST);
         glEnable(GL_BLEND);
@@ -110,14 +173,18 @@ protected:
             uniform float maxHeight;
             uniform int colorMode;
             uniform float overlay;
+            uniform int renderPass;
+            layout(location = 2) in uint pointState;
             out float heightValue;
             out vec3 normalValue;
+            flat out int stateValue;
             void main() {
                 vec3 normalized = (vertexPosition - cloudCenter) * (2.0 / cloudSpan);
                 gl_Position = transform * vec4(normalized, 1.0);
                 gl_Position.xy += viewPan * gl_Position.w;
-                gl_PointSize = pointSize;
+                gl_PointSize = renderPass == 0 ? pointSize : pointSize + 1.5;
                 normalValue = vertexNormal;
+                stateValue = int(pointState);
                 heightValue = clamp((vertexPosition.z - minHeight) /
                                     max(maxHeight - minHeight, 0.000001), 0.0, 1.0);
             }
@@ -128,7 +195,9 @@ protected:
             in vec3 normalValue;
             uniform int colorMode;
             uniform float overlay;
+            uniform int renderPass;
             out vec4 fragmentColor;
+            flat in int stateValue;
             void main() {
                 vec3 lowColor = vec3(0.05, 0.55, 0.95);
                 vec3 middleColor = vec3(0.12, 0.88, 0.70);
@@ -145,18 +214,56 @@ protected:
                 vec3 normal = length(normalValue) > 0.0001
                     ? normalize(normalValue) : vec3(0.0, 0.0, 1.0);
                 float light = 0.72 + 0.28 * max(dot(normal, normalize(vec3(0.35, 0.45, 0.82))), 0.0);
+                if (renderPass == 1) color = vec3(1.0);
+                else if (stateValue == 1) color = vec3(0.58);
+                else if (stateValue == 2) color = vec3(0.95);
                 fragmentColor = vec4(color * light, max(0.02, overlay));
+            }
+        )";
+
+        static const char *pickingVertexShader = R"(
+            #version 330 core
+            layout(location = 0) in vec3 vertexPosition;
+            uniform mat4 transform;
+            uniform vec3 cloudCenter;
+            uniform float cloudSpan;
+            uniform vec2 viewPan;
+            uniform float pointSize;
+            flat out uint pointId;
+            void main() {
+                vec3 normalized = (vertexPosition - cloudCenter) * (2.0 / cloudSpan);
+                gl_Position = transform * vec4(normalized, 1.0);
+                gl_Position.xy += viewPan * gl_Position.w;
+                gl_PointSize = pointSize;
+                pointId = uint(gl_VertexID) + 1u;
+            }
+        )";
+        static const char *pickingFragmentShader = R"(
+            #version 330 core
+            flat in uint pointId;
+            out vec4 fragmentColor;
+            void main() {
+                fragmentColor = vec4(
+                    float(pointId & 255u),
+                    float((pointId >> 8u) & 255u),
+                    float((pointId >> 16u) & 255u),
+                    float((pointId >> 24u) & 255u)) / 255.0;
             }
         )";
 
         if (!m_program.addShaderFromSourceCode(QOpenGLShader::Vertex, vertexShader)
             || !m_program.addShaderFromSourceCode(QOpenGLShader::Fragment, fragmentShader)
-            || !m_program.link()) {
-            m_initializationError = m_program.log();
+            || !m_program.link()
+            || !m_pickingProgram.addShaderFromSourceCode(QOpenGLShader::Vertex, pickingVertexShader)
+            || !m_pickingProgram.addShaderFromSourceCode(QOpenGLShader::Fragment, pickingFragmentShader)
+            || !m_pickingProgram.link()) {
+            m_initializationError = tr("OpenGL 着色器初始化失败\n主渲染：%1\n拾取：%2")
+                                        .arg(m_program.log(), m_pickingProgram.log());
+            qWarning().noquote() << m_initializationError;
             return;
         }
 
-        if (!m_vertexArray.create() || !m_vertexBuffer.create()) {
+        if (!m_vertexArray.create() || !m_vertexBuffer.create() || !m_stateBuffer.create()) {
             m_initializationError = tr("无法创建 OpenGL 顶点缓冲区");
             return;
         }
@@ -169,6 +276,7 @@ protected:
         if (m_initializationError.isEmpty() && !m_points.isEmpty()) {
             uploadCloudIfNeeded();
             if (m_uploadError.isEmpty()) {
+                uploadStatesIfNeeded();
                 const QMatrix4x4 transform = viewTransform();
                 m_program.bind();
                 m_program.setUniformValue("transform", transform);
@@ -182,8 +290,18 @@ protected:
                 m_program.setUniformValue("maxHeight", upper);
                 m_program.setUniformValue("colorMode", m_colorMode);
                 m_program.setUniformValue("overlay", m_overlay);
+                m_program.setUniformValue("renderPass", 0);
                 m_vertexArray.bind();
                 glDrawArrays(GL_POINTS, 0, int(m_points.size()));
+                if (!m_selectedIndices.isEmpty()) {
+                    glDepthFunc(GL_LEQUAL);
+                    m_program.setUniformValue("renderPass", 1);
+                    for (int index : m_selectedIndices) {
+                        if (index >= 0 && index < m_points.size())
+                            glDrawArrays(GL_POINTS, index, 1);
+                    }
+                    glDepthFunc(GL_LESS);
+                }
                 m_vertexArray.release();
                 m_program.release();
             }
@@ -195,12 +313,14 @@ protected:
     void mousePressEvent(QMouseEvent *event) override {
         m_lastMousePosition = event->position();
         m_pressedButton = event->button();
+        m_mouseMoved = false;
     }
 
     void mouseMoveEvent(QMouseEvent *event) override {
         const QPointF delta = event->position() - m_lastMousePosition;
+        if (std::abs(delta.x()) + std::abs(delta.y()) > 1.0) m_mouseMoved = true;
         m_lastMousePosition = event->position();
-        if (m_pressedButton == Qt::LeftButton) {
+        if (m_pressedButton == Qt::LeftButton && !m_selectionMode) {
             m_yaw += float(delta.x()) * 0.45f;
             m_pitch = qBound(-89.0f, m_pitch + float(delta.y()) * 0.45f, 89.0f);
         } else if (m_pressedButton == Qt::RightButton) {
@@ -210,8 +330,18 @@ protected:
         update();
     }
 
-    void mouseReleaseEvent(QMouseEvent *) override {
+    void mouseReleaseEvent(QMouseEvent *event) override {
+        if (m_selectionMode && event->button() == Qt::LeftButton && !m_mouseMoved
+            && pointPicked) {
+            pointPicked(pickPoint(event->position()));
+        }
         m_pressedButton = Qt::NoButton;
+    }
+
+    void resizeGL(int width, int height) override {
+        Q_UNUSED(width)
+        Q_UNUSED(height)
+        m_pickingFbo.reset();
     }
 
     void wheelEvent(QWheelEvent *event) override {
@@ -284,11 +414,93 @@ private:
             m_program.enableAttributeArray(1);
             m_program.setAttributeBuffer(1, GL_FLOAT, int(3 * sizeof(float)), 3,
                                          sizeof(pointcloud::Point3D));
+            m_stateBuffer.bind();
+            m_stateBuffer.setUsagePattern(QOpenGLBuffer::DynamicDraw);
+            m_stateBuffer.allocate(m_pointStates.constData(), int(m_pointStates.size()));
+            glEnableVertexAttribArray(2);
+            glVertexAttribIPointer(2, 1, GL_UNSIGNED_BYTE, sizeof(quint8), nullptr);
+            m_stateBuffer.release();
             m_program.release();
             m_uploadPending = false;
+            m_stateUploadPending = false;
         }
         m_vertexBuffer.release();
         m_vertexArray.release();
+    }
+
+    void uploadStatesIfNeeded() {
+        if (!m_stateUploadPending || !m_stateBuffer.isCreated()) return;
+        m_vertexArray.bind();
+        m_stateBuffer.bind();
+        m_stateBuffer.allocate(m_pointStates.constData(), int(m_pointStates.size()));
+        m_stateBuffer.release();
+        m_vertexArray.release();
+        m_stateUploadPending = false;
+    }
+
+    int pickPoint(const QPointF &position) {
+        if (m_points.isEmpty() || !context() || !isValid()) return -1;
+        makeCurrent();
+        uploadCloudIfNeeded();
+        if (!m_uploadError.isEmpty()) { doneCurrent(); return -1; }
+        const qreal dpr = devicePixelRatioF();
+        const QSize pixelSize(qMax(1, qRound(width() * dpr)),
+                              qMax(1, qRound(height() * dpr)));
+        if (!m_pickingFbo || m_pickingFbo->size() != pixelSize) {
+            QOpenGLFramebufferObjectFormat format;
+            format.setAttachment(QOpenGLFramebufferObject::Depth);
+            format.setInternalTextureFormat(GL_RGBA8);
+            m_pickingFbo = std::make_unique<QOpenGLFramebufferObject>(pixelSize, format);
+        }
+        if (!m_pickingFbo || !m_pickingFbo->isValid()) { doneCurrent(); return -1; }
+        m_pickingFbo->bind();
+        glViewport(0, 0, pixelSize.width(), pixelSize.height());
+        glDisable(GL_BLEND);
+        glDisable(GL_DITHER);
+        glEnable(GL_DEPTH_TEST);
+        glClearColor(0, 0, 0, 0);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        m_pickingProgram.bind();
+        m_pickingProgram.setUniformValue("transform", viewTransform());
+        m_pickingProgram.setUniformValue("cloudCenter", m_center);
+        m_pickingProgram.setUniformValue("cloudSpan", m_span);
+        m_pickingProgram.setUniformValue("viewPan", QVector2D(m_pan));
+        m_pickingProgram.setUniformValue("pointSize", float(m_pointSize));
+        m_vertexArray.bind();
+        glDrawArrays(GL_POINTS, 0, int(m_points.size()));
+        m_vertexArray.release();
+        m_pickingProgram.release();
+
+        const int centerX = qBound(0, qRound(position.x() * dpr), pixelSize.width() - 1);
+        const int centerY = qBound(0, pixelSize.height() - 1 - qRound(position.y() * dpr),
+                                   pixelSize.height() - 1);
+        quint8 pixels[3 * 3 * 4] = {};
+        const int x = qBound(0, centerX - 1, qMax(0, pixelSize.width() - 3));
+        const int y = qBound(0, centerY - 1, qMax(0, pixelSize.height() - 3));
+        const int readWidth = qMin(3, pixelSize.width());
+        const int readHeight = qMin(3, pixelSize.height());
+        glReadPixels(x, y, readWidth, readHeight, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+        glViewport(0, 0, pixelSize.width(), pixelSize.height());
+        glClearColor(0.018f, 0.025f, 0.035f, 1.0f);
+        glEnable(GL_DITHER);
+        glEnable(GL_BLEND);
+        doneCurrent();
+        const int preferredX = centerX - x, preferredY = centerY - y;
+        auto decode = [&](int px, int py) -> quint32 {
+            if (px < 0 || py < 0 || px >= readWidth || py >= readHeight) return 0;
+            const quint8 *rgba = pixels + (py * readWidth + px) * 4;
+            return quint32(rgba[0]) | (quint32(rgba[1]) << 8)
+                | (quint32(rgba[2]) << 16) | (quint32(rgba[3]) << 24);
+        };
+        quint32 id = decode(preferredX, preferredY);
+        if (id == 0) {
+            for (int radius = 1; radius <= 1 && id == 0; ++radius)
+                for (int dy = -radius; dy <= radius && id == 0; ++dy)
+                    for (int dx = -radius; dx <= radius && id == 0; ++dx)
+                        id = decode(preferredX + dx, preferredY + dy);
+        }
+        return id > 0 && id <= quint32(m_points.size()) ? int(id - 1) : -1;
     }
 
     QMatrix4x4 rotationTransform() const {
@@ -378,9 +590,14 @@ private:
     }
 
     QVector<pointcloud::Point3D> m_points;
+    QVector<quint8> m_pointStates;
+    QVector<int> m_selectedIndices;
     QOpenGLShaderProgram m_program;
+    QOpenGLShaderProgram m_pickingProgram;
     QOpenGLVertexArrayObject m_vertexArray;
     QOpenGLBuffer m_vertexBuffer;
+    QOpenGLBuffer m_stateBuffer;
+    std::unique_ptr<QOpenGLFramebufferObject> m_pickingFbo;
     QVector3D m_center;
     QPointF m_lastMousePosition;
     QPointF m_pan;
@@ -402,6 +619,9 @@ private:
     float m_mapMin = 0.0f;
     float m_mapMax = 1.0f;
     bool m_uploadPending = false;
+    bool m_stateUploadPending = false;
+    bool m_selectionMode = false;
+    bool m_mouseMoved = false;
 };
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
@@ -418,6 +638,9 @@ MainWindow::~MainWindow() {
     if (m_planeWatcher && m_planeWatcher->isRunning()) {
         m_planeWatcher->waitForFinished();
     }
+    if (m_threePlaneWatcher && m_threePlaneWatcher->isRunning()) {
+        m_threePlaneWatcher->waitForFinished();
+    }
     if (m_loadWatcher) {
         disconnect(m_loadWatcher, nullptr, this, nullptr);
         m_loadWatcher->disconnect(this);
@@ -429,6 +652,10 @@ MainWindow::~MainWindow() {
     if (m_planeWatcher) {
         disconnect(m_planeWatcher, nullptr, this, nullptr);
         m_planeWatcher->disconnect(this);
+    }
+    if (m_threePlaneWatcher) {
+        disconnect(m_threePlaneWatcher, nullptr, this, nullptr);
+        m_threePlaneWatcher->disconnect(this);
     }
     if (m_canvas) {
         m_canvas->setUpdatesEnabled(false);
@@ -527,6 +754,7 @@ void MainWindow::buildUi() {
     centerLayout->setContentsMargins(0, 0, 0, 0);
     centerLayout->setSpacing(6);
     m_canvas = new PointCloudCanvas;
+    m_canvas->pointPicked = [this](int index) { handleCanvasPointPicked(index); };
     centerLayout->addWidget(m_canvas, 1);
     m_canvasInfo = new QLabel(tr("就绪"));
     m_canvasInfo->setObjectName(QStringLiteral("subTitle"));
@@ -620,8 +848,7 @@ void MainWindow::buildUi() {
     cleanLayout->addStretch();
     connect(m_noiseApply, &QPushButton::clicked, this, &MainWindow::applyNoiseRemoval);
     connect(restoreButton, &QPushButton::clicked, this, [this]() {
-        if ((m_noiseWatcher && m_noiseWatcher->isRunning())
-            || (m_planeWatcher && m_planeWatcher->isRunning())) {
+        if (pointTaskRunning()) {
             statusBar()->showMessage(tr("点云处理任务正在运行"));
             return;
         }
@@ -670,6 +897,78 @@ void MainWindow::buildUi() {
             this, &MainWindow::applyPlaneSegmentation);
     tabs->addTab(planePage, tr("平面分割"));
 
+    auto *threePage = new QWidget;
+    auto *threeLayout = new QVBoxLayout(threePage);
+    threeLayout->setContentsMargins(8, 14, 8, 8);
+    auto *threeTitle = new QLabel(tr("三点目标平面"));
+    threeTitle->setObjectName(QStringLiteral("sectionTitle"));
+    threeLayout->addWidget(threeTitle);
+    auto *threeForm = new QFormLayout;
+    m_threeInitialTolerance = new QDoubleSpinBox;
+    m_threeInitialTolerance->setRange(0.0001, 1000.0);
+    m_threeInitialTolerance->setDecimals(4);
+    m_threeInitialTolerance->setValue(1.0);
+    threeForm->addRow(tr("初始容差 mm"), m_threeInitialTolerance);
+    m_threeSurfaceTolerance = new QDoubleSpinBox;
+    m_threeSurfaceTolerance->setRange(0.0001, 1000.0);
+    m_threeSurfaceTolerance->setDecimals(4);
+    m_threeSurfaceTolerance->setValue(0.4);
+    threeForm->addRow(tr("表面容差 mm"), m_threeSurfaceTolerance);
+    m_threeConnectivityRadius = new QDoubleSpinBox;
+    m_threeConnectivityRadius->setRange(0.0, 10000.0);
+    m_threeConnectivityRadius->setDecimals(4);
+    m_threeConnectivityRadius->setSpecialValueText(tr("自动"));
+    threeForm->addRow(tr("连通半径 mm"), m_threeConnectivityRadius);
+    m_threeIterations = new QSpinBox;
+    m_threeIterations->setRange(10, 100000);
+    m_threeIterations->setValue(300);
+    threeForm->addRow(tr("RANSAC 迭代"), m_threeIterations);
+    m_threeMinInliers = new QSpinBox;
+    m_threeMinInliers->setRange(3, 100000000);
+    m_threeMinInliers->setValue(100);
+    threeForm->addRow(tr("最小内点数"), m_threeMinInliers);
+    threeLayout->addLayout(threeForm);
+    auto *threeButtons = new QHBoxLayout;
+    m_threeStart = new QPushButton(tr("开始选择"));
+    auto *threeUndo = new QPushButton(tr("撤销"));
+    auto *threeClear = new QPushButton(tr("清除"));
+    threeButtons->addWidget(m_threeStart);
+    threeButtons->addWidget(threeUndo);
+    threeButtons->addWidget(threeClear);
+    threeLayout->addLayout(threeButtons);
+    m_threeOutput = new QPlainTextEdit;
+    m_threeOutput->setReadOnly(true);
+    m_threeOutput->setPlaceholderText(tr("选择三个点后显示平面方程和统计结果"));
+    threeLayout->addWidget(m_threeOutput, 1);
+    connect(m_threeStart, &QPushButton::clicked, this, &MainWindow::startThreePointSelection);
+    connect(threeClear, &QPushButton::clicked, this, &MainWindow::clearThreePointSelection);
+    const auto undoThreePoint = [this]() {
+        if (pointTaskRunning()) {
+            statusBar()->showMessage(tr("点云处理任务正在运行"));
+            return;
+        }
+        if (m_selectedPointIndices.isEmpty()) return;
+        m_selectedPointIndices.removeLast();
+        m_threePointSelectionActive = true;
+        m_canvas->setSelectionMode(true);
+        m_canvas->setSelectedIndices(m_selectedPointIndices);
+        m_canvas->clearPlaneResult();
+        m_threePlaneResult = {};
+        updateThreePointStatus();
+    };
+    connect(threeUndo, &QPushButton::clicked, this, undoThreePoint);
+    auto *cancelThreeAction = new QAction(this);
+    cancelThreeAction->setShortcut(QKeySequence(Qt::Key_Escape));
+    cancelThreeAction->setShortcutContext(Qt::ApplicationShortcut);
+    connect(cancelThreeAction, &QAction::triggered, this, &MainWindow::cancelThreePointSelection);
+    addAction(cancelThreeAction);
+    auto *undoThreeAction = new QAction(this);
+    undoThreeAction->setShortcut(QKeySequence(Qt::Key_Backspace));
+    undoThreeAction->setShortcutContext(Qt::ApplicationShortcut);
+    connect(undoThreeAction, &QAction::triggered, this, undoThreePoint);
+    addAction(undoThreeAction);
+    tabs->addTab(threePage, tr("三点选平面"));
+
     rightLayout->addWidget(tabs, 1);
     splitter->addWidget(rightPanel);
     splitter->setStretchFactor(0, 0);
@@ -689,8 +988,7 @@ void MainWindow::buildUi() {
 }
 
 void MainWindow::openPointCloud() {
-    if (m_loading || (m_noiseWatcher && m_noiseWatcher->isRunning())
-        || (m_planeWatcher && m_planeWatcher->isRunning())) {
+    if (pointTaskRunning()) {
         statusBar()->showMessage(tr("点云处理任务正在运行"));
         return;
     }
@@ -764,7 +1062,14 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points) {
     m_points = std::move(points);
     ++m_canvasRevision;
     clearPlaneSegmentation();
-    if (m_canvas) m_canvas->setCloud(m_points);
+    m_selectedPointIndices.clear();
+    m_threePlaneResult = {};
+    m_threePointSelectionActive = false;
+    if (m_canvas) {
+        m_canvas->setSelectionMode(false);
+        m_canvas->setCloud(m_points);
+    }
+    if (m_threeOutput) m_threeOutput->clear();
     if (m_canvasInfo) {
         m_canvasInfo->setText(tr("当前显示 %1 个点  ·  原始 %2 个点  ·  全量直接标记")
                                   .arg(QLocale().toString(m_points.size()))
@@ -777,14 +1082,165 @@ void MainWindow::clearPlaneSegmentation() {
     if (m_planeOutput) m_planeOutput->clear();
 }
 
+bool MainWindow::pointTaskRunning() const {
+    return m_loading || (m_noiseWatcher && m_noiseWatcher->isRunning())
+        || (m_planeWatcher && m_planeWatcher->isRunning())
+        || (m_threePlaneWatcher && m_threePlaneWatcher->isRunning());
+}
+
+void MainWindow::startThreePointSelection() {
+    if (pointTaskRunning()) {
+        statusBar()->showMessage(tr("点云处理任务正在运行"));
+        return;
+    }
+    if (m_points.isEmpty()) {
+        statusBar()->showMessage(tr("请先加载点云"));
+        return;
+    }
+    m_selectedPointIndices.clear();
+    m_threePlaneResult = {};
+    m_threePointSelectionActive = true;
+    m_canvas->clearPlaneResult();
+    m_canvas->setSelectedIndices({});
+    m_canvas->setSelectionMode(true);
+    updateThreePointStatus();
+}
+
+void MainWindow::clearThreePointSelection() {
+    if (m_threePlaneWatcher && m_threePlaneWatcher->isRunning()) {
+        statusBar()->showMessage(tr("三点平面拟合正在运行"));
+        return;
+    }
+    m_selectedPointIndices.clear();
+    m_threePlaneResult = {};
+    m_threePointSelectionActive = false;
+    if (m_canvas) {
+        m_canvas->setSelectionMode(false);
+        m_canvas->setSelectedIndices({});
+        m_canvas->clearPlaneResult();
+    }
+    if (m_threeOutput) m_threeOutput->clear();
+    statusBar()->showMessage(tr("三点选择已清除"));
+}
+
+void MainWindow::cancelThreePointSelection() {
+    if (!m_threePointSelectionActive) return;
+    m_threePointSelectionActive = false;
+    m_selectedPointIndices.clear();
+    m_canvas->setSelectionMode(false);
+    m_canvas->setSelectedIndices({});
+    updateThreePointStatus();
+    statusBar()->showMessage(tr("已取消三点选择"));
+}
+
+void MainWindow::updateThreePointStatus() {
+    if (!m_threeOutput) return;
+    QStringList lines;
+    for (int i = 0; i < m_selectedPointIndices.size(); ++i) {
+        const int index = m_selectedPointIndices[i];
+        if (index < 0 || index >= m_points.size()) continue;
+        const auto &p = m_points[index];
+        lines << tr("P%1 [%2]  (%3, %4, %5)")
+                     .arg(i + 1).arg(index)
+                     .arg(p.x, 0, 'g', 8).arg(p.y, 0, 'g', 8).arg(p.z, 0, 'g', 8);
+    }
+    if (m_threePointSelectionActive && m_selectedPointIndices.size() < 3)
+        lines << QString() << tr("请选择第 %1 个点").arg(m_selectedPointIndices.size() + 1);
+    m_threeOutput->setPlainText(lines.join(QLatin1Char('\n')));
+}
+
+void MainWindow::handleCanvasPointPicked(int index) {
+    if (!m_threePointSelectionActive || pointTaskRunning()) return;
+    if (index < 0) {
+        statusBar()->showMessage(tr("鼠标位置没有可选点"));
+        return;
+    }
+    if (m_selectedPointIndices.contains(index)) {
+        statusBar()->showMessage(tr("该点已经被选择"));
+        return;
+    }
+    m_selectedPointIndices.push_back(index);
+    m_canvas->setSelectedIndices(m_selectedPointIndices);
+    updateThreePointStatus();
+    if (m_selectedPointIndices.size() < 3) {
+        statusBar()->showMessage(tr("请选择第 %1 个点").arg(m_selectedPointIndices.size() + 1));
+        return;
+    }
+
+    pointcloud::ThreePointPlaneOptions options;
+    options.initialTolerance = float(m_threeInitialTolerance->value());
+    options.surfaceTolerance = float(m_threeSurfaceTolerance->value());
+    options.connectivityRadius = float(m_threeConnectivityRadius->value());
+    options.ransacIterations = m_threeIterations->value();
+    options.minInliers = m_threeMinInliers->value();
+    if (!m_threePlaneWatcher) {
+        m_threePlaneWatcher = new QFutureWatcher<pointcloud::ThreePointPlaneResult>(this);
+        connect(m_threePlaneWatcher, &QFutureWatcher<pointcloud::ThreePointPlaneResult>::finished,
+                this, &MainWindow::threePointPlaneFinished);
+    }
+    const QVector<pointcloud::Point3D> source = m_points;
+    const QVector<int> seeds = m_selectedPointIndices;
+    m_threePlaneInputRevision = m_canvasRevision;
+    m_threePointSelectionActive = false;
+    m_canvas->setSelectionMode(false);
+    m_threeStart->setEnabled(false);
+    m_progress->show();
+    m_progress->setRange(0, 0);
+    statusBar()->showMessage(tr("后台拟合目标平面..."));
+    m_threePlaneWatcher->setFuture(QtConcurrent::run([source, seeds, options]() {
+        return pointcloud::extractPlaneFromThreePoints(source, seeds, options);
+    }));
+}
+
+void MainWindow::threePointPlaneFinished() {
+    const pointcloud::ThreePointPlaneResult result = m_threePlaneWatcher->result();
+    m_threeStart->setEnabled(true);
+    m_progress->hide();
+    if (m_threePlaneInputRevision != m_canvasRevision) {
+        statusBar()->showMessage(tr("画布缓存已变化，已丢弃旧三点平面结果"));
+        return;
+    }
+    if (!result.ok) {
+        m_threePlaneResult = {};
+        // Keep P1/P2 and let the user replace the invalid third seed.
+        if (m_selectedPointIndices.size() >= 3)
+            m_selectedPointIndices.removeLast();
+        m_threePointSelectionActive = true;
+        m_canvas->setSelectionMode(true);
+        m_canvas->setSelectedIndices(m_selectedPointIndices);
+        m_threeOutput->appendPlainText(QStringLiteral("\n") + result.error);
+        m_threeOutput->appendPlainText(tr("请重新选择第 3 个点"));
+        statusBar()->showMessage(result.error);
+        return;
+    }
+    m_threePlaneResult = result;
+    m_canvas->setPlaneResult(result.planeIndices, result.edgeIndices);
+    const auto &plane = result.model;
+    QStringList lines;
+    for (int i = 0; i < m_selectedPointIndices.size(); ++i) {
+        const auto &p = m_points[m_selectedPointIndices[i]];
+        lines << tr("P%1  (%2, %3, %4)").arg(i + 1)
+                     .arg(p.x, 0, 'g', 8).arg(p.y, 0, 'g', 8).arg(p.z, 0, 'g', 8);
+    }
+    lines << QString()
+          << tr("%1 x + %2 y + %3 z + %4 = 0")
+                 .arg(plane.a, 0, 'g', 9).arg(plane.b, 0, 'g', 9)
+                 .arg(plane.c, 0, 'g', 9).arg(plane.d, 0, 'g', 9)
+          << tr("候选点：%1").arg(QLocale().toString(result.candidateIndices.size()))
+          << tr("目标平面点：%1").arg(QLocale().toString(result.planeIndices.size()))
+          << tr("边缘点：%1").arg(QLocale().toString(result.edgeIndices.size()))
+          << tr("RMS 误差：%1 mm").arg(result.rmsError, 0, 'g', 7);
+    m_threeOutput->setPlainText(lines.join(QLatin1Char('\n')));
+    statusBar()->showMessage(tr("目标平面已生成"));
+}
+
 void MainWindow::applyNoiseRemoval() {
     if (m_loading || m_points.isEmpty()) {
         statusBar()->showMessage(tr("请先完成点云加载"));
         return;
     }
-    if (m_noiseWatcher && m_noiseWatcher->isRunning()) return;
-    if (m_planeWatcher && m_planeWatcher->isRunning()) {
-        statusBar()->showMessage(tr("平面分割任务正在运行"));
+    if (pointTaskRunning()) {
+        statusBar()->showMessage(tr("已有点云处理任务正在运行"));
         return;
     }
     pointcloud::NoiseOptions options;
@@ -837,8 +1293,7 @@ void MainWindow::applyPlaneSegmentation() {
         statusBar()->showMessage(tr("当前画布没有可分割的点云缓存"));
         return;
     }
-    if ((m_planeWatcher && m_planeWatcher->isRunning())
-        || (m_noiseWatcher && m_noiseWatcher->isRunning())) {
+    if (pointTaskRunning()) {
         statusBar()->showMessage(tr("已有点云处理任务正在运行"));
         return;
     }
@@ -921,6 +1376,10 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     if (m_planeWatcher && m_planeWatcher->isRunning()) {
         statusBar()->showMessage(tr("正在结束后台平面分割，请稍候..."));
         m_planeWatcher->waitForFinished();
+    }
+    if (m_threePlaneWatcher && m_threePlaneWatcher->isRunning()) {
+        statusBar()->showMessage(tr("正在结束后台三点平面拟合，请稍候..."));
+        m_threePlaneWatcher->waitForFinished();
     }
     event->accept();
 }

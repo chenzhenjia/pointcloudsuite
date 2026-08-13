@@ -58,8 +58,27 @@ struct SimilarCircleSearchResult { QVector<CircleCandidate> candidates; QString 
 struct PlaneSegmentationResult { QVector<int> labels; QVector<PlaneModel> planes; QString summary,error; bool ok=false; };
 struct EdgePipelineOptions { GeometryFeatureOptions feature; float edgePercentile=0.90f,edgeCurvatureThreshold=0,edgeNeighborRadius=0; int edgeMinNeighbors=2; NoiseOptions denoise; PlaneSegmentationOptions planes; };
 struct EdgePipelineResult { QVector<float> edgeScore; QVector<quint8> edgeMask; QVector<GeometryFeature> edgeFeatures; QVector<Point3D> filteredPoints; PlaneSegmentationResult planeResult; QString summary,error; bool ok=false; };
-struct ThreePointPlaneOptions { int neighborhoodSize=24; float distanceThreshold=0,normalAngleDegrees=20; bool preferHorizontal=true; int preferredAxis=3; };
-struct ThreePointPlaneResult { QVector<Point3D> controlPoints,planePoints; PlaneModel model; float usedThreshold=0; QString error; bool ok=false; };
+struct ThreePointPlaneOptions {
+    float initialTolerance = 1.0f;
+    float surfaceTolerance = 0.4f;
+    float connectivityRadius = 0.0f;
+    int ransacIterations = 300;
+    int minInliers = 100;
+    unsigned int randomSeed = 20260813u;
+    bool keepSeedComponentOnly = true;
+};
+struct ThreePointPlaneResult {
+    PlaneModel model;
+    QVector<int> candidateIndices;
+    QVector<int> planeIndices;
+    QVector<int> edgeIndices;
+    QVector<Point3D> controlPoints;
+    QVector<Point3D> planePoints;
+    float rmsError = 0.0f;
+    float usedThreshold = 0.0f;
+    QString error;
+    bool ok = false;
+};
 
 struct NoiseResult {
     QVector<Point3D> points;
@@ -99,6 +118,7 @@ CircleInteriorCleanupResult cleanCircleInterior(const QVector<Point3D>&, const P
 SimilarCircleSearchResult findSimilarCirclesOnPlane(const QVector<Point3D>&, const PlaneModel&, const CircleDetectionResult&, const SimilarCircleSearchOptions& = {});
 PlaneSegmentationResult segmentPlanes(const QVector<Point3D>&, const PlaneSegmentationOptions& = {});
 EdgePipelineResult runEdgeAwarePipeline(const QVector<Point3D>&, const EdgePipelineOptions& = {});
+ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D>&, const QVector<int>&, const ThreePointPlaneOptions& = {});
 ThreePointPlaneResult selectPlaneFromThreeSeeds(const QVector<Point3D>&, const QVector<int>&, const ThreePointPlaneOptions& = {});
 
 } // namespace pointcloud

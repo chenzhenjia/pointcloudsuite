@@ -32,12 +32,19 @@ private slots:
     void noiseFinished();
     void applyPlaneSegmentation();
     void planeSegmentationFinished();
+    void startThreePointSelection();
+    void clearThreePointSelection();
+    void cancelThreePointSelection();
+    void handleCanvasPointPicked(int index);
+    void threePointPlaneFinished();
 
 private:
     void closeEvent(QCloseEvent *event) override;
     void buildUi();
     void publishCanvasCache(QVector<pointcloud::Point3D> points);
     void clearPlaneSegmentation();
+    void updateThreePointStatus();
+    bool pointTaskRunning() const;
     QListWidget *m_fileList = nullptr;
     QLabel *m_fileInfo = nullptr;
     QLabel *m_canvasInfo = nullptr;
@@ -60,6 +67,13 @@ private:
     QComboBox *m_planeSampleRatio = nullptr;
     QPushButton *m_planeApply = nullptr;
     QPlainTextEdit *m_planeOutput = nullptr;
+    QDoubleSpinBox *m_threeInitialTolerance = nullptr;
+    QDoubleSpinBox *m_threeSurfaceTolerance = nullptr;
+    QDoubleSpinBox *m_threeConnectivityRadius = nullptr;
+    QSpinBox *m_threeIterations = nullptr;
+    QSpinBox *m_threeMinInliers = nullptr;
+    QPushButton *m_threeStart = nullptr;
+    QPlainTextEdit *m_threeOutput = nullptr;
     PointCloudCanvas *m_canvas = nullptr;
     QVector<pointcloud::Point3D> m_rawPoints;
     QVector<pointcloud::Point3D> m_points;
@@ -68,9 +82,14 @@ private:
     QFutureWatcher<pointcloud::LoadResult> *m_loadWatcher = nullptr;
     QFutureWatcher<pointcloud::NoiseResult> *m_noiseWatcher = nullptr;
     QFutureWatcher<pointcloud::PlaneSegmentationResult> *m_planeWatcher = nullptr;
+    QFutureWatcher<pointcloud::ThreePointPlaneResult> *m_threePlaneWatcher = nullptr;
     qsizetype m_noiseInputCount = 0;
     quint64 m_canvasRevision = 0;
     quint64 m_noiseInputRevision = 0;
     quint64 m_planeInputRevision = 0;
+    quint64 m_threePlaneInputRevision = 0;
     pointcloud::PlaneSegmentationResult m_planeResult;
+    pointcloud::ThreePointPlaneResult m_threePlaneResult;
+    QVector<int> m_selectedPointIndices;
+    bool m_threePointSelectionActive = false;
 };
