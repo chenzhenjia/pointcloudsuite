@@ -92,17 +92,25 @@ double readBinaryScalar(const char *&cursor, const char *end,
     if (bytes <= 0 || cursor + bytes > end) { if (ok) *ok = false; return 0.0; }
     const uchar *data = reinterpret_cast<const uchar *>(cursor);
     cursor += bytes;
-    const quint16 raw16 = bigEndian ? qFromBigEndian<quint16>(data) : qFromLittleEndian<quint16>(data);
-    const quint32 raw32 = bigEndian ? qFromBigEndian<quint32>(data) : qFromLittleEndian<quint32>(data);
-    const quint64 raw64 = bigEndian ? qFromBigEndian<quint64>(data) : qFromLittleEndian<quint64>(data);
-    if (type == "float" || type == "float32") { float value; std::memcpy(&value, &raw32, sizeof(value)); return value; }
-    if (type == "double" || type == "float64") { double value; std::memcpy(&value, &raw64, sizeof(value)); return value; }
+    if (type == "float" || type == "float32") {
+        const quint32 raw = bigEndian ? qFromBigEndian<quint32>(data) : qFromLittleEndian<quint32>(data);
+        float value; std::memcpy(&value, &raw, sizeof(value)); return value;
+    }
+    if (type == "double" || type == "float64") {
+        const quint64 raw = bigEndian ? qFromBigEndian<quint64>(data) : qFromLittleEndian<quint64>(data);
+        double value; std::memcpy(&value, &raw, sizeof(value)); return value;
+    }
     if (type == "uchar" || type == "uint8") return data[0];
     if (type == "char" || type == "int8") return qint8(data[0]);
-    if (type == "ushort" || type == "uint16") return raw16;
-    if (type == "short" || type == "int16") return qint16(raw16);
-    if (type == "uint" || type == "uint32") return raw32;
-    return qint32(raw32);
+    if (type == "ushort" || type == "uint16") {
+        return bigEndian ? qFromBigEndian<quint16>(data) : qFromLittleEndian<quint16>(data);
+    }
+    if (type == "short" || type == "int16") {
+        const quint16 raw = bigEndian ? qFromBigEndian<quint16>(data) : qFromLittleEndian<quint16>(data);
+        return qint16(raw);
+    }
+    const quint32 raw = bigEndian ? qFromBigEndian<quint32>(data) : qFromLittleEndian<quint32>(data);
+    return type == "uint" || type == "uint32" ? raw : qint32(raw);
 }
 
 } // namespace
@@ -200,6 +208,10 @@ bool loadPly(const QString &fileName, QVector<Point3D> &points, QString *error) 
         const bool bigEndian = format.contains("big_endian");
         const qsizetype bytesPerVertex = std::accumulate(properties.cbegin(), properties.cend(), qsizetype(0),
             [](qsizetype total, const Property &property) { return total + scalarBytes(property.type); });
+        if (bytesPerVertex <= 0 || vertexCount > std::numeric_limits<qsizetype>::max() / bytesPerVertex) {
+            if (error) *error = QStringLiteral("PLY 二进制顶点数据大小溢出");
+            return false;
+        }
         const qsizetype payloadBytes = bytesPerVertex * qsizetype(vertexCount);
         QByteArray payload = file.read(payloadBytes);
         const char *cursor = payload.constData();
@@ -263,6 +275,7 @@ bool readCache(const QString &source, QVector<Point3D> &points) {
         || sourceSize != quint64(sourceInfo.size()) || sourceStamp != sourceInfo.lastModified().toMSecsSinceEpoch()
         || count > quint64(std::numeric_limits<qsizetype>::max())) return false;
     points.resize(qsizetype(count));
+    if (count > quint64(std::numeric_limits<qint64>::max() / qint64(sizeof(Point3D)))) return false;
     const qint64 payloadBytes = qint64(count) * qint64(sizeof(Point3D));
     if (cache.read(reinterpret_cast<char *>(points.data()), payloadBytes) != payloadBytes) {
         points.clear();
@@ -283,6 +296,7 @@ bool writeCache(const QString &source, const QVector<Point3D> &points) {
     stream.setFloatingPointPrecision(QDataStream::SinglePrecision);
     stream << CacheMagic << CacheVersion << quint64(points.size())
            << quint64(sourceInfo.size()) << sourceInfo.lastModified().toMSecsSinceEpoch();
+    if (points.size() > qsizetype(std::numeric_limits<qint64>::max() / qint64(sizeof(Point3D)))) return false;
     const qint64 payloadBytes = qint64(points.size()) * qint64(sizeof(Point3D));
     if (cache.write(reinterpret_cast<const char *>(points.constData()), payloadBytes) != payloadBytes) {
         qWarning() << "Cannot write point cloud cache payload:" << cache.errorString();
