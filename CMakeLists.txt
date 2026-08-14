@@ -63,6 +63,14 @@ if (POINTCLOUDVIEW_BUILD_TESTS)
     enable_testing()
     add_executable(registration_diagnostic_runner registration_diagnostic_runner.cpp pointcloudprocessor.cpp pointcloudprocessor.h)
     target_link_libraries(registration_diagnostic_runner PRIVATE Qt::Core Qt::Gui)
+    add_executable(pointcloudprocessor_obstacle_tests
+        tests/pointcloudprocessor_obstacle_tests.cpp
+        pointcloudprocessor.cpp
+        pointcloudprocessor.h
+    )
+    target_include_directories(pointcloudprocessor_obstacle_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(pointcloudprocessor_obstacle_tests PRIVATE Qt::Core Qt::Gui)
+    add_test(NAME pointcloudprocessor_obstacle_tests COMMAND pointcloudprocessor_obstacle_tests)
 endif()
 
 install(TARGETS pointcloudview

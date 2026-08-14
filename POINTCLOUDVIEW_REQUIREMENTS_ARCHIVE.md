@@ -1,6 +1,6 @@
 # pointcloudview 当前版本需求与实现档案
 
-版本：基于 Git `937c826` 及其父提交的当前实现
+版本：基于 Git `e5239e4` 及其父提交的当前实现
 
 文档用途：本档案描述当前代码的实际功能、接口、数据格式、算法、界面、线程模型、构建方式和限制。按照本档案重新建立 Qt 工程，应能够复现当前版本的主要行为。文档中的“已实现”以源码为准；“限制”和“未实现”不会被当作现成功能。
 
@@ -9,7 +9,8 @@
 - `main.cpp`
 - `mainwindow.h/.cpp/.ui`
 - `pointcloudprocessor.h/.cpp`
-- `tests/pointcloudprocessor_tests.cpp`
+- `registration_diagnostic_runner.cpp`（可选诊断工具）
+- `tests/pointcloudprocessor_obstacle_tests.cpp`（障碍检测算法测试）
 - `CMakeLists.txt`
 - `CMakePresets.json`
 - `build_windows.ps1`
@@ -89,7 +90,7 @@ OpenGL 初始化后记录 `GL_VENDOR`、`GL_RENDERER`、`GL_VERSION`；检测到
 ```text
 D:/workpiece/pointcloudview/
 ├─ pointcloudview/
-│  ├─ CMakeLists.txt                 构建目标、Qt 模块和测试目标
+│  ├─ CMakeLists.txt                 构建目标、Qt 模块、诊断和障碍检测测试
 │  ├─ CMakePresets.json              ASCII 路径的 MSVC 配置预设
 │  ├─ main.cpp                       程序入口、OpenGL 选择、启动日志
 │  ├─ mainwindow.h                   主窗口声明、状态和异步任务成员
@@ -97,7 +98,8 @@ D:/workpiece/pointcloudview/
 │  ├─ mainwindow.ui                  Qt Designer 主界面定义
 │  ├─ pointcloudprocessor.h          点云数据结构和公共算法接口
 │  ├─ pointcloudprocessor.cpp        PLY、缓存、滤波、几何和配准算法
-│  ├─ tests/pointcloudprocessor_tests.cpp 处理器单元测试
+│  ├─ registration_diagnostic_runner.cpp 机器人配准诊断工具
+│  ├─ tests/pointcloudprocessor_obstacle_tests.cpp 障碍检测算法测试
 │  ├─ build_windows.ps1              Windows 配置、编译和 windeployqt
 │  ├─ clean_reconfigure.ps1          清理并重新配置
 │  ├─ QT_CREATOR_BUILD.md             Qt Creator 构建说明
@@ -472,6 +474,22 @@ maximumEdgeGridCells = 4,000,000
 - 右键仍用于平移。
 - Esc 由画布快捷键取消三点选择；边缘选择取消主要通过“清除边缘选择”。
 
+### 12.5 第一阶段障碍物检测
+
+障碍物检测必须在用户确定候选平面后执行，输入为当前画布缓存、已确定平面索引和归一化平面模型。算法将法向统一指向正 Z，计算点到基准平面的有符号高度，仅保留高度达到阈值且 UV 投影位于平面测量范围（允许一个栅格边距）内的点。
+
+候选点投影到平面 UV 栅格，使用 8 邻域组成连续区域，再按最小点数和占用栅格物理面积过滤。默认参数：
+
+```text
+minimumHeight = 1.0 mm
+gridSize = 0（按平面点密度自动估计）
+minimumPointCount = 30
+minimumArea = 4.0 mm²
+maximumGridCells = 4,000,000
+```
+
+`detectObstacles()` 输出候选点数、有效障碍点索引、栅格尺寸和每个区域的点数、面积、中心、平均高度、最大高度及三维包围盒。有效障碍点在画布中以红色显示，优先级高于灰色平面和黄色边缘；检测到区域时状态栏、障碍检测页和警告对话框同时提醒用户移除障碍物并重新扫描。平面或画布缓存变化时必须清除旧检测结果。
+
 ---
 
 ## 13. 几何处理公共 API
@@ -522,6 +540,7 @@ maximumEdgeGridCells = 4,000,000
 | 显示 | `spb_point_size`, `btn_reset_view`, `cb_color_mode`, `dsb_overlay`, `dsb_map_min`, `dsb_map_max` | 点大小、视角、颜色、透明度、高度映射 |
 | 点云清理 | `chk_voxel_noise`, `dsb_voxel_size`, `chk_statistical_noise`, `spb_mean_k`, `dsb_stddev`, `btn_apply_noise`, `btn_restore_cloud` | 当前画布缓存滤波和恢复 |
 | 2.5D 平面提取 | `btn_pick_points`, `btn_abandon_points`, `btn_undo_point`, `btn_determine_plane`, `btn_confirm_candidate`, `btn_cancel_candidate`, `pte_plane_output` | 三点采样、候选拟合、确认/取消 |
+| 障碍检测 | `dsb_obstacle_height`, `dsb_obstacle_grid`, `spb_obstacle_min_points`, `dsb_obstacle_min_area`, `btn_detect_obstacles`, `btn_clear_obstacles`, `lbl_obstacle_status`, `pte_obstacle_output` | 平面上方凸起、连续区域过滤、红色高亮和用户提醒 |
 | 平面边缘分割 | `dsb_edge_grid`, `spb_edge_close`, `spb_edge_open`, `btn_extract_plane_image`, `btn_apply_edge`, `btn_select_edge`, `btn_clear_edge`, `btn_save_plane_image`, `lbl_plane_image_preview`, `pte_edge_output` | Mask、轮廓、黄色边缘、2D 图像 |
 
 菜单：`act_open` 打开点云，`act_exit` 退出。底部 `pbar_progress` 为后台任务指示，`statusbar_main` 显示状态。
@@ -542,6 +561,7 @@ UI 文件中存在重复的通用名称（例如多个 `lbl_subtitle`、控制�
 | `m_worldMergeWatcher` | `mergePlyCloudsInWorld` | `worldMergeFinished` |
 | `m_noiseWatcher` | `removeNoise` | `noiseFinished` |
 | `m_threePlaneWatcher` | `extractPlaneFromThreePoints` | `planeExtractionFinished` |
+| `m_obstacleWatcher` | `detectObstacles` | `obstacleDetectionFinished` |
 | `m_edgeWatcher` | `segmentPlaneEdges` | `planeEdgeSegmentationFinished` |
 | `m_planeImageWatcher` | `extractPlaneImage` | `planeImageExtractionFinished` |
 
@@ -576,28 +596,14 @@ matrix4 = matrix1 · matrix2 · matrix3
 
 ---
 
-## 17. 测试和验收
+## 17. 验证和验收
 
-### 17.1 自动测试
+### 17.1 当前验证状态
 
-`tests/pointcloudprocessor_tests.cpp` 使用 `QTemporaryDir` 生成：
-
-- ASCII PLY，含 normals 和 face 元素。
-- binary little-endian PLY，含 RGB 附加属性。
-- 截断 PLY，验证失败和部分数据清空。
-- `.pcvbin` 首次写入和二次读取。
-- 八叉树 LOD 和比例降采样。
-- 统计离群值、体素化、尺度适应。
-- 单平面和双平面 RANSAC。
-- 三点平面、PCA 细化、共线/近重合拒绝、Z 轴模式、连通域过滤。
-- 平面边缘、Marching Squares 闭合轮廓、孔洞识别和二维图像。
-- 几何特征公共 API。
-
-成功输出：
-
-```text
-All point cloud processor tests passed.
-```
+旧版综合测试已经移除；当前保留独立的
+`tests/pointcloudprocessor_obstacle_tests.cpp`，覆盖连续凸起识别、孤立高点过滤、
+高度阈值和基准平面范围过滤。机器人配准仍以 MSVC 编译、
+`registration_diagnostic_runner` 真实数据诊断和 GUI 手动验收为准。
 
 ### 17.2 构建命令
 
@@ -611,17 +617,19 @@ cd D:/workpiece/pointcloudview/pointcloudview
   -Config Release
 ```
 
-测试配置需启用：
+如需构建机器人配准诊断工具，可启用可选目标：
 
 ```powershell
-cmake -S . -B C:/qt-build-pointcloudview-tests `
+cmake -S . -B C:/qt-build-pointcloudview-diagnostic `
   -G "NMake Makefiles" `
   -DCMAKE_PREFIX_PATH=C:/Qt/6.8.3/msvc2022_64 `
   -DCMAKE_BUILD_TYPE=Debug `
   -DPOINTCLOUDVIEW_BUILD_TESTS=ON
-cmake --build C:/qt-build-pointcloudview-tests
-ctest --test-dir C:/qt-build-pointcloudview-tests --output-on-failure
+cmake --build C:/qt-build-pointcloudview-diagnostic
 ```
+
+该选项生成 `registration_diagnostic_runner` 和
+`pointcloudprocessor_obstacle_tests`，并注册障碍检测 CTest 用例。
 
 构建自动运行 `windeployqt`，运行目录应包含 Qt Core/Gui/Widgets/OpenGL/OpenGLWidgets DLL 和 `platforms/qwindows*.dll`。
 
@@ -639,6 +647,7 @@ ctest --test-dir C:/qt-build-pointcloudview-tests --output-on-failure
 10. Start/End 位姿、XML、进度来源改变后不读取旧合并缓存。
 11. ICP 开关对照检查：先关闭 ICP 检查世界坐标转换，再开启 ICP 检查片间残差。
 12. OpenGL 启动日志中可看到 vendor/renderer/version。
+13. 确定平面后执行障碍检测，连续凸起显示为红色并弹出提醒；降低凸起高度或移到平面范围外后不应误报。
 
 ---
 
@@ -720,6 +729,10 @@ Start/End → 以 Local Y 执行机器人世界坐标转换（默认关闭 ICP�
 
 Designer 是运行时 UI 唯一来源；任何在代码中重新创建同名控件或重新启用 `buildUiLegacy()` 都可能造成连接重复和空指针。新增控件必须同步 `.ui`、生成头文件和 `buildUi()` 绑定。
 
+### 18.6 障碍物识别限制
+
+第一阶段只依据已确定基准平面的正向高度、二维连通性、点数和面积进行规则检测。没有 CAD、标准件模板或历史无障碍扫描时，算法无法自动区分工件设计中的正常凸台与临时障碍物；检测结果用于提醒和人工复核，不允许简单删除障碍点后假定被遮挡表面完整。
+
 ---
 
 ## 19. 复现最低实现顺序
@@ -728,16 +741,17 @@ Designer 是运行时 UI 唯一来源；任何在代码中重新创建同名控�
 
 1. 建立 Qt 6 CMake 工程和 `Point3D` 数据结构。
 2. 实现 PLY ASCII/二进制解析及 `.pcvbin` 校验缓存。
-3. 用 Qt Designer 建立主窗口五个标签页和对象名。
+3. 用 Qt Designer 建立主窗口六个标签页和对象名。
 4. 实现 `PointCloudCanvas`、VBO/VAO、OpenGL 3.3 shader 和视角控制。
 5. 实现 Picking FBO、RGBA32 ID、深度和 3×3 读取。
 6. 实现当前画布缓存发布、revision 和异步 watcher 生命周期。
 7. 实现体素/统计离群值。
 8. 实现三点初始平面、RANSAC/PCA、Z 轴约束和连通域。
 9. 实现平面栅格、形态学、8 邻域边缘、Marching Squares 和图片。
-10. 实现 XML 手眼矩阵读取、Start/End 插值、世界转换和缓存。
-11. 实现空间哈希 ICP 和质量阈值。
-12. 加入测试夹具和构建部署脚本。
+10. 实现平面高度差、UV 栅格连通区域过滤和障碍点红色高亮。
+11. 实现 XML 手眼矩阵读取、Start/End 插值、世界转换和缓存。
+12. 实现空间哈希 ICP 和质量阈值。
+13. 通过算法测试、真实 PLY、机器人位姿和诊断工具完成构建部署验收。
 
 完成以上步骤后，再实现几何特征、圆、相似圆和倒角等公共 API，不改变主窗口已有缓存和索引契约。
 

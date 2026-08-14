@@ -219,6 +219,39 @@ struct PlaneImageResult {
     bool ok = false;
 };
 
+// First-stage obstacle detection for a 2.5D workpiece surface. Candidates are
+// points above the confirmed reference plane whose UV projection lies inside
+// the measured plane footprint. Nearby candidate cells are grouped before
+// minimum point-count and physical-area filters are applied.
+struct ObstacleDetectionOptions {
+    float minimumHeight = 1.0f;
+    float gridSize = 0.0f;
+    int minimumPointCount = 30;
+    float minimumArea = 4.0f;
+    int maximumGridCells = 4000000;
+};
+
+struct ObstacleRegion {
+    int id = -1;
+    QVector<int> pointIndices;
+    Point3D centroid;
+    Point3D minimumBound;
+    Point3D maximumBound;
+    float area = 0.0f;
+    float meanHeight = 0.0f;
+    float maximumHeight = 0.0f;
+};
+
+struct ObstacleDetectionResult {
+    QVector<int> obstacleIndices;
+    QVector<ObstacleRegion> regions;
+    int candidatePointCount = 0;
+    float gridSize = 0.0f;
+    QString summary;
+    QString error;
+    bool ok = false;
+};
+
 struct NoiseResult {
     QVector<Point3D> points;
     QString error;
@@ -271,5 +304,9 @@ PlaneEdgeResult segmentPlaneEdges(const QVector<Point3D>&, const QVector<int>&,
 // and can be passed to a later, independent edge-processing stage.
 PlaneImageResult extractPlaneImage(const QVector<Point3D>&, const QVector<int>&,
                                    const PlaneModel&, const PlaneEdgeOptions& = {});
+ObstacleDetectionResult detectObstacles(const QVector<Point3D>&,
+                                        const QVector<int>&,
+                                        const PlaneModel&,
+                                        const ObstacleDetectionOptions& = {});
 
 } // namespace pointcloud
