@@ -114,3 +114,11 @@ Exact compensation requires one of the following datasets for every PLY:
 
 Until one of these is available, Start/End interpolation must be treated as an
 approximation and verified with the ICP-disabled comparison result.
+
+## Phase 4 approved implementation (transform validation)
+
+Before loading or using a merge cache, every Start, End, and enabled hand-eye
+matrix is checked for finite values, a homogeneous bottom row of `[0 0 0 1]`,
+orthonormal rotation columns, and a positive determinant near one. Invalid
+matrices are rejected with the PLY index and matrix type instead of allowing
+NaN, mirror, or degenerate transforms to enter world coordinates.

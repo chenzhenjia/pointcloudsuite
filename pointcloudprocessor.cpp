@@ -487,6 +487,37 @@ bool sameTransform(const QMatrix4x4 &a, const QMatrix4x4 &b) {
     for (int i = 0; i < 16; ++i) if (std::abs(x[i] - y[i]) > 1.0e-6f) return false;
     return true;
 }
+
+bool validateRigidTransform(const QMatrix4x4 &matrix, QString *error) {
+    const float *values = matrix.constData();
+    for (int i = 0; i < 16; ++i) {
+        if (!std::isfinite(values[i])) {
+            if (error) *error = QStringLiteral("矩阵包含 NaN/Inf");
+            return false;
+        }
+    }
+    if (std::abs(matrix(3, 0)) > 1.0e-4f || std::abs(matrix(3, 1)) > 1.0e-4f
+        || std::abs(matrix(3, 2)) > 1.0e-4f || std::abs(matrix(3, 3) - 1.0f) > 1.0e-4f) {
+        if (error) *error = QStringLiteral("齐次矩阵底行不是 [0 0 0 1]");
+        return false;
+    }
+    const QVector3D c0(matrix(0, 0), matrix(1, 0), matrix(2, 0));
+    const QVector3D c1(matrix(0, 1), matrix(1, 1), matrix(2, 1));
+    const QVector3D c2(matrix(0, 2), matrix(1, 2), matrix(2, 2));
+    const float tolerance = 2.0e-3f;
+    if (std::abs(c0.lengthSquared() - 1.0f) > tolerance
+        || std::abs(c1.lengthSquared() - 1.0f) > tolerance
+        || std::abs(c2.lengthSquared() - 1.0f) > tolerance
+        || std::abs(QVector3D::dotProduct(c0, c1)) > tolerance
+        || std::abs(QVector3D::dotProduct(c0, c2)) > tolerance
+        || std::abs(QVector3D::dotProduct(c1, c2)) > tolerance
+        || matrix.determinant() < 0.98f || matrix.determinant() > 1.02f) {
+        if (error) *error = QStringLiteral("旋转部分不是有效的刚体旋转矩阵");
+        return false;
+    }
+    return true;
+}
+
 bool readMergeCache(const QVector<WorldCloudInput> &inputs, WorldCloudMergeResult &result) {
     QFile file(mergeCachePath(inputs));
     if (!file.open(QIODevice::ReadOnly)) return false;
@@ -753,6 +784,25 @@ QString progressSourceName(WorldCloudInput::ScanProgressSource source) {
 WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &inputs, const IcpOptions &icp) {
     WorldCloudMergeResult result;
     if (inputs.isEmpty()) { result.error = QStringLiteral("未选择 PLY 文件"); return result; }
+    for (int index = 0; index < inputs.size(); ++index) {
+        QString matrixError;
+        if (!validateRigidTransform(inputs[index].startBaseFromFlange, &matrixError)) {
+            result.error = QStringLiteral("第 %1 个 PLY 的 Start 位姿无效：%2")
+                .arg(index + 1).arg(matrixError);
+            return result;
+        }
+        if (!validateRigidTransform(inputs[index].endBaseFromFlange, &matrixError)) {
+            result.error = QStringLiteral("第 %1 个 PLY 的 End 位姿无效：%2")
+                .arg(index + 1).arg(matrixError);
+            return result;
+        }
+        if (inputs[index].applyRobotTransform
+            && !validateRigidTransform(inputs[index].flangeFromDepth, &matrixError)) {
+            result.error = QStringLiteral("第 %1 个 PLY 的手眼矩阵无效：%2")
+                .arg(index + 1).arg(matrixError);
+            return result;
+        }
+    }
     if (!icp.enabled && readMergeCache(inputs, result)) return result;
     qsizetype total = 0;
     std::vector<std::future<LoadResult>> futures;
