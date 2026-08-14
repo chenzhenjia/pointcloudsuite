@@ -54,6 +54,9 @@ struct IcpOptions {
     float maximumCorrespondenceDistance = 2.0f;
     float convergenceTolerance = 0.001f;
     int maximumSamples = 120000;
+    int minimumCorrespondences = 24;
+    float maximumCorrectionTranslation = 100.0f;
+    float maximumCorrectionAngleDegrees = 45.0f;
 };
 
 struct WorldCloudMergeResult {
@@ -61,6 +64,7 @@ struct WorldCloudMergeResult {
     QVector<int> cloudIds;
     QVector<qsizetype> sourceIndices;
     QVector<QString> sourceFiles;
+    QString diagnostics;
     QString error;
     bool ok = false;
 };

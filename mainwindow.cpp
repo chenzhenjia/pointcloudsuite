@@ -89,33 +89,29 @@ bool readDepthInRobotTransform(const QString &path, QMatrix4x4 *transform, QStri
         return false;
     }
     QXmlStreamReader xml(&file);
+    QMatrix4x4 poseResult; bool poseFound = false;
+    QMatrix4x4 matrixResult; bool matrixFound = false; QVector<double> matrixValues; bool insideDepth2Robot = false;
     while (!xml.atEnd()) {
         xml.readNext();
-        if (!xml.isStartElement() || xml.name() != QStringLiteral("DepthInRobotPose")) continue;
-        const auto a = xml.attributes();
-        bool ok[6]{};
-        const double tx=a.value(QStringLiteral("tx")).toDouble(&ok[0]);
-        const double ty=a.value(QStringLiteral("ty")).toDouble(&ok[1]);
-        const double tz=a.value(QStringLiteral("tz")).toDouble(&ok[2]);
-        const double rx=a.value(QStringLiteral("rx")).toDouble(&ok[3]);
-        const double ry=a.value(QStringLiteral("ry")).toDouble(&ok[4]);
-        const double rz=a.value(QStringLiteral("rz")).toDouble(&ok[5]);
-        if (!std::all_of(std::begin(ok), std::end(ok), [](bool value){ return value; })) {
-            if (error) *error = QObject::tr("DepthInRobotPose 属性不完整");
-            return false;
+        if (xml.isEndElement() && xml.name() == QStringLiteral("RTmatDepth2robot")) { insideDepth2Robot = false; continue; }
+        if (!xml.isStartElement()) continue;
+        if (xml.name() == QStringLiteral("DepthInRobotPose")) {
+            const auto a = xml.attributes(); bool ok[6]{};
+            const double tx=a.value(QStringLiteral("tx")).toDouble(&ok[0]), ty=a.value(QStringLiteral("ty")).toDouble(&ok[1]), tz=a.value(QStringLiteral("tz")).toDouble(&ok[2]);
+            const double rx=a.value(QStringLiteral("rx")).toDouble(&ok[3]), ry=a.value(QStringLiteral("ry")).toDouble(&ok[4]), rz=a.value(QStringLiteral("rz")).toDouble(&ok[5]);
+            if (!std::all_of(std::begin(ok), std::end(ok), [](bool value){ return value; })) { if (error) *error = QObject::tr("DepthInRobotPose 属性不完整"); return false; }
+            poseResult.setToIdentity(); poseResult.rotate(float(qRadiansToDegrees(rz)),0,0,1); poseResult.rotate(float(qRadiansToDegrees(ry)),0,1,0); poseResult.rotate(float(qRadiansToDegrees(rx)),1,0,0); poseResult(0,3)=float(tx); poseResult(1,3)=float(ty); poseResult(2,3)=float(tz); poseFound=true;
+        } else if (xml.name() == QStringLiteral("RTmatDepth2robot")) {
+            insideDepth2Robot = true;
+        } else if (xml.name() == QStringLiteral("RotMat") && insideDepth2Robot) {
+            const auto a=xml.attributes(); if (a.hasAttribute(QStringLiteral("r00")) && a.hasAttribute(QStringLiteral("r22"))) {
+                matrixValues.resize(9); const QStringList names={"r00","r01","r02","r10","r11","r12","r20","r21","r22"}; bool ok=true; for (int i=0;i<9;++i) matrixValues[i]=a.value(names[i]).toDouble(&ok); if (ok) matrixFound=true;
+            }
         }
-        // The calibration XML stores fixed-XYZ angles in radians. This is
-        // exactly Rz(rz) * Ry(ry) * Rx(rx), matching the Python converter.
-        QMatrix4x4 result; result.setToIdentity();
-        result.rotate(float(qRadiansToDegrees(rz)), 0, 0, 1);
-        result.rotate(float(qRadiansToDegrees(ry)), 0, 1, 0);
-        result.rotate(float(qRadiansToDegrees(rx)), 1, 0, 0);
-        result(0,3)=float(tx); result(1,3)=float(ty); result(2,3)=float(tz);
-        *transform = result;
-        return true;
     }
-    if (error) *error = xml.hasError() ? xml.errorString() : QObject::tr("XML 中未找到 DepthInRobotPose");
-    return false;
+    if (!poseFound) { if (error) *error = xml.hasError() ? xml.errorString() : QObject::tr("XML 中未找到 DepthInRobotPose"); return false; }
+    if (matrixFound && matrixValues.size()==9) { matrixResult.setToIdentity(); for(int r=0;r<3;++r) for(int c=0;c<3;++c) matrixResult(r,c)=float(matrixValues[r*3+c]); matrixResult(0,3)=poseResult(0,3); matrixResult(1,3)=poseResult(1,3); matrixResult(2,3)=poseResult(2,3); float maxDiff=0; for(int i=0;i<16;++i) maxDiff=qMax(maxDiff,std::abs(matrixResult.constData()[i]-poseResult.constData()[i])); if(maxDiff>0.01f && error) *error=QObject::tr("标定文件欧拉角与 RTmatDepth2robot 不一致，最大差异 %1").arg(maxDiff); }
+    *transform=poseResult; return true;
 }
 QVector<double> parsePoseCells(QTableWidget *table, int row, int firstColumn, bool *ok) {
     QVector<double> values;
@@ -1642,7 +1638,9 @@ void MainWindow::startPointCloudRegistration() {
     m_loading = true; m_folderScanOnly = false;
     m_progress->show(); m_progress->setRange(0, 0);
     m_registrationStart->setEnabled(false);
-    statusBar()->showMessage(tr("正在按中间机器人位姿配准并合并..."));
+    statusBar()->showMessage(icp.enabled
+        ? tr("正在进行世界坐标转换和 ICP 配准...")
+        : tr("正在进行世界坐标转换（ICP 已关闭）..."));
     const auto taskInputs = m_pendingWorldInputs;
     pointcloud::IcpOptions icp;
     icp.enabled = m_registrationIcpEnabled && m_registrationIcpEnabled->isChecked();

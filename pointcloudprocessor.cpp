@@ -476,7 +476,7 @@ struct StatisticalFilterResult {
 };
 
 constexpr quint32 MergeCacheMagic = 0x314D4350; // PCM1
-constexpr quint32 MergeCacheVersion = 1;
+constexpr quint32 MergeCacheVersion = 2;
 QString mergeCachePath(const QVector<WorldCloudInput> &inputs) {
     if (inputs.isEmpty()) return {};
     return QFileInfo(inputs.first().filePath).absolutePath() + QStringLiteral("/.pointcloudview-merge.pcvbin");
@@ -498,6 +498,10 @@ bool readMergeCache(const QVector<WorldCloudInput> &inputs, WorldCloudMergeResul
         QFileInfo info(input.filePath);
         if (path != input.filePath || size != quint64(info.size()) || stamp != info.lastModified().toMSecsSinceEpoch()) return false;
         for (int i = 0; i < 16; ++i) { float value = 0; stream >> value; if (std::abs(value - input.startBaseFromFlange.constData()[i]) > 1.0e-6f) return false; }
+        for (int i = 0; i < 16; ++i) { float value = 0; stream >> value; if (std::abs(value - input.endBaseFromFlange.constData()[i]) > 1.0e-6f) return false; }
+        for (int i = 0; i < 16; ++i) { float value = 0; stream >> value; if (std::abs(value - input.flangeFromDepth.constData()[i]) > 1.0e-6f) return false; }
+        quint8 progress = 0; quint8 voxel = 0; float voxelSize = 0; stream >> progress >> voxel >> voxelSize;
+        if (progress != quint8(input.scanProgressSource) || voxel != quint8(input.voxelDownsample) || std::abs(voxelSize - input.voxelSize) > 1.0e-6f) return false;
     }
     if (pointCount > quint64(std::numeric_limits<qsizetype>::max())) return false;
     result.points.resize(qsizetype(pointCount)); result.cloudIds.resize(qsizetype(pointCount)); result.sourceIndices.resize(qsizetype(pointCount));
@@ -510,21 +514,34 @@ void writeMergeCache(const QVector<WorldCloudInput> &inputs, const WorldCloudMer
     QFile file(temp); if (!file.open(QIODevice::WriteOnly)) return;
     QDataStream stream(&file); stream.setByteOrder(QDataStream::LittleEndian);
     stream << MergeCacheMagic << MergeCacheVersion << quint32(inputs.size()) << quint64(result.points.size());
-    for (const auto &input : inputs) { QFileInfo info(input.filePath); stream << input.filePath << quint64(info.size()) << info.lastModified().toMSecsSinceEpoch(); for (int i = 0; i < 16; ++i) stream << input.startBaseFromFlange.constData()[i]; }
+    for (const auto &input : inputs) { QFileInfo info(input.filePath); stream << input.filePath << quint64(info.size()) << info.lastModified().toMSecsSinceEpoch(); for (int i = 0; i < 16; ++i) stream << input.startBaseFromFlange.constData()[i]; for (int i = 0; i < 16; ++i) stream << input.endBaseFromFlange.constData()[i]; for (int i = 0; i < 16; ++i) stream << input.flangeFromDepth.constData()[i]; stream << quint8(input.scanProgressSource) << quint8(input.voxelDownsample) << input.voxelSize; }
     for (qsizetype i = 0; i < result.points.size(); ++i) { const auto &p = result.points[i]; stream << p.x << p.y << p.z << p.nx << p.ny << p.nz << qint32(result.cloudIds[i]) << qint64(result.sourceIndices[i]); }
     file.flush(); file.close(); QFile::remove(path); QFile::rename(temp, path);
 }
 
-struct IcpCorrection { float r[3][3]{{1,0,0},{0,1,0},{0,0,1}}; QVector3D t; bool ok=false; float rms=0; };
+struct IcpCorrection { float r[3][3]{{1,0,0},{0,1,0},{0,0,1}}; QVector3D t; bool ok=false; float rms=0; int correspondences=0; float angleDegrees=0; };
+
+struct IcpSpatialIndex {
+    std::unordered_map<NoiseKey, QVector<int>, NoiseKeyHash> cells;
+    float cellSize = 0.0f;
+};
+
+IcpSpatialIndex buildIcpSpatialIndex(const QVector<Point3D> &reference, float cellSize) {
+    IcpSpatialIndex index;
+    index.cellSize = cellSize;
+    if (cellSize <= 0.0f) return index;
+    index.cells.reserve(size_t(reference.size() / 2 + 1));
+    for (int i = 0; i < reference.size(); ++i)
+        index.cells[noiseKey(reference[i], cellSize)].push_back(i);
+    return index;
+}
 
 IcpCorrection estimateIcpCorrection(const QVector<Point3D> &moving,
                                     const QVector<Point3D> &reference,
-                                    float maximumDistance, int maximumSamples) {
+                                    const IcpSpatialIndex &index,
+                                    float maximumDistance, int maximumSamples, int minimumCorrespondences) {
     IcpCorrection out;
-    if (moving.size() < 3 || reference.size() < 3 || maximumDistance <= 0) return out;
-    std::unordered_map<NoiseKey, QVector<int>, NoiseKeyHash> cells;
-    cells.reserve(size_t(reference.size() / 2 + 1));
-    for (int i = 0; i < reference.size(); ++i) cells[noiseKey(reference[i], maximumDistance)].push_back(i);
+    if (moving.size() < 3 || reference.size() < 3 || maximumDistance <= 0 || index.cellSize <= 0.0f) return out;
     QVector<QPair<QVector3D,QVector3D>> pairs;
     const int step = qMax(1, int((moving.size() + maximumSamples - 1) / maximumSamples));
     const float limit2 = maximumDistance * maximumDistance;
@@ -532,18 +549,19 @@ IcpCorrection estimateIcpCorrection(const QVector<Point3D> &moving,
         const Point3D &p = moving[i]; const NoiseKey key = noiseKey(p, maximumDistance);
         float best = limit2; int bestIndex = -1;
         for (qint64 dx=-1; dx<=1; ++dx) for (qint64 dy=-1; dy<=1; ++dy) for (qint64 dz=-1; dz<=1; ++dz) {
-            auto it = cells.find({key.x+dx,key.y+dy,key.z+dz}); if (it == cells.end()) continue;
+            auto it = index.cells.find({key.x+dx,key.y+dy,key.z+dz}); if (it == index.cells.end()) continue;
             for (int j : it->second) { const Point3D &q=reference[j]; const float ex=p.x-q.x,ey=p.y-q.y,ez=p.z-q.z; const float d=ex*ex+ey*ey+ez*ez; if(d<best){best=d;bestIndex=j;} }
         }
         if (bestIndex >= 0) pairs.push_back({QVector3D(p.x,p.y,p.z), QVector3D(reference[bestIndex].x,reference[bestIndex].y,reference[bestIndex].z)});
     }
-    if (pairs.size() < 6) return out;
+    if (pairs.size() < qMax(6, minimumCorrespondences)) return out;
+    out.correspondences = pairs.size();
     QVector3D cp, cq; for (const auto &v:pairs){cp+=v.first;cq+=v.second;} cp/=float(pairs.size()); cq/=float(pairs.size());
     double s[3][3]{}; for(const auto &v:pairs){QVector3D a=v.first-cp,b=v.second-cq; s[0][0]+=a.x()*b.x();s[0][1]+=a.x()*b.y();s[0][2]+=a.x()*b.z();s[1][0]+=a.y()*b.x();s[1][1]+=a.y()*b.y();s[1][2]+=a.y()*b.z();s[2][0]+=a.z()*b.x();s[2][1]+=a.z()*b.y();s[2][2]+=a.z()*b.z();}
     const double tr=s[0][0]+s[1][1]+s[2][2]; double n[4][4]={{tr,s[1][2]-s[2][1],s[2][0]-s[0][2],s[0][1]-s[1][0]},{s[1][2]-s[2][1],s[0][0]-s[1][1]-s[2][2],s[0][1]+s[1][0],s[0][2]+s[2][0]},{s[2][0]-s[0][2],s[0][1]+s[1][0],-s[0][0]+s[1][1]-s[2][2],s[1][2]+s[2][1]},{s[0][1]-s[1][0],s[0][2]+s[2][0],s[1][2]+s[2][1],-s[0][0]-s[1][1]+s[2][2]}};
     double q[4]{1,0,0,0}; for(int k=0;k<32;++k){double v[4]{};for(int r=0;r<4;++r)for(int c=0;c<4;++c)v[r]+=n[r][c]*q[c];double len=std::sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]+v[3]*v[3]);if(len<1e-15)return out;for(int r=0;r<4;++r)q[r]=v[r]/len;}
     const double w=q[0],x=q[1],y=q[2],z=q[3]; out.r[0][0]=float(1-2*(y*y+z*z));out.r[0][1]=float(2*(x*y-z*w));out.r[0][2]=float(2*(x*z+y*w));out.r[1][0]=float(2*(x*y+z*w));out.r[1][1]=float(1-2*(x*x+z*z));out.r[1][2]=float(2*(y*z-x*w));out.r[2][0]=float(2*(x*z-y*w));out.r[2][1]=float(2*(y*z+x*w));out.r[2][2]=float(1-2*(x*x+y*y));
-    auto rotate=[&](const QVector3D &v){return QVector3D(out.r[0][0]*v.x()+out.r[0][1]*v.y()+out.r[0][2]*v.z(),out.r[1][0]*v.x()+out.r[1][1]*v.y()+out.r[1][2]*v.z(),out.r[2][0]*v.x()+out.r[2][1]*v.y()+out.r[2][2]*v.z());}; out.t=cq-rotate(cp);
+    auto rotate=[&](const QVector3D &v){return QVector3D(out.r[0][0]*v.x()+out.r[0][1]*v.y()+out.r[0][2]*v.z(),out.r[1][0]*v.x()+out.r[1][1]*v.y()+out.r[1][2]*v.z(),out.r[2][0]*v.x()+out.r[2][1]*v.y()+out.r[2][2]*v.z());}; out.t=cq-rotate(cp); out.angleDegrees=qRadiansToDegrees(float(2.0*std::acos(qBound(-1.0, std::min(1.0, std::abs(w)), 1.0))));
     double error=0;for(const auto &v:pairs)error+=(rotate(v.first)+out.t-v.second).lengthSquared();out.rms=float(std::sqrt(error/pairs.size()));out.ok=true;return out;
 }
 
@@ -564,6 +582,28 @@ QMatrix4x4 interpolateRigidTransform(const QMatrix4x4 &start, const QMatrix4x4 &
     result(0,3)=position.x(); result(1,3)=position.y(); result(2,3)=position.z();
     return result;
 }
+
+struct RigidTransformLut {
+    static constexpr int Resolution = 2048;
+    QVector<QMatrix4x4> values;
+    bool constant = false;
+
+    RigidTransformLut(const QMatrix4x4 &start, const QMatrix4x4 &end) {
+        values.reserve(Resolution + 1);
+        constant = true;
+        for (int i = 0; i < 16; ++i)
+            if (std::abs(start.constData()[i] - end.constData()[i]) > 1.0e-7f) { constant = false; break; }
+        if (constant) { values.push_back(start); return; }
+        for (int i = 0; i <= Resolution; ++i)
+            values.push_back(interpolateRigidTransform(start, end, float(i) / float(Resolution)));
+    }
+
+    const QMatrix4x4 &at(float t) const {
+        if (constant) return values.front();
+        const int index = qBound(0, qRound(t * float(Resolution)), Resolution);
+        return values[index];
+    }
+};
 
 float scanProgress(const QVector<Point3D> &points, qsizetype index,
                    WorldCloudInput::ScanProgressSource source, float low, float high) {
@@ -605,6 +645,8 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
         const int progressAxis = progressSource == WorldCloudInput::ScanProgressSource::LocalX ? 0
             : progressSource == WorldCloudInput::ScanProgressSource::LocalY ? 1 : 2;
         float progressLow = std::numeric_limits<float>::max(), progressHigh = -progressLow;
+        const RigidTransformLut motionLut(inputs[cloudId].startBaseFromFlange,
+                                          inputs[cloudId].endBaseFromFlange);
         if (progressSource != WorldCloudInput::ScanProgressSource::VertexOrder)
             for (const Point3D &point : points) {
                 const float value = progressAxis == 0 ? point.x : progressAxis == 1 ? point.y : point.z;
@@ -613,8 +655,7 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
         for (qsizetype sourceIndex=0; sourceIndex<points.size(); ++sourceIndex) {
             Point3D &source=points[sourceIndex]; sourceIndices[sourceIndex]=sourceIndex;
             const float progress = scanProgress(points, sourceIndex, progressSource, progressLow, progressHigh);
-            const QMatrix4x4 baseFromFlange = interpolateRigidTransform(
-                inputs[cloudId].startBaseFromFlange, inputs[cloudId].endBaseFromFlange, progress);
+            const QMatrix4x4 &baseFromFlange = motionLut.at(progress);
             const QMatrix4x4 transform = baseFromFlange * inputs[cloudId].flangeFromDepth;
             const QVector3D world = transform.map(QVector3D(source.x, source.y, source.z));
             const QVector3D normal = transform.mapVector(QVector3D(source.nx, source.ny, source.nz));
@@ -629,8 +670,9 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
             points=std::move(reduced); sourceIndices=std::move(reducedIndices);
         }
         if (icp.enabled && cloudId > 0) {
+            const IcpSpatialIndex referenceIndex = buildIcpSpatialIndex(result.points, icp.maximumCorrespondenceDistance);
             float previous=std::numeric_limits<float>::max();
-            for(int iteration=0;iteration<icp.maximumIterations;++iteration){IcpCorrection correction=estimateIcpCorrection(points,result.points,icp.maximumCorrespondenceDistance,icp.maximumSamples);if(!correction.ok)break;applyIcpCorrection(points,correction);if(std::abs(previous-correction.rms)<=icp.convergenceTolerance)break;previous=correction.rms;}
+            for(int iteration=0;iteration<icp.maximumIterations;++iteration){IcpCorrection correction=estimateIcpCorrection(points,result.points,referenceIndex,icp.maximumCorrespondenceDistance,icp.maximumSamples,icp.minimumCorrespondences);if(!correction.ok)break;if(correction.t.length()>icp.maximumCorrectionTranslation || correction.angleDegrees>icp.maximumCorrectionAngleDegrees)break;applyIcpCorrection(points,correction);if(std::abs(previous-correction.rms)<=icp.convergenceTolerance)break;previous=correction.rms;}
         }
         for (qsizetype sourceIndex = 0; sourceIndex < points.size(); ++sourceIndex) {
             const Point3D &point = points[sourceIndex];
