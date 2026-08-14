@@ -41,6 +41,30 @@ rigid ICP correction cannot repair this kind of distortion.
 4. Report per-cloud world bounds and ICP quality metrics.
 5. Reject unsafe ICP updates when overlap or correspondence quality is too low.
 
+## Phase 1 approved implementation (robot-constrained 2.5D ICP)
+
+The robot/world transform remains mandatory for the production registration
+path.  ICP is only a bounded correction applied after
+`T_base_flange(t) * T_flange_depth`.
+
+The first 2.5D phase uses the existing spatial-hash ICP and adds an
+anisotropic metric: XY residuals keep unit weight while Z residuals use a
+configurable `zWeight` (default `0.25`).  Large depth residuals are further
+downweighted with `edgeWeight` (default `0.20`) so flying pixels and height
+discontinuities cannot dominate the rigid update.  This is a conservative
+depth-reliability proxy; true row/column gradient weighting is deferred until
+PLY organization can be proven.
+
+Production ICP correction limits default to 10 mm translation and 2 degrees
+rotation.  If a correction exceeds either limit, the robot-derived world
+coordinates are retained and the diagnostic reports rejection.  Pure-visual
+mode remains diagnostic-only and must not be used for robot localization.
+
+The phase-1 acceptance record reports correspondence count, Fitness, RMSE,
+correction translation/rotation, and the rejection reason.  Multi-scale ICP,
+point-to-plane ICP, organized-grid recovery, and true depth-gradient masks are
+separate later phases and must be documented before implementation.
+
 ## External data required for exact motion compensation
 
 Exact compensation requires one of the following datasets for every PLY:
