@@ -477,6 +477,7 @@ struct StatisticalFilterResult {
 
 constexpr quint32 MergeCacheMagic = 0x314D4350; // PCM1
 constexpr quint32 MergeCacheVersion = 3;
+QString progressSourceName(WorldCloudInput::ScanProgressSource source);
 QString mergeCachePath(const QVector<WorldCloudInput> &inputs) {
     if (inputs.isEmpty()) return {};
     return QFileInfo(inputs.first().filePath).absolutePath() + QStringLiteral("/.pointcloudview-merge.pcvbin");
@@ -506,8 +507,44 @@ bool readMergeCache(const QVector<WorldCloudInput> &inputs, WorldCloudMergeResul
     if (pointCount > quint64(std::numeric_limits<qsizetype>::max())) return false;
     result.points.resize(qsizetype(pointCount)); result.cloudIds.resize(qsizetype(pointCount)); result.sourceIndices.resize(qsizetype(pointCount));
     for (qsizetype i = 0; i < result.points.size(); ++i) { qint32 cloud = -1; qint64 source = -1; stream >> result.points[i].x >> result.points[i].y >> result.points[i].z >> result.points[i].nx >> result.points[i].ny >> result.points[i].nz >> cloud >> source; result.cloudIds[i] = cloud; result.sourceIndices[i] = source; }
-    result.sourceFiles.clear(); for (const auto &input : inputs) result.sourceFiles.push_back(input.filePath);
-    result.ok = stream.status() == QDataStream::Ok; return result.ok;
+    result.sourceFiles.clear();
+    for (const auto &input : inputs) result.sourceFiles.push_back(input.filePath);
+    result.ok = stream.status() == QDataStream::Ok;
+    if (result.ok) {
+        // A cache hit must not hide the information needed to diagnose robot
+        // pose registration.  The cache header has already validated every
+        // input transform/progress/voxel setting; summarize the cached world
+        // bounds as well so the UI report is equivalent to a fresh merge.
+        result.diagnostics = QStringLiteral("合并缓存命中（已校验文件、Start/End、手眼矩阵、扫描进度和体素参数）\n");
+        for (int cloudId = 0; cloudId < inputs.size(); ++cloudId) {
+            QVector3D minimum(std::numeric_limits<float>::max(),
+                              std::numeric_limits<float>::max(),
+                              std::numeric_limits<float>::max());
+            QVector3D maximum(std::numeric_limits<float>::lowest(),
+                              std::numeric_limits<float>::lowest(),
+                              std::numeric_limits<float>::lowest());
+            qsizetype count = 0;
+            for (int i = 0; i < result.points.size(); ++i) {
+                if (result.cloudIds.value(i, -1) != cloudId || !usablePoint(result.points[i])) continue;
+                const Point3D &point = result.points[i];
+                minimum.setX(qMin(minimum.x(), point.x));
+                minimum.setY(qMin(minimum.y(), point.y));
+                minimum.setZ(qMin(minimum.z(), point.z));
+                maximum.setX(qMax(maximum.x(), point.x));
+                maximum.setY(qMax(maximum.y(), point.y));
+                maximum.setZ(qMax(maximum.z(), point.z));
+                ++count;
+            }
+            result.diagnostics += QStringLiteral("%1: robot=%2, progress=%3, world points=%4, bounds=min(%5,%6,%7) max(%8,%9,%10)\n")
+                .arg(QFileInfo(inputs[cloudId].filePath).fileName())
+                .arg(inputs[cloudId].applyRobotTransform ? QStringLiteral("enabled") : QStringLiteral("disabled"))
+                .arg(progressSourceName(inputs[cloudId].scanProgressSource))
+                .arg(count)
+                .arg(minimum.x(), 0, 'g', 8).arg(minimum.y(), 0, 'g', 8).arg(minimum.z(), 0, 'g', 8)
+                .arg(maximum.x(), 0, 'g', 8).arg(maximum.y(), 0, 'g', 8).arg(maximum.z(), 0, 'g', 8);
+        }
+    }
+    return result.ok;
 }
 void writeMergeCache(const QVector<WorldCloudInput> &inputs, const WorldCloudMergeResult &result) {
     const QString path = mergeCachePath(inputs), temp = path + QStringLiteral(".tmp");
