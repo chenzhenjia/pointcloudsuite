@@ -521,6 +521,13 @@ void writeMergeCache(const QVector<WorldCloudInput> &inputs, const WorldCloudMer
 
 struct IcpCorrection { float r[3][3]{{1,0,0},{0,1,0},{0,0,1}}; QVector3D t; bool ok=false; float rms=0; int correspondences=0; float angleDegrees=0; };
 
+float twoPointFiveDWeight(const Point3D &point, float edgeWeight, float depthEdgeThreshold) {
+    const float normalLength = std::sqrt(point.nx * point.nx + point.ny * point.ny + point.nz * point.nz);
+    if (normalLength <= 1.0e-6f || edgeWeight >= 0.999f) return 1.0f;
+    const float nz = std::abs(point.nz) / normalLength;
+    return nz < qBound(0.05f, depthEdgeThreshold, 0.99f) ? qBound(0.01f, edgeWeight, 1.0f) : 1.0f;
+}
+
 QVector3D cloudCentroid(const QVector<Point3D> &points) {
     QVector3D c;
     qsizetype count = 0;
@@ -555,10 +562,11 @@ IcpSpatialIndex buildIcpSpatialIndex(const QVector<Point3D> &reference, float ce
 IcpCorrection estimateIcpCorrection(const QVector<Point3D> &moving,
                                     const QVector<Point3D> &reference,
                                     const IcpSpatialIndex &index,
-                                    float maximumDistance, int maximumSamples, int minimumCorrespondences) {
+                                    float maximumDistance, int maximumSamples, int minimumCorrespondences,
+                                    float zWeight, float edgeWeight, float depthEdgeThreshold) {
     IcpCorrection out;
     if (moving.size() < 3 || reference.size() < 3 || maximumDistance <= 0 || index.cellSize <= 0.0f) return out;
-    struct IcpPair { QVector3D moving; QVector3D reference; float distanceSquared = 0.0f; };
+    struct IcpPair { QVector3D moving; QVector3D reference; float distanceSquared = 0.0f; float weight = 1.0f; };
     QVector<IcpPair> pairs;
     const int step = qMax(1, int((moving.size() + maximumSamples - 1) / maximumSamples));
     const float limit2 = maximumDistance * maximumDistance;
@@ -567,9 +575,9 @@ IcpCorrection estimateIcpCorrection(const QVector<Point3D> &moving,
         float best = limit2; int bestIndex = -1;
         for (qint64 dx=-1; dx<=1; ++dx) for (qint64 dy=-1; dy<=1; ++dy) for (qint64 dz=-1; dz<=1; ++dz) {
             auto it = index.cells.find({key.x+dx,key.y+dy,key.z+dz}); if (it == index.cells.end()) continue;
-            for (int j : it->second) { const Point3D &q=reference[j]; const float ex=p.x-q.x,ey=p.y-q.y,ez=p.z-q.z; const float d=ex*ex+ey*ey+ez*ez; if(d<best){best=d;bestIndex=j;} }
+            for (int j : it->second) { const Point3D &q=reference[j]; const float ex=p.x-q.x,ey=p.y-q.y,ez=p.z-q.z; const float edge = qMin(twoPointFiveDWeight(p, edgeWeight, depthEdgeThreshold), twoPointFiveDWeight(q, edgeWeight, depthEdgeThreshold)); const float d=edge * (ex*ex+ey*ey+zWeight*ez*ez); if(d<best){best=d;bestIndex=j;} }
         }
-        if (bestIndex >= 0) pairs.push_back({QVector3D(p.x,p.y,p.z), QVector3D(reference[bestIndex].x,reference[bestIndex].y,reference[bestIndex].z), best});
+        if (bestIndex >= 0) { const Point3D &q = reference[bestIndex]; pairs.push_back({QVector3D(p.x,p.y,p.z), QVector3D(q.x,q.y,q.z), best, qMin(twoPointFiveDWeight(p, edgeWeight, depthEdgeThreshold), twoPointFiveDWeight(q, edgeWeight, depthEdgeThreshold))}); }
     }
     if (pairs.size() < qMax(6, minimumCorrespondences)) return out;
     // Reject the worst residual tail before estimating the rigid correction.
@@ -583,13 +591,13 @@ IcpCorrection estimateIcpCorrection(const QVector<Point3D> &moving,
         if (keep < pairs.size()) pairs.resize(keep);
     }
     out.correspondences = pairs.size();
-    QVector3D cp, cq; for (const auto &v:pairs){cp+=v.moving;cq+=v.reference;} cp/=float(pairs.size()); cq/=float(pairs.size());
-    double s[3][3]{}; for(const auto &v:pairs){QVector3D a=v.moving-cp,b=v.reference-cq; s[0][0]+=a.x()*b.x();s[0][1]+=a.x()*b.y();s[0][2]+=a.x()*b.z();s[1][0]+=a.y()*b.x();s[1][1]+=a.y()*b.y();s[1][2]+=a.y()*b.z();s[2][0]+=a.z()*b.x();s[2][1]+=a.z()*b.y();s[2][2]+=a.z()*b.z();}
+    double weightSum = 0.0; QVector3D cp, cq; for (const auto &v:pairs){weightSum += v.weight; cp += v.moving * v.weight; cq += v.reference * v.weight;} if (weightSum <= 1.0e-6) return out; cp/=float(weightSum); cq/=float(weightSum);
+    double s[3][3]{}; for(const auto &v:pairs){QVector3D a=v.moving-cp,b=v.reference-cq; s[0][0]+=v.weight*a.x()*b.x();s[0][1]+=v.weight*a.x()*b.y();s[0][2]+=v.weight*a.x()*b.z();s[1][0]+=v.weight*a.y()*b.x();s[1][1]+=v.weight*a.y()*b.y();s[1][2]+=v.weight*a.y()*b.z();s[2][0]+=v.weight*a.z()*b.x();s[2][1]+=v.weight*a.z()*b.y();s[2][2]+=v.weight*a.z()*b.z();}
     const double tr=s[0][0]+s[1][1]+s[2][2]; double n[4][4]={{tr,s[1][2]-s[2][1],s[2][0]-s[0][2],s[0][1]-s[1][0]},{s[1][2]-s[2][1],s[0][0]-s[1][1]-s[2][2],s[0][1]+s[1][0],s[0][2]+s[2][0]},{s[2][0]-s[0][2],s[0][1]+s[1][0],-s[0][0]+s[1][1]-s[2][2],s[1][2]+s[2][1]},{s[0][1]-s[1][0],s[0][2]+s[2][0],s[1][2]+s[2][1],-s[0][0]-s[1][1]+s[2][2]}};
     double q[4]{1,0,0,0}; for(int k=0;k<32;++k){double v[4]{};for(int r=0;r<4;++r)for(int c=0;c<4;++c)v[r]+=n[r][c]*q[c];double len=std::sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]+v[3]*v[3]);if(len<1e-15)return out;for(int r=0;r<4;++r)q[r]=v[r]/len;}
     const double w=q[0],x=q[1],y=q[2],z=q[3]; out.r[0][0]=float(1-2*(y*y+z*z));out.r[0][1]=float(2*(x*y-z*w));out.r[0][2]=float(2*(x*z+y*w));out.r[1][0]=float(2*(x*y+z*w));out.r[1][1]=float(1-2*(x*x+z*z));out.r[1][2]=float(2*(y*z-x*w));out.r[2][0]=float(2*(x*z-y*w));out.r[2][1]=float(2*(y*z+x*w));out.r[2][2]=float(1-2*(x*x+y*y));
     auto rotate=[&](const QVector3D &v){return QVector3D(out.r[0][0]*v.x()+out.r[0][1]*v.y()+out.r[0][2]*v.z(),out.r[1][0]*v.x()+out.r[1][1]*v.y()+out.r[1][2]*v.z(),out.r[2][0]*v.x()+out.r[2][1]*v.y()+out.r[2][2]*v.z());}; out.t=cq-rotate(cp); out.angleDegrees=qRadiansToDegrees(float(2.0*std::acos(qBound(-1.0, std::min(1.0, std::abs(w)), 1.0))));
-    double error=0;for(const auto &v:pairs)error+=(rotate(v.moving)+out.t-v.reference).lengthSquared();out.rms=float(std::sqrt(error/pairs.size()));out.ok=true;return out;
+    double error=0;for(const auto &v:pairs)error += v.weight * (rotate(v.moving)+out.t-v.reference).lengthSquared();out.rms=float(std::sqrt(error/weightSum));out.ok=true;return out;
 }
 
 void applyIcpCorrection(QVector<Point3D> &points, const IcpCorrection &c) { for(Point3D &p:points){const float x=p.x,y=p.y,z=p.z;p.x=c.r[0][0]*x+c.r[0][1]*y+c.r[0][2]*z+c.t.x();p.y=c.r[1][0]*x+c.r[1][1]*y+c.r[1][2]*z+c.t.y();p.z=c.r[2][0]*x+c.r[2][1]*y+c.r[2][2]*z+c.t.z();const float nx=p.nx,ny=p.ny,nz=p.nz;p.nx=c.r[0][0]*nx+c.r[0][1]*ny+c.r[0][2]*nz;p.ny=c.r[1][0]*nx+c.r[1][1]*ny+c.r[1][2]*nz;p.nz=c.r[2][0]*nx+c.r[2][1]*ny+c.r[2][2]*nz;} }
@@ -715,7 +723,10 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
             float previous=std::numeric_limits<float>::max();
             IcpCorrection last;
             for(int iteration=0;iteration<icp.maximumIterations;++iteration){
-                IcpCorrection correction=estimateIcpCorrection(points,result.points,referenceIndex,icp.maximumCorrespondenceDistance,icp.maximumSamples,icp.minimumCorrespondences);
+                IcpCorrection correction=estimateIcpCorrection(points,result.points,referenceIndex,icp.maximumCorrespondenceDistance,icp.maximumSamples,icp.minimumCorrespondences,
+                                                                 icp.useTwoPointFiveD ? qBound(0.01f, icp.zWeight, 1.0f) : 1.0f,
+                                                                 icp.useTwoPointFiveD ? qBound(0.01f, icp.edgeWeight, 1.0f) : 1.0f,
+                                                                 icp.depthEdgeThreshold);
                 if(!correction.ok){ diag.reason = QStringLiteral("有效对应点不足"); break; }
                 if(correction.t.length()>icp.maximumCorrectionTranslation || correction.angleDegrees>icp.maximumCorrectionAngleDegrees){ diag.reason = QStringLiteral("ICP 修正量超过限制"); break; }
                 applyIcpCorrection(points,correction); last=correction; diag.iterations=iteration+1;

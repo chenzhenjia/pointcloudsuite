@@ -1003,6 +1003,8 @@ void MainWindow::buildUi() {
     m_registrationIcpTolerance = ui->dsb_icp_tolerance;
     m_registrationIcpFitness = ui->dsb_icp_fitness;
     m_registrationIcpRmse = ui->dsb_icp_rmse;
+    m_registrationIcpZWeight = ui->dsb_icp_z_weight;
+    m_registrationIcpEdgeWeight = ui->dsb_icp_edge_weight;
     m_handEyeXmlPath = ui->le_hand_eye_xml;
     m_browseHandEyeButton = ui->btn_browse_hand_eye;
     m_openHandEyeToolButton = ui->btn_open_hand_eye_tool;
@@ -1653,6 +1655,11 @@ void MainWindow::startPointCloudRegistration() {
     icp.useRobotInitialGuess = !visualOnly;
     icp.fitnessThreshold = m_registrationIcpFitness ? float(m_registrationIcpFitness->value()) : 0.90f;
     icp.rmseThreshold = m_registrationIcpRmse ? float(m_registrationIcpRmse->value()) : 0.05f;
+    icp.useTwoPointFiveD = true;
+    icp.zWeight = m_registrationIcpZWeight ? float(m_registrationIcpZWeight->value()) : 0.25f;
+    icp.edgeWeight = m_registrationIcpEdgeWeight ? float(m_registrationIcpEdgeWeight->value()) : 0.20f;
+    icp.maximumCorrectionTranslation = 10.0f;
+    icp.maximumCorrectionAngleDegrees = 2.0f;
     statusBar()->showMessage(visualOnly
         ? tr("正在执行纯视觉全局初值 + ICP 诊断（不使用机器人坐标）...")
         : (icp.enabled ? tr("正在进行世界坐标转换和 ICP 配准...")

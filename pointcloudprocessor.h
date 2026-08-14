@@ -60,6 +60,12 @@ struct IcpOptions {
     int minimumCorrespondences = 24;
     float maximumCorrectionTranslation = 100.0f;
     float maximumCorrectionAngleDegrees = 45.0f;
+    // 2.5D reliability weights.  Robot-world coordinates remain the base;
+    // these only affect correspondence selection and ICP fitting.
+    bool useTwoPointFiveD = true;
+    float zWeight = 0.25f;
+    float edgeWeight = 0.20f;
+    float depthEdgeThreshold = 0.70f;
     bool globalInitialization = true;
     bool useRobotInitialGuess = true;
     float fitnessThreshold = 0.90f;
