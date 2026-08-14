@@ -84,6 +84,25 @@ overlap (default `0.10`) and still obeys the robot correction limits.  A very
 low unique-reference ratio is reported as correspondence collapse and is not
 silently treated as independent geometric evidence.
 
+## Phase 3 approved implementation (robot-constrained multi-scale ICP)
+
+The production path remains robot-world based. Multi-scale processing changes
+only how the bounded ICP correction is estimated: each moving cloud is reduced
+with the existing real-point voxel representative method at coarse, medium,
+and fine levels, while the same correction is applied to the full-resolution
+world cloud. The next level starts from the previous level's correction.
+
+Default levels are `2.0`, `0.8`, and `0.25` mm. A level is skipped when its
+voxel size is not smaller than the current cloud extent or when there are too
+few points. No virtual centroid points are introduced and source indices remain
+those of the measured PLY points.
+
+Each accepted level records weighted XY RMSE and Z RMSE in addition to total
+RMSE, Fitness, overlap, duplicate correspondence ratio, and robot correction
+limits. These diagnostics distinguish lateral misalignment from depth noise.
+Final acceptance still requires the robot correction bounds and the phase-2
+overlap/quality thresholds.
+
 ## External data required for exact motion compensation
 
 Exact compensation requires one of the following datasets for every PLY:
