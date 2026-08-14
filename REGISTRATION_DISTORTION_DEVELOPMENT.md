@@ -158,3 +158,9 @@ run robot/world conversion with ICP disabled; inspect per-file world bounds
 and Start/Mid/End diagnostics; only then enable bounded ICP. The merge-cache
 format version is incremented when progress direction or transform assumptions
 change, invalidating caches produced with the previous direction.
+
+### Direction diagnosis from the real Point_Cloud_A run
+
+The default-view run exposed a direction error in the earlier rule. With the supplied hand-eye rotation and robot poses, the combined transform maps camera local Y and robot base Y in opposite directions. Applying the additional LocalY reversal adds the 300 mm camera span to the 300 mm robot motion, producing a world Y span of about 602 mm and four disconnected bands.
+
+An A/B test that exchanges each Start and End pose reduces the world Y span to about 3 mm. This confirms that pose pairing, not ICP or image resolution, is the primary fault. Future direction selection must evaluate transformed endpoint residuals for both forward and reversed pairings and choose the smaller residual. Local-axis monotonicity alone is insufficient because the hand-eye and flange rotations change the world-axis direction.
