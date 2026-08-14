@@ -44,6 +44,11 @@ struct WorldCloudInput {
     QMatrix4x4 flangeFromDepth;
     enum class ScanProgressSource : quint8 { VertexOrder, LocalX, LocalY, LocalZ };
     ScanProgressSource scanProgressSource = ScanProgressSource::VertexOrder;
+    enum class ScanDirection : quint8 { Auto, Forward, Reverse };
+    // Forward maps the first scan sample to Start and the last to End.
+    // Reverse maps the first sample to End and the last to Start. Auto uses
+    // the world-axis displacement test implemented by the merge routine.
+    ScanDirection scanDirection = ScanDirection::Auto;
     bool voxelDownsample = true;
     float voxelSize = 0.25f;
     // Pure visual diagnostics keep the original camera coordinates and do not

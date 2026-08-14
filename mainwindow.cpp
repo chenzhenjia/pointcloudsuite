@@ -1682,6 +1682,7 @@ void MainWindow::startPointCloudRegistration() {
         input.flangeFromDepth = flangeFromDepth;
         input.scanProgressSource = static_cast<pointcloud::WorldCloudInput::ScanProgressSource>(
             m_registrationScanProgress ? m_registrationScanProgress->currentIndex() : 0);
+        input.scanDirection = pointcloud::WorldCloudInput::ScanDirection::Auto;
         input.voxelDownsample = m_registrationVoxelEnabled && m_registrationVoxelEnabled->isChecked();
         input.voxelSize = m_registrationVoxelSize ? float(m_registrationVoxelSize->value()) : 0.25f;
         inputs.push_back(std::move(input));

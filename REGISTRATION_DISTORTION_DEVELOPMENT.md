@@ -164,3 +164,7 @@ change, invalidating caches produced with the previous direction.
 The default-view run exposed a direction error in the earlier rule. With the supplied hand-eye rotation and robot poses, the combined transform maps camera local Y and robot base Y in opposite directions. Applying the additional LocalY reversal adds the 300 mm camera span to the 300 mm robot motion, producing a world Y span of about 602 mm and four disconnected bands.
 
 An A/B test that exchanges each Start and End pose reduces the world Y span to about 3 mm. This confirms that pose pairing, not ICP or image resolution, is the primary fault. Future direction selection must evaluate transformed endpoint residuals for both forward and reversed pairings and choose the smaller residual. Local-axis monotonicity alone is insufficient because the hand-eye and flange rotations change the world-axis direction.
+
+## Phase 1 implementation: explicit scan direction and cache isolation
+
+`WorldCloudInput` now carries `ScanDirection::{Auto,Forward,Reverse}`. The production UI uses `Auto`; it compares transformed endpoint residuals for both mappings and records the selected direction in diagnostics. A caller can force either mapping for controlled A/B tests. The merge-cache version is incremented and the direction is serialized, so results from a different direction cannot be reused.

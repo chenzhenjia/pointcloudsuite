@@ -194,6 +194,7 @@ void runFixtureTests(const QString &directory) {
         motion.endBaseFromFlange(0, 3) = 10.0f;
         motion.flangeFromDepth.setToIdentity();
         motion.scanProgressSource = pointcloud::WorldCloudInput::ScanProgressSource::LocalY;
+        motion.scanDirection = pointcloud::WorldCloudInput::ScanDirection::Reverse;
         motion.voxelDownsample = false;
         motion.applyRobotTransform = true;
         pointcloud::IcpOptions noIcp;

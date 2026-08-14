@@ -476,7 +476,7 @@ struct StatisticalFilterResult {
 };
 
 constexpr quint32 MergeCacheMagic = 0x314D4350; // PCM1
-constexpr quint32 MergeCacheVersion = 4;
+constexpr quint32 MergeCacheVersion = 7;
 QString progressSourceName(WorldCloudInput::ScanProgressSource source);
 QString mergeCachePath(const QVector<WorldCloudInput> &inputs) {
     if (inputs.isEmpty()) return {};
@@ -532,8 +532,8 @@ bool readMergeCache(const QVector<WorldCloudInput> &inputs, WorldCloudMergeResul
         for (int i = 0; i < 16; ++i) { float value = 0; stream >> value; if (std::abs(value - input.startBaseFromFlange.constData()[i]) > 1.0e-6f) return false; }
         for (int i = 0; i < 16; ++i) { float value = 0; stream >> value; if (std::abs(value - input.endBaseFromFlange.constData()[i]) > 1.0e-6f) return false; }
         for (int i = 0; i < 16; ++i) { float value = 0; stream >> value; if (std::abs(value - input.flangeFromDepth.constData()[i]) > 1.0e-6f) return false; }
-        quint8 progress = 0; quint8 voxel = 0; quint8 robot = 0; float voxelSize = 0; stream >> progress >> voxel >> robot >> voxelSize;
-        if (progress != quint8(input.scanProgressSource) || voxel != quint8(input.voxelDownsample) || robot != quint8(input.applyRobotTransform) || std::abs(voxelSize - input.voxelSize) > 1.0e-6f) return false;
+        quint8 progress = 0; quint8 direction = 0; quint8 voxel = 0; quint8 robot = 0; float voxelSize = 0; stream >> progress >> direction >> voxel >> robot >> voxelSize;
+        if (progress != quint8(input.scanProgressSource) || direction != quint8(input.scanDirection) || voxel != quint8(input.voxelDownsample) || robot != quint8(input.applyRobotTransform) || std::abs(voxelSize - input.voxelSize) > 1.0e-6f) return false;
     }
     if (pointCount > quint64(std::numeric_limits<qsizetype>::max())) return false;
     result.points.resize(qsizetype(pointCount)); result.cloudIds.resize(qsizetype(pointCount)); result.sourceIndices.resize(qsizetype(pointCount));
@@ -582,7 +582,7 @@ void writeMergeCache(const QVector<WorldCloudInput> &inputs, const WorldCloudMer
     QFile file(temp); if (!file.open(QIODevice::WriteOnly)) return;
     QDataStream stream(&file); stream.setByteOrder(QDataStream::LittleEndian);
     stream << MergeCacheMagic << MergeCacheVersion << quint32(inputs.size()) << quint64(result.points.size());
-    for (const auto &input : inputs) { QFileInfo info(input.filePath); stream << input.filePath << quint64(info.size()) << info.lastModified().toMSecsSinceEpoch(); for (int i = 0; i < 16; ++i) stream << input.startBaseFromFlange.constData()[i]; for (int i = 0; i < 16; ++i) stream << input.endBaseFromFlange.constData()[i]; for (int i = 0; i < 16; ++i) stream << input.flangeFromDepth.constData()[i]; stream << quint8(input.scanProgressSource) << quint8(input.voxelDownsample) << quint8(input.applyRobotTransform) << input.voxelSize; }
+    for (const auto &input : inputs) { QFileInfo info(input.filePath); stream << input.filePath << quint64(info.size()) << info.lastModified().toMSecsSinceEpoch(); for (int i = 0; i < 16; ++i) stream << input.startBaseFromFlange.constData()[i]; for (int i = 0; i < 16; ++i) stream << input.endBaseFromFlange.constData()[i]; for (int i = 0; i < 16; ++i) stream << input.flangeFromDepth.constData()[i]; stream << quint8(input.scanProgressSource) << quint8(input.scanDirection) << quint8(input.voxelDownsample) << quint8(input.applyRobotTransform) << input.voxelSize; }
     for (qsizetype i = 0; i < result.points.size(); ++i) { const auto &p = result.points[i]; stream << p.x << p.y << p.z << p.nx << p.ny << p.nz << qint32(result.cloudIds[i]) << qint64(result.sourceIndices[i]); }
     file.flush(); file.close(); QFile::remove(path); QFile::rename(temp, path);
 }
@@ -852,8 +852,60 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
                 haveLastProgressValue = true;
             }
         }
-        const bool reverseProgress = haveFirstProgressValue && haveLastProgressValue
+        bool reverseProgress = haveFirstProgressValue && haveLastProgressValue
             && lastProgressValue < firstProgressValue;
+        if (inputs[cloudId].scanDirection == WorldCloudInput::ScanDirection::Forward)
+            reverseProgress = false;
+        else if (inputs[cloudId].scanDirection == WorldCloudInput::ScanDirection::Reverse)
+            reverseProgress = true;
+        QString progressDecision = reverseProgress ? QStringLiteral("axis-decreasing initial reverse")
+                                                    : QStringLiteral("axis-forward initial");
+        // The local axis direction alone is not enough for Eye-in-Hand scans:
+        // the hand-eye/flange rotations can already reverse that axis in the
+        // world frame. Compare the transformed first/last valid samples for
+        // both pairings and select the candidate with the smaller residual.
+        if (inputs[cloudId].scanDirection == WorldCloudInput::ScanDirection::Auto
+            && inputs[cloudId].applyRobotTransform && progressSource != WorldCloudInput::ScanProgressSource::VertexOrder
+            && haveFirstProgressValue && haveLastProgressValue && progressHigh > progressLow) {
+            const auto axisValue = [progressAxis](const Point3D &point) {
+                return progressAxis == 0 ? point.x : progressAxis == 1 ? point.y : point.z;
+            };
+            const Point3D *firstPoint = nullptr, *lastPoint = nullptr;
+            for (const Point3D &point : points) if (usablePoint(point)) {
+                if (!firstPoint) firstPoint = &point;
+                lastPoint = &point;
+            }
+            if (firstPoint && lastPoint) {
+                const float firstNormalized = qBound(0.0f,
+                    (axisValue(*firstPoint) - progressLow) / (progressHigh - progressLow), 1.0f);
+                const float lastNormalized = qBound(0.0f,
+                    (axisValue(*lastPoint) - progressLow) / (progressHigh - progressLow), 1.0f);
+                auto endpointResidual = [&](bool reverse) {
+                    const float firstT = reverse ? 1.0f - firstNormalized : firstNormalized;
+                    const float lastT = reverse ? 1.0f - lastNormalized : lastNormalized;
+                    const QMatrix4x4 firstTransform = interpolateRigidTransform(
+                        inputs[cloudId].startBaseFromFlange,
+                        inputs[cloudId].endBaseFromFlange, firstT)
+                        * inputs[cloudId].flangeFromDepth;
+                    const QMatrix4x4 lastTransform = interpolateRigidTransform(
+                        inputs[cloudId].startBaseFromFlange,
+                        inputs[cloudId].endBaseFromFlange, lastT)
+                        * inputs[cloudId].flangeFromDepth;
+                    const QVector3D firstWorld = firstTransform.map(
+                        QVector3D(firstPoint->x, firstPoint->y, firstPoint->z));
+                    const QVector3D lastWorld = lastTransform.map(
+                        QVector3D(lastPoint->x, lastPoint->y, lastPoint->z));
+                    return (lastWorld - firstWorld).length();
+                };
+                const float forwardResidual = endpointResidual(false);
+                const float reverseResidual = endpointResidual(true);
+                reverseProgress = reverseResidual < forwardResidual;
+                progressDecision = QStringLiteral("auto forward residual=%1, reverse residual=%2, selected=%3")
+                    .arg(forwardResidual, 0, 'g', 8)
+                    .arg(reverseResidual, 0, 'g', 8)
+                    .arg(reverseProgress ? QStringLiteral("reverse") : QStringLiteral("forward"));
+            }
+        }
         result.diagnostics += QStringLiteral("%1\n  Robot transform: %2\n  Progress source: %3, range: %4 .. %5\n  Start matrix: %6\n  Mid matrix: %7\n  End matrix: %8\n  Hand-eye matrix (flange<-depth): %9\n  Local bounds: %10\n")
             .arg(QFileInfo(inputs[cloudId].filePath).fileName())
             .arg(inputs[cloudId].applyRobotTransform ? QStringLiteral("enabled") : QStringLiteral("disabled"))
@@ -871,8 +923,7 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
         if (progressSource != WorldCloudInput::ScanProgressSource::VertexOrder)
             result.diagnostics += QStringLiteral("  Progress first/last: %1 -> %2 (%3)\n")
                 .arg(firstProgressValue, 0, 'g', 8).arg(lastProgressValue, 0, 'g', 8)
-                .arg(reverseProgress ? QStringLiteral("reversed to follow Start->End")
-                                      : QStringLiteral("forward Start->End"));
+                .arg(progressDecision);
         for (qsizetype sourceIndex=0; sourceIndex<points.size(); ++sourceIndex) {
             Point3D &source=points[sourceIndex]; sourceIndices[sourceIndex]=sourceIndex;
             if (inputs[cloudId].applyRobotTransform) {

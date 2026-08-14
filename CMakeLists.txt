@@ -69,6 +69,8 @@ if (POINTCLOUDVIEW_BUILD_TESTS)
     target_include_directories(pointcloudprocessor_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(pointcloudprocessor_tests PRIVATE Qt::Core Qt::Gui)
     add_test(NAME pointcloudprocessor_tests COMMAND pointcloudprocessor_tests)
+    add_executable(registration_diagnostic_runner registration_diagnostic_runner.cpp pointcloudprocessor.cpp pointcloudprocessor.h)
+    target_link_libraries(registration_diagnostic_runner PRIVATE Qt::Core Qt::Gui)
     if (WIN32)
         set_tests_properties(pointcloudprocessor_tests PROPERTIES
             ENVIRONMENT "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}")
