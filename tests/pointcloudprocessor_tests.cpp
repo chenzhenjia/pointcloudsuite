@@ -247,6 +247,40 @@ void runGeometryTests() {
     expect(!selectedEdges.image.isNull() && selectedEdges.image.width() > 0
                && selectedEdges.image.height() > 0,
            "render extracted plane as a 2D image");
+    {
+        bool hasBlackBackground = false;
+        bool hasWorkpiecePixel = false;
+        for (int y = 0; y < selectedEdges.image.height(); ++y) {
+            for (int x = 0; x < selectedEdges.image.width(); ++x) {
+                const QRgb pixel = selectedEdges.image.pixel(x, y);
+                if (qRed(pixel) == 0 && qGreen(pixel) == 0 && qBlue(pixel) == 0)
+                    hasBlackBackground = true;
+                else
+                    hasWorkpiecePixel = true;
+            }
+        }
+        expect(hasBlackBackground && hasWorkpiecePixel,
+               "edge image uses pure black outside the workpiece");
+    }
+    const pointcloud::PlaneImageResult planeImage = pointcloud::extractPlaneImage(
+        planePoints, selected.planeIndices, selected.model, selectedEdgeOptions);
+    expect(planeImage.ok && !planeImage.image.isNull(),
+           "extract standalone plane image");
+    if (planeImage.ok) {
+        bool hasBlackBackground = false;
+        bool hasWorkpiecePixel = false;
+        for (int y = 0; y < planeImage.image.height(); ++y) {
+            for (int x = 0; x < planeImage.image.width(); ++x) {
+                const QRgb pixel = planeImage.image.pixel(x, y);
+                if (qRed(pixel) == 0 && qGreen(pixel) == 0 && qBlue(pixel) == 0)
+                    hasBlackBackground = true;
+                else
+                    hasWorkpiecePixel = true;
+            }
+        }
+        expect(hasBlackBackground && hasWorkpiecePixel,
+               "standalone plane image uses pure black outside the workpiece");
+    }
     if (!selectedEdges.contours.isEmpty()) {
         expect(selectedEdges.contours.first().points.size() >= 4,
                "ordered contour contains a closed polyline");

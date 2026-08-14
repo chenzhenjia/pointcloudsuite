@@ -3040,7 +3040,9 @@ PlaneEdgeResult segmentPlaneEdges(const QVector<Point3D> &points,
     }
 
     result.image = QImage(gridWidth, gridHeight, QImage::Format_RGB32);
-    result.image.fill(qRgb(16, 18, 21));
+    // OpenCV downstream processing relies on a zero-valued background mask.
+    // Keep every non-occupied pixel exactly RGB(0,0,0), not a dark gray UI color.
+    result.image.fill(qRgb(0, 0, 0));
     for (int y = 0; y < gridHeight; ++y) {
         QRgb *row = reinterpret_cast<QRgb *>(result.image.scanLine(gridHeight - 1 - y));
         for (int x = 0; x < gridWidth; ++x) {
@@ -3120,7 +3122,9 @@ PlaneImageResult extractPlaneImage(const QVector<Point3D> &points,
     const int imageScale = qBound(1, options.imageScale, 8);
     QImage baseImage(width, height, QImage::Format_RGB32);
     result.image = baseImage;
-    result.image.fill(qRgb(16, 18, 21));
+    // The exported plane image is a data product rather than a UI preview:
+    // non-workpiece pixels must remain pure black for deterministic OpenCV masks.
+    result.image.fill(qRgb(0, 0, 0));
     int occupied = 0;
     for (int y = 0; y < height; ++y) {
         QRgb *row = reinterpret_cast<QRgb *>(result.image.scanLine(height - 1 - y));
