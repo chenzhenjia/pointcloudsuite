@@ -65,6 +65,25 @@ correction translation/rotation, and the rejection reason.  Multi-scale ICP,
 point-to-plane ICP, organized-grid recovery, and true depth-gradient masks are
 separate later phases and must be documented before implementation.
 
+## Phase 2 approved implementation (overlap and duplicate-point diagnostics)
+
+Scans may intentionally contain spatially overlapping points.  Overlap is not
+removed as noise and is not merged by inventing centroid points.  After each
+robot-based ICP correction, the sampled moving points are matched again against
+the accumulated world reference using the same correspondence distance and
+2.5D metric.  The result records:
+
+- overlap ratio: valid correspondences / sampled moving points;
+- unique reference ratio: unique matched reference points / valid correspondences;
+- duplicate correspondence ratio: `1 - unique reference ratio`.
+
+Duplicate matches are expected when two scans cover the same surface or have
+different sampling densities.  They are reported separately from Fitness so a
+high overlap is not mistaken for a failure.  ICP acceptance requires a minimum
+overlap (default `0.10`) and still obeys the robot correction limits.  A very
+low unique-reference ratio is reported as correspondence collapse and is not
+silently treated as independent geometric evidence.
+
 ## External data required for exact motion compensation
 
 Exact compensation requires one of the following datasets for every PLY:
