@@ -128,3 +128,33 @@ matrix is checked for finite values, a homogeneous bottom row of `[0 0 0 1]`,
 orthonormal rotation columns, and a positive determinant near one. Invalid
 matrices are rejected with the PLY index and matrix type instead of allowing
 NaN, mirror, or degenerate transforms to enter world coordinates.
+
+## Point_Cloud_A validation record (2026-08-14)
+
+The supplied `Point_Cloud_A` directory contains `Point_Cloud_A01.ply` through
+`Point_Cloud_A04.ply`, each with about 6.3 million measured vertices. Their
+local bounds are approximately X=-94..96, Y=0..-300, and Z=-82..18. The PLY
+vertices are organized by scan rows and local Y decreases from the first row
+to the last row.
+
+The robot mapping is:
+
+```text
+A01: Start (500, 150, 700, 0, 0, 180) -> End (500, -150, 700, 0, 0, 180)
+A02: Start (600, 150, 700, 0, 0, 180) -> End (600, -150, 700, 0, 0, 180)
+A03: Start (700, 150, 700, 0, 0, 180) -> End (700, -150, 700, 0, 0, 180)
+A04: Start (800, 150, 700, 0, 0, 180) -> End (800, -150, 700, 0, 0, 180)
+```
+
+For these files `Local Y` is the recommended scan-progress source. The
+implementation compares the first and last valid Y values and reverses the
+normalized progress when the axis decreases, so the first scanned row maps to
+Start and the last row maps to End. `VertexOrder` is not recommended: points
+within a row are not robot-motion samples and applying their order produces
+shear or other non-rigid distortion.
+
+Validation order is: load all four files and check bounds; select Local Y and
+run robot/world conversion with ICP disabled; inspect per-file world bounds
+and Start/Mid/End diagnostics; only then enable bounded ICP. The merge-cache
+format version is incremented when progress direction or transform assumptions
+change, invalidating caches produced with the previous direction.
