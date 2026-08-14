@@ -497,7 +497,7 @@ bool readMergeCache(const QVector<WorldCloudInput> &inputs, WorldCloudMergeResul
         QString path; quint64 size = 0; qint64 stamp = 0; stream >> path >> size >> stamp;
         QFileInfo info(input.filePath);
         if (path != input.filePath || size != quint64(info.size()) || stamp != info.lastModified().toMSecsSinceEpoch()) return false;
-        for (int i = 0; i < 16; ++i) { float value = 0; stream >> value; if (std::abs(value - input.startWorldFromLocal.constData()[i]) > 1.0e-6f) return false; }
+        for (int i = 0; i < 16; ++i) { float value = 0; stream >> value; if (std::abs(value - input.startBaseFromFlange.constData()[i]) > 1.0e-6f) return false; }
     }
     if (pointCount > quint64(std::numeric_limits<qsizetype>::max())) return false;
     result.points.resize(qsizetype(pointCount)); result.cloudIds.resize(qsizetype(pointCount)); result.sourceIndices.resize(qsizetype(pointCount));
@@ -510,7 +510,7 @@ void writeMergeCache(const QVector<WorldCloudInput> &inputs, const WorldCloudMer
     QFile file(temp); if (!file.open(QIODevice::WriteOnly)) return;
     QDataStream stream(&file); stream.setByteOrder(QDataStream::LittleEndian);
     stream << MergeCacheMagic << MergeCacheVersion << quint32(inputs.size()) << quint64(result.points.size());
-    for (const auto &input : inputs) { QFileInfo info(input.filePath); stream << input.filePath << quint64(info.size()) << info.lastModified().toMSecsSinceEpoch(); for (int i = 0; i < 16; ++i) stream << input.startWorldFromLocal.constData()[i]; }
+    for (const auto &input : inputs) { QFileInfo info(input.filePath); stream << input.filePath << quint64(info.size()) << info.lastModified().toMSecsSinceEpoch(); for (int i = 0; i < 16; ++i) stream << input.startBaseFromFlange.constData()[i]; }
     for (qsizetype i = 0; i < result.points.size(); ++i) { const auto &p = result.points[i]; stream << p.x << p.y << p.z << p.nx << p.ny << p.nz << qint32(result.cloudIds[i]) << qint64(result.sourceIndices[i]); }
     file.flush(); file.close(); QFile::remove(path); QFile::rename(temp, path);
 }
@@ -565,6 +565,17 @@ QMatrix4x4 interpolateRigidTransform(const QMatrix4x4 &start, const QMatrix4x4 &
     return result;
 }
 
+float scanProgress(const QVector<Point3D> &points, qsizetype index,
+                   WorldCloudInput::ScanProgressSource source, float low, float high) {
+    if (points.size() < 2 || source == WorldCloudInput::ScanProgressSource::VertexOrder)
+        return points.size() < 2 ? 0.0f : float(index) / float(points.size() - 1);
+    const int axis = source == WorldCloudInput::ScanProgressSource::LocalX ? 0
+                   : source == WorldCloudInput::ScanProgressSource::LocalY ? 1 : 2;
+    const Point3D &p = points[index];
+    const float value = axis == 0 ? p.x : axis == 1 ? p.y : p.z;
+    return high > low ? qBound(0.0f, (value-low)/(high-low), 1.0f) : 0.0f;
+}
+
 WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &inputs, const IcpOptions &icp) {
     WorldCloudMergeResult result;
     if (inputs.isEmpty()) { result.error = QStringLiteral("未选择 PLY 文件"); return result; }
@@ -590,12 +601,21 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
         result.sourceFiles.push_back(inputs[cloudId].filePath);
         QVector<Point3D> points = std::move(loaded[cloudId]);
         QVector<qsizetype> sourceIndices(points.size());
+        const auto progressSource = inputs[cloudId].scanProgressSource;
+        const int progressAxis = progressSource == WorldCloudInput::ScanProgressSource::LocalX ? 0
+            : progressSource == WorldCloudInput::ScanProgressSource::LocalY ? 1 : 2;
+        float progressLow = std::numeric_limits<float>::max(), progressHigh = -progressLow;
+        if (progressSource != WorldCloudInput::ScanProgressSource::VertexOrder)
+            for (const Point3D &point : points) {
+                const float value = progressAxis == 0 ? point.x : progressAxis == 1 ? point.y : point.z;
+                progressLow = qMin(progressLow, value); progressHigh = qMax(progressHigh, value);
+            }
         for (qsizetype sourceIndex=0; sourceIndex<points.size(); ++sourceIndex) {
             Point3D &source=points[sourceIndex]; sourceIndices[sourceIndex]=sourceIndex;
-            const float progress = inputs[cloudId].interpolateScanPose && points.size()>1
-                ? float(sourceIndex)/float(points.size()-1) : 0.0f;
-            const QMatrix4x4 transform = interpolateRigidTransform(
-                inputs[cloudId].startWorldFromLocal, inputs[cloudId].endWorldFromLocal, progress);
+            const float progress = scanProgress(points, sourceIndex, progressSource, progressLow, progressHigh);
+            const QMatrix4x4 baseFromFlange = interpolateRigidTransform(
+                inputs[cloudId].startBaseFromFlange, inputs[cloudId].endBaseFromFlange, progress);
+            const QMatrix4x4 transform = baseFromFlange * inputs[cloudId].flangeFromDepth;
             const QVector3D world = transform.map(QVector3D(source.x, source.y, source.z));
             const QVector3D normal = transform.mapVector(QVector3D(source.nx, source.ny, source.nz));
             source.x=world.x();source.y=world.y();source.z=world.z();

@@ -186,6 +186,7 @@
              </widget>
             </item>
             <item><layout class="QHBoxLayout" name="hbl_hand_eye_xml"><item><widget class="QLineEdit" name="le_hand_eye_xml"><property name="placeholderText"><string>选择 Eye-in-Hand 标定 XML</string></property></widget></item><item><widget class="QPushButton" name="btn_browse_hand_eye"><property name="text"><string>标定文件</string></property></widget></item></layout></item>
+            <item><layout class="QHBoxLayout" name="hbl_hand_eye_tool"><item><widget class="QLabel" name="lbl_scan_progress"><property name="text"><string>扫描进度来源</string></property></widget></item><item><widget class="QComboBox" name="cb_scan_progress"><item><property name="text"><string>PLY 顶点顺序</string></property></item><item><property name="text"><string>相机局部 X</string></property></item><item><property name="text"><string>相机局部 Y</string></property></item><item><property name="text"><string>相机局部 Z</string></property></item></widget></item><item><widget class="QPushButton" name="btn_open_hand_eye_tool"><property name="text"><string>Python 3.13 标定工具</string></property></widget></item></layout></item>
             <item>
              <widget class="QPushButton" name="btn_open_point_cloud">
               <property name="text">

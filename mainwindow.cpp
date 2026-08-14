@@ -53,6 +53,7 @@
 #include <QLineEdit>
 #include <QSignalBlocker>
 #include <QXmlStreamReader>
+#include <QProcess>
 #include <QtMath>
 #include <QRegularExpression>
 #include <QDir>
@@ -1006,6 +1007,8 @@ void MainWindow::buildUi() {
     m_registrationIcpTolerance = ui->dsb_icp_tolerance;
     m_handEyeXmlPath = ui->le_hand_eye_xml;
     m_browseHandEyeButton = ui->btn_browse_hand_eye;
+    m_openHandEyeToolButton = ui->btn_open_hand_eye_tool;
+    m_registrationScanProgress = ui->cb_scan_progress;
     m_fileInfo = ui->lbl_subtitle1;
     m_canvasInfo = ui->lbl_subtitle2;
     m_progress = ui->pbar_progress;
@@ -1049,6 +1052,7 @@ void MainWindow::buildUi() {
     connect(m_registrationPrepare, &QPushButton::clicked, this, &MainWindow::preparePointCloudRegistration);
     connect(m_registrationStart, &QPushButton::clicked, this, &MainWindow::startPointCloudRegistration);
     connect(m_browseHandEyeButton, &QPushButton::clicked, this, &MainWindow::browseHandEyeCalibration);
+    connect(m_openHandEyeToolButton, &QPushButton::clicked, this, &MainWindow::openHandEyeTool);
     connect(m_pointSize, qOverload<int>(&QSpinBox::valueChanged), m_canvas, &PointCloudCanvas::setPointSize);
     connect(ui->btn_reset_view, &QPushButton::clicked, m_canvas, &PointCloudCanvas::resetView);
     connect(m_colorMode, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::updateRenderSettings);
@@ -1566,6 +1570,16 @@ void MainWindow::browseHandEyeCalibration() {
     statusBar()->showMessage(tr("Eye-in-Hand 标定文件已加载"));
 }
 
+void MainWindow::openHandEyeTool() {
+    const QString script = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(
+        QStringLiteral("../../../hand_eye/MV-DP2240-01P_Hand_Eye_Convert/standard_transform_gui.py"));
+    if (!QFileInfo::exists(script)
+        || !QProcess::startDetached(QStringLiteral("py"), {QStringLiteral("-3.13"), script})) {
+        QMessageBox::warning(this, tr("无法打开标定工具"),
+            tr("需要 Python 3.13 的 py 启动器，并且转换脚本必须位于：\n%1").arg(script));
+    }
+}
+
 void MainWindow::syncRegistrationPoseText() {
     if (!m_registrationTable || !m_registrationOutput) return;
     QString text = QStringLiteral("Image_Set_A\n");
@@ -1609,9 +1623,11 @@ void MainWindow::startPointCloudRegistration() {
         if (!startOk || !endOk) { errors << tr("第 %1 行位姿包含无效数字").arg(row + 1); continue; }
         pointcloud::WorldCloudInput input;
         input.filePath = m_registrationTable->item(row, 0)->text();
-        input.startWorldFromLocal = poseMatrixZYX(start) * flangeFromDepth;
-        input.endWorldFromLocal = poseMatrixZYX(end) * flangeFromDepth;
-        input.interpolateScanPose = true;
+        input.startBaseFromFlange = poseMatrixZYX(start);
+        input.endBaseFromFlange = poseMatrixZYX(end);
+        input.flangeFromDepth = flangeFromDepth;
+        input.scanProgressSource = static_cast<pointcloud::WorldCloudInput::ScanProgressSource>(
+            m_registrationScanProgress ? m_registrationScanProgress->currentIndex() : 0);
         input.voxelDownsample = m_registrationVoxelEnabled && m_registrationVoxelEnabled->isChecked();
         input.voxelSize = m_registrationVoxelSize ? float(m_registrationVoxelSize->value()) : 0.25f;
         inputs.push_back(std::move(input));
@@ -1792,10 +1808,10 @@ void MainWindow::mergeWorldPointClouds() {
         }
         pointcloud::WorldCloudInput input;
         input.filePath = dir.absoluteFilePath(fileName);
-        input.startWorldFromLocal.setToIdentity();
-        input.startWorldFromLocal.translate(x, y, z);
-        input.endWorldFromLocal = input.startWorldFromLocal;
-        input.interpolateScanPose = false;
+        input.startBaseFromFlange.setToIdentity();
+        input.startBaseFromFlange.translate(x, y, z);
+        input.endBaseFromFlange = input.startBaseFromFlange;
+        input.flangeFromDepth.setToIdentity();
         inputs.push_back(input);
     }
     m_pendingWorldInputs = inputs;

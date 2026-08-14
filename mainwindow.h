@@ -36,6 +36,7 @@ private slots:
     void preparePointCloudRegistration();
     void startPointCloudRegistration();
     void browseHandEyeCalibration();
+    void openHandEyeTool();
     void mergeWorldPointClouds();
     void worldMergeFinished();
     void loadFinished();
@@ -82,6 +83,8 @@ private:
     QDoubleSpinBox *m_registrationIcpTolerance = nullptr;
     QLineEdit *m_handEyeXmlPath = nullptr;
     QPushButton *m_browseHandEyeButton = nullptr;
+    QPushButton *m_openHandEyeToolButton = nullptr;
+    QComboBox *m_registrationScanProgress = nullptr;
     QLabel *m_fileInfo = nullptr;
     QLabel *m_canvasInfo = nullptr;
     QProgressBar *m_progress = nullptr;
