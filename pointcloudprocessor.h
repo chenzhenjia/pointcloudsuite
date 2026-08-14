@@ -46,6 +46,9 @@ struct WorldCloudInput {
     ScanProgressSource scanProgressSource = ScanProgressSource::VertexOrder;
     bool voxelDownsample = true;
     float voxelSize = 0.25f;
+    // Pure visual diagnostics keep the original camera coordinates and do not
+    // apply the robot/hand-eye transform.
+    bool applyRobotTransform = true;
 };
 
 struct IcpOptions {
@@ -57,6 +60,26 @@ struct IcpOptions {
     int minimumCorrespondences = 24;
     float maximumCorrectionTranslation = 100.0f;
     float maximumCorrectionAngleDegrees = 45.0f;
+    bool globalInitialization = true;
+    bool useRobotInitialGuess = true;
+    float fitnessThreshold = 0.90f;
+    float rmseThreshold = 0.05f;
+};
+
+struct IcpDiagnostics {
+    QString filePath;
+    bool attempted = false;
+    bool converged = false;
+    bool accepted = false;
+    bool usedGlobalInitialization = false;
+    int iterations = 0;
+    int correspondences = 0;
+    int movingSampleCount = 0;
+    float fitness = 0.0f;
+    float rmse = 0.0f;
+    float correctionTranslation = 0.0f;
+    float correctionAngleDegrees = 0.0f;
+    QString reason;
 };
 
 struct WorldCloudMergeResult {
@@ -65,6 +88,7 @@ struct WorldCloudMergeResult {
     QVector<qsizetype> sourceIndices;
     QVector<QString> sourceFiles;
     QString diagnostics;
+    QVector<IcpDiagnostics> icpDiagnostics;
     QString error;
     bool ok = false;
 };

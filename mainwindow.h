@@ -81,10 +81,13 @@ private:
     QSpinBox *m_registrationIcpIterations = nullptr;
     QDoubleSpinBox *m_registrationIcpDistance = nullptr;
     QDoubleSpinBox *m_registrationIcpTolerance = nullptr;
+    QDoubleSpinBox *m_registrationIcpFitness = nullptr;
+    QDoubleSpinBox *m_registrationIcpRmse = nullptr;
     QLineEdit *m_handEyeXmlPath = nullptr;
     QPushButton *m_browseHandEyeButton = nullptr;
     QPushButton *m_openHandEyeToolButton = nullptr;
     QComboBox *m_registrationScanProgress = nullptr;
+    QComboBox *m_registrationMode = nullptr;
     QLabel *m_fileInfo = nullptr;
     QLabel *m_canvasInfo = nullptr;
     QProgressBar *m_progress = nullptr;

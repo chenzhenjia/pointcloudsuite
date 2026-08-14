@@ -1001,10 +1001,13 @@ void MainWindow::buildUi() {
     m_registrationIcpIterations = ui->spb_icp_iterations;
     m_registrationIcpDistance = ui->dsb_icp_distance;
     m_registrationIcpTolerance = ui->dsb_icp_tolerance;
+    m_registrationIcpFitness = ui->dsb_icp_fitness;
+    m_registrationIcpRmse = ui->dsb_icp_rmse;
     m_handEyeXmlPath = ui->le_hand_eye_xml;
     m_browseHandEyeButton = ui->btn_browse_hand_eye;
     m_openHandEyeToolButton = ui->btn_open_hand_eye_tool;
     m_registrationScanProgress = ui->cb_scan_progress;
+    m_registrationMode = ui->cb_registration_mode;
     m_fileInfo = ui->lbl_subtitle1;
     m_canvasInfo = ui->lbl_subtitle2;
     m_progress = ui->pbar_progress;
@@ -1604,10 +1607,11 @@ void MainWindow::startPointCloudRegistration() {
     }
     QVector<pointcloud::WorldCloudInput> inputs;
     inputs.reserve(m_registrationTable->rowCount());
+    const bool visualOnly = m_registrationMode && m_registrationMode->currentIndex() == 1;
     QStringList errors;
     QMatrix4x4 flangeFromDepth;
     QString calibrationError;
-    if (!readDepthInRobotTransform(m_handEyeXmlPath ? m_handEyeXmlPath->text().trimmed() : QString(),
+    if (!visualOnly && !readDepthInRobotTransform(m_handEyeXmlPath ? m_handEyeXmlPath->text().trimmed() : QString(),
                                    &flangeFromDepth, &calibrationError)) {
         QMessageBox::warning(this, tr("缺少 Eye-in-Hand 标定"), calibrationError);
         return;
@@ -1638,15 +1642,21 @@ void MainWindow::startPointCloudRegistration() {
     m_loading = true; m_folderScanOnly = false;
     m_progress->show(); m_progress->setRange(0, 0);
     m_registrationStart->setEnabled(false);
-    const auto taskInputs = m_pendingWorldInputs;
+    auto taskInputs = m_pendingWorldInputs;
     pointcloud::IcpOptions icp;
     icp.enabled = m_registrationIcpEnabled && m_registrationIcpEnabled->isChecked();
     icp.maximumIterations = m_registrationIcpIterations->value();
     icp.maximumCorrespondenceDistance = float(m_registrationIcpDistance->value());
     icp.convergenceTolerance = float(m_registrationIcpTolerance->value());
-    statusBar()->showMessage(icp.enabled
-        ? tr("正在进行世界坐标转换和 ICP 配准...")
-        : tr("正在进行世界坐标转换（ICP 已关闭）..."));
+    for (auto &input : taskInputs) input.applyRobotTransform = !visualOnly;
+    icp.globalInitialization = visualOnly;
+    icp.useRobotInitialGuess = !visualOnly;
+    icp.fitnessThreshold = m_registrationIcpFitness ? float(m_registrationIcpFitness->value()) : 0.90f;
+    icp.rmseThreshold = m_registrationIcpRmse ? float(m_registrationIcpRmse->value()) : 0.05f;
+    statusBar()->showMessage(visualOnly
+        ? tr("正在执行纯视觉全局初值 + ICP 诊断（不使用机器人坐标）...")
+        : (icp.enabled ? tr("正在进行世界坐标转换和 ICP 配准...")
+                       : tr("正在进行世界坐标转换（ICP 已关闭）...")));
     m_worldMergeWatcher->setFuture(QtConcurrent::run([taskInputs, icp]() {
         return pointcloud::mergePlyCloudsInWorld(taskInputs, icp);
     }));
@@ -1855,6 +1865,19 @@ void MainWindow::worldMergeFinished() {
               .arg(result.sourceFiles.size())
               .arg(QLocale().toString(result.points.size()));
     statusBar()->showMessage(message);
+    if (m_registrationOutput && !result.icpDiagnostics.isEmpty()) {
+        QString report = result.diagnostics;
+        for (const auto &diag : result.icpDiagnostics) {
+            report += tr("%1\n  对应数: %2 / %3\n  Fitness: %4\n  RMSE: %5 mm\n  迭代: %6\n  修正: 平移 %7 mm, 旋转 %8°\n  结论: %9\n")
+                .arg(QFileInfo(diag.filePath).fileName())
+                .arg(diag.correspondences).arg(diag.movingSampleCount)
+                .arg(diag.fitness, 0, 'f', 4).arg(diag.rmse, 0, 'f', 4)
+                .arg(diag.iterations).arg(diag.correctionTranslation, 0, 'f', 4)
+                .arg(diag.correctionAngleDegrees, 0, 'f', 3)
+                .arg(diag.reason.isEmpty() ? tr("未完成") : diag.reason);
+        }
+        m_registrationOutput->setPlainText(report.trimmed());
+    }
     if (m_registrationStart) m_registrationStart->setEnabled(true);
     m_folderScanOnly = false;
 }

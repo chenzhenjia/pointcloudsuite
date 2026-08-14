@@ -476,7 +476,7 @@ struct StatisticalFilterResult {
 };
 
 constexpr quint32 MergeCacheMagic = 0x314D4350; // PCM1
-constexpr quint32 MergeCacheVersion = 2;
+constexpr quint32 MergeCacheVersion = 3;
 QString mergeCachePath(const QVector<WorldCloudInput> &inputs) {
     if (inputs.isEmpty()) return {};
     return QFileInfo(inputs.first().filePath).absolutePath() + QStringLiteral("/.pointcloudview-merge.pcvbin");
@@ -500,8 +500,8 @@ bool readMergeCache(const QVector<WorldCloudInput> &inputs, WorldCloudMergeResul
         for (int i = 0; i < 16; ++i) { float value = 0; stream >> value; if (std::abs(value - input.startBaseFromFlange.constData()[i]) > 1.0e-6f) return false; }
         for (int i = 0; i < 16; ++i) { float value = 0; stream >> value; if (std::abs(value - input.endBaseFromFlange.constData()[i]) > 1.0e-6f) return false; }
         for (int i = 0; i < 16; ++i) { float value = 0; stream >> value; if (std::abs(value - input.flangeFromDepth.constData()[i]) > 1.0e-6f) return false; }
-        quint8 progress = 0; quint8 voxel = 0; float voxelSize = 0; stream >> progress >> voxel >> voxelSize;
-        if (progress != quint8(input.scanProgressSource) || voxel != quint8(input.voxelDownsample) || std::abs(voxelSize - input.voxelSize) > 1.0e-6f) return false;
+        quint8 progress = 0; quint8 voxel = 0; quint8 robot = 0; float voxelSize = 0; stream >> progress >> voxel >> robot >> voxelSize;
+        if (progress != quint8(input.scanProgressSource) || voxel != quint8(input.voxelDownsample) || robot != quint8(input.applyRobotTransform) || std::abs(voxelSize - input.voxelSize) > 1.0e-6f) return false;
     }
     if (pointCount > quint64(std::numeric_limits<qsizetype>::max())) return false;
     result.points.resize(qsizetype(pointCount)); result.cloudIds.resize(qsizetype(pointCount)); result.sourceIndices.resize(qsizetype(pointCount));
@@ -514,12 +514,28 @@ void writeMergeCache(const QVector<WorldCloudInput> &inputs, const WorldCloudMer
     QFile file(temp); if (!file.open(QIODevice::WriteOnly)) return;
     QDataStream stream(&file); stream.setByteOrder(QDataStream::LittleEndian);
     stream << MergeCacheMagic << MergeCacheVersion << quint32(inputs.size()) << quint64(result.points.size());
-    for (const auto &input : inputs) { QFileInfo info(input.filePath); stream << input.filePath << quint64(info.size()) << info.lastModified().toMSecsSinceEpoch(); for (int i = 0; i < 16; ++i) stream << input.startBaseFromFlange.constData()[i]; for (int i = 0; i < 16; ++i) stream << input.endBaseFromFlange.constData()[i]; for (int i = 0; i < 16; ++i) stream << input.flangeFromDepth.constData()[i]; stream << quint8(input.scanProgressSource) << quint8(input.voxelDownsample) << input.voxelSize; }
+    for (const auto &input : inputs) { QFileInfo info(input.filePath); stream << input.filePath << quint64(info.size()) << info.lastModified().toMSecsSinceEpoch(); for (int i = 0; i < 16; ++i) stream << input.startBaseFromFlange.constData()[i]; for (int i = 0; i < 16; ++i) stream << input.endBaseFromFlange.constData()[i]; for (int i = 0; i < 16; ++i) stream << input.flangeFromDepth.constData()[i]; stream << quint8(input.scanProgressSource) << quint8(input.voxelDownsample) << quint8(input.applyRobotTransform) << input.voxelSize; }
     for (qsizetype i = 0; i < result.points.size(); ++i) { const auto &p = result.points[i]; stream << p.x << p.y << p.z << p.nx << p.ny << p.nz << qint32(result.cloudIds[i]) << qint64(result.sourceIndices[i]); }
     file.flush(); file.close(); QFile::remove(path); QFile::rename(temp, path);
 }
 
 struct IcpCorrection { float r[3][3]{{1,0,0},{0,1,0},{0,0,1}}; QVector3D t; bool ok=false; float rms=0; int correspondences=0; float angleDegrees=0; };
+
+QVector3D cloudCentroid(const QVector<Point3D> &points) {
+    QVector3D c;
+    qsizetype count = 0;
+    for (const Point3D &p : points) if (usablePoint(p)) {
+        c += QVector3D(p.x, p.y, p.z);
+        ++count;
+    }
+    return count > 0 ? c / float(count) : QVector3D();
+}
+
+void translateCloud(QVector<Point3D> &points, const QVector3D &delta) {
+    for (Point3D &p : points) {
+        p.x += delta.x(); p.y += delta.y(); p.z += delta.z();
+    }
+}
 
 struct IcpSpatialIndex {
     std::unordered_map<NoiseKey, QVector<int>, NoiseKeyHash> cells;
@@ -637,6 +653,7 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
     }
     result.points.reserve(total); result.cloudIds.reserve(total); result.sourceIndices.reserve(total);
     result.sourceFiles.reserve(inputs.size());
+    result.icpDiagnostics.reserve(inputs.size());
     for (int cloudId = 0; cloudId < inputs.size(); ++cloudId) {
         result.sourceFiles.push_back(inputs[cloudId].filePath);
         QVector<Point3D> points = std::move(loaded[cloudId]);
@@ -654,13 +671,15 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
             }
         for (qsizetype sourceIndex=0; sourceIndex<points.size(); ++sourceIndex) {
             Point3D &source=points[sourceIndex]; sourceIndices[sourceIndex]=sourceIndex;
-            const float progress = scanProgress(points, sourceIndex, progressSource, progressLow, progressHigh);
-            const QMatrix4x4 &baseFromFlange = motionLut.at(progress);
-            const QMatrix4x4 transform = baseFromFlange * inputs[cloudId].flangeFromDepth;
-            const QVector3D world = transform.map(QVector3D(source.x, source.y, source.z));
-            const QVector3D normal = transform.mapVector(QVector3D(source.nx, source.ny, source.nz));
-            source.x=world.x();source.y=world.y();source.z=world.z();
-            source.nx=normal.x();source.ny=normal.y();source.nz=normal.z();
+            if (inputs[cloudId].applyRobotTransform) {
+                const float progress = scanProgress(points, sourceIndex, progressSource, progressLow, progressHigh);
+                const QMatrix4x4 &baseFromFlange = motionLut.at(progress);
+                const QMatrix4x4 transform = baseFromFlange * inputs[cloudId].flangeFromDepth;
+                const QVector3D world = transform.map(QVector3D(source.x, source.y, source.z));
+                const QVector3D normal = transform.mapVector(QVector3D(source.nx, source.ny, source.nz));
+                source.x=world.x();source.y=world.y();source.z=world.z();
+                source.nx=normal.x();source.ny=normal.y();source.nz=normal.z();
+            }
         }
         if (inputs[cloudId].voxelDownsample && inputs[cloudId].voxelSize > 0.0f) {
             std::unordered_map<NoiseKey, qsizetype, NoiseKeyHash> representatives;
@@ -669,11 +688,45 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
             for (qsizetype i=0;i<points.size();++i) if (usablePoint(points[i]) && representatives.emplace(noiseKey(points[i],inputs[cloudId].voxelSize),i).second) { reduced.push_back(points[i]); reducedIndices.push_back(sourceIndices[i]); }
             points=std::move(reduced); sourceIndices=std::move(reducedIndices);
         }
-        if (icp.enabled && cloudId > 0) {
+        IcpDiagnostics diag;
+        diag.filePath = inputs[cloudId].filePath;
+        if (icp.enabled && cloudId > 0 && !result.points.isEmpty()) {
+            diag.attempted = true;
+            diag.movingSampleCount = qMin<int>(points.size(), icp.maximumSamples);
+            if (!inputs[cloudId].applyRobotTransform && icp.globalInitialization) {
+                const QVector3D delta = cloudCentroid(result.points) - cloudCentroid(points);
+                translateCloud(points, delta);
+                diag.usedGlobalInitialization = true;
+            }
             const IcpSpatialIndex referenceIndex = buildIcpSpatialIndex(result.points, icp.maximumCorrespondenceDistance);
             float previous=std::numeric_limits<float>::max();
-            for(int iteration=0;iteration<icp.maximumIterations;++iteration){IcpCorrection correction=estimateIcpCorrection(points,result.points,referenceIndex,icp.maximumCorrespondenceDistance,icp.maximumSamples,icp.minimumCorrespondences);if(!correction.ok)break;if(correction.t.length()>icp.maximumCorrectionTranslation || correction.angleDegrees>icp.maximumCorrectionAngleDegrees)break;applyIcpCorrection(points,correction);if(std::abs(previous-correction.rms)<=icp.convergenceTolerance)break;previous=correction.rms;}
+            IcpCorrection last;
+            for(int iteration=0;iteration<icp.maximumIterations;++iteration){
+                IcpCorrection correction=estimateIcpCorrection(points,result.points,referenceIndex,icp.maximumCorrespondenceDistance,icp.maximumSamples,icp.minimumCorrespondences);
+                if(!correction.ok){ diag.reason = QStringLiteral("有效对应点不足"); break; }
+                if(correction.t.length()>icp.maximumCorrectionTranslation || correction.angleDegrees>icp.maximumCorrectionAngleDegrees){ diag.reason = QStringLiteral("ICP 修正量超过限制"); break; }
+                applyIcpCorrection(points,correction); last=correction; diag.iterations=iteration+1;
+                if(std::abs(previous-correction.rms)<=icp.convergenceTolerance){ diag.converged=true; break; }
+                previous=correction.rms;
+            }
+            if (last.ok) {
+                diag.correspondences = last.correspondences;
+                diag.fitness = diag.movingSampleCount > 0 ? float(last.correspondences) / float(diag.movingSampleCount) : 0.0f;
+                diag.rmse = last.rms;
+                diag.correctionTranslation = last.t.length();
+                diag.correctionAngleDegrees = last.angleDegrees;
+                diag.accepted = diag.converged && diag.fitness >= icp.fitnessThreshold && diag.rmse <= icp.rmseThreshold;
+                if (diag.reason.isEmpty()) diag.reason = diag.accepted ? QStringLiteral("通过 Fitness/RMSE") : QStringLiteral("Fitness 或 RMSE 未达标");
+            }
+        } else if (cloudId == 0) {
+            diag.filePath = inputs[cloudId].filePath;
+            diag.reason = QStringLiteral("参考点云");
+        } else if (!icp.enabled) {
+            diag.reason = QStringLiteral("ICP 未启用");
         }
+        result.icpDiagnostics.push_back(diag);
+        if (icp.enabled && cloudId > 0 && diag.attempted && !diag.accepted && diag.reason.isEmpty())
+            result.diagnostics += QStringLiteral("%1: 纯视觉/ICP 指标未达标，可检查点云畸变或机器人位姿；\n").arg(QFileInfo(inputs[cloudId].filePath).fileName());
         for (qsizetype sourceIndex = 0; sourceIndex < points.size(); ++sourceIndex) {
             const Point3D &point = points[sourceIndex];
             result.points.push_back(point); result.cloudIds.push_back(cloudId); result.sourceIndices.push_back(sourceIndices[sourceIndex]);
