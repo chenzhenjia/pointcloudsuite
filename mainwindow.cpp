@@ -8,6 +8,7 @@
 #include <QDoubleSpinBox>
 #include <QFutureWatcher>
 #include <QFileDialog>
+#include <QFile>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFrame>
@@ -56,6 +57,7 @@
 #include <QProcess>
 #include <QtMath>
 #include <QRegularExpression>
+#include <QTextStream>
 #include <QDir>
 #include <QDirIterator>
 #include <QPixmap>
@@ -130,6 +132,40 @@ void setPoseCell(QTableWidget *table, int row, int column, const QString &text) 
     auto *edit = new QLineEdit(text, table);
     edit->setAlignment(Qt::AlignRight);
     table->setCellWidget(row, column, edit);
+}
+
+bool readScanPoseInfo(const QString &directory, const QString &filePath,
+                      QVector<double> *start, QVector<double> *end) {
+    if (!start || !end) return false;
+    const QString key = QFileInfo(filePath).completeBaseName();
+    const QRegularExpression keyExpression(QStringLiteral("(A\\d{2})"),
+                                            QRegularExpression::CaseInsensitiveOption);
+    const auto keyMatch = keyExpression.match(key);
+    if (!keyMatch.hasMatch()) return false;
+    const QString scanKey = keyMatch.captured(1).toUpper();
+    QDir dir(directory);
+    QString infoPath = dir.filePath(QStringLiteral("Point_Cloud_A_Info.txt"));
+    if (!QFileInfo::exists(infoPath)) {
+        const QStringList candidates = dir.entryList({QStringLiteral("*_Info.txt"),
+                                                       QStringLiteral("*_info.txt")}, QDir::Files);
+        if (candidates.isEmpty()) return false;
+        infoPath = dir.filePath(candidates.constFirst());
+    }
+    QFile file(infoPath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return false;
+    QTextStream stream(&file);
+    const QRegularExpression lineExpression(
+        QStringLiteral("^\\s*%1\\s+Start\\s+X\\s*([-+0-9.eE]+)\\s+Y\\s*([-+0-9.eE]+)\\s+Z\\s*([-+0-9.eE]+)\\s+RX\\s*([-+0-9.eE]+)\\s+RY\\s*([-+0-9.eE]+)\\s+RZ\\s*([-+0-9.eE]+)\\s*;\\s*END\\s+X\\s*([-+0-9.eE]+)\\s+Y\\s*([-+0-9.eE]+)\\s+Z\\s*([-+0-9.eE]+)\\s+RX\\s*([-+0-9.eE]+)\\s+RY\\s*([-+0-9.eE]+)\\s+RZ\\s*([-+0-9.eE]+)" )
+            .arg(scanKey), QRegularExpression::CaseInsensitiveOption);
+    while (!stream.atEnd()) {
+        const auto match = lineExpression.match(stream.readLine());
+        if (!match.hasMatch()) continue;
+        start->clear(); end->clear();
+        for (int i = 1; i <= 6; ++i) start->push_back(match.captured(i).toDouble());
+        for (int i = 7; i <= 12; ++i) end->push_back(match.captured(i).toDouble());
+        return true;
+    }
+    return false;
 }
 }
 
@@ -1011,6 +1047,10 @@ void MainWindow::buildUi() {
     m_openHandEyeToolButton = ui->btn_open_hand_eye_tool;
     m_registrationScanProgress = ui->cb_scan_progress;
     m_registrationMode = ui->cb_registration_mode;
+    // Current Point_Cloud_A scans run along decreasing local Y. Keep this
+    // safe production default; advanced users can still change it.
+    if (m_registrationScanProgress) m_registrationScanProgress->setCurrentIndex(2);
+    if (m_registrationIcpEnabled) m_registrationIcpEnabled->setChecked(false);
     m_fileInfo = ui->lbl_subtitle1;
     m_canvasInfo = ui->lbl_subtitle2;
     m_progress = ui->pbar_progress;
@@ -1514,6 +1554,7 @@ void MainWindow::openPointCloudSource() {
         m_fileList->clear();
         m_fileList->setSelectionMode(QAbstractItemView::ExtendedSelection);
         for (const QString &path : m_sourceFiles) m_fileList->addItem(QFileInfo(path).fileName());
+        m_fileList->selectAll();
         m_fileInfo->setText(tr("文件夹扫描完成\nPLY 文件数  %1\n请在列表中选择文件查看，或进入“点云配准”页进行多选。")
                                 .arg(m_sourceFiles.size()));
         m_registrationTable->setRowCount(0);
@@ -1548,14 +1589,24 @@ void MainWindow::preparePointCloudRegistration() {
     QString text = QStringLiteral("Image_Set_A\n");
     for (int row = 0; row < selected.size(); ++row) {
         const int sourceRow = m_fileList->row(selected[row]);
-        m_registrationTable->setItem(row, 0, new QTableWidgetItem(m_sourceFiles.value(sourceRow)));
+        const QString filePath = m_sourceFiles.value(sourceRow);
+        m_registrationTable->setItem(row, 0, new QTableWidgetItem(filePath));
+        QVector<double> startPose, endPose;
+        const bool poseLoaded = readScanPoseInfo(m_sourceDirectory,
+                                                  filePath, &startPose, &endPose);
         for (int c = 1; c < 13; ++c) {
-            setPoseCell(m_registrationTable, row, c, QStringLiteral("0"));
+            QString value = QStringLiteral("0");
+            if (poseLoaded) {
+                const QVector<double> &pose = c <= 6 ? startPose : endPose;
+                value = QString::number(pose.value((c <= 6 ? c - 1 : c - 7)), 'g', 12);
+            }
+            setPoseCell(m_registrationTable, row, c, value);
             if (auto *edit = qobject_cast<QLineEdit *>(m_registrationTable->cellWidget(row, c)))
                 connect(edit, &QLineEdit::textChanged, this, &MainWindow::syncRegistrationPoseText);
         }
     }
     syncRegistrationPoseText();
+    statusBar()->showMessage(tr("已生成 %1 个文件的位姿；可直接开始世界坐标转换，ICP 默认关闭").arg(selected.size()));
 }
 
 void MainWindow::browseHandEyeCalibration() {
