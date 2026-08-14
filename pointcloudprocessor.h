@@ -110,6 +110,16 @@ struct WorldCloudMergeResult {
     QVector<QString> sourceFiles;
     QString diagnostics;
     QVector<IcpDiagnostics> icpDiagnostics;
+    struct OverlapDiagnostic {
+        int cloudId = -1;
+        float intersectionArea = 0.0f;
+        float movingArea = 0.0f;
+        float unionArea = 0.0f;
+        float movingCoverage = 0.0f;
+        float intersectionOverUnion = 0.0f;
+        bool warning = false;
+    };
+    QVector<OverlapDiagnostic> overlapDiagnostics;
     QString error;
     bool ok = false;
 };

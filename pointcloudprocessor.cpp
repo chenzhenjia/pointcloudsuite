@@ -741,6 +741,22 @@ struct CloudBounds {
     bool valid = false;
 };
 
+float xyOverlapArea(const CloudBounds &a, const CloudBounds &b, float *movingArea,
+                    float *unionArea, float *coverage, float *iou) {
+    if (!a.valid || !b.valid) { if (movingArea) *movingArea = 0; if (unionArea) *unionArea = 0; if (coverage) *coverage = 0; if (iou) *iou = 0; return 0; }
+    const float ix = qMax(0.0f, qMin(a.maximum.x(), b.maximum.x()) - qMax(a.minimum.x(), b.minimum.x()));
+    const float iy = qMax(0.0f, qMin(a.maximum.y(), b.maximum.y()) - qMax(a.minimum.y(), b.minimum.y()));
+    const float intersection = ix * iy;
+    const float areaA = qMax(0.0f, a.maximum.x() - a.minimum.x()) * qMax(0.0f, a.maximum.y() - a.minimum.y());
+    const float areaB = qMax(0.0f, b.maximum.x() - b.minimum.x()) * qMax(0.0f, b.maximum.y() - b.minimum.y());
+    const float uni = areaA + areaB - intersection;
+    if (movingArea) *movingArea = areaA;
+    if (unionArea) *unionArea = uni;
+    if (coverage) *coverage = areaA > 1.0e-6f ? intersection / areaA : 0.0f;
+    if (iou) *iou = uni > 1.0e-6f ? intersection / uni : 0.0f;
+    return intersection;
+}
+
 CloudBounds cloudBounds(const QVector<Point3D> &points) {
     CloudBounds bounds;
     for (const Point3D &point : points) {
@@ -827,6 +843,8 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
     result.points.reserve(total); result.cloudIds.reserve(total); result.sourceIndices.reserve(total);
     result.sourceFiles.reserve(inputs.size());
     result.icpDiagnostics.reserve(inputs.size());
+    result.overlapDiagnostics.reserve(inputs.size());
+    CloudBounds accumulatedBounds;
     for (int cloudId = 0; cloudId < inputs.size(); ++cloudId) {
         result.sourceFiles.push_back(inputs[cloudId].filePath);
         QVector<Point3D> points = std::move(loaded[cloudId]);
@@ -934,6 +952,33 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
         }
         result.diagnostics += QStringLiteral("  World bounds: %1\n  Output points after voxel: %2\n")
             .arg(formatBounds(cloudBounds(points))).arg(points.size());
+        const CloudBounds worldBounds = cloudBounds(points);
+        if (cloudId > 0 && accumulatedBounds.valid && worldBounds.valid) {
+            WorldCloudMergeResult::OverlapDiagnostic overlap;
+            overlap.cloudId = cloudId;
+            overlap.intersectionArea = xyOverlapArea(worldBounds, accumulatedBounds,
+                                                     &overlap.movingArea, &overlap.unionArea,
+                                                     &overlap.movingCoverage,
+                                                     &overlap.intersectionOverUnion);
+            overlap.warning = overlap.movingCoverage < 0.10f;
+            result.overlapDiagnostics.push_back(overlap);
+            result.diagnostics += QStringLiteral("  XY overlap with accumulated: intersection=%1, moving coverage=%2, IoU=%3%4\n")
+                .arg(overlap.intersectionArea, 0, 'g', 8)
+                .arg(overlap.movingCoverage, 0, 'g', 6)
+                .arg(overlap.intersectionOverUnion, 0, 'g', 6)
+                .arg(overlap.warning ? QStringLiteral(" [WARNING: low overlap]") : QString());
+        }
+        if (worldBounds.valid) {
+            if (!accumulatedBounds.valid) accumulatedBounds = worldBounds;
+            else {
+                accumulatedBounds.minimum.setX(qMin(accumulatedBounds.minimum.x(), worldBounds.minimum.x()));
+                accumulatedBounds.minimum.setY(qMin(accumulatedBounds.minimum.y(), worldBounds.minimum.y()));
+                accumulatedBounds.minimum.setZ(qMin(accumulatedBounds.minimum.z(), worldBounds.minimum.z()));
+                accumulatedBounds.maximum.setX(qMax(accumulatedBounds.maximum.x(), worldBounds.maximum.x()));
+                accumulatedBounds.maximum.setY(qMax(accumulatedBounds.maximum.y(), worldBounds.maximum.y()));
+                accumulatedBounds.maximum.setZ(qMax(accumulatedBounds.maximum.z(), worldBounds.maximum.z()));
+            }
+        }
         IcpDiagnostics diag;
         diag.filePath = inputs[cloudId].filePath;
         if (icp.enabled && cloudId > 0 && !result.points.isEmpty()) {
