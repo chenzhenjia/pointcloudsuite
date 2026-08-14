@@ -1005,6 +1005,7 @@ void MainWindow::buildUi() {
     m_registrationIcpRmse = ui->dsb_icp_rmse;
     m_registrationIcpZWeight = ui->dsb_icp_z_weight;
     m_registrationIcpEdgeWeight = ui->dsb_icp_edge_weight;
+    m_registrationIcpOverlap = ui->dsb_icp_overlap;
     m_handEyeXmlPath = ui->le_hand_eye_xml;
     m_browseHandEyeButton = ui->btn_browse_hand_eye;
     m_openHandEyeToolButton = ui->btn_open_hand_eye_tool;
@@ -1658,6 +1659,8 @@ void MainWindow::startPointCloudRegistration() {
     icp.useTwoPointFiveD = true;
     icp.zWeight = m_registrationIcpZWeight ? float(m_registrationIcpZWeight->value()) : 0.25f;
     icp.edgeWeight = m_registrationIcpEdgeWeight ? float(m_registrationIcpEdgeWeight->value()) : 0.20f;
+    icp.minimumOverlapRatio = m_registrationIcpOverlap ? float(m_registrationIcpOverlap->value()) : 0.10f;
+    icp.minimumUniqueReferenceRatio = 0.05f;
     icp.maximumCorrectionTranslation = 10.0f;
     icp.maximumCorrectionAngleDegrees = 2.0f;
     statusBar()->showMessage(visualOnly
@@ -1875,9 +1878,11 @@ void MainWindow::worldMergeFinished() {
     if (m_registrationOutput && !result.icpDiagnostics.isEmpty()) {
         QString report = result.diagnostics;
         for (const auto &diag : result.icpDiagnostics) {
-            report += tr("%1\n  对应数: %2 / %3\n  Fitness: %4\n  RMSE: %5 mm\n  迭代: %6\n  修正: 平移 %7 mm, 旋转 %8°\n  结论: %9\n")
+            report += tr("%1\n  对应数: %2 / %3\n  重合率: %4\n  唯一参考率: %5\n  重复对应率: %6\n  Fitness: %7\n  RMSE: %8 mm\n  迭代: %9\n  修正: 平移 %10 mm, 旋转 %11°\n  结论: %12\n")
                 .arg(QFileInfo(diag.filePath).fileName())
                 .arg(diag.correspondences).arg(diag.movingSampleCount)
+                .arg(diag.overlapRatio, 0, 'f', 4).arg(diag.uniqueReferenceRatio, 0, 'f', 4)
+                .arg(diag.duplicateCorrespondenceRatio, 0, 'f', 4)
                 .arg(diag.fitness, 0, 'f', 4).arg(diag.rmse, 0, 'f', 4)
                 .arg(diag.iterations).arg(diag.correctionTranslation, 0, 'f', 4)
                 .arg(diag.correctionAngleDegrees, 0, 'f', 3)

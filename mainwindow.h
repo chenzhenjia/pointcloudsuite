@@ -85,6 +85,7 @@ private:
     QDoubleSpinBox *m_registrationIcpRmse = nullptr;
     QDoubleSpinBox *m_registrationIcpZWeight = nullptr;
     QDoubleSpinBox *m_registrationIcpEdgeWeight = nullptr;
+    QDoubleSpinBox *m_registrationIcpOverlap = nullptr;
     QLineEdit *m_handEyeXmlPath = nullptr;
     QPushButton *m_browseHandEyeButton = nullptr;
     QPushButton *m_openHandEyeToolButton = nullptr;

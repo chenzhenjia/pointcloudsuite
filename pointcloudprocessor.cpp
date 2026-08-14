@@ -519,7 +519,7 @@ void writeMergeCache(const QVector<WorldCloudInput> &inputs, const WorldCloudMer
     file.flush(); file.close(); QFile::remove(path); QFile::rename(temp, path);
 }
 
-struct IcpCorrection { float r[3][3]{{1,0,0},{0,1,0},{0,0,1}}; QVector3D t; bool ok=false; float rms=0; int correspondences=0; float angleDegrees=0; };
+struct IcpCorrection { float r[3][3]{{1,0,0},{0,1,0},{0,0,1}}; QVector3D t; bool ok=false; float rms=0; int correspondences=0; int uniqueReferenceCount=0; float angleDegrees=0; };
 
 float twoPointFiveDWeight(const Point3D &point, float edgeWeight, float depthEdgeThreshold) {
     const float normalLength = std::sqrt(point.nx * point.nx + point.ny * point.ny + point.nz * point.nz);
@@ -566,7 +566,7 @@ IcpCorrection estimateIcpCorrection(const QVector<Point3D> &moving,
                                     float zWeight, float edgeWeight, float depthEdgeThreshold) {
     IcpCorrection out;
     if (moving.size() < 3 || reference.size() < 3 || maximumDistance <= 0 || index.cellSize <= 0.0f) return out;
-    struct IcpPair { QVector3D moving; QVector3D reference; float distanceSquared = 0.0f; float weight = 1.0f; };
+    struct IcpPair { QVector3D moving; QVector3D reference; int referenceIndex = -1; float distanceSquared = 0.0f; float weight = 1.0f; };
     QVector<IcpPair> pairs;
     const int step = qMax(1, int((moving.size() + maximumSamples - 1) / maximumSamples));
     const float limit2 = maximumDistance * maximumDistance;
@@ -577,7 +577,7 @@ IcpCorrection estimateIcpCorrection(const QVector<Point3D> &moving,
             auto it = index.cells.find({key.x+dx,key.y+dy,key.z+dz}); if (it == index.cells.end()) continue;
             for (int j : it->second) { const Point3D &q=reference[j]; const float ex=p.x-q.x,ey=p.y-q.y,ez=p.z-q.z; const float edge = qMin(twoPointFiveDWeight(p, edgeWeight, depthEdgeThreshold), twoPointFiveDWeight(q, edgeWeight, depthEdgeThreshold)); const float d=edge * (ex*ex+ey*ey+zWeight*ez*ez); if(d<best){best=d;bestIndex=j;} }
         }
-        if (bestIndex >= 0) { const Point3D &q = reference[bestIndex]; pairs.push_back({QVector3D(p.x,p.y,p.z), QVector3D(q.x,q.y,q.z), best, qMin(twoPointFiveDWeight(p, edgeWeight, depthEdgeThreshold), twoPointFiveDWeight(q, edgeWeight, depthEdgeThreshold))}); }
+        if (bestIndex >= 0) { const Point3D &q = reference[bestIndex]; pairs.push_back({QVector3D(p.x,p.y,p.z), QVector3D(q.x,q.y,q.z), bestIndex, best, qMin(twoPointFiveDWeight(p, edgeWeight, depthEdgeThreshold), twoPointFiveDWeight(q, edgeWeight, depthEdgeThreshold))}); }
     }
     if (pairs.size() < qMax(6, minimumCorrespondences)) return out;
     // Reject the worst residual tail before estimating the rigid correction.
@@ -591,6 +591,12 @@ IcpCorrection estimateIcpCorrection(const QVector<Point3D> &moving,
         if (keep < pairs.size()) pairs.resize(keep);
     }
     out.correspondences = pairs.size();
+    {
+        std::unordered_set<int> unique;
+        unique.reserve(size_t(pairs.size()));
+        for (const auto &pair : pairs) unique.insert(pair.referenceIndex);
+        out.uniqueReferenceCount = int(unique.size());
+    }
     double weightSum = 0.0; QVector3D cp, cq; for (const auto &v:pairs){weightSum += v.weight; cp += v.moving * v.weight; cq += v.reference * v.weight;} if (weightSum <= 1.0e-6) return out; cp/=float(weightSum); cq/=float(weightSum);
     double s[3][3]{}; for(const auto &v:pairs){QVector3D a=v.moving-cp,b=v.reference-cq; s[0][0]+=v.weight*a.x()*b.x();s[0][1]+=v.weight*a.x()*b.y();s[0][2]+=v.weight*a.x()*b.z();s[1][0]+=v.weight*a.y()*b.x();s[1][1]+=v.weight*a.y()*b.y();s[1][2]+=v.weight*a.y()*b.z();s[2][0]+=v.weight*a.z()*b.x();s[2][1]+=v.weight*a.z()*b.y();s[2][2]+=v.weight*a.z()*b.z();}
     const double tr=s[0][0]+s[1][1]+s[2][2]; double n[4][4]={{tr,s[1][2]-s[2][1],s[2][0]-s[0][2],s[0][1]-s[1][0]},{s[1][2]-s[2][1],s[0][0]-s[1][1]-s[2][2],s[0][1]+s[1][0],s[0][2]+s[2][0]},{s[2][0]-s[0][2],s[0][1]+s[1][0],-s[0][0]+s[1][1]-s[2][2],s[1][2]+s[2][1]},{s[0][1]-s[1][0],s[0][2]+s[2][0],s[1][2]+s[2][1],-s[0][0]-s[1][1]+s[2][2]}};
@@ -738,11 +744,24 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
                     diag.converged = true;
                 diag.correspondences = last.correspondences;
                 diag.fitness = diag.movingSampleCount > 0 ? float(last.correspondences) / float(diag.movingSampleCount) : 0.0f;
+                diag.overlapRatio = diag.fitness;
+                diag.uniqueReferenceRatio = last.correspondences > 0
+                    ? float(last.uniqueReferenceCount) / float(last.correspondences) : 0.0f;
+                diag.duplicateCorrespondenceRatio = 1.0f - diag.uniqueReferenceRatio;
                 diag.rmse = last.rms;
                 diag.correctionTranslation = last.t.length();
                 diag.correctionAngleDegrees = last.angleDegrees;
-                diag.accepted = diag.converged && diag.fitness >= icp.fitnessThreshold && diag.rmse <= icp.rmseThreshold;
-                if (diag.reason.isEmpty()) diag.reason = diag.accepted ? QStringLiteral("通过 Fitness/RMSE") : QStringLiteral("Fitness 或 RMSE 未达标");
+                diag.accepted = diag.converged && diag.fitness >= icp.fitnessThreshold && diag.rmse <= icp.rmseThreshold
+                    && diag.overlapRatio >= icp.minimumOverlapRatio
+                    && diag.uniqueReferenceRatio >= icp.minimumUniqueReferenceRatio;
+                if (diag.reason.isEmpty()) {
+                    if (diag.overlapRatio < icp.minimumOverlapRatio)
+                        diag.reason = QStringLiteral("重合率过低");
+                    else if (diag.uniqueReferenceRatio < icp.minimumUniqueReferenceRatio)
+                        diag.reason = QStringLiteral("重复对应过高");
+                    else
+                        diag.reason = diag.accepted ? QStringLiteral("通过 Fitness/RMSE/重合率") : QStringLiteral("Fitness 或 RMSE 未达标");
+                }
             }
         } else if (cloudId == 0) {
             diag.filePath = inputs[cloudId].filePath;

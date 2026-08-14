@@ -70,6 +70,8 @@ struct IcpOptions {
     bool useRobotInitialGuess = true;
     float fitnessThreshold = 0.90f;
     float rmseThreshold = 0.05f;
+    float minimumOverlapRatio = 0.10f;
+    float minimumUniqueReferenceRatio = 0.05f;
 };
 
 struct IcpDiagnostics {
@@ -85,6 +87,9 @@ struct IcpDiagnostics {
     float rmse = 0.0f;
     float correctionTranslation = 0.0f;
     float correctionAngleDegrees = 0.0f;
+    float overlapRatio = 0.0f;
+    float uniqueReferenceRatio = 0.0f;
+    float duplicateCorrespondenceRatio = 0.0f;
     QString reason;
 };
 
