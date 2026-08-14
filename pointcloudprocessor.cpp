@@ -953,6 +953,8 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
         result.diagnostics += QStringLiteral("  World bounds: %1\n  Output points after voxel: %2\n")
             .arg(formatBounds(cloudBounds(points))).arg(points.size());
         const CloudBounds worldBounds = cloudBounds(points);
+        float worldOverlapForIcp = 1.0f;
+        bool lowWorldOverlapForIcp = false;
         if (cloudId > 0 && accumulatedBounds.valid && worldBounds.valid) {
             WorldCloudMergeResult::OverlapDiagnostic overlap;
             overlap.cloudId = cloudId;
@@ -962,6 +964,9 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
                                                      &overlap.intersectionOverUnion);
             overlap.warning = overlap.movingCoverage < 0.10f;
             result.overlapDiagnostics.push_back(overlap);
+            worldOverlapForIcp = overlap.movingCoverage;
+            lowWorldOverlapForIcp = icp.rejectIcpWhenLowWorldOverlap
+                && worldOverlapForIcp < qBound(0.0f, icp.minimumWorldOverlapForIcp, 1.0f);
             result.diagnostics += QStringLiteral("  XY overlap with accumulated: intersection=%1, moving coverage=%2, IoU=%3%4\n")
                 .arg(overlap.intersectionArea, 0, 'g', 8)
                 .arg(overlap.movingCoverage, 0, 'g', 6)
@@ -981,7 +986,12 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
         }
         IcpDiagnostics diag;
         diag.filePath = inputs[cloudId].filePath;
-        if (icp.enabled && cloudId > 0 && !result.points.isEmpty()) {
+        if (icp.enabled && cloudId > 0 && !result.points.isEmpty() && lowWorldOverlapForIcp) {
+            diag.attempted = false;
+            diag.reason = QStringLiteral("机器人世界坐标 XY 重合率过低，已跳过 ICP（请检查 Start/End、扫描方向、手眼矩阵和文件顺序）");
+            result.diagnostics += QStringLiteral("%1: %2\n")
+                .arg(QFileInfo(inputs[cloudId].filePath).fileName(), diag.reason);
+        } else if (icp.enabled && cloudId > 0 && !result.points.isEmpty()) {
             diag.attempted = true;
             const int sampleLimit = qMax(1, icp.maximumSamples);
             const int sampleStep = qMax(1, int((points.size() + sampleLimit - 1) / sampleLimit));

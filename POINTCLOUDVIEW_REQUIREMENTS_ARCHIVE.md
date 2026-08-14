@@ -783,3 +783,11 @@ ef55dc6 Document registration distortion diagnosis
 的 XY 包围盒交集。输出交集面积、当前帧面积、交并比和重合率；低于阈值时
 在配准诊断中报警，提示检查文件顺序、Start/End、扫描方向和手眼矩阵。该
 阶段只做几何检查，不删除重合实测点，也不让 ICP 掩盖无重合问题。
+
+### 18.7 第四阶段：ICP 前置质量门控
+
+机器人世界坐标转换完成后，ICP 开始前计算当前帧与累计参考的 XY 包围盒
+重合率。默认低于 10% 时跳过该帧 ICP，并在诊断中明确提示检查 Start/End、
+扫描方向、手眼矩阵和文件顺序；实测点不删除、不移动。该门控可通过
+`rejectIcpWhenLowWorldOverlap=false` 关闭，仅用于受控诊断。ICP 实际运行时
+仍执行 Fitness、RMSE、对应点重合率、重复对应率及修正量限制。

@@ -198,3 +198,15 @@ ordering problem and must not be hidden by ICP.
 
 The gate is diagnostic in this phase and does not delete overlapping measured
 points. A later UI phase may expose a configurable warning threshold.
+
+## Phase 4 implementation: ICP preflight overlap gate
+
+Before ICP correspondence search, the robot-world XY bounding-box coverage of
+the moving cloud is compared with the accumulated reference. If coverage is
+below `IcpOptions::minimumWorldOverlapForIcp` (default 0.10), ICP is skipped
+and the diagnostic asks the operator to check Start/End poses, scan direction,
+hand-eye calibration, and file order. Measured points remain unchanged; this
+is a safety gate rather than a filter. Set `rejectIcpWhenLowWorldOverlap` to
+false only for controlled diagnostics. The existing ICP Fitness, RMSE,
+correspondence-overlap, and correction-limit checks remain active whenever
+ICP is allowed to run.

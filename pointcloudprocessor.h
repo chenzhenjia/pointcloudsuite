@@ -77,6 +77,11 @@ struct IcpOptions {
     float rmseThreshold = 0.05f;
     float minimumOverlapRatio = 0.10f;
     float minimumUniqueReferenceRatio = 0.05f;
+    // Robot-world XY overlap is checked before ICP.  A low value usually
+    // indicates an incorrect Start/End pose, scan direction, hand-eye matrix,
+    // or file order; do not let ICP manufacture a misleading correction.
+    bool rejectIcpWhenLowWorldOverlap = true;
+    float minimumWorldOverlapForIcp = 0.10f;
     bool useMultiScale = true;
     QVector<float> voxelLevels = {2.0f, 0.8f, 0.25f};
 };
