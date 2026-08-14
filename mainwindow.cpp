@@ -110,7 +110,7 @@ bool readDepthInRobotTransform(const QString &path, QMatrix4x4 *transform, QStri
         }
     }
     if (!poseFound) { if (error) *error = xml.hasError() ? xml.errorString() : QObject::tr("XML 中未找到 DepthInRobotPose"); return false; }
-    if (matrixFound && matrixValues.size()==9) { matrixResult.setToIdentity(); for(int r=0;r<3;++r) for(int c=0;c<3;++c) matrixResult(r,c)=float(matrixValues[r*3+c]); matrixResult(0,3)=poseResult(0,3); matrixResult(1,3)=poseResult(1,3); matrixResult(2,3)=poseResult(2,3); float maxDiff=0; for(int i=0;i<16;++i) maxDiff=qMax(maxDiff,std::abs(matrixResult.constData()[i]-poseResult.constData()[i])); if(maxDiff>0.01f && error) *error=QObject::tr("标定文件欧拉角与 RTmatDepth2robot 不一致，最大差异 %1").arg(maxDiff); }
+    if (matrixFound && matrixValues.size()==9) { matrixResult.setToIdentity(); for(int r=0;r<3;++r) for(int c=0;c<3;++c) matrixResult(r,c)=float(matrixValues[r*3+c]); matrixResult(0,3)=poseResult(0,3); matrixResult(1,3)=poseResult(1,3); matrixResult(2,3)=poseResult(2,3); float maxDiff=0; for(int i=0;i<16;++i) maxDiff=qMax(maxDiff,std::abs(matrixResult.constData()[i]-poseResult.constData()[i])); if(maxDiff>0.01f) { if(error) *error=QObject::tr("标定文件欧拉角与 RTmatDepth2robot 不一致，最大差异 %1").arg(maxDiff); return false; } }
     *transform=poseResult; return true;
 }
 QVector<double> parsePoseCells(QTableWidget *table, int row, int firstColumn, bool *ok) {
