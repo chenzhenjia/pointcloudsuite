@@ -168,3 +168,20 @@ An A/B test that exchanges each Start and End pose reduces the world Y span to a
 ## Phase 1 implementation: explicit scan direction and cache isolation
 
 `WorldCloudInput` now carries `ScanDirection::{Auto,Forward,Reverse}`. The production UI uses `Auto`; it compares transformed endpoint residuals for both mappings and records the selected direction in diagnostics. A caller can force either mapping for controlled A/B tests. The merge-cache version is incremented and the direction is serialized, so results from a different direction cannot be reused.
+
+## Phase 2 plan: robust direction score and overlap validation
+
+The next direction decision uses trimmed endpoint regions rather than one first
+and one last vertex. For each organized scan, the first and last 1% (bounded
+by a maximum sample count) of valid points are averaged. The local endpoint
+vector is rotated by the mid-scan hand-eye/flange orientation. Two candidates
+are scored: camera displacement plus robot Start-to-End translation, and camera
+displacement minus that translation. The smaller norm is selected, and both
+scores are written to diagnostics. This tests the physical cancellation
+expected for a moving Eye-in-Hand scanner and is independent of local-axis
+numeric order.
+
+After conversion, phase 2 also reports adjacent-cloud XY bounding-box overlap
+and rejects direction conclusions when neither candidate produces a plausible
+overlap. Duplicate measured points are retained; overlap is a diagnostic, not
+an instruction to delete points.

@@ -519,6 +519,8 @@ bool validateRigidTransform(const QMatrix4x4 &matrix, QString *error) {
 }
 
 bool readMergeCache(const QVector<WorldCloudInput> &inputs, WorldCloudMergeResult &result) {
+    for (const auto &input : inputs)
+        if (input.scanDirection == WorldCloudInput::ScanDirection::Auto) return false;
     QFile file(mergeCachePath(inputs));
     if (!file.open(QIODevice::ReadOnly)) return false;
     QDataStream stream(&file); stream.setByteOrder(QDataStream::LittleEndian);
@@ -867,44 +869,30 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
         if (inputs[cloudId].scanDirection == WorldCloudInput::ScanDirection::Auto
             && inputs[cloudId].applyRobotTransform && progressSource != WorldCloudInput::ScanProgressSource::VertexOrder
             && haveFirstProgressValue && haveLastProgressValue && progressHigh > progressLow) {
-            const auto axisValue = [progressAxis](const Point3D &point) {
-                return progressAxis == 0 ? point.x : progressAxis == 1 ? point.y : point.z;
-            };
-            const Point3D *firstPoint = nullptr, *lastPoint = nullptr;
-            for (const Point3D &point : points) if (usablePoint(point)) {
-                if (!firstPoint) firstPoint = &point;
-                lastPoint = &point;
+            const qsizetype validCount = std::count_if(points.cbegin(), points.cend(),
+                [](const Point3D &point) { return usablePoint(point); });
+            const qsizetype window = qMax<qsizetype>(1, qMin<qsizetype>(4096, validCount / 100));
+            QVector3D firstMean, lastMean; qsizetype ordinal = 0;
+            for (const Point3D &point : points) {
+                if (!usablePoint(point)) continue;
+                if (ordinal < window) firstMean += QVector3D(point.x, point.y, point.z);
+                if (ordinal >= validCount - window) lastMean += QVector3D(point.x, point.y, point.z);
+                ++ordinal;
             }
-            if (firstPoint && lastPoint) {
-                const float firstNormalized = qBound(0.0f,
-                    (axisValue(*firstPoint) - progressLow) / (progressHigh - progressLow), 1.0f);
-                const float lastNormalized = qBound(0.0f,
-                    (axisValue(*lastPoint) - progressLow) / (progressHigh - progressLow), 1.0f);
-                auto endpointResidual = [&](bool reverse) {
-                    const float firstT = reverse ? 1.0f - firstNormalized : firstNormalized;
-                    const float lastT = reverse ? 1.0f - lastNormalized : lastNormalized;
-                    const QMatrix4x4 firstTransform = interpolateRigidTransform(
-                        inputs[cloudId].startBaseFromFlange,
-                        inputs[cloudId].endBaseFromFlange, firstT)
-                        * inputs[cloudId].flangeFromDepth;
-                    const QMatrix4x4 lastTransform = interpolateRigidTransform(
-                        inputs[cloudId].startBaseFromFlange,
-                        inputs[cloudId].endBaseFromFlange, lastT)
-                        * inputs[cloudId].flangeFromDepth;
-                    const QVector3D firstWorld = firstTransform.map(
-                        QVector3D(firstPoint->x, firstPoint->y, firstPoint->z));
-                    const QVector3D lastWorld = lastTransform.map(
-                        QVector3D(lastPoint->x, lastPoint->y, lastPoint->z));
-                    return (lastWorld - firstWorld).length();
-                };
-                const float forwardResidual = endpointResidual(false);
-                const float reverseResidual = endpointResidual(true);
-                reverseProgress = reverseResidual < forwardResidual;
-                progressDecision = QStringLiteral("auto forward residual=%1, reverse residual=%2, selected=%3")
-                    .arg(forwardResidual, 0, 'g', 8)
-                    .arg(reverseResidual, 0, 'g', 8)
-                    .arg(reverseProgress ? QStringLiteral("reverse") : QStringLiteral("forward"));
-            }
+            firstMean /= float(window); lastMean /= float(window);
+            const QMatrix4x4 midTransform = interpolateRigidTransform(
+                inputs[cloudId].startBaseFromFlange,
+                inputs[cloudId].endBaseFromFlange, 0.5f) * inputs[cloudId].flangeFromDepth;
+            const QVector3D cameraWorldDelta = midTransform.mapVector(lastMean - firstMean);
+            const QVector3D robotDelta(inputs[cloudId].endBaseFromFlange(0, 3) - inputs[cloudId].startBaseFromFlange(0, 3),
+                                       inputs[cloudId].endBaseFromFlange(1, 3) - inputs[cloudId].startBaseFromFlange(1, 3),
+                                       inputs[cloudId].endBaseFromFlange(2, 3) - inputs[cloudId].startBaseFromFlange(2, 3));
+            const float forwardResidual = (cameraWorldDelta + robotDelta).length();
+            const float reverseResidual = (cameraWorldDelta - robotDelta).length();
+            reverseProgress = reverseResidual < forwardResidual;
+            progressDecision = QStringLiteral("auto first/last 1%% mean, forward residual=%1, reverse residual=%2, selected=%3")
+                .arg(forwardResidual, 0, 'g', 8).arg(reverseResidual, 0, 'g', 8)
+                .arg(reverseProgress ? QStringLiteral("reverse") : QStringLiteral("forward"));
         }
         result.diagnostics += QStringLiteral("%1\n  Robot transform: %2\n  Progress source: %3, range: %4 .. %5\n  Start matrix: %6\n  Mid matrix: %7\n  End matrix: %8\n  Hand-eye matrix (flange<-depth): %9\n  Local bounds: %10\n")
             .arg(QFileInfo(inputs[cloudId].filePath).fileName())
