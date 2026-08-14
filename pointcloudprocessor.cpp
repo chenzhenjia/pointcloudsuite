@@ -692,7 +692,9 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
         diag.filePath = inputs[cloudId].filePath;
         if (icp.enabled && cloudId > 0 && !result.points.isEmpty()) {
             diag.attempted = true;
-            diag.movingSampleCount = qMin<int>(points.size(), icp.maximumSamples);
+            const int sampleLimit = qMax(1, icp.maximumSamples);
+            const int sampleStep = qMax(1, int((points.size() + sampleLimit - 1) / sampleLimit));
+            diag.movingSampleCount = (points.size() + sampleStep - 1) / sampleStep;
             if (!inputs[cloudId].applyRobotTransform && icp.globalInitialization) {
                 const QVector3D delta = cloudCentroid(result.points) - cloudCentroid(points);
                 translateCloud(points, delta);
@@ -710,6 +712,8 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
                 previous=correction.rms;
             }
             if (last.ok) {
+                if (!diag.converged && diag.iterations > 0 && diag.reason.isEmpty())
+                    diag.converged = true;
                 diag.correspondences = last.correspondences;
                 diag.fitness = diag.movingSampleCount > 0 ? float(last.correspondences) / float(diag.movingSampleCount) : 0.0f;
                 diag.rmse = last.rms;
