@@ -72,6 +72,8 @@ struct IcpOptions {
     float rmseThreshold = 0.05f;
     float minimumOverlapRatio = 0.10f;
     float minimumUniqueReferenceRatio = 0.05f;
+    bool useMultiScale = true;
+    QVector<float> voxelLevels = {2.0f, 0.8f, 0.25f};
 };
 
 struct IcpDiagnostics {
@@ -90,6 +92,9 @@ struct IcpDiagnostics {
     float overlapRatio = 0.0f;
     float uniqueReferenceRatio = 0.0f;
     float duplicateCorrespondenceRatio = 0.0f;
+    float xyRmse = 0.0f;
+    float zRmse = 0.0f;
+    int completedLevels = 0;
     QString reason;
 };
 

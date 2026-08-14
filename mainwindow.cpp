@@ -1878,13 +1878,15 @@ void MainWindow::worldMergeFinished() {
     if (m_registrationOutput && !result.icpDiagnostics.isEmpty()) {
         QString report = result.diagnostics;
         for (const auto &diag : result.icpDiagnostics) {
-            report += tr("%1\n  对应数: %2 / %3\n  重合率: %4\n  唯一参考率: %5\n  重复对应率: %6\n  Fitness: %7\n  RMSE: %8 mm\n  迭代: %9\n  修正: 平移 %10 mm, 旋转 %11°\n  结论: %12\n")
+            report += tr("%1\n  对应数: %2 / %3\n  重合率: %4\n  唯一参考率: %5\n  重复对应率: %6\n  Fitness: %7\n  RMSE: %8 mm\n  XY RMSE: %9 mm\n  Z RMSE: %10 mm\n  多尺度层数: %11\n  迭代: %12\n  修正: 平移 %13 mm, 旋转 %14°\n  结论: %15\n")
                 .arg(QFileInfo(diag.filePath).fileName())
                 .arg(diag.correspondences).arg(diag.movingSampleCount)
                 .arg(diag.overlapRatio, 0, 'f', 4).arg(diag.uniqueReferenceRatio, 0, 'f', 4)
                 .arg(diag.duplicateCorrespondenceRatio, 0, 'f', 4)
                 .arg(diag.fitness, 0, 'f', 4).arg(diag.rmse, 0, 'f', 4)
-                .arg(diag.iterations).arg(diag.correctionTranslation, 0, 'f', 4)
+                .arg(diag.xyRmse, 0, 'f', 4).arg(diag.zRmse, 0, 'f', 4)
+                .arg(diag.completedLevels).arg(diag.iterations)
+                .arg(diag.correctionTranslation, 0, 'f', 4)
                 .arg(diag.correctionAngleDegrees, 0, 'f', 3)
                 .arg(diag.reason.isEmpty() ? tr("未完成") : diag.reason);
         }

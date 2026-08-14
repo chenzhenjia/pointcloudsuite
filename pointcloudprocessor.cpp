@@ -519,7 +519,7 @@ void writeMergeCache(const QVector<WorldCloudInput> &inputs, const WorldCloudMer
     file.flush(); file.close(); QFile::remove(path); QFile::rename(temp, path);
 }
 
-struct IcpCorrection { float r[3][3]{{1,0,0},{0,1,0},{0,0,1}}; QVector3D t; bool ok=false; float rms=0; int correspondences=0; int uniqueReferenceCount=0; float angleDegrees=0; };
+struct IcpCorrection { float r[3][3]{{1,0,0},{0,1,0},{0,0,1}}; QVector3D t; bool ok=false; float rms=0; float xyRms=0; float zRms=0; int correspondences=0; int uniqueReferenceCount=0; float angleDegrees=0; };
 
 float twoPointFiveDWeight(const Point3D &point, float edgeWeight, float depthEdgeThreshold) {
     const float normalLength = std::sqrt(point.nx * point.nx + point.ny * point.ny + point.nz * point.nz);
@@ -603,7 +603,8 @@ IcpCorrection estimateIcpCorrection(const QVector<Point3D> &moving,
     double q[4]{1,0,0,0}; for(int k=0;k<32;++k){double v[4]{};for(int r=0;r<4;++r)for(int c=0;c<4;++c)v[r]+=n[r][c]*q[c];double len=std::sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]+v[3]*v[3]);if(len<1e-15)return out;for(int r=0;r<4;++r)q[r]=v[r]/len;}
     const double w=q[0],x=q[1],y=q[2],z=q[3]; out.r[0][0]=float(1-2*(y*y+z*z));out.r[0][1]=float(2*(x*y-z*w));out.r[0][2]=float(2*(x*z+y*w));out.r[1][0]=float(2*(x*y+z*w));out.r[1][1]=float(1-2*(x*x+z*z));out.r[1][2]=float(2*(y*z-x*w));out.r[2][0]=float(2*(x*z-y*w));out.r[2][1]=float(2*(y*z+x*w));out.r[2][2]=float(1-2*(x*x+y*y));
     auto rotate=[&](const QVector3D &v){return QVector3D(out.r[0][0]*v.x()+out.r[0][1]*v.y()+out.r[0][2]*v.z(),out.r[1][0]*v.x()+out.r[1][1]*v.y()+out.r[1][2]*v.z(),out.r[2][0]*v.x()+out.r[2][1]*v.y()+out.r[2][2]*v.z());}; out.t=cq-rotate(cp); out.angleDegrees=qRadiansToDegrees(float(2.0*std::acos(qBound(-1.0, std::min(1.0, std::abs(w)), 1.0))));
-    double error=0;for(const auto &v:pairs)error += v.weight * (rotate(v.moving)+out.t-v.reference).lengthSquared();out.rms=float(std::sqrt(error/weightSum));out.ok=true;return out;
+    double error=0, xyError=0, zError=0; for(const auto &v:pairs){ const QVector3D residual=rotate(v.moving)+out.t-v.reference; error += v.weight * residual.lengthSquared(); xyError += v.weight * (residual.x()*residual.x()+residual.y()*residual.y()); zError += v.weight * residual.z()*residual.z(); }
+    out.rms=float(std::sqrt(error/weightSum)); out.xyRms=float(std::sqrt(xyError/weightSum)); out.zRms=float(std::sqrt(zError/weightSum)); out.ok=true;return out;
 }
 
 void applyIcpCorrection(QVector<Point3D> &points, const IcpCorrection &c) { for(Point3D &p:points){const float x=p.x,y=p.y,z=p.z;p.x=c.r[0][0]*x+c.r[0][1]*y+c.r[0][2]*z+c.t.x();p.y=c.r[1][0]*x+c.r[1][1]*y+c.r[1][2]*z+c.t.y();p.z=c.r[2][0]*x+c.r[2][1]*y+c.r[2][2]*z+c.t.z();const float nx=p.nx,ny=p.ny,nz=p.nz;p.nx=c.r[0][0]*nx+c.r[0][1]*ny+c.r[0][2]*nz;p.ny=c.r[1][0]*nx+c.r[1][1]*ny+c.r[1][2]*nz;p.nz=c.r[2][0]*nx+c.r[2][1]*ny+c.r[2][2]*nz;} }
@@ -725,19 +726,34 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
                 translateCloud(points, delta);
                 diag.usedGlobalInitialization = true;
             }
-            const IcpSpatialIndex referenceIndex = buildIcpSpatialIndex(result.points, icp.maximumCorrespondenceDistance);
-            float previous=std::numeric_limits<float>::max();
             IcpCorrection last;
-            for(int iteration=0;iteration<icp.maximumIterations;++iteration){
-                IcpCorrection correction=estimateIcpCorrection(points,result.points,referenceIndex,icp.maximumCorrespondenceDistance,icp.maximumSamples,icp.minimumCorrespondences,
-                                                                 icp.useTwoPointFiveD ? qBound(0.01f, icp.zWeight, 1.0f) : 1.0f,
-                                                                 icp.useTwoPointFiveD ? qBound(0.01f, icp.edgeWeight, 1.0f) : 1.0f,
-                                                                 icp.depthEdgeThreshold);
-                if(!correction.ok){ diag.reason = QStringLiteral("有效对应点不足"); break; }
-                if(correction.t.length()>icp.maximumCorrectionTranslation || correction.angleDegrees>icp.maximumCorrectionAngleDegrees){ diag.reason = QStringLiteral("ICP 修正量超过限制"); break; }
-                applyIcpCorrection(points,correction); last=correction; diag.iterations=iteration+1;
-                if(std::abs(previous-correction.rms)<=icp.convergenceTolerance){ diag.converged=true; break; }
-                previous=correction.rms;
+            QVector<float> levels = icp.useMultiScale && !icp.voxelLevels.isEmpty()
+                ? icp.voxelLevels : QVector<float>{0.0f};
+            int levelNumber = 0;
+            for (float levelSize : levels) {
+                QVector<Point3D> movingLevel = levelSize > 0.0f ? voxelFilter(points, levelSize) : points;
+                QVector<Point3D> referenceLevel = levelSize > 0.0f ? voxelFilter(result.points, levelSize) : result.points;
+                if (movingLevel.size() < qMax(6, icp.minimumCorrespondences)
+                    || referenceLevel.size() < qMax(6, icp.minimumCorrespondences)) continue;
+                const float levelDistance = levelSize > 0.0f
+                    ? qMax(icp.maximumCorrespondenceDistance, levelSize * 1.5f)
+                    : icp.maximumCorrespondenceDistance;
+                const IcpSpatialIndex referenceIndex = buildIcpSpatialIndex(referenceLevel, levelDistance);
+                float previous=std::numeric_limits<float>::max();
+                const int levelIterations = qMax(1, icp.maximumIterations / qMax(1, int(levels.size())));
+                for(int iteration=0;iteration<levelIterations;++iteration){
+                    IcpCorrection correction=estimateIcpCorrection(movingLevel,referenceLevel,referenceIndex,levelDistance,icp.maximumSamples,icp.minimumCorrespondences,
+                                                                     icp.useTwoPointFiveD ? qBound(0.01f, icp.zWeight, 1.0f) : 1.0f,
+                                                                     icp.useTwoPointFiveD ? qBound(0.01f, icp.edgeWeight, 1.0f) : 1.0f,
+                                                                     icp.depthEdgeThreshold);
+                    if(!correction.ok){ diag.reason = QStringLiteral("有效对应点不足"); break; }
+                    if(correction.t.length()>icp.maximumCorrectionTranslation || correction.angleDegrees>icp.maximumCorrectionAngleDegrees){ diag.reason = QStringLiteral("ICP 修正量超过限制"); break; }
+                    applyIcpCorrection(points,correction); applyIcpCorrection(movingLevel,correction); last=correction; diag.iterations++;
+                    if(std::abs(previous-correction.rms)<=icp.convergenceTolerance){ diag.converged=true; break; }
+                    previous=correction.rms;
+                }
+                if (last.ok) ++levelNumber;
+                if (!diag.reason.isEmpty() && !diag.converged) break;
             }
             if (last.ok) {
                 if (!diag.converged && diag.iterations > 0 && diag.reason.isEmpty())
@@ -749,6 +765,9 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
                     ? float(last.uniqueReferenceCount) / float(last.correspondences) : 0.0f;
                 diag.duplicateCorrespondenceRatio = 1.0f - diag.uniqueReferenceRatio;
                 diag.rmse = last.rms;
+                diag.xyRmse = last.xyRms;
+                diag.zRmse = last.zRms;
+                diag.completedLevels = levelNumber;
                 diag.correctionTranslation = last.t.length();
                 diag.correctionAngleDegrees = last.angleDegrees;
                 diag.accepted = diag.converged && diag.fitness >= icp.fitnessThreshold && diag.rmse <= icp.rmseThreshold
