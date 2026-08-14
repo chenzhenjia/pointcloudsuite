@@ -673,10 +673,17 @@ private:
         if (!m_uploadPending) return;
         if (m_points.size() > std::numeric_limits<int>::max() / qsizetype(sizeof(pointcloud::Point3D))) {
             m_uploadError = tr("点云过大，超过单个 OpenGL 缓冲区限制");
+            qCritical() << "OpenGL upload rejected, points=" << m_points.size()
+                        << "bytes="
+                        << (m_points.size() * qsizetype(sizeof(pointcloud::Point3D)));
             m_uploadPending = false;
             return;
         }
 
+        const qsizetype uploadBytes =
+            m_points.size() * qsizetype(sizeof(pointcloud::Point3D));
+        qInfo() << "OpenGL cloud upload started, points=" << m_points.size()
+                << "bytes=" << uploadBytes;
         m_vertexArray.bind();
         m_vertexBuffer.bind();
         m_vertexBuffer.setUsagePattern(QOpenGLBuffer::StaticDraw);
@@ -688,6 +695,9 @@ private:
             m_uploadError = uploadError == GL_OUT_OF_MEMORY
                 ? tr("显存不足，无法全量上传当前点云")
                 : tr("点云上传至显卡失败（OpenGL 错误 %1）").arg(uploadError);
+            qCritical().noquote() << m_uploadError
+                                  << "points=" << m_points.size()
+                                  << "bytes=" << uploadBytes;
             m_uploadPending = false;
         } else {
             m_program.bind();
@@ -705,6 +715,8 @@ private:
             m_program.release();
             m_uploadPending = false;
             m_stateUploadPending = false;
+            qInfo() << "OpenGL cloud upload finished, points=" << m_points.size()
+                    << "bytes=" << uploadBytes;
         }
         m_vertexBuffer.release();
         m_vertexArray.release();
@@ -1820,6 +1832,12 @@ void MainWindow::openPointCloud() {
 
 void MainWindow::loadFinished() {
     const pointcloud::LoadResult result = m_loadWatcher->result();
+    if (m_closing) {
+        qWarning() << "PLY load result discarded because the window is closing, points="
+                   << result.points.size() << "path=" << m_pendingPath;
+        m_loading = false;
+        return;
+    }
     if (!result.ok) {
         m_loading = false;
         m_progress->hide();
@@ -1834,6 +1852,8 @@ void MainWindow::loadFinished() {
         statusBar()->showMessage(tr("加载失败：点云为空"));
         return;
     }
+    qInfo() << "PLY load finished, points=" << result.points.size()
+            << "path=" << m_pendingPath;
     m_rawPoints = result.points;
     const QFileInfo fileInfo(m_pendingPath);
     const bool keepFolderSources = m_folderScanOnly && m_sourceFiles.size() > 1
@@ -1851,6 +1871,8 @@ void MainWindow::loadFinished() {
     m_mapMin->setValue(minZ);
     m_mapMax->setValue(maxZ > minZ ? maxZ : minZ + 1.0);
     publishCanvasCache(m_rawPoints);
+    qInfo() << "PLY display publication finished, main points=" << m_points.size()
+            << "raw points=" << m_rawPoints.size();
     m_pointCloudIds.clear();
     m_pointSourceIndices.resize(m_rawPoints.size());
     for (qsizetype i = 0; i < m_pointSourceIndices.size(); ++i) m_pointSourceIndices[i] = i;
@@ -1883,9 +1905,26 @@ void MainWindow::updateRenderSettings() {
 }
 
 void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points) {
-    if (m_closing || !m_canvas) return;
+    const qsizetype incomingCount = points.size();
+
+    // No GUI or OpenGL state may be touched once closeEvent() has started.
+    // A QFutureWatcher completion can already be queued when the window closes.
+    if (m_closing) {
+        qWarning() << "Display cache publication discarded during shutdown, points="
+                   << incomingCount;
+        return;
+    }
+
+    // The CPU display cache is the authoritative input for every downstream
+    // operation. A temporarily unavailable OpenGL widget must never discard a
+    // successfully loaded cloud or leave the UI reporting zero displayed
+    // points while m_rawPoints is populated.
     m_points = std::move(points);
     ++m_canvasRevision;
+    qInfo() << "Main display cache published, points=" << m_points.size()
+            << "incoming=" << incomingCount
+            << "canvas=" << static_cast<const void *>(m_canvas)
+            << "closing=" << m_closing;
     m_selectedPointIndices.clear();
     m_threePlaneResult = {};
     m_obstacleResult = {};
@@ -1899,6 +1938,8 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points) {
         // multi-million-point cloud that schedules a second state-buffer
         // update during the first VBO upload and can leave the canvas blank.
         m_canvas->setCloud(m_points);
+    } else {
+        qCritical() << "Main display cache is ready but PointCloudCanvas is null";
     }
     if (m_threeOutput) m_threeOutput->clear();
     clearPlaneEdgeUi();
@@ -2031,6 +2072,10 @@ bool MainWindow::pointTaskRunning() const {
         || (m_planeImageWatcher && m_planeImageWatcher->isRunning());
 }
 
+bool MainWindow::obstacleBlocksProcessing() const {
+    return m_obstacleResult.ok && !m_obstacleResult.regions.isEmpty();
+}
+
 void MainWindow::startPlanePointSelection() {
     if (pointTaskRunning()) {
         statusBar()->showMessage(tr("点云处理任务正在运行"));
@@ -2151,7 +2196,7 @@ void MainWindow::updateObstacleDetectionUi() {
         m_obstacleStatus->setStyleSheet(QStringLiteral("color: #3fa66b;"));
     } else {
         m_obstacleStatus->setText(
-            tr("发现 %1 个障碍物区域，请移除后重新扫描")
+            tr("发现 %1 个障碍物区域，后续处理已停止")
                 .arg(m_obstacleResult.regions.size()));
         m_obstacleStatus->setStyleSheet(QStringLiteral("color: #e35d55; font-weight: 600;"));
     }
@@ -2170,6 +2215,7 @@ void MainWindow::clearObstacleDetection() {
         return;
     }
     clearObstacleDetectionUi();
+    updatePlaneEdgeUi();
     statusBar()->showMessage(tr("已清除障碍物检测结果"));
 }
 
@@ -2188,6 +2234,7 @@ void MainWindow::detectObstacles() {
     options.gridSize = float(m_obstacleGridSize->value());
     options.minimumPointCount = m_obstacleMinimumPointCount->value();
     options.minimumArea = float(m_obstacleMinimumArea->value());
+    options.connectivityRadiusCells = 2;
     options.maximumGridCells = 4000000;
     if (!m_obstacleWatcher) {
         m_obstacleWatcher = new QFutureWatcher<pointcloud::ObstacleDetectionResult>(this);
@@ -2204,7 +2251,7 @@ void MainWindow::detectObstacles() {
     m_progress->show();
     m_progress->setRange(0, 0);
     if (m_obstacleOutput)
-        m_obstacleOutput->setPlainText(tr("正在计算平面高度差和连续区域..."));
+        m_obstacleOutput->setPlainText(tr("正在计算平面双侧距离和连续区域..."));
     statusBar()->showMessage(tr("后台执行障碍物检测..."));
     m_obstacleWatcher->setFuture(QtConcurrent::run(
         [source, planeIndices, model, options]() {
@@ -2236,35 +2283,46 @@ void MainWindow::obstacleDetectionFinished() {
     if (m_canvas) m_canvas->setObstacleIndices(result.obstacleIndices);
     QStringList lines;
     lines << result.summary
-          << tr("高度阈值：%1 mm").arg(m_obstacleHeight->value(), 0, 'f', 3)
-          << tr("候选凸起点：%1").arg(QLocale().toString(result.candidatePointCount))
+          << tr("绝对距离阈值：%1 mm").arg(m_obstacleHeight->value(), 0, 'f', 3)
+          << tr("候选偏离点：%1（正侧 %2，负侧 %3）")
+                 .arg(QLocale().toString(result.candidatePointCount))
+                 .arg(QLocale().toString(result.positiveCandidatePointCount))
+                 .arg(QLocale().toString(result.negativeCandidatePointCount))
           << tr("有效障碍点：%1").arg(QLocale().toString(result.obstacleIndices.size()))
           << tr("检测栅格：%1 mm").arg(result.gridSize, 0, 'g', 6);
     for (const pointcloud::ObstacleRegion &region : result.regions) {
         lines << QString()
               << tr("区域 #%1").arg(region.id)
               << tr("  点数：%1").arg(QLocale().toString(region.pointIndices.size()))
+              << tr("  平面侧：%1").arg(region.sideSign < 0 ? tr("负侧") : tr("正侧"))
               << tr("  面积：%1 mm²").arg(region.area, 0, 'f', 3)
-              << tr("  平均高度：%1 mm").arg(region.meanHeight, 0, 'f', 3)
-              << tr("  最大高度：%1 mm").arg(region.maximumHeight, 0, 'f', 3)
+              << tr("  平均偏离：%1 mm").arg(region.meanHeight, 0, 'f', 3)
+              << tr("  最大偏离：%1 mm").arg(region.maximumHeight, 0, 'f', 3)
               << tr("  中心：(%1, %2, %3)")
                      .arg(region.centroid.x, 0, 'f', 3)
                      .arg(region.centroid.y, 0, 'f', 3)
                      .arg(region.centroid.z, 0, 'f', 3);
     }
     if (m_obstacleOutput) m_obstacleOutput->setPlainText(lines.join(QLatin1Char('\n')));
+    if (!result.regions.isEmpty()) {
+        // Results derived from an obstructed surface are not valid downstream.
+        clearPlaneEdgeUi();
+    }
     updateObstacleDetectionUi();
+    updatePlaneEdgeUi();
     if (result.regions.isEmpty()) {
         statusBar()->showMessage(tr("障碍物检测完成：未发现达到阈值的异常区域"));
         return;
     }
 
     statusBar()->showMessage(
-        tr("检测到 %1 个障碍物区域，已在画布中标红").arg(result.regions.size()));
+        tr("检测到 %1 个障碍物区域，已标红并停止后续处理")
+            .arg(result.regions.size()));
     QMessageBox::warning(
         this, tr("检测到工件表面障碍物"),
-        tr("检测到 %1 个连续凸起区域，可能导致 2.5D 图像识别失真。\n"
-           "障碍点已在画布中标红，请移除障碍物后重新扫描。")
+        tr("检测到 %1 个连续异常区域，可能导致 2.5D 图像识别失真。\n"
+           "障碍点已在画布中标红，边缘分割和图像提取已停止。\n"
+           "请移除障碍物并重新扫描；人工确认后可清除检测结果。")
             .arg(result.regions.size()));
 }
 
@@ -2272,13 +2330,17 @@ void MainWindow::updatePlaneEdgeUi() {
     const bool running = m_edgeWatcher && m_edgeWatcher->isRunning();
     const bool imageRunning = m_planeImageWatcher && m_planeImageWatcher->isRunning();
     const bool planeReady = m_planeCandidateConfirmed && m_threePlaneResult.ok;
-    if (m_edgeApplyButton) m_edgeApplyButton->setEnabled(!running && planeReady);
+    const bool blocked = obstacleBlocksProcessing();
+    if (m_edgeApplyButton)
+        m_edgeApplyButton->setEnabled(!running && planeReady && !blocked);
     if (m_selectEdgeButton)
-        m_selectEdgeButton->setEnabled(!running && m_planeEdgeResult.ok
+        m_selectEdgeButton->setEnabled(!running && !blocked && m_planeEdgeResult.ok
                                        && !m_planeEdgeResult.edgeIndices.isEmpty());
     if (m_clearEdgeSelectionButton)
         m_clearEdgeSelectionButton->setEnabled(!running && !m_selectedEdgeIndices.isEmpty());
-    if (m_extractPlaneImageButton) m_extractPlaneImageButton->setEnabled(!running && !imageRunning && planeReady);
+    if (m_extractPlaneImageButton)
+        m_extractPlaneImageButton->setEnabled(!running && !imageRunning
+                                               && planeReady && !blocked);
     if (m_savePlaneImageButton)
         m_savePlaneImageButton->setEnabled(!running && !imageRunning
                                            && ((m_planeImageResult.ok && !m_planeImageResult.image.isNull())
@@ -2303,6 +2365,10 @@ void MainWindow::clearPlaneEdgeUi() {
 }
 
 void MainWindow::extractPlaneImage() {
+    if (obstacleBlocksProcessing()) {
+        statusBar()->showMessage(tr("检测到障碍物，已停止平面图像提取"));
+        return;
+    }
     if (pointTaskRunning() || !m_planeCandidateConfirmed || !m_threePlaneResult.ok) return;
     pointcloud::PlaneEdgeOptions options;
     options.edgeGridSize = float(m_edgeGridSize->value());
@@ -2496,6 +2562,10 @@ void MainWindow::cancelPlaneCandidate() {
 }
 
 void MainWindow::applyPlaneEdgeSegmentation() {
+    if (obstacleBlocksProcessing()) {
+        statusBar()->showMessage(tr("检测到障碍物，已停止边缘分割"));
+        return;
+    }
     if (pointTaskRunning()) {
         statusBar()->showMessage(tr("已有点云处理任务正在运行"));
         return;
@@ -2570,6 +2640,10 @@ void MainWindow::planeEdgeSegmentationFinished() {
 }
 
 void MainWindow::startEdgePointSelection() {
+    if (obstacleBlocksProcessing()) {
+        statusBar()->showMessage(tr("检测到障碍物，不能选择边缘"));
+        return;
+    }
     if (pointTaskRunning() || !m_planeEdgeResult.ok) return;
     m_edgeSelectionActive = true;
     m_selectedEdgeIndices.clear();
@@ -2677,11 +2751,26 @@ void MainWindow::noiseFinished() {
 
 void MainWindow::closeEvent(QCloseEvent *event) {
     m_closing = true;
+    qWarning() << "MainWindow closeEvent, spontaneous=" << event->spontaneous()
+               << "visible=" << isVisible()
+               << "loading=" << m_loading
+               << "loadRunning="
+               << (m_loadWatcher && m_loadWatcher->isRunning());
     setEnabled(false);
     if (m_canvas) {
         m_canvas->setUpdatesEnabled(false);
         m_canvas->hide();
     }
+
+    // Prevent queued watcher completions from entering slots that manipulate
+    // widgets or QPixmap/QImage objects while Qt is destroying the GUI tree.
+    if (m_loadWatcher) disconnect(m_loadWatcher, nullptr, this, nullptr);
+    if (m_worldMergeWatcher) disconnect(m_worldMergeWatcher, nullptr, this, nullptr);
+    if (m_noiseWatcher) disconnect(m_noiseWatcher, nullptr, this, nullptr);
+    if (m_threePlaneWatcher) disconnect(m_threePlaneWatcher, nullptr, this, nullptr);
+    if (m_obstacleWatcher) disconnect(m_obstacleWatcher, nullptr, this, nullptr);
+    if (m_edgeWatcher) disconnect(m_edgeWatcher, nullptr, this, nullptr);
+    if (m_planeImageWatcher) disconnect(m_planeImageWatcher, nullptr, this, nullptr);
     if (m_loading && m_loadWatcher && m_loadWatcher->isRunning()) {
         statusBar()->showMessage(tr("正在结束后台加载，请稍候..."));
         m_loadWatcher->waitForFinished();

@@ -235,6 +235,20 @@ QtConcurrent::run(pointcloud::loadPlyCachedResult, path)
 GUI 线程，禁止直接返回并静默丢弃已加载点云。发布点数写入启动日志，便于
 区分 PLY 解析问题与画布缓存发布问题。
 
+主窗口的 `m_points` 是所有后续处理的权威显示缓存。正常运行期间，
+`publishCanvasCache()` 必须先提交 `m_points` 并递增 revision，再检查 OpenGL
+画布是否存在；禁止因画布指针暂时不可用而丢弃已加载数据。窗口一旦进入
+`closeEvent()` 则属于唯一例外：关闭入口必须先断开所有 watcher 的完成信号，
+等待后台任务结束，并禁止已排队的完成回调继续操作 QWidget、QPixmap、QImage
+或 OpenGL 状态，避免 Qt GUI 对象销毁期间发生访问冲突。加载诊断固定
+记录 PLY 解析点数、主显示缓存点数、画布缓存点数，以及 VBO 上传的点数、字节
+数和 OpenGL 错误。若界面出现“原始点数非零、当前显示为零”，应首先判定为
+缓存发布被截断，而不是 PLY 解析或着色器故障。
+
+关闭诊断必须记录 `QCloseEvent::spontaneous()`、窗口可见性、加载状态和 watcher
+运行状态；启动日志同时记录 `POINTCLOUDVIEW_SELFTEST_CLOSE` 是否启用，用于
+区分用户/系统原生关闭、程序主动退出和遗留自测环境变量。
+
 ### 7.2 视图和导航
 
 - 左键拖动（普通模式）：绕 X/Z 旋转，pitch 限制 `[-89°,89°]`。
@@ -485,19 +499,20 @@ maximumEdgeGridCells = 4,000,000
 
 ### 12.5 第一阶段障碍物检测
 
-障碍物检测必须在用户确定候选平面后执行，输入为当前画布缓存、已确定平面索引和归一化平面模型。算法将法向统一指向正 Z，计算点到基准平面的有符号高度，仅保留高度达到阈值且 UV 投影位于平面测量范围（允许一个栅格边距）内的点。
+障碍物检测必须在用户确定候选平面后执行，输入为当前画布缓存、已确定平面索引和归一化平面模型。算法将法向统一指向正 Z，但候选判定使用点到基准平面的绝对距离，正侧和负侧都必须检测。这样既覆盖世界坐标中沿正 Z 的凸起，也覆盖 2.5D 相机坐标中因“越靠近相机、深度 Z 越小”而表现为负向距离的障碍。候选点的 UV 投影必须位于平面测量范围内，允许一个栅格边距。
 
-候选点投影到平面 UV 栅格，使用 8 邻域组成连续区域，再按最小点数和占用栅格物理面积过滤。默认参数：
+候选点投影到平面 UV 栅格，正负两侧使用独立的栅格键，禁止把投影重叠的前景和背景合并为同一障碍。连通搜索默认半径为 2 个栅格，可跨越一个由采样稀疏造成的空栅格，再按最小点数和占用栅格物理面积过滤。默认参数：
 
 ```text
 minimumHeight = 1.0 mm
 gridSize = 0（按平面点密度自动估计）
 minimumPointCount = 30
 minimumArea = 4.0 mm²
+connectivityRadiusCells = 2
 maximumGridCells = 4,000,000
 ```
 
-`detectObstacles()` 输出候选点数、有效障碍点索引、栅格尺寸和每个区域的点数、面积、中心、平均高度、最大高度及三维包围盒。有效障碍点在画布中以红色显示，优先级高于灰色平面和黄色边缘；检测到区域时状态栏、障碍检测页和警告对话框同时提醒用户移除障碍物并重新扫描。平面或画布缓存变化时必须清除旧检测结果。
+`detectObstacles()` 输出总候选点数、正负侧候选点数、有效障碍点索引、栅格尺寸和每个区域的方向、点数、面积、中心、平均绝对偏离、最大绝对偏离及三维包围盒。有效障碍点在画布中以红色显示，优先级高于灰色平面和黄色边缘。检测到任一区域时必须清除已有边缘和 2D 图像结果，禁用并拦截边缘分割、图像提取和边缘选择，同时在状态栏、障碍检测页和警告对话框提示处理已停止。用户明确清除检测结果或发布新的画布缓存后才允许继续处理。
 
 ---
 
@@ -549,7 +564,7 @@ maximumGridCells = 4,000,000
 | 显示 | `spb_point_size`, `btn_reset_view`, `cb_color_mode`, `dsb_overlay`, `dsb_map_min`, `dsb_map_max` | 点大小、视角、颜色、透明度、高度映射 |
 | 点云清理 | `chk_voxel_noise`, `dsb_voxel_size`, `chk_statistical_noise`, `spb_mean_k`, `dsb_stddev`, `btn_apply_noise`, `btn_restore_cloud` | 当前画布缓存滤波和恢复 |
 | 2.5D 平面提取 | `btn_pick_points`, `btn_abandon_points`, `btn_undo_point`, `btn_determine_plane`, `btn_confirm_candidate`, `btn_cancel_candidate`, `pte_plane_output` | 三点采样、候选拟合、确认/取消 |
-| 障碍检测 | `dsb_obstacle_height`, `dsb_obstacle_grid`, `spb_obstacle_min_points`, `dsb_obstacle_min_area`, `btn_detect_obstacles`, `btn_clear_obstacles`, `lbl_obstacle_status`, `pte_obstacle_output` | 平面上方凸起、连续区域过滤、红色高亮和用户提醒 |
+| 障碍检测 | `dsb_obstacle_height`, `dsb_obstacle_grid`, `spb_obstacle_min_points`, `dsb_obstacle_min_area`, `btn_detect_obstacles`, `btn_clear_obstacles`, `lbl_obstacle_status`, `pte_obstacle_output` | 平面双侧偏离、连续区域过滤、红色高亮和后续处理阻断 |
 | 平面边缘分割 | `dsb_edge_grid`, `spb_edge_close`, `spb_edge_open`, `btn_extract_plane_image`, `btn_apply_edge`, `btn_select_edge`, `btn_clear_edge`, `btn_save_plane_image`, `lbl_plane_image_preview`, `pte_edge_output` | Mask、轮廓、黄色边缘、2D 图像 |
 
 菜单：`act_open` 打开点云，`act_exit` 退出。底部 `pbar_progress` 为后台任务指示，`statusbar_main` 显示状态。
@@ -740,7 +755,7 @@ Designer 是运行时 UI 唯一来源；任何在代码中重新创建同名控�
 
 ### 18.6 障碍物识别限制
 
-第一阶段只依据已确定基准平面的正向高度、二维连通性、点数和面积进行规则检测。没有 CAD、标准件模板或历史无障碍扫描时，算法无法自动区分工件设计中的正常凸台与临时障碍物；检测结果用于提醒和人工复核，不允许简单删除障碍点后假定被遮挡表面完整。
+当前阶段依据已确定基准平面的双侧绝对距离、二维连通性、点数和面积进行规则检测。没有 CAD、标准件模板或历史无障碍扫描时，算法无法自动区分工件设计中的正常凸台与临时障碍物；因此发现异常后停止下游处理并要求人工复核，不允许简单删除障碍点后假定被遮挡表面完整。
 
 ---
 

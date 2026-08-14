@@ -56,7 +56,10 @@ int main(int argc, char *argv[])
     qInfo() << "startup: MainWindow constructed";
     w.show();
     qInfo() << "startup: MainWindow shown";
-    if (qEnvironmentVariableIsSet("POINTCLOUDVIEW_SELFTEST_CLOSE")) {
+    const bool selfTestClose =
+        qEnvironmentVariableIsSet("POINTCLOUDVIEW_SELFTEST_CLOSE");
+    qInfo() << "startup: POINTCLOUDVIEW_SELFTEST_CLOSE=" << selfTestClose;
+    if (selfTestClose) {
         // Closing a QOpenGLWidget a few milliseconds after show() races its
         // first native surface/GL initialization on some Qt 6 debug builds.
         // Use the normal application quit path for the startup smoke test;

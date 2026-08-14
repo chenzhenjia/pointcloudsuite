@@ -66,10 +66,51 @@ bool ignoresLowAndOutsidePoints() {
         && expect(result.obstacleIndices.isEmpty(), "no obstacle points should be returned");
 }
 
+bool detectsBothPlaneSidesSeparately() {
+    QVector<int> planeIndices;
+    QVector<pointcloud::Point3D> points = makeReferencePlane(&planeIndices);
+    for (int y = 0; y < 4; ++y) {
+        for (int x = 0; x < 4; ++x) {
+            const float px = 4.0f + 0.3f * x;
+            const float py = 4.0f + 0.3f * y;
+            points.push_back({px, py, 12.0f});
+            points.push_back({px, py, 8.0f});
+        }
+    }
+
+    pointcloud::ObstacleDetectionOptions options;
+    options.minimumHeight = 1.0f;
+    options.gridSize = 0.5f;
+    options.minimumPointCount = 8;
+    options.minimumArea = 0.0f;
+    options.connectivityRadiusCells = 2;
+    const pointcloud::PlaneModel plane{0.0f, 0.0f, 1.0f, -10.0f};
+    const auto result = pointcloud::detectObstacles(points, planeIndices, plane, options);
+
+    int positiveRegions = 0;
+    int negativeRegions = 0;
+    for (const auto &region : result.regions) {
+        if (region.sideSign > 0) ++positiveRegions;
+        if (region.sideSign < 0) ++negativeRegions;
+    }
+    return expect(result.ok, "two-sided obstacle detection should succeed")
+        && expect(result.regions.size() == 2, "overlapping plane sides must remain separate")
+        && expect(positiveRegions == 1, "positive-side obstacle should be retained")
+        && expect(negativeRegions == 1, "negative-side obstacle should be retained")
+        && expect(result.positiveCandidatePointCount == 16,
+                  "positive candidate count should be reported")
+        && expect(result.negativeCandidatePointCount == 16,
+                  "negative candidate count should be reported")
+        && expect(result.obstacleIndices.size() == 32,
+                  "all significant points on both sides should be marked");
+}
+
 } // namespace
 
 int main() {
-    const bool ok = detectsConnectedObstacle() && ignoresLowAndOutsidePoints();
+    const bool ok = detectsConnectedObstacle()
+        && ignoresLowAndOutsidePoints()
+        && detectsBothPlaneSidesSeparately();
     if (ok) std::cout << "Obstacle detection tests passed\n";
     return ok ? 0 : 1;
 }

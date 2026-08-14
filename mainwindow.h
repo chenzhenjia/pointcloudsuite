@@ -75,6 +75,7 @@ private:
     void clearObstacleDetectionUi();
     void runPlaneExtraction(bool deferFinalClassification);
     bool pointTaskRunning() const;
+    bool obstacleBlocksProcessing() const;
     QListWidget *m_fileList = nullptr;
     QTableWidget *m_registrationTable = nullptr;
     QPushButton *m_registrationPrepare = nullptr;

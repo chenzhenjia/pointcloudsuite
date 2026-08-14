@@ -3345,7 +3345,8 @@ ObstacleDetectionResult detectObstacles(const QVector<Point3D> &points,
     }
     if (!std::isfinite(options.minimumHeight) || options.minimumHeight <= 0.0f
         || options.minimumPointCount < 1 || !std::isfinite(options.minimumArea)
-        || options.minimumArea < 0.0f) {
+        || options.minimumArea < 0.0f || options.connectivityRadiusCells < 1
+        || options.connectivityRadiusCells > 4) {
         result.error = QStringLiteral("障碍物检测参数无效");
         return result;
     }
@@ -3413,6 +3414,7 @@ ObstacleDetectionResult detectObstacles(const QVector<Point3D> &points,
         return result;
     }
 
+    const int gridCellCount = gridWidth * gridHeight;
     std::unordered_map<int, QVector<int>> occupiedCells;
     occupiedCells.reserve(std::size_t(qMin(points.size(), maximumCells)));
     const float footprintMargin = gridSize;
@@ -3421,7 +3423,9 @@ ObstacleDetectionResult detectObstacles(const QVector<Point3D> &points,
         if (!usablePoint(source)) continue;
         const QVector3D point(source.x, source.y, source.z);
         const float signedHeight = QVector3D::dotProduct(normal, point) + normalizedD;
-        if (!std::isfinite(signedHeight) || signedHeight < options.minimumHeight) continue;
+        if (!std::isfinite(signedHeight)
+            || std::abs(signedHeight) < options.minimumHeight)
+            continue;
         const QVector3D delta = point - origin;
         const float u = QVector3D::dotProduct(delta, axisU);
         const float v = QVector3D::dotProduct(delta, axisV);
@@ -3430,8 +3434,14 @@ ObstacleDetectionResult detectObstacles(const QVector<Point3D> &points,
             continue;
         const int x = qBound(0, int(std::floor((u - minimumU) / gridSize)), gridWidth - 1);
         const int y = qBound(0, int(std::floor((v - minimumV) / gridSize)), gridHeight - 1);
-        occupiedCells[y * gridWidth + x].push_back(index);
+        // Keep both sides topologically independent. A foreground obstacle and
+        // a background surface may project to the same UV cell in 2.5D data.
+        const bool negativeSide = signedHeight < 0.0f;
+        const int sideOffset = negativeSide ? gridCellCount : 0;
+        occupiedCells[sideOffset + y * gridWidth + x].push_back(index);
         ++result.candidatePointCount;
+        if (negativeSide) ++result.negativeCandidatePointCount;
+        else ++result.positiveCandidatePointCount;
     }
 
     std::unordered_set<int> visited;
@@ -3440,6 +3450,8 @@ ObstacleDetectionResult detectObstacles(const QVector<Point3D> &points,
     for (const auto &entry : occupiedCells) {
         const int startCell = entry.first;
         if (!visited.insert(startCell).second) continue;
+        const bool negativeSide = startCell >= gridCellCount;
+        const int sideOffset = negativeSide ? gridCellCount : 0;
         QVector<int> queue{startCell};
         QVector<int> componentPoints;
         int componentCellCount = 0;
@@ -3449,17 +3461,19 @@ ObstacleDetectionResult detectObstacles(const QVector<Point3D> &points,
             const auto found = occupiedCells.find(cell);
             if (found == occupiedCells.end()) continue;
             componentPoints += found->second;
-            const int x = cell % gridWidth;
-            const int y = cell / gridWidth;
-            for (int dy = -1; dy <= 1; ++dy) {
-                for (int dx = -1; dx <= 1; ++dx) {
+            const int localCell = cell - sideOffset;
+            const int x = localCell % gridWidth;
+            const int y = localCell / gridWidth;
+            const int radius = options.connectivityRadiusCells;
+            for (int dy = -radius; dy <= radius; ++dy) {
+                for (int dx = -radius; dx <= radius; ++dx) {
                     if (dx == 0 && dy == 0) continue;
                     const int neighborX = x + dx;
                     const int neighborY = y + dy;
                     if (neighborX < 0 || neighborX >= gridWidth
                         || neighborY < 0 || neighborY >= gridHeight)
                         continue;
-                    const int neighborCell = neighborY * gridWidth + neighborX;
+                    const int neighborCell = sideOffset + neighborY * gridWidth + neighborX;
                     if (occupiedCells.find(neighborCell) != occupiedCells.end()
                         && visited.insert(neighborCell).second)
                         queue.push_back(neighborCell);
@@ -3474,6 +3488,7 @@ ObstacleDetectionResult detectObstacles(const QVector<Point3D> &points,
 
         ObstacleRegion region;
         region.id = nextRegionId++;
+        region.sideSign = negativeSide ? -1 : 1;
         region.pointIndices = std::move(componentPoints);
         region.area = componentArea;
         region.minimumBound = {std::numeric_limits<float>::max(),
@@ -3489,8 +3504,9 @@ ObstacleDetectionResult detectObstacles(const QVector<Point3D> &points,
             centroid += QVector3D(point.x, point.y, point.z);
             const float height = QVector3D::dotProduct(
                 normal, QVector3D(point.x, point.y, point.z)) + normalizedD;
-            heightSum += height;
-            region.maximumHeight = qMax(region.maximumHeight, height);
+            const float absoluteHeight = std::abs(height);
+            heightSum += absoluteHeight;
+            region.maximumHeight = qMax(region.maximumHeight, absoluteHeight);
             region.minimumBound.x = qMin(region.minimumBound.x, point.x);
             region.minimumBound.y = qMin(region.minimumBound.y, point.y);
             region.minimumBound.z = qMin(region.minimumBound.z, point.z);
