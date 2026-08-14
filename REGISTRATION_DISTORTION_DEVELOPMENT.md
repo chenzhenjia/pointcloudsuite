@@ -185,3 +185,16 @@ After conversion, phase 2 also reports adjacent-cloud XY bounding-box overlap
 and rejects direction conclusions when neither candidate produces a plausible
 overlap. Duplicate measured points are retained; overlap is a diagnostic, not
 an instruction to delete points.
+
+## Phase 3 plan: adjacent-cloud overlap gate
+
+After each cloud is transformed and voxel-reduced, compute its XY bounding box
+and compare it with the accumulated reference. Report intersection area divided
+by the moving-cloud area and by the union area. The diagnostic records the
+moving cloud id, overlap ratio, intersection bounds, and whether the overlap is
+below the production warning threshold. This is a geometric gate before ICP:
+low overlap or disjoint boxes indicate a robot pose, scan direction, or file
+ordering problem and must not be hidden by ICP.
+
+The gate is diagnostic in this phase and does not delete overlapping measured
+points. A later UI phase may expose a configurable warning threshold.
