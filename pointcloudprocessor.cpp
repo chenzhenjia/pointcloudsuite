@@ -542,13 +542,6 @@ struct IcpSpatialIndex {
     float cellSize = 0.0f;
 };
 
-// Declared here because the PCA implementation is kept with the other small
-// linear-algebra helpers below the merge routine.
-void symmetricEigen3(const double input[3][3], double values[3], double vectors[3][3]);
-bool pcaGlobalInitialization(QVector<Point3D> &moving,
-                             const QVector<Point3D> &reference,
-                             int maximumSamples);
-
 IcpSpatialIndex buildIcpSpatialIndex(const QVector<Point3D> &reference, float cellSize) {
     IcpSpatialIndex index;
     index.cellSize = cellSize;
@@ -703,11 +696,8 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
             const int sampleStep = qMax(1, int((points.size() + sampleLimit - 1) / sampleLimit));
             diag.movingSampleCount = (points.size() + sampleStep - 1) / sampleStep;
             if (!inputs[cloudId].applyRobotTransform && icp.globalInitialization) {
-                const bool pcaApplied = pcaGlobalInitialization(points, result.points, icp.maximumSamples);
-                if (!pcaApplied) {
-                    const QVector3D delta = cloudCentroid(result.points) - cloudCentroid(points);
-                    translateCloud(points, delta);
-                }
+                const QVector3D delta = cloudCentroid(result.points) - cloudCentroid(points);
+                translateCloud(points, delta);
                 diag.usedGlobalInitialization = true;
             }
             const IcpSpatialIndex referenceIndex = buildIcpSpatialIndex(result.points, icp.maximumCorrespondenceDistance);
@@ -2457,65 +2447,6 @@ QVector<QVector<QVector2D>> marchingSquaresContours(const QVector<quint8> &mask,
     return contours;
 }
 
-bool pcaGlobalInitialization(QVector<Point3D> &moving,
-                             const QVector<Point3D> &reference,
-                             int maximumSamples) {
-    if (moving.size() < 6 || reference.size() < 6) return false;
-    const int movingStep = qMax(1, int((moving.size() + maximumSamples - 1) / qMax(1, maximumSamples)));
-    const int referenceStep = qMax(1, int((reference.size() + maximumSamples - 1) / qMax(1, maximumSamples)));
-    QVector3D cm, cr;
-    int nm = 0, nr = 0;
-    for (int i = 0; i < moving.size(); i += movingStep) {
-        if (!usablePoint(moving[i])) continue;
-        cm += QVector3D(moving[i].x, moving[i].y, moving[i].z); ++nm;
-    }
-    for (int i = 0; i < reference.size(); i += referenceStep) {
-        if (!usablePoint(reference[i])) continue;
-        cr += QVector3D(reference[i].x, reference[i].y, reference[i].z); ++nr;
-    }
-    if (nm < 6 || nr < 6) return false;
-    cm /= float(nm); cr /= float(nr);
-    double mm[3][3] = {}, rr[3][3] = {};
-    for (int i = 0; i < moving.size(); i += movingStep) {
-        if (!usablePoint(moving[i])) continue;
-        const QVector3D d = QVector3D(moving[i].x, moving[i].y, moving[i].z) - cm;
-        const double v[3] = {d.x(), d.y(), d.z()};
-        for (int a = 0; a < 3; ++a) for (int b = 0; b < 3; ++b) mm[a][b] += v[a] * v[b];
-    }
-    for (int i = 0; i < reference.size(); i += referenceStep) {
-        if (!usablePoint(reference[i])) continue;
-        const QVector3D d = QVector3D(reference[i].x, reference[i].y, reference[i].z) - cr;
-        const double v[3] = {d.x(), d.y(), d.z()};
-        for (int a = 0; a < 3; ++a) for (int b = 0; b < 3; ++b) rr[a][b] += v[a] * v[b];
-    }
-    double em[3], er[3], vm[3][3], vr[3][3];
-    symmetricEigen3(mm, em, vm); symmetricEigen3(rr, er, vr);
-    if (em[0] < 1.0e-12 || er[0] < 1.0e-12) return false;
-    // A nearly symmetric cloud has no reliable principal frame. Keep the
-    // centroid-only initialization rather than applying an arbitrary turn.
-    if (em[0] / qMax(em[2], 1.0e-12) < 1.05 || er[0] / qMax(er[2], 1.0e-12) < 1.05) return false;
-    for (int col = 0; col < 3; ++col) {
-        double dot = 0.0;
-        for (int row = 0; row < 3; ++row) dot += vr[row][col] * vm[row][col];
-        if (dot < 0.0) for (int row = 0; row < 3; ++row) vm[row][col] = -vm[row][col];
-    }
-    const double det = vm[0][0] * (vm[1][1] * vm[2][2] - vm[1][2] * vm[2][1])
-                     - vm[0][1] * (vm[1][0] * vm[2][2] - vm[1][2] * vm[2][0])
-                     + vm[0][2] * (vm[1][0] * vm[2][1] - vm[1][1] * vm[2][0]);
-    if (det < 0.0) for (int row = 0; row < 3; ++row) vm[row][2] = -vm[row][2];
-    double rot[3][3] = {};
-    for (int r = 0; r < 3; ++r) for (int c = 0; c < 3; ++c)
-        for (int k = 0; k < 3; ++k) rot[r][c] += vr[r][k] * vm[c][k];
-    for (Point3D &p : moving) {
-        const QVector3D d(p.x, p.y, p.z);
-        const QVector3D q(float(rot[0][0] * (d.x() - cm.x()) + rot[0][1] * (d.y() - cm.y()) + rot[0][2] * (d.z() - cm.z()) + cr.x()),
-                          float(rot[1][0] * (d.x() - cm.x()) + rot[1][1] * (d.y() - cm.y()) + rot[1][2] * (d.z() - cm.z()) + cr.y()),
-                          float(rot[2][0] * (d.x() - cm.x()) + rot[2][1] * (d.y() - cm.y()) + rot[2][2] * (d.z() - cm.z()) + cr.z()));
-        p.x = q.x(); p.y = q.y(); p.z = q.z();
-    }
-    return true;
-}
-
 } // namespace
 
 WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inputs,
@@ -3127,22 +3058,23 @@ PlaneImageResult extractPlaneImage(const QVector<Point3D> &points,
         valid[y * width + x] = 1;
     }
     const int imageScale = qBound(1, options.imageScale, 8);
-    const int imageWidth = qMin(std::numeric_limits<int>::max() / imageScale, width * imageScale);
-    const int imageHeight = qMin(std::numeric_limits<int>::max() / imageScale, height * imageScale);
-    result.image = QImage(imageWidth, imageHeight, QImage::Format_RGB32);
+    QImage baseImage(width, height, QImage::Format_RGB32);
+    result.image = baseImage;
     result.image.fill(qRgb(16, 18, 21));
     int occupied = 0;
     for (int y = 0; y < height; ++y) {
+        QRgb *row = reinterpret_cast<QRgb *>(result.image.scanLine(height - 1 - y));
         for (int x = 0; x < width; ++x) {
             if (!valid[y * width + x]) continue;
             ++occupied;
-            const int outY = (height - 1 - y) * imageScale;
-            for (int sy = 0; sy < imageScale; ++sy) {
-                QRgb *row = reinterpret_cast<QRgb *>(result.image.scanLine(outY + sy));
-                for (int sx = 0; sx < imageScale; ++sx)
-                    row[x * imageScale + sx] = qRgb(190, 198, 210);
-            }
+            row[x] = qRgb(190, 198, 210);
         }
+    }
+    if (imageScale > 1) {
+        const int imageWidth = qMin(std::numeric_limits<int>::max() / imageScale, width * imageScale);
+        const int imageHeight = qMin(std::numeric_limits<int>::max() / imageScale, height * imageScale);
+        result.image = result.image.scaled(imageWidth, imageHeight, Qt::IgnoreAspectRatio,
+                                           Qt::FastTransformation);
     }
     result.gridSize = gridSize;
     result.width = maxU - minU + padding * gridSize;

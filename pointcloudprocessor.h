@@ -140,6 +140,9 @@ struct PlaneEdgeOptions {
     int morphologyCloseRadius = 1;
     int morphologyOpenRadius = 1;
     int maximumEdgeGridCells = 4000000;
+    // 2D export scale.  Values above one supersample the plane image for
+    // inspection/export without changing the physical grid size.
+    int imageScale = 3;
 };
 struct PlaneContour {
     QVector<Point3D> points;
