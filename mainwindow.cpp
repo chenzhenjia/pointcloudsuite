@@ -1638,15 +1638,15 @@ void MainWindow::startPointCloudRegistration() {
     m_loading = true; m_folderScanOnly = false;
     m_progress->show(); m_progress->setRange(0, 0);
     m_registrationStart->setEnabled(false);
-    statusBar()->showMessage(icp.enabled
-        ? tr("正在进行世界坐标转换和 ICP 配准...")
-        : tr("正在进行世界坐标转换（ICP 已关闭）..."));
     const auto taskInputs = m_pendingWorldInputs;
     pointcloud::IcpOptions icp;
     icp.enabled = m_registrationIcpEnabled && m_registrationIcpEnabled->isChecked();
     icp.maximumIterations = m_registrationIcpIterations->value();
     icp.maximumCorrespondenceDistance = float(m_registrationIcpDistance->value());
     icp.convergenceTolerance = float(m_registrationIcpTolerance->value());
+    statusBar()->showMessage(icp.enabled
+        ? tr("正在进行世界坐标转换和 ICP 配准...")
+        : tr("正在进行世界坐标转换（ICP 已关闭）..."));
     m_worldMergeWatcher->setFuture(QtConcurrent::run([taskInputs, icp]() {
         return pointcloud::mergePlyCloudsInWorld(taskInputs, icp);
     }));
