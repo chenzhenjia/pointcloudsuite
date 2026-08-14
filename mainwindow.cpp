@@ -204,13 +204,20 @@ public:
         doneCurrent();
     }
 
-    void setCloud(const QVector<pointcloud::Point3D> &points) {
+    void setCloud(QVector<pointcloud::Point3D> points) {
         if (QThread::currentThread() != thread()) {
-            qWarning() << "PointCloudCanvas::setCloud called outside GUI thread";
+            qWarning() << "PointCloudCanvas::setCloud queued to GUI thread, points="
+                       << points.size();
+            QMetaObject::invokeMethod(
+                this,
+                [this, points = std::move(points)]() mutable {
+                    setCloud(std::move(points));
+                },
+                Qt::QueuedConnection);
             return;
         }
-        m_points = points;
-        m_pointStates.fill(NormalPoint, points.size());
+        m_points = std::move(points);
+        m_pointStates.fill(NormalPoint, m_points.size());
         m_planeResultIndices.clear();
         m_edgeResultIndices.clear();
         m_obstacleIndices.clear();
@@ -221,6 +228,7 @@ public:
         updateBounds();
         m_uploadError.clear();
         m_uploadPending = true;
+        qInfo() << "PointCloudCanvas cache published, points=" << m_points.size();
         update();
     }
 
@@ -1601,16 +1609,25 @@ void MainWindow::openPointCloudSource() {
         m_sourceFiles.clear();
         for (const QString &name : files) m_sourceFiles.push_back(dir.absoluteFilePath(name));
         m_folderScanOnly = true;
-        m_fileList->clear();
-        m_fileList->setSelectionMode(QAbstractItemView::ExtendedSelection);
-        for (const QString &path : m_sourceFiles) m_fileList->addItem(QFileInfo(path).fileName());
-        m_fileList->selectAll();
+        {
+            // Populate and select the list without relying on currentRowChanged
+            // to start the first load. selectAll() may already change the
+            // current index, so a later setCurrentRow(0) is not guaranteed to
+            // emit the signal and previously left the center canvas empty.
+            const QSignalBlocker blocker(m_fileList);
+            m_fileList->clear();
+            m_fileList->setSelectionMode(QAbstractItemView::ExtendedSelection);
+            for (const QString &path : m_sourceFiles)
+                m_fileList->addItem(QFileInfo(path).fileName());
+            m_fileList->selectAll();
+            m_fileList->setCurrentRow(0);
+        }
         m_fileInfo->setText(tr("文件夹扫描完成\nPLY 文件数  %1\n请在列表中选择文件查看，或进入“点云配准”页进行多选。")
                                 .arg(m_sourceFiles.size()));
         m_registrationTable->setRowCount(0);
         m_registrationOutput->clear();
-        statusBar()->showMessage(tr("已扫描 %1 个 PLY，未自动加载或合并").arg(m_sourceFiles.size()));
-        m_fileList->setCurrentRow(0);
+        statusBar()->showMessage(tr("已扫描 %1 个 PLY，正在显示第一个文件").arg(m_sourceFiles.size()));
+        loadSelectedSource();
     }
 }
 
@@ -1871,14 +1888,19 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points) {
     ++m_canvasRevision;
     m_selectedPointIndices.clear();
     m_threePlaneResult = {};
+    m_obstacleResult = {};
     m_threePointSelectionActive = false;
     m_planeCandidateConfirmed = false;
+    if (m_obstacleOutput) m_obstacleOutput->clear();
     if (m_canvas) {
         m_canvas->setSelectionMode(false);
+        // setCloud() clears every derived point-state layer. Do not call
+        // setObstacleIndices() immediately afterwards: on a newly loaded
+        // multi-million-point cloud that schedules a second state-buffer
+        // update during the first VBO upload and can leave the canvas blank.
         m_canvas->setCloud(m_points);
     }
     if (m_threeOutput) m_threeOutput->clear();
-    clearObstacleDetectionUi();
     clearPlaneEdgeUi();
     updatePlaneExtractionUi();
     updateObstacleDetectionUi();

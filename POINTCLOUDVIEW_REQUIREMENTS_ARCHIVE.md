@@ -205,7 +205,7 @@ QtConcurrent::run(pointcloud::loadPlyCachedResult, path)
 点击“打开点云”后弹出两个选项：
 
 1. **打开单个 PLY**：选择文件，建立单文件数据源并异步加载。
-2. **扫描文件夹 PLY**：扫描所选目录的 `*.ply` 和 `*.PLY`，按文件名排序，只把文件名放入左侧 `lw_files`，不自动合并。
+2. **扫描文件夹 PLY**：扫描所选目录的 `*.ply` 和 `*.PLY`，按文件名排序，把全部文件放入左侧 `lw_files` 并保持扩展多选；扫描完成后明确异步加载第一个文件到中央画布，但不自动合并。列表填充期间阻断 `currentRowChanged`，随后直接调用加载流程，避免 `selectAll()` 改变当前项后信号不再触发而导致画布空白。
 
 左侧列表使用 `ExtendedSelection`，支持 Ctrl/Shift 多选。当前行变化只加载该文件预览；“确认点云配准”读取所有选中行并生成姿态输入表。
 
@@ -218,13 +218,22 @@ QtConcurrent::run(pointcloud::loadPlyCachedResult, path)
 `PointCloudCanvas` 创建：
 
 - 点云位置/法向 VBO：`QOpenGLBuffer::StaticDraw`。
-- 点状态 VBO：`QOpenGLBuffer::DynamicDraw`，0 普通、1 平面、2 边缘。
+- 点状态 VBO：`QOpenGLBuffer::DynamicDraw`，0 普通、1 平面、2 边缘、3 障碍。
 - 点云 VAO。
 - 轮廓线 VBO/VAO。
 - Picking FBO：RGBA8 颜色纹理 + depth attachment。
 - 主渲染、Picking、轮廓三组 shader。
 
 资源创建和销毁必须在有效 OpenGL context 中进行；析构期间检查 `QCoreApplication::closingDown()`、context 有效性和 `makeCurrent()` 成功状态。
+
+数据源加载与障碍结果清理必须保持单向关系：PLY 加载完成后由主线程调用
+`publishCanvasCache()` 上传完整点云，随后才清空旧平面、边缘和障碍状态；
+障碍检测层只能更新点状态 VBO，不能清空位置 VBO、替换画布缓存或决定文件
+是否加载。文件夹扫描必须显式启动首个文件加载，不能仅依赖列表当前行信号。
+`PointCloudCanvas::setCloud()` 接管独立的显示缓存；如果调用来自非画布线程，
+必须通过 `QMetaObject::invokeMethod(..., Qt::QueuedConnection)` 排队回画布所属
+GUI 线程，禁止直接返回并静默丢弃已加载点云。发布点数写入启动日志，便于
+区分 PLY 解析问题与画布缓存发布问题。
 
 ### 7.2 视图和导航
 
@@ -636,7 +645,7 @@ cmake --build C:/qt-build-pointcloudview-diagnostic
 ### 17.3 手动验收
 
 1. 单个 ASCII、binary PLY 打开。
-2. 文件夹扫描后左侧显示全部 PLY，支持多选。
+2. 文件夹扫描后左侧显示全部 PLY、支持多选，并自动在中央画布显示第一个文件；切换当前行时显示对应 PLY。
 3. 旋转、平移、缩放后 GPU 点选不发生明显偏移。
 4. 空白区域不误选，重叠点取深度最前点。
 5. 三点共线或过近时提示并允许重选。
