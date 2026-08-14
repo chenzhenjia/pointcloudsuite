@@ -115,6 +115,12 @@ Exact compensation requires one of the following datasets for every PLY:
 Until one of these is available, Start/End interpolation must be treated as an
 approximation and verified with the ICP-disabled comparison result.
 
+For the supplied `Point_Cloud_A` files, local Y decreases from approximately
+0 to -300 along the organized scan rows.  Axis progress therefore follows the
+first-to-last valid sample direction; if the axis decreases, progress is
+reversed so the first sample maps to Start and the last to End.  The merge
+cache version is bumped whenever this mapping changes.
+
 ## Phase 4 approved implementation (transform validation)
 
 Before loading or using a merge cache, every Start, End, and enabled hand-eye

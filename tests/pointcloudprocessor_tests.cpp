@@ -178,6 +178,35 @@ void runFixtureTests(const QString &directory) {
     error.clear();
     expect(!pointcloud::loadPly(truncatedPath, points, &error), "reject truncated PLY");
     expect(points.isEmpty(), "clear partial data after truncated PLY");
+
+    const QString motionPath = directory + QStringLiteral("/motion_progress.ply");
+    QFile motionFile(motionPath);
+    expect(motionFile.open(QIODevice::WriteOnly), "open motion fixture");
+    if (motionFile.isOpen()) {
+        motionFile.write("ply\nformat ascii 1.0\nelement vertex 3\n"
+                         "property float x\nproperty float y\nproperty float z\n"
+                         "end_header\n1 0 0\n1 -1 0\n1 -2 0\n");
+        motionFile.close();
+        pointcloud::WorldCloudInput motion;
+        motion.filePath = motionPath;
+        motion.startBaseFromFlange.setToIdentity();
+        motion.endBaseFromFlange.setToIdentity();
+        motion.endBaseFromFlange(0, 3) = 10.0f;
+        motion.flangeFromDepth.setToIdentity();
+        motion.scanProgressSource = pointcloud::WorldCloudInput::ScanProgressSource::LocalY;
+        motion.voxelDownsample = false;
+        motion.applyRobotTransform = true;
+        pointcloud::IcpOptions noIcp;
+        noIcp.enabled = false;
+        const auto transformed = pointcloud::mergePlyCloudsInWorld({motion}, noIcp);
+        expect(transformed.ok && transformed.points.size() == 3,
+               "local-axis motion fixture merged");
+        if (transformed.points.size() == 3) {
+            expect(closeTo(transformed.points[0].x, 1.0f)
+                       && closeTo(transformed.points[2].x, 11.0f),
+                   "descending local axis follows Start to End");
+        }
+    }
 }
 
 void runGeometryTests() {
