@@ -658,6 +658,61 @@ float scanProgress(const QVector<Point3D> &points, qsizetype index,
     return high > low ? qBound(0.0f, (value-low)/(high-low), 1.0f) : 0.0f;
 }
 
+struct CloudBounds {
+    QVector3D minimum{std::numeric_limits<float>::max(),
+                      std::numeric_limits<float>::max(),
+                      std::numeric_limits<float>::max()};
+    QVector3D maximum{std::numeric_limits<float>::lowest(),
+                      std::numeric_limits<float>::lowest(),
+                      std::numeric_limits<float>::lowest()};
+    bool valid = false;
+};
+
+CloudBounds cloudBounds(const QVector<Point3D> &points) {
+    CloudBounds bounds;
+    for (const Point3D &point : points) {
+        if (!usablePoint(point)) continue;
+        const QVector3D value(point.x, point.y, point.z);
+        bounds.minimum.setX(qMin(bounds.minimum.x(), value.x()));
+        bounds.minimum.setY(qMin(bounds.minimum.y(), value.y()));
+        bounds.minimum.setZ(qMin(bounds.minimum.z(), value.z()));
+        bounds.maximum.setX(qMax(bounds.maximum.x(), value.x()));
+        bounds.maximum.setY(qMax(bounds.maximum.y(), value.y()));
+        bounds.maximum.setZ(qMax(bounds.maximum.z(), value.z()));
+        bounds.valid = true;
+    }
+    return bounds;
+}
+
+QString formatMatrix(const QMatrix4x4 &matrix) {
+    QStringList rows;
+    for (int row = 0; row < 4; ++row) {
+        QStringList values;
+        for (int column = 0; column < 4; ++column)
+            values << QString::number(matrix(row, column), 'g', 8);
+        rows << values.join(QLatin1Char(' '));
+    }
+    return rows.join(QStringLiteral(" | "));
+}
+
+QString formatBounds(const CloudBounds &bounds) {
+    if (!bounds.valid) return QStringLiteral("invalid");
+    return QStringLiteral("min(%1,%2,%3) max(%4,%5,%6)")
+        .arg(bounds.minimum.x(), 0, 'g', 8).arg(bounds.minimum.y(), 0, 'g', 8)
+        .arg(bounds.minimum.z(), 0, 'g', 8).arg(bounds.maximum.x(), 0, 'g', 8)
+        .arg(bounds.maximum.y(), 0, 'g', 8).arg(bounds.maximum.z(), 0, 'g', 8);
+}
+
+QString progressSourceName(WorldCloudInput::ScanProgressSource source) {
+    switch (source) {
+    case WorldCloudInput::ScanProgressSource::LocalX: return QStringLiteral("LocalX");
+    case WorldCloudInput::ScanProgressSource::LocalY: return QStringLiteral("LocalY");
+    case WorldCloudInput::ScanProgressSource::LocalZ: return QStringLiteral("LocalZ");
+    case WorldCloudInput::ScanProgressSource::VertexOrder: break;
+    }
+    return QStringLiteral("VertexOrder");
+}
+
 WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &inputs, const IcpOptions &icp) {
     WorldCloudMergeResult result;
     if (inputs.isEmpty()) { result.error = QStringLiteral("未选择 PLY 文件"); return result; }
@@ -683,6 +738,7 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
     for (int cloudId = 0; cloudId < inputs.size(); ++cloudId) {
         result.sourceFiles.push_back(inputs[cloudId].filePath);
         QVector<Point3D> points = std::move(loaded[cloudId]);
+        const CloudBounds localBounds = cloudBounds(points);
         QVector<qsizetype> sourceIndices(points.size());
         const auto progressSource = inputs[cloudId].scanProgressSource;
         const int progressAxis = progressSource == WorldCloudInput::ScanProgressSource::LocalX ? 0
@@ -695,6 +751,20 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
                 const float value = progressAxis == 0 ? point.x : progressAxis == 1 ? point.y : point.z;
                 progressLow = qMin(progressLow, value); progressHigh = qMax(progressHigh, value);
             }
+        result.diagnostics += QStringLiteral("%1\n  Robot transform: %2\n  Progress source: %3, range: %4 .. %5\n  Start matrix: %6\n  Mid matrix: %7\n  End matrix: %8\n  Hand-eye matrix (flange<-depth): %9\n  Local bounds: %10\n")
+            .arg(QFileInfo(inputs[cloudId].filePath).fileName())
+            .arg(inputs[cloudId].applyRobotTransform ? QStringLiteral("enabled") : QStringLiteral("disabled"))
+            .arg(progressSourceName(progressSource))
+            .arg(progressSource == WorldCloudInput::ScanProgressSource::VertexOrder
+                     ? QStringLiteral("0") : QString::number(progressLow, 'g', 8))
+            .arg(progressSource == WorldCloudInput::ScanProgressSource::VertexOrder
+                     ? QStringLiteral("1") : QString::number(progressHigh, 'g', 8))
+            .arg(formatMatrix(inputs[cloudId].startBaseFromFlange))
+            .arg(formatMatrix(interpolateRigidTransform(inputs[cloudId].startBaseFromFlange,
+                                                        inputs[cloudId].endBaseFromFlange, 0.5f)))
+            .arg(formatMatrix(inputs[cloudId].endBaseFromFlange))
+            .arg(formatMatrix(inputs[cloudId].flangeFromDepth))
+            .arg(formatBounds(localBounds));
         for (qsizetype sourceIndex=0; sourceIndex<points.size(); ++sourceIndex) {
             Point3D &source=points[sourceIndex]; sourceIndices[sourceIndex]=sourceIndex;
             if (inputs[cloudId].applyRobotTransform) {
@@ -714,6 +784,8 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
             for (qsizetype i=0;i<points.size();++i) if (usablePoint(points[i]) && representatives.emplace(noiseKey(points[i],inputs[cloudId].voxelSize),i).second) { reduced.push_back(points[i]); reducedIndices.push_back(sourceIndices[i]); }
             points=std::move(reduced); sourceIndices=std::move(reducedIndices);
         }
+        result.diagnostics += QStringLiteral("  World bounds: %1\n  Output points after voxel: %2\n")
+            .arg(formatBounds(cloudBounds(points))).arg(points.size());
         IcpDiagnostics diag;
         diag.filePath = inputs[cloudId].filePath;
         if (icp.enabled && cloudId > 0 && !result.points.isEmpty()) {
