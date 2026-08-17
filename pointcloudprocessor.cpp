@@ -3099,6 +3099,7 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points
         grid[{int(std::floor(uv.x() / radius)), int(std::floor(uv.y() / radius))}].push_back(local);
     }
     QVector<int> component(classified.size(), -1);
+    QVector<int> componentSizes;
     int componentCount = 0;
     for (int start = 0; start < classified.size(); ++start) {
         if (component[start] >= 0) continue;
@@ -3119,8 +3120,10 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points
                 }
             }
         }
+        componentSizes.push_back(queue.size());
         ++componentCount;
     }
+    result.connectedComponentCount = componentCount;
 
     int selectedComponent = -1;
     if (options.keepSeedComponentOnly) {
@@ -3137,9 +3140,25 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points
             }
         }
     }
+    const int referenceComponentSize = selectedComponent >= 0
+        ? componentSizes[selectedComponent]
+        : (componentSizes.isEmpty()
+            ? 0 : *std::max_element(componentSizes.cbegin(), componentSizes.cend()));
+    const int disconnectedPointThreshold = qMax(
+        qMax(1, options.minimumDisconnectedComponentPoints),
+        int(std::ceil(double(referenceComponentSize)
+                      * qBound(0.0f, options.minimumDisconnectedComponentRatio, 1.0f))));
+    result.significantComponentCount = selectedComponent >= 0 ? 1 : 0;
     for (int local = 0; local < classified.size(); ++local) {
         if (!options.keepSeedComponentOnly || component[local] == selectedComponent)
             result.planeIndices.push_back(classified[local]);
+        else if (componentSizes[component[local]] >= disconnectedPointThreshold)
+            result.disconnectedPlaneIndices.push_back(classified[local]);
+    }
+    for (int componentIndex = 0; componentIndex < componentSizes.size(); ++componentIndex) {
+        if (componentIndex != selectedComponent
+            && componentSizes[componentIndex] >= disconnectedPointThreshold)
+            ++result.significantComponentCount;
     }
     if (result.planeIndices.size() < requiredInliers) {
         result.error = QStringLiteral("目标连通区域点数不足：%1 / %2")

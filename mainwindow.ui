@@ -600,7 +600,7 @@
             <item>
              <widget class="QLabel" name="lbl_obstacle_hint">
               <property name="text">
-               <string>基于已确定平面，识别平面双侧连续且明显偏离的异常物体。</string>
+               <string>确定平面后自动检查显著分离面及平面双侧连续偏离；发现异常将停止后续处理。</string>
               </property>
               <property name="wordWrap">
                <bool>true</bool>
@@ -697,7 +697,7 @@
             <item>
              <widget class="QPushButton" name="btn_detect_obstacles">
               <property name="text">
-               <string>检测障碍物</string>
+               <string>重新检测障碍物</string>
               </property>
              </widget>
             </item>
@@ -711,7 +711,7 @@
             <item>
              <widget class="QLabel" name="lbl_obstacle_status">
               <property name="text">
-               <string>请先在平面提取页确定候选平面</string>
+               <string>请先在平面提取页确定平面</string>
               </property>
               <property name="wordWrap">
                <bool>true</bool>

@@ -2073,7 +2073,9 @@ bool MainWindow::pointTaskRunning() const {
 }
 
 bool MainWindow::obstacleBlocksProcessing() const {
-    return m_obstacleResult.ok && !m_obstacleResult.regions.isEmpty();
+    return m_obstacleResult.ok
+        && (m_obstacleResult.disconnectedPlaneSurface
+            || !m_obstacleResult.regions.isEmpty());
 }
 
 void MainWindow::startPlanePointSelection() {
@@ -2144,6 +2146,7 @@ void MainWindow::undoPlanePointSelection() {
 
 void MainWindow::updatePlaneExtractionUi() {
     const bool running = m_threePlaneWatcher && m_threePlaneWatcher->isRunning();
+    const bool obstacleRunning = m_obstacleWatcher && m_obstacleWatcher->isRunning();
     const bool hasThreePoints = m_selectedPointIndices.size() == 3;
     const bool hasCandidate = m_threePlaneResult.ok;
     if (m_pickPointsButton) m_pickPointsButton->setEnabled(!running && !m_points.isEmpty());
@@ -2154,7 +2157,9 @@ void MainWindow::updatePlaneExtractionUi() {
     if (m_determinePlaneButton)
         m_determinePlaneButton->setEnabled(!running && hasThreePoints && !hasCandidate);
     if (m_confirmCandidateButton)
-        m_confirmCandidateButton->setEnabled(!running && hasCandidate && !m_planeCandidateConfirmed);
+        m_confirmCandidateButton->setEnabled(!running && !obstacleRunning && hasCandidate
+                                             && !m_planeCandidateConfirmed
+                                             && !obstacleBlocksProcessing());
     if (m_cancelCandidateButton)
         m_cancelCandidateButton->setEnabled(!running && hasCandidate);
     if (!m_threeOutput || hasCandidate) return;
@@ -2176,7 +2181,7 @@ void MainWindow::updatePlaneExtractionUi() {
 
 void MainWindow::updateObstacleDetectionUi() {
     const bool running = m_obstacleWatcher && m_obstacleWatcher->isRunning();
-    const bool planeReady = m_planeCandidateConfirmed && m_threePlaneResult.ok;
+    const bool planeReady = m_threePlaneResult.ok && !m_threePlaneResult.deferred;
     if (m_obstacleDetectButton)
         m_obstacleDetectButton->setEnabled(!running && planeReady);
     if (m_obstacleClearButton)
@@ -2186,18 +2191,16 @@ void MainWindow::updateObstacleDetectionUi() {
         m_obstacleStatus->setText(tr("正在检测障碍物..."));
         m_obstacleStatus->setStyleSheet(QStringLiteral("color: #d9a928;"));
     } else if (!planeReady) {
-        m_obstacleStatus->setText(tr("请先在平面提取页确定候选平面"));
+        m_obstacleStatus->setText(tr("请先在平面提取页确定平面"));
         m_obstacleStatus->setStyleSheet({});
     } else if (!m_obstacleResult.ok) {
         m_obstacleStatus->setText(tr("平面已就绪，可以执行障碍物检测"));
         m_obstacleStatus->setStyleSheet({});
-    } else if (m_obstacleResult.regions.isEmpty()) {
+    } else if (!obstacleBlocksProcessing()) {
         m_obstacleStatus->setText(tr("未发现达到阈值的障碍物"));
         m_obstacleStatus->setStyleSheet(QStringLiteral("color: #3fa66b;"));
     } else {
-        m_obstacleStatus->setText(
-            tr("发现 %1 个障碍物区域，后续处理已停止")
-                .arg(m_obstacleResult.regions.size()));
+        m_obstacleStatus->setText(tr("发现工件表面异常，后续处理已停止"));
         m_obstacleStatus->setStyleSheet(QStringLiteral("color: #e35d55; font-weight: 600;"));
     }
 }
@@ -2215,6 +2218,7 @@ void MainWindow::clearObstacleDetection() {
         return;
     }
     clearObstacleDetectionUi();
+    updatePlaneExtractionUi();
     updatePlaneEdgeUi();
     statusBar()->showMessage(tr("已清除障碍物检测结果"));
 }
@@ -2224,8 +2228,8 @@ void MainWindow::detectObstacles() {
         statusBar()->showMessage(tr("已有点云处理任务正在运行"));
         return;
     }
-    if (!m_planeCandidateConfirmed || !m_threePlaneResult.ok) {
-        statusBar()->showMessage(tr("请先在平面提取页确定候选平面"));
+    if (!m_threePlaneResult.ok || m_threePlaneResult.deferred) {
+        statusBar()->showMessage(tr("请先在平面提取页确定平面"));
         return;
     }
 
@@ -2245,7 +2249,9 @@ void MainWindow::detectObstacles() {
 
     const QVector<pointcloud::Point3D> source = m_points;
     const QVector<int> planeIndices = m_threePlaneResult.planeIndices;
+    const QVector<int> disconnectedPlaneIndices = m_threePlaneResult.disconnectedPlaneIndices;
     const pointcloud::PlaneModel model = m_threePlaneResult.model;
+    const int planeComponentCount = m_threePlaneResult.significantComponentCount;
     m_obstacleInputRevision = m_canvasRevision;
     clearObstacleDetectionUi();
     m_progress->show();
@@ -2254,10 +2260,32 @@ void MainWindow::detectObstacles() {
         m_obstacleOutput->setPlainText(tr("正在计算平面双侧距离和连续区域..."));
     statusBar()->showMessage(tr("后台执行障碍物检测..."));
     m_obstacleWatcher->setFuture(QtConcurrent::run(
-        [source, planeIndices, model, options]() {
-            return pointcloud::detectObstacles(source, planeIndices, model, options);
+        [source, planeIndices, disconnectedPlaneIndices, model, options,
+         planeComponentCount]() {
+            pointcloud::ObstacleDetectionResult detection =
+                pointcloud::detectObstacles(source, planeIndices, model, options);
+            if (!detection.ok) return detection;
+            detection.planeComponentCount = planeComponentCount;
+            detection.disconnectedPlaneSurface = planeComponentCount > 1;
+            if (detection.disconnectedPlaneSurface && detection.regions.isEmpty()) {
+                detection.obstacleIndices += disconnectedPlaneIndices;
+                std::sort(detection.obstacleIndices.begin(), detection.obstacleIndices.end());
+                detection.obstacleIndices.erase(
+                    std::unique(detection.obstacleIndices.begin(),
+                                detection.obstacleIndices.end()),
+                    detection.obstacleIndices.end());
+            }
+            if (detection.disconnectedPlaneSurface) {
+                detection.summary = detection.regions.isEmpty()
+                    ? tr("平面内点形成 %1 个显著连通面，疑似被障碍物遮挡")
+                          .arg(planeComponentCount)
+                    : tr("同时发现高度异常区域和 %1 个显著连通面")
+                          .arg(planeComponentCount);
+            }
+            return detection;
         }));
     updateObstacleDetectionUi();
+    updatePlaneExtractionUi();
 }
 
 void MainWindow::obstacleDetectionFinished() {
@@ -2289,7 +2317,10 @@ void MainWindow::obstacleDetectionFinished() {
                  .arg(QLocale().toString(result.positiveCandidatePointCount))
                  .arg(QLocale().toString(result.negativeCandidatePointCount))
           << tr("有效障碍点：%1").arg(QLocale().toString(result.obstacleIndices.size()))
+          << tr("平面显著连通面：%1").arg(result.planeComponentCount)
           << tr("检测栅格：%1 mm").arg(result.gridSize, 0, 'g', 6);
+    if (result.disconnectedPlaneSurface)
+        lines << tr("平面内点不在同一连通面，疑似被障碍物遮挡");
     for (const pointcloud::ObstacleRegion &region : result.regions) {
         lines << QString()
               << tr("区域 #%1").arg(region.id)
@@ -2304,26 +2335,28 @@ void MainWindow::obstacleDetectionFinished() {
                      .arg(region.centroid.z, 0, 'f', 3);
     }
     if (m_obstacleOutput) m_obstacleOutput->setPlainText(lines.join(QLatin1Char('\n')));
-    if (!result.regions.isEmpty()) {
+    const bool blocked = result.disconnectedPlaneSurface || !result.regions.isEmpty();
+    if (blocked) {
         // Results derived from an obstructed surface are not valid downstream.
         clearPlaneEdgeUi();
     }
     updateObstacleDetectionUi();
+    updatePlaneExtractionUi();
     updatePlaneEdgeUi();
-    if (result.regions.isEmpty()) {
+    if (!blocked) {
         statusBar()->showMessage(tr("障碍物检测完成：未发现达到阈值的异常区域"));
         return;
     }
 
     statusBar()->showMessage(
-        tr("检测到 %1 个障碍物区域，已标红并停止后续处理")
-            .arg(result.regions.size()));
+        tr("检测到工件表面异常，已标红并停止后续处理"));
     QMessageBox::warning(
-        this, tr("检测到工件表面障碍物"),
-        tr("检测到 %1 个连续异常区域，可能导致 2.5D 图像识别失真。\n"
+        this, tr("检测到工件表面异常"),
+        tr("检测到 %1 个高度异常区域，平面显著连通面数量为 %2。\n"
+           "平面不连续可能由障碍物遮挡造成，可能导致 2.5D 图像识别失真。\n"
            "障碍点已在画布中标红，边缘分割和图像提取已停止。\n"
            "请移除障碍物并重新扫描；人工确认后可清除检测结果。")
-            .arg(result.regions.size()));
+            .arg(result.regions.size()).arg(result.planeComponentCount));
 }
 
 void MainWindow::updatePlaneEdgeUi() {
@@ -2437,7 +2470,9 @@ void MainWindow::handleCanvasPointPicked(int index) {
 }
 
 void MainWindow::determinePlaneCandidate() {
-    runPlaneExtraction(true);
+    // Obstacle detection needs the complete plane classification and its
+    // connectivity result, so perform the full pass at "determine plane".
+    runPlaneExtraction(false);
 }
 
 void MainWindow::runPlaneExtraction(bool deferFinalClassification) {
@@ -2516,18 +2551,37 @@ void MainWindow::planeExtractionFinished() {
                  .arg(plane.c, 0, 'g', 9).arg(plane.d, 0, 'g', 9)
           << tr("初始候选点：%1").arg(QLocale().toString(result.candidateIndices.size()))
           << tr("候选平面点：%1").arg(QLocale().toString(result.planeIndices.size()))
+          << tr("全部连通区域：%1").arg(result.connectedComponentCount)
+          << tr("显著连通面：%1").arg(result.significantComponentCount)
+          << tr("分离平面点：%1")
+                 .arg(QLocale().toString(result.disconnectedPlaneIndices.size()))
           << tr("PCA 平面性：%1").arg(result.planarity, 0, 'f', 6)
           << tr("PCA 精拟合轮次：%1").arg(result.pcaRefinementCount)
           << tr("Z 方向 RMS：%1 mm").arg(result.rmsError, 0, 'g', 7)
           << QString() << (result.deferred
               ? tr("快速候选平面已生成，请确认后完成全量分类")
               : (completingCandidate ? tr("候选平面已完成全量分类并确定")
-                                     : tr("候选平面已生成，请确认或取消")));
+                                     : tr("候选平面已生成，正在自动检测障碍物")));
     m_threeOutput->setPlainText(lines.join(QLatin1Char('\n')));
     updatePlaneExtractionUi();
     updateObstacleDetectionUi();
     updatePlaneEdgeUi();
-    statusBar()->showMessage(tr("候选平面已生成"));
+    if (!result.deferred) {
+        statusBar()->showMessage(tr("平面已生成，准备自动检测障碍物"));
+        scheduleAutomaticObstacleDetection();
+    } else {
+        statusBar()->showMessage(tr("候选平面已生成"));
+    }
+}
+
+void MainWindow::scheduleAutomaticObstacleDetection() {
+    if (m_closing || !m_threePlaneResult.ok || m_threePlaneResult.deferred) return;
+    QMetaObject::invokeMethod(this, [this]() {
+        if (m_closing || !m_threePlaneResult.ok || m_threePlaneResult.deferred
+            || pointTaskRunning())
+            return;
+        detectObstacles();
+    }, Qt::QueuedConnection);
 }
 
 void MainWindow::confirmPlaneCandidate() {

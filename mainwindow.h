@@ -74,6 +74,7 @@ private:
     void clearPlaneEdgeUi();
     void clearObstacleDetectionUi();
     void runPlaneExtraction(bool deferFinalClassification);
+    void scheduleAutomaticObstacleDetection();
     bool pointTaskRunning() const;
     bool obstacleBlocksProcessing() const;
     QListWidget *m_fileList = nullptr;

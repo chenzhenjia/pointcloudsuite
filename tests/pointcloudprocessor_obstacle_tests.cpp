@@ -105,12 +105,44 @@ bool detectsBothPlaneSidesSeparately() {
                   "all significant points on both sides should be marked");
 }
 
+bool reportsDisconnectedPlaneSurface() {
+    QVector<pointcloud::Point3D> points;
+    for (int y = 0; y < 10; ++y)
+        for (int x = 0; x < 10; ++x)
+            points.push_back({float(x), float(y), 10.0f});
+    for (int y = 0; y < 10; ++y)
+        for (int x = 0; x < 10; ++x)
+            points.push_back({30.0f + float(x), float(y), 10.0f});
+
+    pointcloud::ThreePointPlaneOptions options;
+    options.initialTolerance = 0.5f;
+    options.surfaceTolerance = 0.1f;
+    options.connectivityRadius = 1.5f;
+    options.ransacIterations = 20;
+    options.minInliers = 20;
+    options.minimumDisconnectedComponentPoints = 20;
+    options.minimumDisconnectedComponentRatio = 0.05f;
+    const QVector<int> seeds{0, 9, 90};
+    const auto result = pointcloud::extractPlaneFromThreePoints(points, seeds, options);
+
+    return expect(result.ok, "disconnected plane extraction should succeed")
+        && expect(result.connectedComponentCount == 2,
+                  "all classified plane components should be reported")
+        && expect(result.significantComponentCount == 2,
+                  "both large plane components should be significant")
+        && expect(result.planeIndices.size() == 100,
+                  "the seed component should remain the extracted plane")
+        && expect(result.disconnectedPlaneIndices.size() == 100,
+                  "the separated component should be retained as occlusion evidence");
+}
+
 } // namespace
 
 int main() {
     const bool ok = detectsConnectedObstacle()
         && ignoresLowAndOutsidePoints()
-        && detectsBothPlaneSidesSeparately();
+        && detectsBothPlaneSidesSeparately()
+        && reportsDisconnectedPlaneSurface();
     if (ok) std::cout << "Obstacle detection tests passed\n";
     return ok ? 0 : 1;
 }

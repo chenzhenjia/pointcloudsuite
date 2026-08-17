@@ -167,6 +167,8 @@ struct ThreePointPlaneOptions {
     bool useZAxisResidual = false;
     float maxNormalTiltDegrees = 45.0f;
     int pcaRefinementIterations = 2;
+    int minimumDisconnectedComponentPoints = 30;
+    float minimumDisconnectedComponentRatio = 0.005f;
     // Fast preview mode: fit the model but defer full-cloud classification and
     // connected-component traversal until the user confirms the candidate.
     bool deferFinalClassification = false;
@@ -188,12 +190,15 @@ struct ThreePointPlaneResult {
     PlaneModel model;
     QVector<int> candidateIndices;
     QVector<int> planeIndices;
+    QVector<int> disconnectedPlaneIndices;
     QVector<Point3D> controlPoints;
     QVector<Point3D> planePoints;
     float rmsError = 0.0f;
     float usedThreshold = 0.0f;
     float planarity = 0.0f;
     int pcaRefinementCount = 0;
+    int connectedComponentCount = 0;
+    int significantComponentCount = 0;
     bool deferred = false;
     QString error;
     bool ok = false;
@@ -250,7 +255,9 @@ struct ObstacleDetectionResult {
     int candidatePointCount = 0;
     int positiveCandidatePointCount = 0;
     int negativeCandidatePointCount = 0;
+    int planeComponentCount = 0;
     float gridSize = 0.0f;
+    bool disconnectedPlaneSurface = false;
     QString summary;
     QString error;
     bool ok = false;
