@@ -37,3 +37,14 @@ migrated to the public boundary.
 - Existing ASCII and binary formats, point order, optional normals and error
   handling remain unchanged. Memory mapping and custom numeric parsing are
   intentionally deferred to the next optimization stage.
+
+## ASCII parser optimization
+
+- ASCII vertex values now use a locale-independent in-place float parser for
+  signed decimal and scientific notation values, avoiding `strtof` setup for
+  every field.
+- Header property positions compute `lastRequiredIndex`; values after the last
+  required coordinate/normal property are not converted and are only skipped
+  as trailing text.
+- The reader still rejects malformed numbers and non-finite/overflowing float
+  values, preserves vertex order, and keeps binary parsing unchanged.

@@ -42,6 +42,19 @@ int main(int argc, char **argv) {
         || !closeTo(asciiResult.points[1].nx, 1.0f))
         return fail("ASCII property mapping failed");
 
+    const QString fastPath = directory.filePath(QStringLiteral("ascii_extra.ply"));
+    const QByteArray fastAscii =
+        "ply\nformat ascii 1.0\nelement vertex 1\n"
+        "property float x\nproperty float y\nproperty float z\n"
+        "property uchar red\nproperty float intensity\nend_header\n"
+        "-1.25e+1 2.5E-1 +3.0 255 99.0\n";
+    if (!writeFile(fastPath, fastAscii)) return fail("fast ASCII fixture write failed");
+    const auto fastResult = pcv::detail::io::readPly(fastPath);
+    if (!fastResult.ok || !closeTo(fastResult.points[0].x, -12.5f)
+        || !closeTo(fastResult.points[0].y, 0.25f)
+        || !closeTo(fastResult.points[0].z, 3.0f))
+        return fail("fast ASCII parser or trailing attribute skip failed");
+
     const QString binaryPath = directory.filePath(QStringLiteral("binary.ply"));
     QFile binary(binaryPath);
     if (!binary.open(QIODevice::WriteOnly)) return fail("binary fixture open failed");

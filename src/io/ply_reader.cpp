@@ -29,22 +29,61 @@ int scalarBytes(const QByteArray &type) {
     return 0;
 }
 
+bool parseFloatFast(const char *&cursor, const char *end, float *value) {
+    while (cursor < end && std::isspace(static_cast<unsigned char>(*cursor))) ++cursor;
+    if (cursor >= end) return false;
+    int sign = 1;
+    if (*cursor == '+' || *cursor == '-') {
+        if (*cursor++ == '-') sign = -1;
+    }
+    double mantissa = 0.0;
+    int digits = 0;
+    while (cursor < end && *cursor >= '0' && *cursor <= '9') {
+        mantissa = mantissa * 10.0 + double(*cursor++ - '0');
+        ++digits;
+    }
+    if (cursor < end && *cursor == '.') {
+        ++cursor;
+        double scale = 0.1;
+        while (cursor < end && *cursor >= '0' && *cursor <= '9') {
+            mantissa += double(*cursor++ - '0') * scale;
+            scale *= 0.1;
+            ++digits;
+        }
+    }
+    if (digits == 0) return false;
+    int exponent = 0;
+    if (cursor < end && (*cursor == 'e' || *cursor == 'E')) {
+        ++cursor;
+        int exponentSign = 1;
+        if (cursor < end && (*cursor == '+' || *cursor == '-')) {
+            if (*cursor++ == '-') exponentSign = -1;
+        }
+        int exponentDigits = 0;
+        while (cursor < end && *cursor >= '0' && *cursor <= '9') {
+            exponent = qMin( exponent * 10 + int(*cursor++ - '0'), 4000);
+            ++exponentDigits;
+        }
+        if (exponentDigits == 0) return false;
+        exponent *= exponentSign;
+    }
+    const double converted = double(sign) * mantissa * std::pow(10.0, exponent);
+    if (!std::isfinite(converted) || std::abs(converted) > std::numeric_limits<float>::max())
+        return false;
+    *value = float(converted);
+    return std::isfinite(*value);
+}
+
 bool parseAsciiPoint(const QByteArray &line, const int indices[6],
-                     pointcloud::Point3D *point) {
-    const int last = std::max({indices[0], indices[1], indices[2],
-                               indices[3], indices[4], indices[5]});
+                     int lastRequiredIndex, pointcloud::Point3D *point) {
     const char *cursor = line.constData();
     const char *end = cursor + line.size();
     float values[6] = {};
-    for (int column = 0; column <= last; ++column) {
-        while (cursor < end && std::isspace(static_cast<unsigned char>(*cursor))) ++cursor;
-        if (cursor >= end) return false;
-        char *next = nullptr;
-        const float value = std::strtof(cursor, &next);
-        if (next == cursor) return false;
+    for (int column = 0; column <= lastRequiredIndex; ++column) {
+        float value = 0.0f;
+        if (!parseFloatFast(cursor, end, &value)) return false;
         for (int component = 0; component < 6; ++component)
             if (column == indices[component]) values[component] = value;
-        cursor = next;
     }
     *point = {values[0], values[1], values[2], values[3], values[4], values[5]};
     return true;
@@ -162,6 +201,8 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
         result.error = QStringLiteral("PLY 文件缺少 x/y/z 顶点属性");
         return result;
     }
+    const int lastRequiredIndex = std::max({indices[0], indices[1], indices[2],
+                                            indices[3], indices[4], indices[5]});
     if (result.declaredPointCount > std::numeric_limits<int>::max()) {
         result.error = QStringLiteral("PLY 顶点数量超过当前实现限制");
         return result;
@@ -204,7 +245,7 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
                                 && buffer[length - 1] != '\n')) break;
             pointcloud::Point3D point;
             if (!parseAsciiPoint(QByteArray::fromRawData(buffer.data(), int(length)),
-                                 indices, &point)) break;
+                                 indices, lastRequiredIndex, &point)) break;
             result.points[parsedCount++] = point;
             updateBounds(point);
             reportProgress(index + 1);
