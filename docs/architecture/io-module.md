@@ -48,15 +48,3 @@ migrated to the public boundary.
   as trailing text.
 - The reader still rejects malformed numbers and non-finite/overflowing float
   values, preserves vertex order, and keeps binary parsing unchanged.
-
-## Loading progress and duration
-
-- The pointcloudview UI invokes `loadPlyResultWithProgress` on a worker thread.
-- The reader reports parsed vertices against the header vertex count; queued
-  invocations update the progress bar on the GUI thread only.
-- The progress bar uses a determinate 0--100 range and the status bar displays
-  the current `loaded / total` count.
-- A `QElapsedTimer` starts when loading begins and the completion message
-  reports total load duration in milliseconds, including parsing and result
-  publication. A guarded `QPointer` prevents callbacks from touching a closing
-  window.

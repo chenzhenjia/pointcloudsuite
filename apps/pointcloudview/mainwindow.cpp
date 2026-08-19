@@ -49,7 +49,6 @@
 #include <QThread>
 #include <QDialog>
 #include <QSignalBlocker>
-#include <QPointer>
 #include <QtMath>
 #include <QDir>
 #include <QPixmap>
@@ -1574,8 +1573,7 @@ void MainWindow::loadSelectedSource() {
     if (row < 0 || row >= m_sourceFiles.size() || pointTaskRunning()) return;
     m_pendingPath = m_sourceFiles[row];
     m_loading = true;
-    m_loadTimer.start();
-    m_progress->show(); m_progress->setRange(0, 100); m_progress->setValue(0);
+    m_progress->show(); m_progress->setRange(0, 0);
     statusBar()->showMessage(tr("正在加载 %1...").arg(QFileInfo(m_pendingPath).fileName()));
     if (!m_loadWatcher) {
         m_loadWatcher = new QFutureWatcher<pointcloud::LoadResult>(this);
@@ -1583,22 +1581,10 @@ void MainWindow::loadSelectedSource() {
                 this, &MainWindow::loadFinished);
     }
     const QString path = m_pendingPath;
-    const QPointer<MainWindow> guard(this);
     // The worker owns only the immutable path.  It must not retain or inspect
     // a QPointer/MainWindow while the GUI can be closing.
-    m_loadWatcher->setFuture(QtConcurrent::run([path, guard]() {
-        return pointcloud::loadPlyResultWithProgress(path,
-            [guard](qsizetype loaded, qsizetype total) {
-                if (!guard) return;
-                QMetaObject::invokeMethod(guard, [guard, loaded, total]() {
-                    if (!guard || !guard->m_loading) return;
-                    const int percent = total > 0
-                        ? qBound(0, static_cast<int>(loaded * 100 / total), 100) : 0;
-                    guard->m_progress->setValue(percent);
-                    guard->statusBar()->showMessage(QObject::tr("正在读取 PLY：%1 / %2")
-                        .arg(QLocale().toString(loaded)).arg(QLocale().toString(total)));
-                }, Qt::QueuedConnection);
-            });
+    m_loadWatcher->setFuture(QtConcurrent::run([path]() {
+        return pointcloud::loadPlyResult(path);
     }));
 }
 
@@ -1617,10 +1603,8 @@ void MainWindow::openPointCloud() {
     m_sourceDirectory = QFileInfo(path).absolutePath();
 
     m_loading = true;
-    m_loadTimer.start();
     m_progress->show();
-    m_progress->setRange(0, 100);
-    m_progress->setValue(0);
+    m_progress->setRange(0, 0);
     statusBar()->showMessage(tr("正在加载 PLY..."));
     m_pendingPath = path;
     if (!m_loadWatcher) {
@@ -1628,20 +1612,8 @@ void MainWindow::openPointCloud() {
         connect(m_loadWatcher, &QFutureWatcher<pointcloud::LoadResult>::finished,
                 this, &MainWindow::loadFinished);
     }
-    const QPointer<MainWindow> guard(this);
-    m_loadWatcher->setFuture(QtConcurrent::run([path, guard]() {
-        return pointcloud::loadPlyResultWithProgress(path,
-            [guard](qsizetype loaded, qsizetype total) {
-                if (!guard) return;
-                QMetaObject::invokeMethod(guard, [guard, loaded, total]() {
-                    if (!guard || !guard->m_loading) return;
-                    const int percent = total > 0
-                        ? qBound(0, static_cast<int>(loaded * 100 / total), 100) : 0;
-                    guard->m_progress->setValue(percent);
-                    guard->statusBar()->showMessage(QObject::tr("正在读取 PLY：%1 / %2")
-                        .arg(QLocale().toString(loaded)).arg(QLocale().toString(total)));
-                }, Qt::QueuedConnection);
-            });
+    m_loadWatcher->setFuture(QtConcurrent::run([path]() {
+        return pointcloud::loadPlyResult(path);
     }));
 }
 
@@ -1650,7 +1622,6 @@ void MainWindow::loadFinished() {
     // leaves a second owner of a multi-million-point QVector inside the
     // watcher until shutdown and was the source of the Debug heap assertion.
     pointcloud::LoadResult result = m_loadWatcher->future().takeResult();
-    const qint64 elapsedMs = m_loadTimer.isValid() ? m_loadTimer.elapsed() : -1;
     if (m_closing) {
         qWarning() << "PLY load result discarded because the window is closing, points="
                    << result.points.size() << "path=" << m_pendingPath;
@@ -1705,9 +1676,7 @@ void MainWindow::loadFinished() {
     m_progress->setValue(100);
     m_progress->hide();
     m_loading = false;
-    statusBar()->showMessage(tr("加载完成：%1 点，用时 %2 ms")
-                                 .arg(QLocale().toString(m_rawPoints.size()))
-                                 .arg(elapsedMs >= 0 ? QString::number(elapsedMs) : tr("未知")));
+    statusBar()->showMessage(tr("加载完成"));
 }
 
 void MainWindow::updateRenderSettings() {
