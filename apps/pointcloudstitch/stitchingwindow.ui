@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>StitchingWindow</class>
+ <widget class="QMainWindow" name="StitchingWindow">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>1420</width><height>850</height></rect></property>
+  <property name="windowTitle"><string>点云配准工具 - Robot World Stitching</string></property>
+  <widget class="QWidget" name="wgt_central">
+   <layout class="QVBoxLayout" name="vbl_main">
+    <item>
+     <widget class="QGroupBox" name="gb_paths">
+      <property name="title"><string>项目路径</string></property>
+      <layout class="QGridLayout" name="gbl_paths">
+       <item row="0" column="0"><widget class="QLabel" name="lbl_calibration"><property name="text"><string>Eye-in-Hand XML</string></property></widget></item>
+       <item row="0" column="1"><widget class="QLineEdit" name="le_calibration_path"><property name="placeholderText"><string>选择包含 RTmatDepth2robot/RotMat/TVec 的 XML</string></property></widget></item>
+       <item row="0" column="2"><widget class="QPushButton" name="btn_browse_calibration"><property name="text"><string>浏览...</string></property></widget></item>
+       <item row="1" column="0"><widget class="QLabel" name="lbl_output"><property name="text"><string>输出目录</string></property></widget></item>
+       <item row="1" column="1"><widget class="QLineEdit" name="le_output_directory"><property name="placeholderText"><string>默认使用首个 PLY 所在目录/stitch_output</string></property></widget></item>
+       <item row="1" column="2"><widget class="QPushButton" name="btn_browse_output"><property name="text"><string>浏览...</string></property></widget></item>
+       <item row="2" column="0"><widget class="QLabel" name="lbl_processing_mode"><property name="text"><string>处理模式</string></property></widget></item>
+       <item row="2" column="1" colspan="2">
+        <widget class="QComboBox" name="cb_processing_mode">
+         <property name="toolTip"><string>仅手眼坐标转换模式不会执行主平面预对齐、ICP 或接缝融合</string></property>
+         <item><property name="text"><string>完整流程：手眼转换 → ICP 配准 → 接缝融合</string></property></item>
+         <item><property name="text"><string>仅坐标转换：手眼转换 → 直接输出 PLY</string></property></item>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="hbl_file_actions">
+      <item><widget class="QPushButton" name="btn_add_files"><property name="text"><string>添加 PLY</string></property></widget></item>
+      <item><widget class="QPushButton" name="btn_add_folder"><property name="text"><string>扫描文件夹</string></property></widget></item>
+      <item><widget class="QPushButton" name="btn_remove_rows"><property name="text"><string>移除选中</string></property></widget></item>
+      <item><widget class="QPushButton" name="btn_clear_files"><property name="text"><string>清空</string></property></widget></item>
+      <item><spacer name="spacer_file_actions"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint"><size><width>40</width><height>20</height></size></property></spacer></item>
+     </layout>
+    </item>
+    <item>
+     <widget class="QTableWidget" name="tbl_scans">
+      <property name="selectionBehavior"><enum>QAbstractItemView::SelectRows</enum></property>
+      <property name="selectionMode"><enum>QAbstractItemView::ExtendedSelection</enum></property>
+      <property name="alternatingRowColors"><bool>true</bool></property>
+      <property name="columnCount"><number>3</number></property>
+      <column><property name="text"><string>PLY 文件</string></property></column>
+      <column><property name="text"><string>Start（X Y Z RX RY RZ）</string></property></column>
+      <column><property name="text"><string>End（X Y Z RX RY RZ）</string></property></column>
+     </widget>
+    </item>
+    <item>
+     <widget class="QGroupBox" name="gb_options">
+      <property name="title"><string>输出与配准参数</string></property>
+      <layout class="QGridLayout" name="gbl_options">
+       <item row="0" column="0"><widget class="QLabel" name="lbl_sample_stride"><property name="text"><string>配准抽样步长</string></property></widget></item>
+       <item row="0" column="1"><widget class="QSpinBox" name="sb_sample_stride"><property name="minimum"><number>1</number></property><property name="maximum"><number>100</number></property><property name="value"><number>8</number></property></widget></item>
+       <item row="0" column="2"><widget class="QLabel" name="lbl_correspondence_levels"><property name="text"><string>对应距离层级</string></property></widget></item>
+       <item row="0" column="3"><widget class="QLineEdit" name="le_correspondence_distances"><property name="text"><string>3.0,1.5,0.6</string></property></widget></item>
+       <item row="0" column="4"><widget class="QLabel" name="lbl_overlap_margin"><property name="text"><string>重叠裁剪边距</string></property></widget></item>
+       <item row="0" column="5"><widget class="QDoubleSpinBox" name="dsb_overlap_margin"><property name="suffix"><string> mm</string></property><property name="decimals"><number>2</number></property><property name="minimum"><double>0.0</double></property><property name="maximum"><double>100.0</double></property><property name="value"><double>5.0</double></property></widget></item>
+       <item row="1" column="0"><widget class="QCheckBox" name="chk_icp"><property name="text"><string>启用多尺度 ICP</string></property><property name="checked"><bool>true</bool></property><property name="enabled"><bool>false</bool></property></widget></item>
+       <item row="1" column="1"><widget class="QLineEdit" name="le_voxel_levels"><property name="text"><string>1.0,0.5,0.2</string></property><property name="toolTip"><string>从粗到细的 point-to-plane ICP 体素层级，单位 mm</string></property></widget></item>
+       <item row="1" column="2"><widget class="QLabel" name="lbl_iterations"><property name="text"><string>每层最大迭代</string></property></widget></item>
+       <item row="1" column="3"><widget class="QLineEdit" name="le_iterations"><property name="text"><string>60,45,35</string></property><property name="readOnly"><bool>true</bool></property></widget></item>
+       <item row="1" column="4"><widget class="QLabel" name="lbl_preview_ratio"><property name="text"><string>预览保留率</string></property></widget></item>
+       <item row="1" column="5"><widget class="QDoubleSpinBox" name="dsb_preview_ratio"><property name="decimals"><number>2</number></property><property name="minimum"><double>0.050000000000000</double></property><property name="maximum"><double>1.000000000000000</double></property><property name="singleStep"><double>0.050000000000000</double></property><property name="value"><double>0.600000000000000</double></property></widget></item>
+       <item row="2" column="0"><widget class="QLabel" name="lbl_max_translation"><property name="text"><string>ICP 最大平移</string></property></widget></item>
+       <item row="2" column="1"><widget class="QDoubleSpinBox" name="dsb_max_translation"><property name="suffix"><string> mm</string></property><property name="minimum"><double>0.100000000000000</double></property><property name="maximum"><double>1000.000000000000000</double></property><property name="value"><double>10.000000000000000</double></property></widget></item>
+       <item row="2" column="2"><widget class="QLabel" name="lbl_max_rotation"><property name="text"><string>ICP 最大旋转</string></property></widget></item>
+       <item row="2" column="3"><widget class="QDoubleSpinBox" name="dsb_max_rotation"><property name="suffix"><string> deg</string></property><property name="decimals"><number>2</number></property><property name="minimum"><double>0.010000000000000</double></property><property name="maximum"><double>45.000000000000000</double></property><property name="value"><double>1.000000000000000</double></property></widget></item>
+       <item row="2" column="4"><widget class="QCheckBox" name="chk_write_sources"><property name="text"><string>输出机器人基坐标来源点云</string></property><property name="checked"><bool>true</bool></property><property name="enabled"><bool>false</bool></property></widget></item>
+       <item row="3" column="0"><widget class="QCheckBox" name="chk_seam_fusion"><property name="text"><string>启用渐变接缝融合</string></property><property name="checked"><bool>true</bool></property></widget></item>
+       <item row="3" column="1"><widget class="QDoubleSpinBox" name="dsb_seam_half_width"><property name="suffix"><string> mm 半宽</string></property><property name="decimals"><number>2</number></property><property name="minimum"><double>0.100000000000000</double></property><property name="maximum"><double>100.000000000000000</double></property><property name="value"><double>8.000000000000000</double></property></widget></item>
+       <item row="3" column="2"><widget class="QLabel" name="lbl_mutual_distance"><property name="text"><string>互为最近邻/决策块</string></property></widget></item>
+       <item row="3" column="3"><widget class="QDoubleSpinBox" name="dsb_mutual_distance"><property name="suffix"><string> mm</string></property><property name="decimals"><number>3</number></property><property name="minimum"><double>0.010000000000000</double></property><property name="maximum"><double>10.000000000000000</double></property><property name="value"><double>0.600000000000000</double></property></widget></item>
+       <item row="3" column="4"><widget class="QLabel" name="lbl_decision_voxel"><property name="text"><string>接缝决策块</string></property></widget></item>
+       <item row="3" column="5"><widget class="QDoubleSpinBox" name="dsb_decision_voxel"><property name="suffix"><string> mm</string></property><property name="decimals"><number>3</number></property><property name="minimum"><double>0.010000000000000</double></property><property name="maximum"><double>10.000000000000000</double></property><property name="value"><double>0.500000000000000</double></property></widget></item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="hbl_run">
+      <item><widget class="QPushButton" name="btn_start"><property name="text"><string>开始世界坐标配准</string></property><property name="minimumSize"><size><width>190</width><height>36</height></size></property></widget></item>
+      <item><widget class="QPushButton" name="btn_cancel"><property name="text"><string>Cancel</string></property><property name="enabled"><bool>false</bool></property></widget></item>
+      <item><widget class="QProgressBar" name="pbar_progress"><property name="value"><number>0</number></property></widget></item>
+     </layout>
+    </item>
+    <item><widget class="QPlainTextEdit" name="pte_log"><property name="readOnly"><bool>true</bool></property><property name="placeholderText"><string>转换、重叠检查、ICP、去重和输出报告将显示在这里。</string></property></widget></item>
+   </layout>
+  </widget>
+  <widget class="QStatusBar" name="statusbar_main"/>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

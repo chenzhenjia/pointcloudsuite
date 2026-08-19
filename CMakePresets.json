@@ -5,25 +5,35 @@
       "name": "windows-msvc-release",
       "displayName": "Windows MSVC / Qt 6 Release (ASCII paths)",
       "generator": "NMake Makefiles",
-      "binaryDir": "C:/qt-build-pointcloudview",
+      "binaryDir": "C:/qt-build-pointcloudsuite-release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_PREFIX_PATH": "C:/Qt/6.8.3/msvc2022_64"
+        "CMAKE_PREFIX_PATH": "C:/Qt/6.8.3/msvc2022_64",
+        "PCV_BUILD_TESTS": "OFF"
       }
     },
     {
       "name": "windows-msvc-debug",
-      "displayName": "Windows MSVC / Qt 6 Debug (ASCII paths)",
+      "displayName": "Windows MSVC / Qt 6 Debug with tests",
       "generator": "NMake Makefiles",
-      "binaryDir": "C:/qt-build-pointcloudview-debug",
+      "binaryDir": "C:/qt-build-pointcloudsuite-debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_PREFIX_PATH": "C:/Qt/6.8.3/msvc2022_64"
+        "CMAKE_PREFIX_PATH": "C:/Qt/6.8.3/msvc2022_64",
+        "PCV_BUILD_TESTS": "ON",
+        "PCV_BUILD_TOOLS": "ON"
       }
     }
   ],
   "buildPresets": [
     { "name": "build-release", "configurePreset": "windows-msvc-release" },
     { "name": "build-debug", "configurePreset": "windows-msvc-debug" }
+  ],
+  "testPresets": [
+    {
+      "name": "test-debug",
+      "configurePreset": "windows-msvc-debug",
+      "output": { "outputOnFailure": true }
+    }
   ]
 }

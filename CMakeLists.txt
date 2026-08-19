@@ -1,87 +1,46 @@
 cmake_minimum_required(VERSION 3.19)
-project(pointcloudview LANGUAGES CXX)
+project(PointCloudSuite VERSION 1.0.0 LANGUAGES CXX)
 
-option(POINTCLOUDVIEW_BUILD_TESTS "Build pointcloud processor tests" OFF)
+include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Qt's Windows toolchain (especially moc/uic/rcc and older JOM/NMake
-# combinations) may fail when either the source or build path contains
-# non-ASCII characters. Fail early with a clear, actionable message instead
-# of producing a cryptic compiler error deep in the generated build files.
-if (WIN32)
-    string(REGEX MATCH "[^ -~]" _source_non_ascii "${CMAKE_SOURCE_DIR}")
-    string(REGEX MATCH "[^ -~]" _binary_non_ascii "${CMAKE_BINARY_DIR}")
-    if (_source_non_ascii OR _binary_non_ascii)
+option(PCV_BUILD_POINTCLOUDVIEW "Build the point cloud viewer" ON)
+option(PCV_BUILD_POINTCLOUDSTITCH "Build the point cloud stitching application" ON)
+option(PCV_BUILD_TOOLS "Build diagnostic command-line tools" OFF)
+option(PCV_BUILD_TESTS "Build all automated tests" OFF)
+
+if(WIN32)
+    string(REGEX MATCH "[^ -~]" PCV_SOURCE_PATH_NON_ASCII "${CMAKE_SOURCE_DIR}")
+    string(REGEX MATCH "[^ -~]" PCV_BINARY_PATH_NON_ASCII "${CMAKE_BINARY_DIR}")
+    if(PCV_SOURCE_PATH_NON_ASCII OR PCV_BINARY_PATH_NON_ASCII)
         message(FATAL_ERROR
             "Qt Windows builds require ASCII-only source and build paths.\n"
-            "Source: ${CMAKE_SOURCE_DIR}\n"
-            "Build:  ${CMAKE_BINARY_DIR}\n"
-            "Move/clone the project to a path such as C:/work/pointcloudview "
-            "and configure into C:/work/pointcloudview/build.")
+            "Source: ${CMAKE_SOURCE_DIR}\nBuild: ${CMAKE_BINARY_DIR}")
     endif()
 endif()
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Concurrent OpenGL OpenGLWidgets)
-
+find_package(Qt6 6.5 REQUIRED COMPONENTS
+    Core Gui Widgets Concurrent OpenGL OpenGLWidgets)
 qt_standard_project_setup()
 
-qt_add_executable(pointcloudview
-    WIN32 MACOSX_BUNDLE
-    main.cpp
-    mainwindow.cpp
-    mainwindow.h
-    mainwindow.ui
-    pointcloudprocessor.cpp
-    pointcloudprocessor.h
-)
-
-target_link_libraries(pointcloudview
-    PRIVATE
-        Qt::Core
-        Qt::Widgets
-        Qt::Concurrent
-        Qt::OpenGL
-        Qt::OpenGLWidgets
-)
-
-if (WIN32)
-    add_custom_command(TARGET pointcloudview POST_BUILD
-        COMMAND Qt6::windeployqt
-            --$<IF:$<CONFIG:Debug>,debug,release>
-            --compiler-runtime
-            --no-translations
-            "$<TARGET_FILE:pointcloudview>"
-        COMMENT "Deploying Qt runtime next to pointcloudview.exe"
-        VERBATIM
-    )
-endif()
-
-if (POINTCLOUDVIEW_BUILD_TESTS)
+if(PCV_BUILD_TESTS)
     enable_testing()
-    add_executable(registration_diagnostic_runner registration_diagnostic_runner.cpp pointcloudprocessor.cpp pointcloudprocessor.h)
-    target_link_libraries(registration_diagnostic_runner PRIVATE Qt::Core Qt::Gui)
-    add_executable(pointcloudprocessor_obstacle_tests
-        tests/pointcloudprocessor_obstacle_tests.cpp
-        pointcloudprocessor.cpp
-        pointcloudprocessor.h
-    )
-    target_include_directories(pointcloudprocessor_obstacle_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(pointcloudprocessor_obstacle_tests PRIVATE Qt::Core Qt::Gui)
-    add_test(NAME pointcloudprocessor_obstacle_tests COMMAND pointcloudprocessor_obstacle_tests)
 endif()
 
-install(TARGETS pointcloudview
-    BUNDLE  DESTINATION .
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-)
+add_subdirectory(src)
 
-qt_generate_deploy_app_script(
-    TARGET pointcloudview
-    OUTPUT_SCRIPT deploy_script
-    NO_UNSUPPORTED_PLATFORM_ERROR
-)
-install(SCRIPT ${deploy_script})
+if(PCV_BUILD_POINTCLOUDVIEW)
+    add_subdirectory(apps/pointcloudview)
+endif()
+if(PCV_BUILD_POINTCLOUDSTITCH)
+    add_subdirectory(apps/pointcloudstitch)
+endif()
+if(PCV_BUILD_TOOLS)
+    add_subdirectory(tools)
+endif()
+if(PCV_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()

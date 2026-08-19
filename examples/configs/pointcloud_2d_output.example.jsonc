@@ -1,0 +1,77 @@
+{
+  // 与 PNG 同名的 JSON 元数据模板；实际输出由程序填充。
+  "schema_version": "1.0.0",
+  "task_id": "task_YYYYMMDD_HHMMSS",
+  "source": {
+    "pointcloud_file": "workpiece_001.ply",
+    "pointcloud_format": "PLY",
+    "ply_encoding": "ascii_or_binary",
+    "coordinate_frame": "robot_base"
+  },
+  "units": {"length": "mm", "angle": "deg"},
+  "plane_selection": {
+    "selected_point_count": 3,
+    "selected_points_in_robot_base": []
+  },
+  "workpiece_coordinate": {
+    "origin_definition": "confirmed_plane_bounding_box_center",
+    "origin_in_robot_base": {"x": 0.0, "y": 0.0, "z": 0.0},
+    "workpiece_center_in_workpiece": {"x": 0.0, "y": 0.0, "z": 0.0, "a": 0.0, "b": 0.0, "c": 0.0},
+    "workpiece_center_in_robot_base": {"x": 0.0, "y": 0.0, "z": 0.0, "a": 0.0, "b": 0.0, "c": 0.0},
+    "pose_in_robot_base": {"x": 0.0, "y": 0.0, "z": 0.0, "a": 0.0, "b": 0.0, "c": 0.0},
+    "workpiece_to_robot_base_matrix_4x4": [],
+    "robot_base_to_workpiece_matrix_4x4": []
+  },
+  "mapping": {
+    "source_frame": "robot_base",
+    "target_frame": "workpiece",
+    "formula": "P_workpiece = R_base_workpiece^T * (P_base - O_base)",
+    "mapped_plane_point_count": 0,
+    "rejected_non_plane_point_count": 0,
+    "rejected_invalid_point_count": 0,
+    "rejected_outside_rectangle_count": 0,
+    "plane_distance_tolerance_mm": 0.4,
+    "workpiece_bounds_mm": {"min": [0.0, 0.0, 0.0], "max": [0.0, 0.0, 0.0]}
+  },
+  "image": {
+    "file_name": "result_001.png",
+    "format": "PNG",
+    "width_pixels": 12000,
+    "height_pixels": 18000,
+    "channels": 1,
+    "bit_depth": 8,
+    "image_type": "binary_mask",
+    "background_value": 0,
+    "foreground_value": 255,
+    "physical_width_mm": 600.0,
+    "physical_height_mm": 900.0,
+    "pixel_size_mm": 0.05,
+    "pixels_per_mm": 20.0,
+    "automatic_bounds": true,
+    "margin_mm": 50.0,
+    "round_increment_mm": 10.0
+  },
+  "image_region": {
+    "coordinate_frame": "workpiece",
+    "plane": "XY",
+    "bounds_mm": {"min_x": -300.0, "max_x": 300.0, "min_y": -450.0, "max_y": 450.0}
+  },
+  "pixel_coordinate": {
+    "origin": "top_left",
+    "u_positive_direction": "workpiece_x_positive",
+    "v_positive_direction": "workpiece_y_negative",
+    "index_base": 0,
+    "workpiece_origin_pixel": {"u": 5999.5, "v": 8999.5, "value_type": "continuous_pixel"}
+  },
+  "output": {
+    "png_file": "result_001.png",
+    "plane_ply_file": "result_001_plane_robot_base.ply",
+    "plane_ply_point_count": 0,
+    "json_file": "result_001.json",
+    "png_write_success": true,
+    "plane_ply_write_success": true,
+    "json_write_success": true,
+    "pair_complete": true,
+    "warnings": []
+  }
+}

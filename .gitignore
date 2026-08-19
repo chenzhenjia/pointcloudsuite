@@ -80,6 +80,15 @@ CMakeLists.txt.user*
 .pch/
 .rcc/
 .uic/
-/build*/
+**/build*/
 /.qtcreator/
 *.pcvbin
+/mid_gap/
+**/regression_results/
+
+# Runtime data now lives under the operating system application-data path.
+# Ignore these names as a safeguard if a developer redirects them locally.
+**/cache/
+**/logs/
+**/exports/
+/sdk-install*/
