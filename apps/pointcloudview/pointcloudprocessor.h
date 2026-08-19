@@ -19,6 +19,9 @@ struct LoadResult {
     QString error;
     bool ok = false;
     bool usedCache = false;
+    Point3D minimum;
+    Point3D maximum;
+    bool hasBounds = false;
 };
 
 struct NoiseOptions {

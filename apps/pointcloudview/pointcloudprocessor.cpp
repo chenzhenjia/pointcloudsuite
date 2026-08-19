@@ -1243,7 +1243,13 @@ NoiseResult removeNoise(const QVector<Point3D> &points, const NoiseOptions &opti
 
 LoadResult loadPlyResult(const QString &fileName) {
     LoadResult result;
-    result.ok = loadPly(fileName, result.points, &result.error);
+    pcv::detail::io::PlyReadResult parsed = pcv::detail::io::readPly(fileName);
+    result.ok = parsed.ok;
+    result.error = std::move(parsed.error);
+    result.points = std::move(parsed.points);
+    result.minimum = parsed.minimum;
+    result.maximum = parsed.maximum;
+    result.hasBounds = parsed.hasBounds;
     result.usedCache = false;
     return result;
 }
@@ -1251,7 +1257,15 @@ LoadResult loadPlyResult(const QString &fileName) {
 LoadResult loadPlyResultWithProgress(const QString &fileName,
                                      const LoadProgressCallback &progress) {
     LoadResult result;
-    result.ok = loadPly(fileName, result.points, &result.error, progress);
+    pcv::detail::io::PlyReadOptions options;
+    options.progress = progress;
+    pcv::detail::io::PlyReadResult parsed = pcv::detail::io::readPly(fileName, options);
+    result.ok = parsed.ok;
+    result.error = std::move(parsed.error);
+    result.points = std::move(parsed.points);
+    result.minimum = parsed.minimum;
+    result.maximum = parsed.maximum;
+    result.hasBounds = parsed.hasBounds;
     result.usedCache = false;
     return result;
 }

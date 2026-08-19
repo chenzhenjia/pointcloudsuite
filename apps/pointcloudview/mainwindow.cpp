@@ -1652,12 +1652,8 @@ void MainWindow::loadFinished() {
         m_sourceFiles = {m_pendingPath};
         m_sourceDirectory = fileInfo.absolutePath();
     }
-    float minZ = m_rawPoints.first().z;
-    float maxZ = minZ;
-    for (const auto &point : m_rawPoints) {
-        minZ = qMin(minZ, point.z);
-        maxZ = qMax(maxZ, point.z);
-    }
+    float minZ = result.hasBounds ? result.minimum.z : m_rawPoints.first().z;
+    float maxZ = result.hasBounds ? result.maximum.z : minZ;
     m_mapMin->setValue(minZ);
     m_mapMax->setValue(maxZ > minZ ? maxZ : minZ + 1.0);
     publishCanvasCache(m_rawPoints);

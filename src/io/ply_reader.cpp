@@ -167,7 +167,22 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
         return result;
     }
 
-    result.points.reserve(result.declaredPointCount);
+    result.points.resize(result.declaredPointCount);
+    qsizetype parsedCount = 0;
+    auto updateBounds = [&result](const pointcloud::Point3D &point) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) return;
+        if (!result.hasBounds) {
+            result.minimum = result.maximum = point;
+            result.hasBounds = true;
+            return;
+        }
+        result.minimum.x = std::min(result.minimum.x, point.x);
+        result.minimum.y = std::min(result.minimum.y, point.y);
+        result.minimum.z = std::min(result.minimum.z, point.z);
+        result.maximum.x = std::max(result.maximum.x, point.x);
+        result.maximum.y = std::max(result.maximum.y, point.y);
+        result.maximum.z = std::max(result.maximum.z, point.z);
+    };
     const auto reportProgress = [&](qsizetype index) {
         if (options.progress && ((index % 10000) == 0 || index == result.declaredPointCount))
             options.progress(index, result.declaredPointCount);
@@ -190,7 +205,8 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
             pointcloud::Point3D point;
             if (!parseAsciiPoint(QByteArray::fromRawData(buffer.data(), int(length)),
                                  indices, &point)) break;
-            result.points.push_back(point);
+            result.points[parsedCount++] = point;
+            updateBounds(point);
             reportProgress(index + 1);
         }
     } else {
@@ -227,13 +243,14 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
                 else if (column == indices[4]) point.ny = float(value);
                 else if (column == indices[5]) point.nz = float(value);
             }
-            if (ok) result.points.push_back(point);
+            if (ok) result.points[parsedCount++] = point;
+            if (ok) updateBounds(point);
             reportProgress(index + 1);
         }
     }
 
-    if (result.points.size() != result.declaredPointCount) {
-        const qsizetype actual = result.points.size();
+    if (parsedCount != result.declaredPointCount) {
+        const qsizetype actual = parsedCount;
         result.points.clear();
         result.error = QStringLiteral("PLY 顶点数据不完整：声明 %1 点，实际读取 %2 点")
             .arg(result.declaredPointCount).arg(actual);

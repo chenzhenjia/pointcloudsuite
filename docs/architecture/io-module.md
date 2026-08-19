@@ -24,3 +24,16 @@ External consumers call the STL-based `pcv::io::readPly` and
 `pcv::io::readPlyCached` API. Existing Qt applications temporarily use the
 private `pcv::detail::io` implementation until their workflow adapters are
 migrated to the public boundary.
+
+## First-stage loading optimization
+
+- `pointcloudview` now uses the shared `pcv::detail::io::readPly` reader for
+  asynchronous loading instead of maintaining a separate application parser.
+- The reader allocates the declared vertex array once and writes by index,
+  avoiding repeated `QVector::push_back` growth.
+- Finite XYZ bounds are accumulated during parsing and returned with the load
+  result, so the UI does not scan millions of points a second time just to set
+  the Z color range.
+- Existing ASCII and binary formats, point order, optional normals and error
+  handling remain unchanged. Memory mapping and custom numeric parsing are
+  intentionally deferred to the next optimization stage.

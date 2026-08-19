@@ -27,6 +27,9 @@ struct PlyReadResult {
     PlyFormat format = PlyFormat::Ascii;
     bool cancelled = false;
     bool ok = false;
+    pointcloud::Point3D minimum;
+    pointcloud::Point3D maximum;
+    bool hasBounds = false;
 };
 
 PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options = {});
