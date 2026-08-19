@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QElapsedTimer>
 #include <QStringList>
 #include "pointcloudprocessor.h"
 
@@ -77,6 +78,7 @@ private:
     QLabel *m_fileInfo = nullptr;
     QLabel *m_canvasInfo = nullptr;
     QProgressBar *m_progress = nullptr;
+    QElapsedTimer m_loadTimer;
     QSpinBox *m_pointSize = nullptr;
     QComboBox *m_colorMode = nullptr;
     QDoubleSpinBox *m_overlay = nullptr;
