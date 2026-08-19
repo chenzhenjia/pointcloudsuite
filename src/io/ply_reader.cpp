@@ -233,23 +233,40 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
     };
 
     if (result.format == PlyFormat::Ascii) {
+        const qint64 payloadOffset = file.pos();
+        const qint64 payloadBytes = file.size() - payloadOffset;
+        uchar *mapped = payloadBytes > 0 ? file.map(payloadOffset, payloadBytes) : nullptr;
+        const char *mappedBegin = reinterpret_cast<const char *>(mapped);
+        const char *mappedCursor = mappedBegin;
+        const char *mappedEnd = mappedBegin ? mappedBegin + payloadBytes : nullptr;
         std::array<char, 64 * 1024> buffer{};
         for (qsizetype index = 0; index < result.declaredPointCount; ++index) {
             if (cancelled(index)) {
                 result.cancelled = true;
                 result.error = QStringLiteral("已取消");
+                if (mapped) file.unmap(mapped);
                 return result;
             }
-            const qint64 length = file.readLine(buffer.data(), buffer.size());
-            if (length <= 0 || (length == buffer.size() - 1 && !file.atEnd()
-                                && buffer[length - 1] != '\n')) break;
+            QByteArray line;
+            if (mapped) {
+                if (mappedCursor >= mappedEnd) break;
+                const char *lineEnd = static_cast<const char *>(std::memchr(
+                    mappedCursor, '\n', size_t(mappedEnd - mappedCursor)));
+                lineEnd = lineEnd ? lineEnd + 1 : mappedEnd;
+                line = QByteArray::fromRawData(mappedCursor, int(lineEnd - mappedCursor));
+                mappedCursor = lineEnd;
+            } else {
+                const qint64 length = file.readLine(buffer.data(), buffer.size());
+                if (length <= 0) break;
+                line = QByteArray::fromRawData(buffer.data(), int(length));
+            }
             pointcloud::Point3D point;
-            if (!parseAsciiPoint(QByteArray::fromRawData(buffer.data(), int(length)),
-                                 indices, lastRequiredIndex, &point)) break;
+            if (!parseAsciiPoint(line, indices, lastRequiredIndex, &point)) break;
             result.points[parsedCount++] = point;
             updateBounds(point);
             reportProgress(index + 1);
         }
+        if (mapped) file.unmap(mapped);
     } else {
         const qsizetype bytesPerVertex = std::accumulate(
             properties.cbegin(), properties.cend(), qsizetype(0),

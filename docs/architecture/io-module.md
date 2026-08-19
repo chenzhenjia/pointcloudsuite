@@ -48,3 +48,13 @@ migrated to the public boundary.
   as trailing text.
 - The reader still rejects malformed numbers and non-finite/overflowing float
   values, preserves vertex order, and keeps binary parsing unchanged.
+
+## Memory-mapped ASCII payload
+
+- After parsing the header, ASCII vertex payloads are read through `QFile::map`
+  and scanned in place with pointer arithmetic; this avoids per-line system
+  calls and temporary byte-array allocations for large files.
+- Newline boundaries are located directly in the mapped buffer, while the
+  existing locale-independent float parser and point order are preserved.
+- If mapping is unavailable, the reader falls back to buffered line reads, so
+  network files and platforms without mapping support remain compatible.
