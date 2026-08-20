@@ -3374,16 +3374,14 @@ PlaneEdgeResult segmentPlaneEdges(const QVector<Point3D> &points,
         result.contours.push_back(std::move(contour));
     }
 
-    result.image = QImage(gridWidth, gridHeight, QImage::Format_RGB32);
-    // OpenCV downstream processing relies on a zero-valued background mask.
-    // Keep every non-occupied pixel exactly RGB(0,0,0), not a dark gray UI color.
-    result.image.fill(qRgb(0, 0, 0));
+    result.image = QImage(gridWidth, gridHeight, QImage::Format_Grayscale8);
+    // Edge output is a single-channel mask: workpiece=225, background=0.
+    result.image.fill(0);
     for (int y = 0; y < gridHeight; ++y) {
-        QRgb *row = reinterpret_cast<QRgb *>(result.image.scanLine(gridHeight - 1 - y));
+        uchar *row = result.image.scanLine(gridHeight - 1 - y);
         for (int x = 0; x < gridWidth; ++x) {
             const int cell = y * gridWidth + x;
-            if (boundaryMask[cell]) row[x] = qRgb(255, 220, 48);
-            else if (mask[cell]) row[x] = qRgb(166, 172, 180);
+            if (mask[cell]) row[x] = 225;
         }
     }
     result.gridSize = gridSize;
@@ -3767,7 +3765,7 @@ PlaneImageResult extractPlaneImage(const QVector<Point3D> &points,
         for (int x = 0; x < width; ++x) {
             if (!valid[y * width + x]) continue;
             ++occupied;
-            row[x] = 255;
+            row[x] = 225;
         }
     }
     if (imageScale > 1) {

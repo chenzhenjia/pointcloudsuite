@@ -539,3 +539,11 @@ D:/workpiece/pointcloudview/backups/pointcloudview_20260818_obstacle_warning_cle
   前景写入 255，供 OpenCV 后处理。
 - PNG 同名 JSON 记录物理/像素宽高、像素比例、边距、取整步长、工件中心 `X/Y/Z/A/B/C`、
   工件坐标变换矩阵和映射统计，支持由 PNG/JSON 反推平面点云坐标。
+
+### 2026-08-20：单通道二值图像值约束
+
+- 平面提取和边缘分割输出统一为 `QImage::Format_Grayscale8` 单通道图像。
+- 工件/平面前景像素固定为灰度 `225`，非工件区域、背景和孔洞固定为 `0` 纯黑；
+  不再输出黄色边缘或 RGB 灰阶，保证 OpenCV 读取时通道和阈值稳定。
+- 边缘分割完成后，其生成的 Mask 会同步成为当前可保存的 2D 图像，沿用 PNG/JSON
+  输出接口及上述像素值约束。

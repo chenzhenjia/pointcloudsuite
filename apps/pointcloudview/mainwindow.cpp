@@ -2628,6 +2628,16 @@ void MainWindow::planeEdgeSegmentationFinished() {
         return;
     }
     m_planeEdgeResult = result;
+    // Make the edge mask directly exportable through the same PNG/JSON path.
+    // Keep the single-channel 225/0 contract used by plane extraction.
+    m_planeImageResult = {};
+    m_planeImageResult.image = result.image;
+    m_planeImageResult.gridSize = result.gridSize;
+    m_planeImageResult.pixelSize = result.gridSize;
+    m_planeImageResult.width = result.width;
+    m_planeImageResult.height = result.height;
+    m_planeImageResult.automaticBounds = false;
+    m_planeImageResult.ok = !result.image.isNull();
     m_canvas->setPlaneResult(m_threePlaneResult.planeIndices,
                              result.edgeIndices, result.contours);
     const int holeCount = int(std::count_if(
@@ -2815,7 +2825,7 @@ void MainWindow::savePlaneImage() {
         {QStringLiteral("bit_depth"), 8},
         {QStringLiteral("image_type"), QStringLiteral("binary_mask")},
         {QStringLiteral("background_value"), 0},
-        {QStringLiteral("foreground_value"), 255},
+        {QStringLiteral("foreground_value"), 225},
         {QStringLiteral("physical_width_mm"), physicalWidth},
         {QStringLiteral("physical_height_mm"), physicalHeight},
         {QStringLiteral("pixel_size_mm"), m_planeImageResult.pixelSize > 0.0f
