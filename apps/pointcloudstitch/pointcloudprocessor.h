@@ -63,6 +63,12 @@ struct IcpOptions {
     float tangentCoarseScoreDistanceMm = 5.0f;
     float tangentCoarseYawRadiusDegrees = 1.0f;
     float tangentCoarseYawStepDegrees = 0.25f;
+    bool wideStructureDiagnosticEnabled = true;
+    float wideStructureSearchRadiusMm = 120.0f;
+    float wideStructureSearchStepMm = 10.0f;
+    float wideStructureRefineStepMm = 2.0f;
+    float wideStructureYawRadiusDegrees = 3.0f;
+    float wideStructureYawStepDegrees = 0.5f;
     float tangentCoarseMinimumCoverageGain = 0.05f;
     std::function<bool()> isCancelled;
 };
@@ -148,6 +154,15 @@ struct IcpDiagnostics {
     float trackedSourcePlaneHeight = 0.0f;
     float trackedTargetPlaneHeight = 0.0f;
     QString planeIdentityReason;
+    bool wideStructureDiagnosticAttempted = false;
+    bool wideStructureDiagnosticValid = false;
+    float wideStructureCoverageBefore = 0.0f;
+    float wideStructureCoverageBest = 0.0f;
+    float wideStructureX = 0.0f;
+    float wideStructureY = 0.0f;
+    float wideStructureZ = 0.0f;
+    float wideStructureYawDegrees = 0.0f;
+    QString wideStructureDiagnosticReason;
     bool planeDiagnosticValid = false;
     float planeNormalAngleDegrees = 0.0f;
     float sourcePlaneHeight = 0.0f;

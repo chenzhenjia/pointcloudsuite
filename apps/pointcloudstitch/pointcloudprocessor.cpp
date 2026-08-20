@@ -418,6 +418,18 @@ QVector<Point3D> structureWeightedPoints(const QVector<Point3D> &points,
     return result;
 }
 
+QVector<Point3D> pureStructuralPoints(const QVector<Point3D> &points,
+                                      const PlaneDiagnostic &plane,
+                                      float exclusionDistance) {
+    QVector<Point3D> result;
+    if(!plane.valid)return result;
+    result.reserve(points.size()/4);
+    for(const Point3D &point:points)
+        if(std::abs(QVector3D::dotProduct(plane.normal,vectorOf(point))-plane.offset)>exclusionDistance)
+            result.push_back(point);
+    return result;
+}
+
 float translatedCoverage(const QVector<Point3D> &source,
                          const QVector<Point3D> &target,
                          const SpatialIndex &targetIndex,
@@ -442,6 +454,53 @@ float translatedCoverage(const QVector<Point3D> &source,
     for(const Point3D &point:source)forward+=covered(point,translation,target,targetIndex);
     for(const Point3D &point:target)backward+=covered(point,-translation,source,sourceIndex);
     return qMin(float(forward)/float(source.size()),float(backward)/float(target.size()));
+}
+
+void runWideStructureDiagnostic(const QVector<Point3D> &source,
+                                const QVector<Point3D> &target,
+                                const PlaneDiagnostic &targetPlane,
+                                const IcpOptions &options,
+                                IcpDiagnostics *diagnostic) {
+    diagnostic->wideStructureDiagnosticAttempted=true;
+    QVector<Point3D> moving=voxelDownsample(source,4.0f),reference=voxelDownsample(target,4.0f);
+    if(moving.size()<options.minimumStructuralPoints||reference.size()<options.minimumStructuralPoints||!targetPlane.valid){
+        diagnostic->wideStructureDiagnosticReason=QStringLiteral("大范围诊断结构样本不足：%1/%2").arg(moving.size()).arg(reference.size());return;
+    }
+    const float scoreDistance=qMax(3.0f,options.tangentCoarseScoreDistanceMm);
+    const SpatialIndex targetIndex=buildIndex(reference,scoreDistance),sourceIndex=buildIndex(moving,scoreDistance);
+    QVector3D axisU=QVector3D::crossProduct(targetPlane.normal,QVector3D(0,0,1));
+    if(axisU.lengthSquared()<1.0e-6f)axisU=QVector3D::crossProduct(targetPlane.normal,QVector3D(1,0,0));
+    axisU.normalize();const QVector3D axisV=QVector3D::crossProduct(targetPlane.normal,axisU).normalized();
+    QVector3D best;float bestScore=translatedCoverage(moving,reference,targetIndex,sourceIndex,{},scoreDistance);
+    diagnostic->wideStructureCoverageBefore=bestScore;
+    const auto search=[&](float centerU,float centerV,float radius,float step){
+        for(float u=centerU-radius;u<=centerU+radius+.001f;u+=step)
+            for(float v=centerV-radius;v<=centerV+radius+.001f;v+=step){
+                const QVector3D candidate=axisU*u+axisV*v;
+                if(candidate.length()>options.wideStructureSearchRadiusMm+.001f)continue;
+                const float score=translatedCoverage(moving,reference,targetIndex,sourceIndex,candidate,scoreDistance);
+                if(score>bestScore){bestScore=score;best=candidate;}
+            }
+    };
+    search(0,0,options.wideStructureSearchRadiusMm,options.wideStructureSearchStepMm);
+    const float centerU=QVector3D::dotProduct(best,axisU),centerV=QVector3D::dotProduct(best,axisV);
+    search(centerU,centerV,options.wideStructureSearchStepMm,options.wideStructureRefineStepMm);
+    QVector3D centroid;for(const Point3D &point:moving)centroid+=vectorOf(point);centroid/=float(moving.size());
+    QVector<Point3D> translated=moving;for(Point3D &point:translated){point.x+=best.x();point.y+=best.y();point.z+=best.z();}
+    float bestYaw=0;
+    for(float angle=-options.wideStructureYawRadiusDegrees;angle<=options.wideStructureYawRadiusDegrees+.001f;angle+=options.wideStructureYawStepDegrees){
+        QMatrix4x4 rotation;rotation.setToIdentity();rotation.translate(centroid+best);rotation.rotate(angle,targetPlane.normal);rotation.translate(-(centroid+best));
+        QVector<Point3D> rotated=translated;applyTransform(&rotated,rotation);
+        const SpatialIndex rotatedIndex=buildIndex(rotated,scoreDistance);
+        const float score=translatedCoverage(rotated,reference,targetIndex,rotatedIndex,{},scoreDistance);
+        if(score>bestScore){bestScore=score;bestYaw=angle;}
+    }
+    diagnostic->wideStructureDiagnosticValid=true;
+    diagnostic->wideStructureCoverageBest=bestScore;
+    diagnostic->wideStructureX=best.x();diagnostic->wideStructureY=best.y();diagnostic->wideStructureZ=best.z();
+    diagnostic->wideStructureYawDegrees=bestYaw;
+    diagnostic->wideStructureDiagnosticReason=QStringLiteral("只读诊断：5 mm 双向覆盖率由 %1 提升至 %2，候选不应用")
+        .arg(diagnostic->wideStructureCoverageBefore,0,'f',4).arg(bestScore,0,'f',4);
 }
 
 QVector3D tangentCoarseTranslation(const QVector<Point3D> &source,
@@ -746,6 +805,15 @@ IcpDiagnostics registerPair(QVector<Point3D> *source,
         }
     }else diagnostic.tangentCoarseAlignmentReason=options.tangentCoarseAlignmentEnabled
         ?QStringLiteral("未检测到可用主平面，跳过切向粗对齐"):QStringLiteral("切向粗对齐已禁用");
+    if(options.wideStructureDiagnosticEnabled&&sourcePlane.valid&&targetPlane.valid){
+        PlaneDiagnostic alignedSourcePlane=sourcePlane;
+        alignedSourcePlane.normal=(*correction).mapVector(sourcePlane.normal).normalized();
+        alignedSourcePlane.offset=QVector3D::dotProduct(alignedSourcePlane.normal,(*correction).map(sourcePlane.centroid));
+        QVector<Point3D> wideSource=*source;applyTransform(&wideSource,*correction);
+        runWideStructureDiagnostic(pureStructuralPoints(wideSource,alignedSourcePlane,options.structuralPlaneExclusionMm),
+            pureStructuralPoints(target,targetPlane,options.structuralPlaneExclusionMm),targetPlane,options,&diagnostic);
+    }else diagnostic.wideStructureDiagnosticReason=options.wideStructureDiagnosticEnabled
+        ?QStringLiteral("未检测到可用主平面，跳过大范围结构诊断"):QStringLiteral("大范围结构诊断已禁用");
     const int maximumIterations[3]{60,45,35};
     for(int level=0;level<3;++level){
         float previousFitness=-1.0f;

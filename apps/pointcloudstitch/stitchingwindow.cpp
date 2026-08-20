@@ -175,6 +175,12 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
     registration.insert(QStringLiteral("tangent_coarse_score_distance_mm"), result.icpOptions.tangentCoarseScoreDistanceMm);
     registration.insert(QStringLiteral("tangent_coarse_yaw_radius_deg"), result.icpOptions.tangentCoarseYawRadiusDegrees);
     registration.insert(QStringLiteral("tangent_coarse_yaw_step_deg"), result.icpOptions.tangentCoarseYawStepDegrees);
+    registration.insert(QStringLiteral("wide_structure_diagnostic_enabled"), result.icpOptions.wideStructureDiagnosticEnabled);
+    registration.insert(QStringLiteral("wide_structure_search_radius_mm"), result.icpOptions.wideStructureSearchRadiusMm);
+    registration.insert(QStringLiteral("wide_structure_search_step_mm"), result.icpOptions.wideStructureSearchStepMm);
+    registration.insert(QStringLiteral("wide_structure_refine_step_mm"), result.icpOptions.wideStructureRefineStepMm);
+    registration.insert(QStringLiteral("wide_structure_yaw_radius_deg"), result.icpOptions.wideStructureYawRadiusDegrees);
+    registration.insert(QStringLiteral("wide_structure_yaw_step_deg"), result.icpOptions.wideStructureYawStepDegrees);
     registration.insert(QStringLiteral("tangent_coarse_minimum_coverage_gain"), result.icpOptions.tangentCoarseMinimumCoverageGain);
     QJsonArray finalCorrections;
     for (const QMatrix4x4 &matrix : result.merge.registrationCorrections) {
@@ -311,6 +317,13 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
         item.insert(QStringLiteral("tangent_coarse_xyz_mm"), QJsonArray{diagnostic.tangentCoarseX,diagnostic.tangentCoarseY,diagnostic.tangentCoarseZ});
         item.insert(QStringLiteral("tangent_coarse_yaw_deg"), diagnostic.tangentCoarseYawDegrees);
         item.insert(QStringLiteral("tangent_coarse_alignment_reason"), diagnostic.tangentCoarseAlignmentReason);
+        item.insert(QStringLiteral("wide_structure_diagnostic_attempted"), diagnostic.wideStructureDiagnosticAttempted);
+        item.insert(QStringLiteral("wide_structure_diagnostic_valid"), diagnostic.wideStructureDiagnosticValid);
+        item.insert(QStringLiteral("wide_structure_coverage_before"), diagnostic.wideStructureCoverageBefore);
+        item.insert(QStringLiteral("wide_structure_coverage_best"), diagnostic.wideStructureCoverageBest);
+        item.insert(QStringLiteral("wide_structure_candidate_xyz_mm"), QJsonArray{diagnostic.wideStructureX,diagnostic.wideStructureY,diagnostic.wideStructureZ});
+        item.insert(QStringLiteral("wide_structure_candidate_yaw_deg"), diagnostic.wideStructureYawDegrees);
+        item.insert(QStringLiteral("wide_structure_diagnostic_reason"), diagnostic.wideStructureDiagnosticReason);
         item.insert(QStringLiteral("plane_diagnostic_valid"), diagnostic.planeDiagnosticValid);
         item.insert(QStringLiteral("plane_normal_angle_deg"), diagnostic.planeNormalAngleDegrees);
         item.insert(QStringLiteral("source_plane_height_mm"), diagnostic.sourcePlaneHeight);

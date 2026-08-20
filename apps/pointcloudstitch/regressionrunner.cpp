@@ -234,6 +234,13 @@ QJsonObject diagnosticJson(const pointcloud::IcpDiagnostics &diagnostic,
     item.insert(QStringLiteral("tangent_coarse_xyz_mm"), QJsonArray{diagnostic.tangentCoarseX,diagnostic.tangentCoarseY,diagnostic.tangentCoarseZ});
     item.insert(QStringLiteral("tangent_coarse_yaw_deg"), diagnostic.tangentCoarseYawDegrees);
     item.insert(QStringLiteral("tangent_coarse_alignment_reason"), diagnostic.tangentCoarseAlignmentReason);
+    item.insert(QStringLiteral("wide_structure_diagnostic_attempted"), diagnostic.wideStructureDiagnosticAttempted);
+    item.insert(QStringLiteral("wide_structure_diagnostic_valid"), diagnostic.wideStructureDiagnosticValid);
+    item.insert(QStringLiteral("wide_structure_coverage_before"), diagnostic.wideStructureCoverageBefore);
+    item.insert(QStringLiteral("wide_structure_coverage_best"), diagnostic.wideStructureCoverageBest);
+    item.insert(QStringLiteral("wide_structure_candidate_xyz_mm"), QJsonArray{diagnostic.wideStructureX,diagnostic.wideStructureY,diagnostic.wideStructureZ});
+    item.insert(QStringLiteral("wide_structure_candidate_yaw_deg"), diagnostic.wideStructureYawDegrees);
+    item.insert(QStringLiteral("wide_structure_diagnostic_reason"), diagnostic.wideStructureDiagnosticReason);
     item.insert(QStringLiteral("plane_diagnostic_valid"), diagnostic.planeDiagnosticValid);
     item.insert(QStringLiteral("plane_normal_angle_deg"), diagnostic.planeNormalAngleDegrees);
     item.insert(QStringLiteral("source_plane_height_mm"), diagnostic.sourcePlaneHeight);
@@ -378,6 +385,12 @@ int runRegression(const QStringList &arguments)
     parameterObject.insert(QStringLiteral("tangent_coarse_score_distance_mm"), options.tangentCoarseScoreDistanceMm);
     parameterObject.insert(QStringLiteral("tangent_coarse_yaw_radius_deg"), options.tangentCoarseYawRadiusDegrees);
     parameterObject.insert(QStringLiteral("tangent_coarse_yaw_step_deg"), options.tangentCoarseYawStepDegrees);
+    parameterObject.insert(QStringLiteral("wide_structure_diagnostic_enabled"), options.wideStructureDiagnosticEnabled);
+    parameterObject.insert(QStringLiteral("wide_structure_search_radius_mm"), options.wideStructureSearchRadiusMm);
+    parameterObject.insert(QStringLiteral("wide_structure_search_step_mm"), options.wideStructureSearchStepMm);
+    parameterObject.insert(QStringLiteral("wide_structure_refine_step_mm"), options.wideStructureRefineStepMm);
+    parameterObject.insert(QStringLiteral("wide_structure_yaw_radius_deg"), options.wideStructureYawRadiusDegrees);
+    parameterObject.insert(QStringLiteral("wide_structure_yaw_step_deg"), options.wideStructureYawStepDegrees);
     parameterObject.insert(QStringLiteral("tangent_coarse_minimum_coverage_gain"), options.tangentCoarseMinimumCoverageGain);
     parameterObject.insert(QStringLiteral("sample_stride"), options.sampleStride);
     parameterObject.insert(QStringLiteral("overlap_margin_mm"), options.overlapMargin);
