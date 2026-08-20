@@ -13,6 +13,11 @@ qt_add_executable(pointcloudstitch WIN32
     pointcloudprocessor.h
 )
 
+# Do not rely solely on localized MSVC /showIncludes output for the shared PLY
+# reader contract; stale caller objects can otherwise corrupt return storage.
+set_property(SOURCE pointcloudprocessor.cpp APPEND PROPERTY OBJECT_DEPENDS
+    "${PROJECT_SOURCE_DIR}/include/pcv/io/ply_reader.h")
+
 target_link_libraries(pointcloudstitch PRIVATE
     Qt::Core Qt::Gui Qt::Widgets Qt::Concurrent pcv_core pcv_infrastructure pcv_io pcv_filtering)
 

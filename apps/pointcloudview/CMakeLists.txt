@@ -8,6 +8,11 @@ qt_add_executable(pointcloudview
     pointcloudprocessor.h
 )
 
+# Localized MSVC /showIncludes output can leave an empty dependency file with
+# this Qt Creator Makefile kit. Keep this ABI-critical dependency explicit.
+set_property(SOURCE pointcloudprocessor.cpp APPEND PROPERTY OBJECT_DEPENDS
+    "${PROJECT_SOURCE_DIR}/include/pcv/io/ply_reader.h")
+
 target_link_libraries(pointcloudview
     PRIVATE
         Qt::Core

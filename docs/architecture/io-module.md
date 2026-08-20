@@ -120,3 +120,8 @@ migrated to the public boundary.
 - Per-point atomic progress accounting is skipped when the caller did not
   provide a progress callback. Cancellation polling and final point-count
   validation remain active independently.
+- Both GUI processor translation units declare `ply_reader.h` as an explicit
+  CMake `OBJECT_DEPENDS` input. Localized MSVC `/showIncludes` output can leave
+  an empty dependency file under the Qt Creator Makefile generator; the
+  explicit dependency prevents a new reader library from linking against a
+  caller compiled with an older result layout.

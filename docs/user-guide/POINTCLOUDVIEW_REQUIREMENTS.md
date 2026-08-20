@@ -601,6 +601,9 @@ D:/workpiece/pointcloudview/backups/pointcloudview_20260818_obstacle_warning_cle
   “Stack around the variable 'parsed' was corrupted”。
 - 修复：二进制线程数恢复为 `ply_reader.cpp` 内部实现，不再改变公共结果结构体 ABI；
   诊断测试改为验证自动路径。完整重建后，紧凑 Binary XYZ 快速路径和通用 PLY 回退路径均保持不变。
+- 构建修复：`pointcloudview` 和 `pointcloudstitch` 的处理器源文件通过 CMake
+  `OBJECT_DEPENDS` 显式依赖 `ply_reader.h`。即使本机 MSVC 中文 `/showIncludes` 未生成有效
+  `.obj.d` 文件，读取接口变化也会强制重新编译调用方，禁止新读取库与旧对象文件混合链接。
 - 验证：Qt 6.8.3 / MSVC x64 Debug 主程序构建通过，`ply_reader_tests` 通过，目标样本点数和
   XYZ 边界保持 `4,741,478` 点及原值。
 
