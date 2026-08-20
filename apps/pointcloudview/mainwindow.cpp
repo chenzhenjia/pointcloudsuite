@@ -2113,7 +2113,10 @@ void MainWindow::extractPlaneImage() {
     options.edgeGridSize = float(m_edgeGridSize->value());
     options.maximumEdgeGridCells = 4000000;
     options.useImageFrame = m_planeCandidateConfirmed && m_workpieceCoordinate.valid;
-    options.autoImageBounds = options.useImageFrame;
+    // Always derive the export rectangle from the extracted plane bounds.
+    // The workpiece frame supplies axes/origin only; legacy manual crop sizes
+    // must not alter the PNG after edge segmentation.
+    options.autoImageBounds = true;
     options.imageMargin = 50.0f;
     options.imagePixelSize = 0.05f;
     options.imageRoundIncrement = 10.0f;
