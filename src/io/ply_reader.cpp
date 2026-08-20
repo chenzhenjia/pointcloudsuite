@@ -16,6 +16,7 @@
 #include <limits>
 #include <mutex>
 #include <numeric>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -39,6 +40,22 @@ struct AsciiChunkResult {
     bool hasBounds = false;
     QString error;
 };
+
+int selectAsciiWorkerCount(qsizetype pointCount, qint64 payloadBytes,
+                           int requestedWorkers) {
+    if (pointCount <= 1) return 1;
+    if (requestedWorkers > 0)
+        return qBound(1, requestedWorkers, int(qMin<qsizetype>(pointCount, 8)));
+
+    const unsigned int reportedHardware = std::thread::hardware_concurrency();
+    const int hardwareLimit = reportedHardware > 0
+        ? qBound(1, int(reportedHardware), 4) : 2;
+    if (pointCount < 100000 || payloadBytes < 4 * 1024 * 1024)
+        return 1;
+    if (pointCount < 1000000 || payloadBytes < 32 * 1024 * 1024)
+        return qMin(2, hardwareLimit);
+    return hardwareLimit;
+}
 
 QVector<AsciiChunk> splitAsciiChunks(const char *begin, const char *end,
                                      qsizetype pointCount, int requestedChunks,
@@ -325,9 +342,11 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
             QElapsedTimer boundaryTimer;
             boundaryTimer.start();
             QString boundaryError;
+            result.asciiWorkerCount = selectAsciiWorkerCount(
+                result.declaredPointCount, payloadBytes, options.asciiWorkerCount);
             chunks = splitAsciiChunks(mappedBegin, mappedEnd,
                                       result.declaredPointCount,
-                                      2, &boundaryError);
+                                      result.asciiWorkerCount, &boundaryError);
             result.boundaryScanElapsedMs = boundaryTimer.elapsed();
             if (chunks.isEmpty()) {
                 file.unmap(mapped);
@@ -411,6 +430,7 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
             result.cancelled = result.error == QStringLiteral("已取消");
             parseFailed = !result.error.isEmpty();
         } else {
+            result.asciiWorkerCount = 1;
             for (qsizetype index = 0; index < result.declaredPointCount; ++index) {
                 if (cancelled(index)) {
                     result.cancelled = true;

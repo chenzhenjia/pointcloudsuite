@@ -18,6 +18,9 @@ enum class PlyFormat {
 struct PlyReadOptions {
     std::function<void(qsizetype loaded, qsizetype total)> progress;
     std::function<bool()> isCancelled;
+    // 0 selects an adaptive count. Positive values are intended for
+    // diagnostics and are clamped to the available point count.
+    int asciiWorkerCount = 0;
 };
 
 struct PlyReadResult {
@@ -34,6 +37,7 @@ struct PlyReadResult {
     qint64 boundaryScanElapsedMs = 0;
     qint64 parseElapsedMs = 0;
     qint64 totalElapsedMs = 0;
+    int asciiWorkerCount = 0;
 };
 
 PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options = {});

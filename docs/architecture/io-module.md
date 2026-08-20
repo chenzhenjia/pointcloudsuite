@@ -92,3 +92,15 @@ migrated to the public boundary.
 - `ply_reader_tests` accepts an optional external PLY path and reports its
   format, point count, bounds and reader timings after the built-in regression
   fixtures pass. This provides a repeatable baseline for large production data.
+
+## Stage-four adaptive ASCII parallelism
+
+- The mapped ASCII reader selects one worker for small payloads, up to two for
+  medium payloads and up to four for large payloads. The default is additionally
+  capped by `std::thread::hardware_concurrency()` so low-core systems are not
+  oversubscribed.
+- `PlyReadOptions::asciiWorkerCount` can force a diagnostic worker count from
+  one through eight. Production callers leave it at zero for adaptive behavior.
+- Mapping fallback remains single-threaded. The selected count is returned in
+  `PlyReadResult::asciiWorkerCount` and the test executable accepts it as an
+  optional second argument for repeatable one/two/four-worker comparisons.

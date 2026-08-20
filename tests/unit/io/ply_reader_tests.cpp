@@ -35,9 +35,14 @@ int main(int argc, char **argv) {
         "property float nx\nproperty float ny\nproperty float nz\nend_header\n"
         "3 1 2 0 0 1\n6 4 5 1 0 0\n";
     if (!writeFile(asciiPath, ascii)) return fail("ASCII fixture write failed");
-    const pcv::detail::io::PlyReadResult asciiResult = pcv::detail::io::readPly(asciiPath);
+    pcv::detail::io::PlyReadOptions twoWorkerOptions;
+    twoWorkerOptions.asciiWorkerCount = 2;
+    const pcv::detail::io::PlyReadResult asciiResult =
+        pcv::detail::io::readPly(asciiPath, twoWorkerOptions);
     if (!asciiResult.ok || asciiResult.points.size() != 2)
         return fail("ASCII PLY read failed");
+    if (asciiResult.asciiWorkerCount != 2)
+        return fail("explicit ASCII worker count was not applied");
     if (!closeTo(asciiResult.points[0].x, 1.0f)
         || !closeTo(asciiResult.points[0].z, 3.0f)
         || !closeTo(asciiResult.points[1].nx, 1.0f))
@@ -56,6 +61,8 @@ int main(int argc, char **argv) {
         || !closeTo(fastResult.points[0].y, 0.25f)
         || !closeTo(fastResult.points[0].z, 3.0f))
         return fail("fast ASCII parser, trailing attribute or face payload handling failed");
+    if (fastResult.asciiWorkerCount != 1)
+        return fail("small ASCII payload should remain single-threaded");
 
     const QString binaryPath = directory.filePath(QStringLiteral("binary.ply"));
     QFile binary(binaryPath);
@@ -86,8 +93,10 @@ int main(int argc, char **argv) {
 
     if (argc > 1) {
         const QString samplePath = QString::fromLocal8Bit(argv[1]);
+        pcv::detail::io::PlyReadOptions sampleOptions;
+        if (argc > 2) sampleOptions.asciiWorkerCount = QByteArray(argv[2]).toInt();
         const pcv::detail::io::PlyReadResult sample =
-            pcv::detail::io::readPly(samplePath);
+            pcv::detail::io::readPly(samplePath, sampleOptions);
         if (!sample.ok || sample.points.size() != sample.declaredPointCount)
             return fail("external PLY sample read failed");
         const char *format = sample.format == pcv::detail::io::PlyFormat::Ascii
@@ -97,6 +106,7 @@ int main(int argc, char **argv) {
         std::cout << "sample=" << QFileInfo(samplePath).fileName().toStdString()
                   << " format=" << format
                   << " points=" << sample.points.size()
+                  << " ascii_workers=" << sample.asciiWorkerCount
                   << " bounds_min=" << sample.minimum.x << ',' << sample.minimum.y << ','
                   << sample.minimum.z
                   << " bounds_max=" << sample.maximum.x << ',' << sample.maximum.y << ','
