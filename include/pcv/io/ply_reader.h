@@ -31,6 +31,7 @@ struct PlyReadResult {
     pointcloud::Point3D maximum;
     bool hasBounds = false;
     qint64 headerElapsedMs = 0;
+    qint64 boundaryScanElapsedMs = 0;
     qint64 parseElapsedMs = 0;
     qint64 totalElapsedMs = 0;
 };

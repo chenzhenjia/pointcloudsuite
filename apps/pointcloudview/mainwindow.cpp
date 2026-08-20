@@ -1645,6 +1645,7 @@ void MainWindow::loadFinished() {
     qInfo() << "PLY load baseline: path=" << m_pendingPath
             << "points=" << result.points.size()
             << "header_ms=" << result.headerElapsedMs
+            << "boundary_scan_ms=" << result.boundaryScanElapsedMs
             << "parse_ms=" << result.parseElapsedMs
             << "reader_total_ms=" << result.totalElapsedMs;
     m_rawPoints = std::move(result.points);

@@ -1251,6 +1251,7 @@ LoadResult loadPlyResult(const QString &fileName) {
     result.maximum = parsed.maximum;
     result.hasBounds = parsed.hasBounds;
     result.headerElapsedMs = parsed.headerElapsedMs;
+    result.boundaryScanElapsedMs = parsed.boundaryScanElapsedMs;
     result.parseElapsedMs = parsed.parseElapsedMs;
     result.totalElapsedMs = parsed.totalElapsedMs;
     result.usedCache = false;
@@ -1270,6 +1271,7 @@ LoadResult loadPlyResultWithProgress(const QString &fileName,
     result.maximum = parsed.maximum;
     result.hasBounds = parsed.hasBounds;
     result.headerElapsedMs = parsed.headerElapsedMs;
+    result.boundaryScanElapsedMs = parsed.boundaryScanElapsedMs;
     result.parseElapsedMs = parsed.parseElapsedMs;
     result.totalElapsedMs = parsed.totalElapsedMs;
     result.usedCache = false;

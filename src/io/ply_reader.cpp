@@ -21,6 +21,56 @@ struct Property {
     QByteArray name;
 };
 
+struct AsciiChunk {
+    const char *begin = nullptr;
+    const char *end = nullptr;
+    qsizetype firstPoint = 0;
+    qsizetype pointCount = 0;
+};
+
+QVector<AsciiChunk> splitAsciiChunks(const char *begin, const char *end,
+                                     qsizetype pointCount, int requestedChunks,
+                                     QString *error) {
+    QVector<AsciiChunk> chunks;
+    if (!begin || !end || end < begin || pointCount <= 0) {
+        if (error) *error = QStringLiteral("ASCII 顶点数据区无效");
+        return chunks;
+    }
+    const int chunkCount = qBound(1, requestedChunks,
+                                  int(qMin<qsizetype>(pointCount, 64)));
+    QVector<const char *> starts(chunkCount + 1, end);
+    starts[0] = begin;
+    for (int i = 1; i < chunkCount; ++i) {
+        const qsizetype offset = qsizetype((end - begin) * qint64(i) / chunkCount);
+        const char *cursor = begin + offset;
+        while (cursor < end && cursor > begin && cursor[-1] != '\n') ++cursor;
+        starts[i] = cursor;
+    }
+    starts[chunkCount] = end;
+    qsizetype firstPoint = 0;
+    for (int i = 0; i < chunkCount; ++i) {
+        AsciiChunk chunk;
+        chunk.begin = starts[i];
+        chunk.end = starts[i + 1];
+        chunk.firstPoint = firstPoint;
+        const char *cursor = chunk.begin;
+        while (cursor < chunk.end) {
+            const char *lineEnd = static_cast<const char *>(std::memchr(
+                cursor, '\n', size_t(chunk.end - cursor)));
+            cursor = lineEnd ? lineEnd + 1 : chunk.end;
+            ++chunk.pointCount;
+        }
+        firstPoint += chunk.pointCount;
+        chunks.push_back(chunk);
+    }
+    if (firstPoint != pointCount) {
+        chunks.clear();
+        if (error) *error = QStringLiteral("ASCII 分块边界校验失败：声明 %1 点，扫描 %2 点")
+            .arg(pointCount).arg(firstPoint);
+    }
+    return chunks;
+}
+
 int scalarBytes(const QByteArray &type) {
     if (type == "char" || type == "int8" || type == "uchar" || type == "uint8") return 1;
     if (type == "short" || type == "int16" || type == "ushort" || type == "uint16") return 2;
@@ -248,7 +298,28 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
         const char *mappedCursor = mappedBegin;
         const char *mappedEnd = mappedBegin ? mappedBegin + payloadBytes : nullptr;
         std::array<char, 64 * 1024> buffer{};
-        for (qsizetype index = 0; index < result.declaredPointCount; ++index) {
+        QVector<AsciiChunk> chunks;
+        if (mapped) {
+            QElapsedTimer boundaryTimer;
+            boundaryTimer.start();
+            QString boundaryError;
+            chunks = splitAsciiChunks(mappedBegin, mappedEnd,
+                                      result.declaredPointCount,
+                                      4, &boundaryError);
+            result.boundaryScanElapsedMs = boundaryTimer.elapsed();
+            if (chunks.isEmpty()) {
+                file.unmap(mapped);
+                result.error = boundaryError;
+                return result;
+            }
+        }
+        bool parseFailed = false;
+        for (const AsciiChunk &chunk : chunks.isEmpty()
+                 ? QVector<AsciiChunk>{AsciiChunk{mappedBegin, mappedEnd, 0,
+                                                  result.declaredPointCount}}
+                 : chunks) {
+            const qsizetype chunkEnd = chunk.firstPoint + chunk.pointCount;
+            for (qsizetype index = chunk.firstPoint; index < chunkEnd; ++index) {
             if (cancelled(index)) {
                 result.cancelled = true;
                 result.error = QStringLiteral("已取消");
@@ -257,24 +328,32 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
             }
             QByteArray line;
             if (mapped) {
-                if (mappedCursor >= mappedEnd) break;
+                mappedCursor = (index == chunk.firstPoint) ? chunk.begin : mappedCursor;
+                if (mappedCursor >= chunk.end) { parseFailed = true; break; }
                 const char *lineEnd = static_cast<const char *>(std::memchr(
-                    mappedCursor, '\n', size_t(mappedEnd - mappedCursor)));
-                lineEnd = lineEnd ? lineEnd + 1 : mappedEnd;
+                    mappedCursor, '\n', size_t(chunk.end - mappedCursor)));
+                lineEnd = lineEnd ? lineEnd + 1 : chunk.end;
                 line = QByteArray::fromRawData(mappedCursor, int(lineEnd - mappedCursor));
                 mappedCursor = lineEnd;
             } else {
                 const qint64 length = file.readLine(buffer.data(), buffer.size());
-                if (length <= 0) break;
+                if (length <= 0) { parseFailed = true; break; }
                 line = QByteArray::fromRawData(buffer.data(), int(length));
             }
             pointcloud::Point3D point;
-            if (!parseAsciiPoint(line, indices, lastRequiredIndex, &point)) break;
+            if (!parseAsciiPoint(line, indices, lastRequiredIndex, &point)) {
+                parseFailed = true;
+                break;
+            }
             result.points[parsedCount++] = point;
             updateBounds(point);
             reportProgress(index + 1);
+            }
+            if (parseFailed) break;
         }
         if (mapped) file.unmap(mapped);
+        if (parseFailed && parsedCount == result.declaredPointCount)
+            result.error = QStringLiteral("ASCII 分块解析失败");
     } else {
         const qsizetype bytesPerVertex = std::accumulate(
             properties.cbegin(), properties.cend(), qsizetype(0),

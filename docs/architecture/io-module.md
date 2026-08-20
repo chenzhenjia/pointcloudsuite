@@ -61,9 +61,18 @@ migrated to the public boundary.
 
 ## Stage-one loading baseline
 
-- `PlyReadResult` records `headerElapsedMs`, `parseElapsedMs`, and
+- `PlyReadResult` records `headerElapsedMs`, `boundaryScanElapsedMs`, `parseElapsedMs`, and
   `totalElapsedMs` for successful reads. These are diagnostic timings only and
   do not change parser or UI behavior.
 - The application logs reader timings and the cache-publication boundary;
   VBO upload timing remains a separate rendering concern. This baseline is
   required before enabling chunked parallel parsing.
+
+## Stage-two ASCII chunk boundaries
+
+- The mapped ASCII payload is divided into four preparatory chunks. Byte split
+  candidates are advanced to the next complete newline, so no vertex line is
+  shared by two chunks.
+- A lightweight second scan counts lines in each chunk and verifies that the
+  sum equals the Header vertex count. The current parser still consumes chunks
+  serially; parallel numeric parsing is deferred until the next stage.
