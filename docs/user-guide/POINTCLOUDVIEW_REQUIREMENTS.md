@@ -539,6 +539,8 @@ D:/workpiece/pointcloudview/backups/pointcloudview_20260818_obstacle_warning_cle
   前景写入 255，供 OpenCV 后处理。
 - PNG 同名 JSON 记录物理/像素宽高、像素比例、边距、取整步长、工件中心 `X/Y/Z/A/B/C`、
   工件坐标变换矩阵和映射统计，支持由 PNG/JSON 反推平面点云坐标。
+- 确定平面和 X/Y 轴后，界面输出框及状态栏显示工件坐标原点在机器人基坐标系中的
+  `X/Y/Z/A/B/C`；该值与 PNG 同名 JSON 的 `workpiece_coordinate.pose_in_robot_base` 一致。
 
 ### 2026-08-20：单通道二值图像值约束
 

@@ -2556,7 +2556,13 @@ void MainWindow::confirmPlaneCandidate() {
     updatePlaneExtractionUi();
     updateObstacleDetectionUi();
     updatePlaneEdgeUi();
-    statusBar()->showMessage(tr("平面提取和工件坐标系已确定"));
+    statusBar()->showMessage(tr("工件坐标系已确定：原点 X %1 Y %2 Z %3 mm，A %4 B %5 C %6°")
+                                .arg(frame.originInRobotBase.x(), 0, 'f', 3)
+                                .arg(frame.originInRobotBase.y(), 0, 'f', 3)
+                                .arg(frame.originInRobotBase.z(), 0, 'f', 3)
+                                .arg(frame.poseA, 0, 'f', 3)
+                                .arg(frame.poseB, 0, 'f', 3)
+                                .arg(frame.poseC, 0, 'f', 3));
 }
 
 void MainWindow::cancelPlaneCandidate() {
@@ -2628,16 +2634,6 @@ void MainWindow::planeEdgeSegmentationFinished() {
         return;
     }
     m_planeEdgeResult = result;
-    // Make the edge mask directly exportable through the same PNG/JSON path.
-    // Keep the single-channel 225/0 contract used by plane extraction.
-    m_planeImageResult = {};
-    m_planeImageResult.image = result.image;
-    m_planeImageResult.gridSize = result.gridSize;
-    m_planeImageResult.pixelSize = result.gridSize;
-    m_planeImageResult.width = result.width;
-    m_planeImageResult.height = result.height;
-    m_planeImageResult.automaticBounds = false;
-    m_planeImageResult.ok = !result.image.isNull();
     m_canvas->setPlaneResult(m_threePlaneResult.planeIndices,
                              result.edgeIndices, result.contours);
     const int holeCount = int(std::count_if(
@@ -2658,6 +2654,36 @@ void MainWindow::planeEdgeSegmentationFinished() {
     m_planeImagePreview->setText({});
     m_planeImagePreview->setPixmap(QPixmap::fromImage(result.image).scaled(
         previewSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    // Re-rasterize the confirmed plane with the canonical export frame. This
+    // makes an edge-segmentation run obey the same 50 mm margin, 10 mm
+    // physical rounding and 0.05 mm/px contract as direct plane extraction.
+    pointcloud::PlaneEdgeOptions imageOptions;
+    imageOptions.edgeGridSize = float(m_edgeGridSize->value());
+    imageOptions.maximumImagePixels = 100000000;
+    imageOptions.useImageFrame = m_workpieceCoordinate.valid;
+    imageOptions.autoImageBounds = true;
+    imageOptions.imageMargin = 50.0f;
+    imageOptions.imagePixelSize = 0.05f;
+    imageOptions.imageRoundIncrement = 10.0f;
+    imageOptions.imageOrigin = m_planeCenter;
+    imageOptions.imageAxisU = m_workpieceCoordinate.axisXInRobotBase;
+    imageOptions.imageAxisV = m_workpieceCoordinate.axisYInRobotBase;
+    const QVector<pointcloud::Point3D> imageSource = m_points;
+    const QVector<int> imageIndices = m_threePlaneResult.planeIndices;
+    const pointcloud::PlaneModel imageModel = m_threePlaneResult.model;
+    m_planeImageInputRevision = m_canvasRevision;
+    m_planeImageCoordinateRevision = m_coordinateFrameRevision;
+    if (!m_planeImageWatcher) {
+        m_planeImageWatcher = new QFutureWatcher<pointcloud::PlaneImageResult>(this);
+        connect(m_planeImageWatcher, &QFutureWatcher<pointcloud::PlaneImageResult>::finished,
+                this, &MainWindow::planeImageExtractionFinished);
+    }
+    m_planeImageWatcher->setFuture(QtConcurrent::run(
+        [imageSource, imageIndices, imageModel, imageOptions]() {
+            return pointcloud::extractPlaneImage(imageSource, imageIndices,
+                                                 imageModel, imageOptions);
+        }));
+    m_edgeOutput->appendPlainText(tr("\n正在按自动边界重新生成可保存 2D 图像..."));
     updatePlaneEdgeUi();
     statusBar()->showMessage(tr("边缘分割和 2D 平面图生成完成"));
 }
