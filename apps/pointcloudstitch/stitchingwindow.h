@@ -25,6 +25,8 @@ struct StitchTaskResult {
     QString reportFile;
     QString mappingFile;
     QStringList retainedSourceFiles;
+    QStringList diagnosticPreIcpFiles;
+    QStringList diagnosticPostIcpFiles;
     qsizetype previewCount = 0;
     qsizetype pointsBeforeOutputDownsample = 0;
     float outputDownsampleVoxelSize = 0.0f;
@@ -33,6 +35,9 @@ struct StitchTaskResult {
     bool registrationAccepted = false;
     bool multiFrameConsistent = false;
     bool transformOnly = false;
+    bool registrationApplied = false;
+    bool seamFusionApplied = false;
+    bool formalOutput = false;
     bool ok = false;
 };
 
