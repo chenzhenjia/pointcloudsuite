@@ -489,7 +489,8 @@ QVector3D tangentCoarseTranslation(const QVector<Point3D> &source,
 }
 
 PlaneDiagnostic pcaPlane(const QVector<Point3D> &points,
-                         float preferredHeight=std::numeric_limits<float>::quiet_NaN()) {
+                         float preferredHeight=std::numeric_limits<float>::quiet_NaN(),
+                         const IcpOptions *fitOptions=nullptr) {
     PlaneDiagnostic result;
     const QVector<Point3D> sample=voxelDownsample(points,1.0f);
     if(sample.size()<100)return result;
@@ -504,15 +505,27 @@ PlaneDiagnostic pcaPlane(const QVector<Point3D> &points,
         for(const auto &entry:histogram)if(entry.second>=minimumPeakCount){const float height=(float(entry.first)+.5f)*heightBin;const float difference=std::abs(height-preferredHeight);if(difference<bestDifference){bestDifference=difference;dominantBin=entry.first;}}
     }
     const float dominantHeight=(float(dominantBin)+.5f)*heightBin;
+    const float heightBand=fitOptions?qMax(1.0f,fitOptions->planeFitHeightBandMm):1.5f;
     QVector<Point3D> planePoints;planePoints.reserve(dominantCount*4);
-    for(const Point3D &point:sample)if(std::abs(point.z-dominantHeight)<=1.5f)planePoints.push_back(point);
+    for(const Point3D &point:sample)if(std::abs(point.z-dominantHeight)<=heightBand)planePoints.push_back(point);
     if(planePoints.size()<100)return result;
-    QVector3D mean;
-    for(const Point3D &point:planePoints)mean+=vectorOf(point);
-    mean/=float(planePoints.size());
-    double covariance[3][3]{};
-    for(const Point3D &point:planePoints){const QVector3D d=vectorOf(point)-mean;const double v[3]{d.x(),d.y(),d.z()};for(int row=0;row<3;++row)for(int column=0;column<3;++column)covariance[row][column]+=v[row]*v[column];}
-    smallestEigenvector(covariance,&result.normal);
+    QVector3D mean; double covariance[3][3]{};
+    const auto fit=[&](const QVector<Point3D> &fitPoints,QVector3D *fitMean,QVector3D *fitNormal){
+        *fitMean={};double matrix[3][3]{};
+        for(const Point3D &point:fitPoints)*fitMean+=vectorOf(point);
+        *fitMean/=float(fitPoints.size());
+        for(const Point3D &point:fitPoints){const QVector3D d=vectorOf(point)-*fitMean;const double v[3]{d.x(),d.y(),d.z()};for(int row=0;row<3;++row)for(int column=0;column<3;++column)matrix[row][column]+=v[row]*v[column];}
+        smallestEigenvector(matrix,fitNormal);
+    };
+    fit(planePoints,&mean,&result.normal);
+    const int iterations=fitOptions?qMax(0,fitOptions->planeFitIterations):0;
+    const float inlierDistance=fitOptions?qMax(.2f,fitOptions->planeFitInlierDistanceMm):1.5f;
+    for(int iteration=0;iteration<iterations&&result.normal.lengthSquared()>1.0e-8f;++iteration){
+        QVector<Point3D> inliers;inliers.reserve(planePoints.size());
+        for(const Point3D &point:planePoints)if(std::abs(QVector3D::dotProduct(result.normal,vectorOf(point)-mean))<=inlierDistance)inliers.push_back(point);
+        if(inliers.size()<100)break;
+        fit(inliers,&mean,&result.normal);planePoints.swap(inliers);
+    }
     if(result.normal.lengthSquared()<=1.0e-8f||std::abs(result.normal.z())<.8f)return result;
     if(result.normal.z()<0)result.normal=-result.normal;
     result.centroid=mean;result.offset=QVector3D::dotProduct(mean,result.normal);result.height=dominantHeight;result.valid=true;return result;
@@ -572,6 +585,7 @@ bool trackPlaneIdentity(const QVector<ConvertedCloud> &clouds,
 void collectInitialPairDiagnostics(const QVector<Point3D> &sourceCrop,
                                    const QVector<Point3D> &targetCrop,
                                    const QVector3D &stitchAxis,
+                                   const IcpOptions &options,
                                    float preferredSourceHeight,
                                    float preferredTargetHeight,
                                    bool planeIdentityTracked,
@@ -586,9 +600,9 @@ void collectInitialPairDiagnostics(const QVector<Point3D> &sourceCrop,
     }
     const DistanceDiagnostic distances=nearestDistanceDiagnostic(sourceCrop,targetCrop);
     diagnostic->nearestDistanceP50=distances.p50;diagnostic->nearestDistanceP90=distances.p90;diagnostic->nearestDistanceP95=distances.p95;diagnostic->coverageWithin3mm=distances.within3;diagnostic->coverageWithin5mm=distances.within5;diagnostic->coverageWithin10mm=distances.within10;
-    PlaneDiagnostic sourcePlane=planeIdentityTracked?pcaPlane(sourceCrop,preferredSourceHeight):pcaPlane(sourceCrop);
-    PlaneDiagnostic targetPlane=planeIdentityTracked?pcaPlane(targetCrop,preferredTargetHeight)
-        :(sourcePlane.valid?pcaPlane(targetCrop,sourcePlane.height):pcaPlane(targetCrop));
+    PlaneDiagnostic sourcePlane=planeIdentityTracked?pcaPlane(sourceCrop,preferredSourceHeight,&options):pcaPlane(sourceCrop,std::numeric_limits<float>::quiet_NaN(),&options);
+    PlaneDiagnostic targetPlane=planeIdentityTracked?pcaPlane(targetCrop,preferredTargetHeight,&options)
+        :(sourcePlane.valid?pcaPlane(targetCrop,sourcePlane.height,&options):pcaPlane(targetCrop,std::numeric_limits<float>::quiet_NaN(),&options));
     diagnostic->planeIdentityTracked=planeIdentityTracked;
     diagnostic->trackedSourcePlaneHeight=preferredSourceHeight;
     diagnostic->trackedTargetPlaneHeight=preferredTargetHeight;
@@ -659,7 +673,7 @@ IcpDiagnostics registerPair(QVector<Point3D> *source,
     const QVector<Point3D> sourceCrop=cropCloud(*source,low,high);
     const QVector<Point3D> targetCrop=cropCloud(target,low,high);
     PlaneDiagnostic sourcePlane,targetPlane;
-    collectInitialPairDiagnostics(sourceCrop,targetCrop,stitchAxis,preferredSourcePlaneHeight,
+    collectInitialPairDiagnostics(sourceCrop,targetCrop,stitchAxis,options,preferredSourcePlaneHeight,
         preferredTargetPlaneHeight,planeIdentityTracked,&diagnostic,&sourcePlane,&targetPlane);
     if(sourceCrop.size()<100||targetCrop.size()<100){diagnostic.reason=QStringLiteral("重叠区抽样点少于 100");return diagnostic;}
     if(options.planePrealignmentEnabled){

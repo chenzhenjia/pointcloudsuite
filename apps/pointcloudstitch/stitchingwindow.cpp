@@ -149,6 +149,9 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
     registration.insert(QStringLiteral("maximum_plane_prealignment_angle_deg"), result.icpOptions.maximumPlanePrealignmentAngleDegrees);
     registration.insert(QStringLiteral("plane_identity_tracking_enabled"), result.icpOptions.planeIdentityTrackingEnabled);
     registration.insert(QStringLiteral("plane_identity_height_tolerance_mm"), result.icpOptions.planeIdentityHeightToleranceMm);
+    registration.insert(QStringLiteral("plane_fit_height_band_mm"), result.icpOptions.planeFitHeightBandMm);
+    registration.insert(QStringLiteral("plane_fit_inlier_distance_mm"), result.icpOptions.planeFitInlierDistanceMm);
+    registration.insert(QStringLiteral("plane_fit_iterations"), result.icpOptions.planeFitIterations);
     registration.insert(QStringLiteral("plane_identity_tracking_valid"), result.merge.planeIdentityTrackingValid);
     registration.insert(QStringLiteral("plane_identity_consensus_height_mm"), result.merge.planeIdentityConsensusHeight);
     registration.insert(QStringLiteral("plane_identity_diagnostics"), result.merge.planeIdentityDiagnostics);

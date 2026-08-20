@@ -380,6 +380,9 @@ int runRegression(const QStringList &arguments)
     parameterObject.insert(QStringLiteral("maximum_plane_prealignment_angle_deg"), options.maximumPlanePrealignmentAngleDegrees);
     parameterObject.insert(QStringLiteral("plane_identity_tracking_enabled"), options.planeIdentityTrackingEnabled);
     parameterObject.insert(QStringLiteral("plane_identity_height_tolerance_mm"), options.planeIdentityHeightToleranceMm);
+    parameterObject.insert(QStringLiteral("plane_fit_height_band_mm"), options.planeFitHeightBandMm);
+    parameterObject.insert(QStringLiteral("plane_fit_inlier_distance_mm"), options.planeFitInlierDistanceMm);
+    parameterObject.insert(QStringLiteral("plane_fit_iterations"), options.planeFitIterations);
     parameterObject.insert(QStringLiteral("plane_identity_tracking_valid"), result.planeIdentityTrackingValid);
     parameterObject.insert(QStringLiteral("plane_identity_consensus_height_mm"), result.planeIdentityConsensusHeight);
     parameterObject.insert(QStringLiteral("plane_identity_diagnostics"), result.planeIdentityDiagnostics);

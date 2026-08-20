@@ -45,6 +45,9 @@ struct IcpOptions {
     float maximumPlanePrealignmentAngleDegrees = 0.5f;
     bool planeIdentityTrackingEnabled = true;
     float planeIdentityHeightToleranceMm = 5.0f;
+    float planeFitHeightBandMm = 3.0f;
+    float planeFitInlierDistanceMm = 0.8f;
+    int planeFitIterations = 3;
     float maximumCorrectionTranslation = 10.0f;
     float maximumCorrectionAngleDegrees = 1.0f;
     bool structuralValidationEnabled = true;
