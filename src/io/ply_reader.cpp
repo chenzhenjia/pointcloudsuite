@@ -33,7 +33,7 @@ struct AsciiChunk {
     qsizetype pointCount = 0;
 };
 
-struct AsciiChunkResult {
+struct ChunkResult {
     qsizetype parsedCount = 0;
     pointcloud::Point3D minimum;
     pointcloud::Point3D maximum;
@@ -41,8 +41,8 @@ struct AsciiChunkResult {
     QString error;
 };
 
-int selectAsciiWorkerCount(qsizetype pointCount, qint64 payloadBytes,
-                           int requestedWorkers) {
+int selectWorkerCount(qsizetype pointCount, qint64 payloadBytes,
+                      int requestedWorkers) {
     if (pointCount <= 1) return 1;
     if (requestedWorkers > 0)
         return qBound(1, requestedWorkers, int(qMin<qsizetype>(pointCount, 8)));
@@ -55,6 +55,15 @@ int selectAsciiWorkerCount(qsizetype pointCount, qint64 payloadBytes,
     if (pointCount < 1000000 || payloadBytes < 32 * 1024 * 1024)
         return qMin(2, hardwareLimit);
     return hardwareLimit;
+}
+
+float decodeBinaryFloat(const char *data, bool bigEndian) {
+    const uchar *bytes = reinterpret_cast<const uchar *>(data);
+    const quint32 raw = bigEndian ? qFromBigEndian<quint32>(bytes)
+                                  : qFromLittleEndian<quint32>(bytes);
+    float value;
+    std::memcpy(&value, &raw, sizeof(value));
+    return value;
 }
 
 QVector<AsciiChunk> splitAsciiChunks(const char *begin, const char *end,
@@ -342,7 +351,7 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
             QElapsedTimer boundaryTimer;
             boundaryTimer.start();
             QString boundaryError;
-            result.asciiWorkerCount = selectAsciiWorkerCount(
+            result.asciiWorkerCount = selectWorkerCount(
                 result.declaredPointCount, payloadBytes, options.asciiWorkerCount);
             chunks = splitAsciiChunks(mappedBegin, mappedEnd,
                                       result.declaredPointCount,
@@ -361,7 +370,7 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
             std::atomic_bool stop{false};
             std::mutex callbackMutex;
             const auto parseChunk = [&](const AsciiChunk &chunk) {
-                AsciiChunkResult local;
+                ChunkResult local;
                 const char *cursor = chunk.begin;
                 for (qsizetype localIndex = 0; localIndex < chunk.pointCount; ++localIndex) {
                     if (stop.load(std::memory_order_relaxed)) break;
@@ -405,21 +414,23 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
                     }
                     ++local.parsedCount;
                     cursor = lineEnd;
-                    const qsizetype done = completed.fetch_add(1, std::memory_order_relaxed) + 1;
-                    if (options.progress
-                        && ((done % 10000) == 0 || done == result.declaredPointCount)) {
-                        std::lock_guard<std::mutex> lock(callbackMutex);
-                        options.progress(done, result.declaredPointCount);
+                    if (options.progress) {
+                        const qsizetype done =
+                            completed.fetch_add(1, std::memory_order_relaxed) + 1;
+                        if ((done % 10000) == 0 || done == result.declaredPointCount) {
+                            std::lock_guard<std::mutex> lock(callbackMutex);
+                            options.progress(done, result.declaredPointCount);
+                        }
                     }
                 }
                 return local;
             };
-            std::vector<std::future<AsciiChunkResult>> futures;
+            std::vector<std::future<ChunkResult>> futures;
             futures.reserve(chunks.size());
             for (const AsciiChunk &chunk : chunks)
                 futures.push_back(std::async(std::launch::async, parseChunk, chunk));
             for (auto &future : futures) {
-                AsciiChunkResult local = future.get();
+                ChunkResult local = future.get();
                 parsedCount += local.parsedCount;
                 if (!local.error.isEmpty() && result.error.isEmpty()) result.error = local.error;
                 if (local.hasBounds) {
@@ -465,31 +476,116 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
             return result;
         }
         const qsizetype payloadSize = bytesPerVertex * result.declaredPointCount;
-        const QByteArray payload = file.read(payloadSize);
-        const char *cursor = payload.constData();
-        const char *end = cursor + payload.size();
-        bool ok = payload.size() == payloadSize;
         const bool bigEndian = result.format == PlyFormat::BinaryBigEndian;
-        for (qsizetype index = 0; index < result.declaredPointCount && ok; ++index) {
-            if (cancelled(index)) {
-                result.cancelled = true;
-                result.error = QStringLiteral("已取消");
-                return result;
+        const bool compactFloatXyz = properties.size() == 3
+            && indices[0] == 0 && indices[1] == 1 && indices[2] == 2
+            && (properties[0].type == "float" || properties[0].type == "float32")
+            && (properties[1].type == "float" || properties[1].type == "float32")
+            && (properties[2].type == "float" || properties[2].type == "float32");
+        const qint64 payloadOffset = file.pos();
+        uchar *mapped = compactFloatXyz && payloadSize > 0
+            ? file.map(payloadOffset, payloadSize) : nullptr;
+        if (mapped) {
+            result.binaryWorkerCount = selectWorkerCount(
+                result.declaredPointCount, payloadSize, options.binaryWorkerCount);
+            pointcloud::Point3D *output = result.points.data();
+            const char *payload = reinterpret_cast<const char *>(mapped);
+            std::atomic<qsizetype> completed{0};
+            std::atomic_bool stop{false};
+            std::mutex callbackMutex;
+            const auto parseBinaryChunk = [&](qsizetype firstPoint, qsizetype pointCount) {
+                ChunkResult local;
+                for (qsizetype localIndex = 0; localIndex < pointCount; ++localIndex) {
+                    if (stop.load(std::memory_order_relaxed)) break;
+                    if ((localIndex % 10000) == 0 && options.isCancelled) {
+                        std::lock_guard<std::mutex> lock(callbackMutex);
+                        if (options.isCancelled()) {
+                            stop.store(true, std::memory_order_relaxed);
+                            local.error = QStringLiteral("已取消");
+                            break;
+                        }
+                    }
+                    const qsizetype pointIndex = firstPoint + localIndex;
+                    const char *source = payload + pointIndex * 3 * qsizetype(sizeof(float));
+                    pointcloud::Point3D point;
+                    point.x = decodeBinaryFloat(source, bigEndian);
+                    point.y = decodeBinaryFloat(source + sizeof(float), bigEndian);
+                    point.z = decodeBinaryFloat(source + 2 * sizeof(float), bigEndian);
+                    output[pointIndex] = point;
+                    if (std::isfinite(point.x) && std::isfinite(point.y)
+                        && std::isfinite(point.z)) {
+                        if (!local.hasBounds) {
+                            local.minimum = local.maximum = point;
+                            local.hasBounds = true;
+                        } else {
+                            local.minimum.x = std::min(local.minimum.x, point.x);
+                            local.minimum.y = std::min(local.minimum.y, point.y);
+                            local.minimum.z = std::min(local.minimum.z, point.z);
+                            local.maximum.x = std::max(local.maximum.x, point.x);
+                            local.maximum.y = std::max(local.maximum.y, point.y);
+                            local.maximum.z = std::max(local.maximum.z, point.z);
+                        }
+                    }
+                    ++local.parsedCount;
+                    if (options.progress) {
+                        const qsizetype done =
+                            completed.fetch_add(1, std::memory_order_relaxed) + 1;
+                        if ((done % 10000) == 0 || done == result.declaredPointCount) {
+                            std::lock_guard<std::mutex> lock(callbackMutex);
+                            options.progress(done, result.declaredPointCount);
+                        }
+                    }
+                }
+                return local;
+            };
+            std::vector<std::future<ChunkResult>> futures;
+            futures.reserve(size_t(result.binaryWorkerCount));
+            qsizetype firstPoint = 0;
+            for (int worker = 0; worker < result.binaryWorkerCount; ++worker) {
+                const qsizetype nextPoint = result.declaredPointCount
+                    * qsizetype(worker + 1) / result.binaryWorkerCount;
+                futures.push_back(std::async(std::launch::async, parseBinaryChunk,
+                                             firstPoint, nextPoint - firstPoint));
+                firstPoint = nextPoint;
             }
-            pointcloud::Point3D point;
-            for (int column = 0; column < properties.size(); ++column) {
-                const double value = readBinaryScalar(cursor, end, properties[column].type,
-                                                      bigEndian, &ok);
-                if (column == indices[0]) point.x = float(value);
-                else if (column == indices[1]) point.y = float(value);
-                else if (column == indices[2]) point.z = float(value);
-                else if (column == indices[3]) point.nx = float(value);
-                else if (column == indices[4]) point.ny = float(value);
-                else if (column == indices[5]) point.nz = float(value);
+            for (auto &future : futures) {
+                ChunkResult local = future.get();
+                parsedCount += local.parsedCount;
+                if (!local.error.isEmpty() && result.error.isEmpty()) result.error = local.error;
+                if (local.hasBounds) {
+                    updateBounds(local.minimum);
+                    updateBounds(local.maximum);
+                }
             }
-            if (ok) result.points[parsedCount++] = point;
-            if (ok) updateBounds(point);
-            reportProgress(index + 1);
+            result.cancelled = result.error == QStringLiteral("已取消");
+            file.unmap(mapped);
+        } else {
+            result.binaryWorkerCount = 1;
+            const QByteArray payload = file.read(payloadSize);
+            const char *cursor = payload.constData();
+            const char *end = cursor + payload.size();
+            bool ok = payload.size() == payloadSize;
+            for (qsizetype index = 0; index < result.declaredPointCount && ok; ++index) {
+                if (cancelled(index)) {
+                    result.cancelled = true;
+                    result.error = QStringLiteral("已取消");
+                    return result;
+                }
+                pointcloud::Point3D point;
+                for (int column = 0; column < properties.size(); ++column) {
+                    const double value = readBinaryScalar(cursor, end, properties[column].type,
+                                                          bigEndian, &ok);
+                    if (column == indices[0]) point.x = float(value);
+                    else if (column == indices[1]) point.y = float(value);
+                    else if (column == indices[2]) point.z = float(value);
+                    else if (column == indices[3]) point.nx = float(value);
+                    else if (column == indices[4]) point.ny = float(value);
+                    else if (column == indices[5]) point.nz = float(value);
+                }
+                if (ok) result.points[parsedCount++] = point;
+                if (ok) updateBounds(point);
+                reportProgress(index + 1);
+            }
         }
     }
 

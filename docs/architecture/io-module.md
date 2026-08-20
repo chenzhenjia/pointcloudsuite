@@ -104,3 +104,18 @@ migrated to the public boundary.
 - Mapping fallback remains single-threaded. The selected count is returned in
   `PlyReadResult::asciiWorkerCount` and the test executable accepts it as an
   optional second argument for repeatable one/two/four-worker comparisons.
+
+## Stage-five compact binary XYZ fast path
+
+- Binary PLY files whose vertex layout is exactly contiguous `float x/y/z`
+  use a mapped, index-partitioned reader. Each worker decodes its fixed point
+  range directly into the preallocated `Point3D` array and keeps private bounds.
+- Compact binary parallelism uses the same adaptive one/two/four-worker policy
+  as ASCII. `PlyReadOptions::binaryWorkerCount` can force a diagnostic count and
+  `PlyReadResult::binaryWorkerCount` reports the selected value.
+- Files with normals, colors, intensity, reordered properties or other scalar
+  layouts retain the generic scalar reader. Mapping failure also falls back to
+  that path, preserving all existing binary little/big-endian compatibility.
+- Per-point atomic progress accounting is skipped when the caller did not
+  provide a progress callback. Cancellation polling and final point-count
+  validation remain active independently.
