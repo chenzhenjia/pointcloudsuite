@@ -1,7 +1,6 @@
 #pragma once
 
 #include <QMainWindow>
-#include <QElapsedTimer>
 #include <QStringList>
 #include "pointcloudprocessor.h"
 
@@ -122,7 +121,6 @@ private:
     QVector<pointcloud::Point3D> m_rawPoints;
     QVector<pointcloud::Point3D> m_points;
     bool m_loading = false;
-    QElapsedTimer m_loadElapsedTimer;
     QString m_pendingPath;
     QStringList m_sourceFiles;
     QString m_sourceDirectory;

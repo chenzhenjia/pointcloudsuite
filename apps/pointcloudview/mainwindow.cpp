@@ -1573,7 +1573,6 @@ void MainWindow::loadSelectedSource() {
     if (row < 0 || row >= m_sourceFiles.size() || pointTaskRunning()) return;
     m_pendingPath = m_sourceFiles[row];
     m_loading = true;
-    m_loadElapsedTimer.start();
     m_progress->show(); m_progress->setRange(0, 0);
     statusBar()->showMessage(tr("正在加载 %1...").arg(QFileInfo(m_pendingPath).fileName()));
     if (!m_loadWatcher) {
@@ -1604,7 +1603,6 @@ void MainWindow::openPointCloud() {
     m_sourceDirectory = QFileInfo(path).absolutePath();
 
     m_loading = true;
-    m_loadElapsedTimer.start();
     m_progress->show();
     m_progress->setRange(0, 0);
     statusBar()->showMessage(tr("正在加载 PLY..."));
@@ -1620,9 +1618,6 @@ void MainWindow::openPointCloud() {
 }
 
 void MainWindow::loadFinished() {
-    const qint64 elapsedMilliseconds =
-        m_loadElapsedTimer.isValid() ? m_loadElapsedTimer.elapsed() : -1;
-
     // Transfer the result out of QFuture exactly once.  Copying the result
     // leaves a second owner of a multi-million-point QVector inside the
     // watcher until shutdown and was the source of the Debug heap assertion.
@@ -1680,32 +1675,8 @@ void MainWindow::loadFinished() {
     m_progress->setRange(0, 100);
     m_progress->setValue(100);
     m_progress->hide();
-    statusBar()->showMessage(
-        elapsedMilliseconds >= 0
-            ? tr("加载完成，用时 %1 ms").arg(elapsedMilliseconds)
-            : tr("加载完成"));
-
-    const QString loadedFileName = fileInfo.fileName();
-    const QString loadedPointCount = QLocale().toString(m_rawPoints.size());
     m_loading = false;
-    if (!m_closing) {
-        const QString elapsedText = elapsedMilliseconds >= 0
-            ? tr("%1 ms").arg(elapsedMilliseconds)
-            : tr("无法获取");
-        auto *dialog = new QMessageBox(
-            QMessageBox::Information,
-            tr("PLY 读取完成"),
-            tr("文件：%1\n点数：%2\n本次读取时间：%3")
-                .arg(loadedFileName)
-                .arg(loadedPointCount)
-                .arg(elapsedText),
-            QMessageBox::Ok,
-            this);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        // Non-modal completion notice: avoid entering a nested event loop
-        // while the load watcher is finishing or the OpenGL canvas publishes.
-        dialog->open();
-    }
+    statusBar()->showMessage(tr("加载完成"));
 }
 
 void MainWindow::updateRenderSettings() {
