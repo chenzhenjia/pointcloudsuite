@@ -581,8 +581,8 @@ D:/workpiece/pointcloudview/backups/pointcloudview_20260818_obstacle_warning_cle
 
 - binary little/big-endian PLY 的 vertex 属性严格为连续 `float x/y/z` 时，直接映射顶点区，
   按点索引划分固定区间并行解码到预分配 `Point3D` 数组；线程只写各自区间并独立统计边界。
-- `binaryWorkerCount` 默认 `0` 自动选择 1/2/4 线程，测试可显式指定。含法向量、颜色、强度、
-  属性重排或其他标量类型的文件继续使用通用解析器；映射失败同样自动回退，不降低兼容性。
+- 二进制快速路径在读取器内部自动选择 1/2/4 线程，不把线程数加入跨模块结果结构。
+  含法向量、颜色、强度、属性重排或其他标量类型的文件继续使用通用解析器；映射失败同样自动回退，不降低兼容性。
 - 指定生产样本 `4_Point_Cloud_A04_robot_base.ply` 为 binary little-endian、56.9 MB、
   4,741,478 点。原通用 Debug 路径约 8,093 ms；专用路径同轮实测单线程 501 ms、双线程
   295 ms、四线程 214 ms、自动模式 242 ms，自动模式选择四线程，较原路径缩短约 97%。
@@ -592,6 +592,17 @@ D:/workpiece/pointcloudview/backups/pointcloudview_20260818_obstacle_warning_cle
   和最终发布规则不变。调用方确实提供进度回调时仍按原频率报告。
 - 去除无效进度原子累加后，同一样本自动四线程复测约 166 ms；相对原通用路径约
   8,093 ms 缩短约 98%。实际 GUI 总耗时还包括结果交接、画布缓存发布和 OpenGL 上传。
+
+### 2026-08-20：修复 PLY 读取器 Debug 栈保护区损坏
+
+- 原因：阶段五把 `binaryWorkerCount` 追加到公共 `PlyReadOptions` 和 `PlyReadResult`。
+  Qt Creator 增量构建可能只重建读取库而保留旧的应用目标文件；新旧结构体大小不一致时，
+  MSVC 会在返回 `PlyReadResult parsed` 时报告 `Run-Time Check Failure #2`，表现为
+  “Stack around the variable 'parsed' was corrupted”。
+- 修复：二进制线程数恢复为 `ply_reader.cpp` 内部实现，不再改变公共结果结构体 ABI；
+  诊断测试改为验证自动路径。完整重建后，紧凑 Binary XYZ 快速路径和通用 PLY 回退路径均保持不变。
+- 验证：Qt 6.8.3 / MSVC x64 Debug 主程序构建通过，`ply_reader_tests` 通过，目标样本点数和
+  XYZ 边界保持 `4,741,478` 点及原值。
 
 ### 2026-08-20：边缘分割后的平面 2D 导出约束
 

@@ -486,8 +486,8 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
         uchar *mapped = compactFloatXyz && payloadSize > 0
             ? file.map(payloadOffset, payloadSize) : nullptr;
         if (mapped) {
-            result.binaryWorkerCount = selectWorkerCount(
-                result.declaredPointCount, payloadSize, options.binaryWorkerCount);
+            const int binaryWorkerCount = selectWorkerCount(
+                result.declaredPointCount, payloadSize, 0);
             pointcloud::Point3D *output = result.points.data();
             const char *payload = reinterpret_cast<const char *>(mapped);
             std::atomic<qsizetype> completed{0};
@@ -539,11 +539,11 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
                 return local;
             };
             std::vector<std::future<ChunkResult>> futures;
-            futures.reserve(size_t(result.binaryWorkerCount));
+            futures.reserve(size_t(binaryWorkerCount));
             qsizetype firstPoint = 0;
-            for (int worker = 0; worker < result.binaryWorkerCount; ++worker) {
+            for (int worker = 0; worker < binaryWorkerCount; ++worker) {
                 const qsizetype nextPoint = result.declaredPointCount
-                    * qsizetype(worker + 1) / result.binaryWorkerCount;
+                    * qsizetype(worker + 1) / binaryWorkerCount;
                 futures.push_back(std::async(std::launch::async, parseBinaryChunk,
                                              firstPoint, nextPoint - firstPoint));
                 firstPoint = nextPoint;
@@ -560,7 +560,6 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
             result.cancelled = result.error == QStringLiteral("已取消");
             file.unmap(mapped);
         } else {
-            result.binaryWorkerCount = 1;
             const QByteArray payload = file.read(payloadSize);
             const char *cursor = payload.constData();
             const char *end = cursor + payload.size();

@@ -77,7 +77,6 @@ int main(int argc, char **argv) {
     binary.close();
     const pcv::detail::io::PlyReadResult binaryResult = pcv::detail::io::readPly(binaryPath);
     if (!binaryResult.ok || binaryResult.points.size() != 1
-        || binaryResult.binaryWorkerCount != 1
         || !closeTo(binaryResult.points[0].y, 8.0f))
         return fail("binary PLY read failed");
 
@@ -92,12 +91,8 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 4; ++i)
         fastStream << float(i + 1) << float(i + 2) << float(i + 3);
     binaryFast.close();
-    pcv::detail::io::PlyReadOptions binaryTwoWorkerOptions;
-    binaryTwoWorkerOptions.binaryWorkerCount = 2;
-    const auto binaryFastResult =
-        pcv::detail::io::readPly(binaryFastPath, binaryTwoWorkerOptions);
+    const auto binaryFastResult = pcv::detail::io::readPly(binaryFastPath);
     if (!binaryFastResult.ok || binaryFastResult.points.size() != 4
-        || binaryFastResult.binaryWorkerCount != 2
         || !closeTo(binaryFastResult.points[3].x, 4.0f)
         || !closeTo(binaryFastResult.points[3].z, 6.0f))
         return fail("parallel compact binary PLY read failed");
@@ -120,7 +115,6 @@ int main(int argc, char **argv) {
         if (argc > 2) {
             const int workers = QByteArray(argv[2]).toInt();
             sampleOptions.asciiWorkerCount = workers;
-            sampleOptions.binaryWorkerCount = workers;
         }
         const pcv::detail::io::PlyReadResult sample =
             pcv::detail::io::readPly(samplePath, sampleOptions);
@@ -134,7 +128,6 @@ int main(int argc, char **argv) {
                   << " format=" << format
                   << " points=" << sample.points.size()
                   << " ascii_workers=" << sample.asciiWorkerCount
-                  << " binary_workers=" << sample.binaryWorkerCount
                   << " bounds_min=" << sample.minimum.x << ',' << sample.minimum.y << ','
                   << sample.minimum.z
                   << " bounds_max=" << sample.maximum.x << ',' << sample.maximum.y << ','

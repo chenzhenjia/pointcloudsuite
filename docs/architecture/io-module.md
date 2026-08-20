@@ -111,8 +111,9 @@ migrated to the public boundary.
   use a mapped, index-partitioned reader. Each worker decodes its fixed point
   range directly into the preallocated `Point3D` array and keeps private bounds.
 - Compact binary parallelism uses the same adaptive one/two/four-worker policy
-  as ASCII. `PlyReadOptions::binaryWorkerCount` can force a diagnostic count and
-  `PlyReadResult::binaryWorkerCount` reports the selected value.
+  as ASCII. The selected binary worker count remains private to the reader;
+  it is deliberately not exposed through the cross-module result structure.
+  This keeps the public ABI stable for incremental Qt Creator builds.
 - Files with normals, colors, intensity, reordered properties or other scalar
   layouts retain the generic scalar reader. Mapping failure also falls back to
   that path, preserving all existing binary little/big-endian compatibility.
