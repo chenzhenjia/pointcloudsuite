@@ -1,6 +1,6 @@
 # pointcloudstitch
 
-独立 Qt 6/C++17 三帧线激光点云拼接工具。当前处理流程按以下参考实现重新编写：
+独立 Qt 6/C++17 多帧线激光点云拼接工具。当前处理流程按以下参考实现重新编写：
 
 - `D:\Share\Point_Cloud_Stitching\laser_profile_camera_transform_gui.py`
 - `D:\Share\Point_Cloud_Stitching\point_cloud_stitching_gui.py`
@@ -9,13 +9,13 @@
 
 ## 固定流程
 
-1. GUI 提供“配准与融合”和“仅手眼坐标转换”两种模式。配准模式输入三个 ASCII PLY；转换模式接受一个或多个 PLY。每帧均填写 Start/End `X Y Z RX RY RZ`。
+1. GUI 提供“配准与融合”和“仅手眼坐标转换”两种模式。配准模式接受任意 `>=2` 个 ASCII PLY；转换模式接受任意 `>=1` 个 PLY。每帧均填写 Start/End `X Y Z RX RY RZ`。
 2. 直接读取 XML 中 `RTmatDepth2robot/RotMat/TVec` 作为 Depth 到法兰矩阵。
 3. 扫描期间 Start/End 法兰旋转必须相同。
 4. PLY.Y 是沿机器人主运动轴的有符号行程，允许比例范围 `-0.02 .. 1.02`。
 5. 激光轮廓按 `[PLY.X, 0, PLY.Z]` 转换，机器人平移按 PLY.Y 线性插值。
 6. ASCII PLY 复用 `pointcloudview` 的内存映射分块读取器，大文件自适应使用最多 4 个解析线程；映射不可用时回退单线程。每 8 个有效点取一个配准样本，正式点云不降采样。
-7. scan 2 配准到 scan 1，scan 3 配准到已对齐的 scan 2。
+7. 按输入顺序处理所有相邻帧：scan N 配准到 scan N-1，并累计组合全局修正。
 8. 相邻帧使用同一三维包围盒重叠区，默认外扩 `5 mm`；ICP 对应只允许位于主平面预对齐后的无外扩真实三维交集。
 9. ICP 前匹配相邻帧主水平面，只执行法向平移和围绕源平面质心的倾斜校正；预对齐超过 `6 mm / 0.5 deg` 时拒绝。
 10. 先从全部帧提取候选水平面，并在默认 ±5 mm 高度容差内选择覆盖全部帧的同一平面轨迹；相邻对禁止各自切换到不同物理表面。无法覆盖全部帧时回退局部匹配并明确记录。
@@ -45,7 +45,7 @@ PLY [X,Y,Z]
 
 ## 输出
 
-- `1_*_robot_base.ply`、`2_*_robot_base.ply`、`3_*_robot_base.ply`：ICP 前机器人基坐标点云。
+- 每帧 `序号_*_robot_base.ply`：ICP 前机器人基坐标点云。
 - `stitched_robot_base.ply`：应用 ICP 修正和羽化接缝后的正式点云。
 - `stitched_robot_base_preview.ply`：确定性抽样预览。
 - `stitching_report.json`：输入、配准参数、每帧指标、修正和接缝统计。
@@ -84,7 +84,7 @@ PLY [X,Y,Z]
 
 ## 限制
 
-- GUI 正式拼接当前保持三个 ASCII PLY；仅手眼坐标转换模式支持任意 `>=1` 帧；命令行回归和处理内核配准支持任意 `>=2` 帧。
+- GUI、命令行回归和处理内核的配准模式均支持任意 `>=2` 个 ASCII PLY；仅手眼坐标转换模式支持任意 `>=1` 帧。
 - 扫描期间法兰姿态必须恒定。
 - Point-to-Plane ICP 是局部优化，机器人位姿或手眼矩阵初值错误时不会自动恢复。
 - 当前使用 Qt/C++ 原生空间索引和 PCA 复现 Open3D 流程；没有引入 Open3D/PCL 的二进制依赖。

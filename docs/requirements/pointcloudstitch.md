@@ -11,7 +11,7 @@
 
 - `main.cpp`：Qt 应用入口，提供正常启动、`--selftest-close` 启动自检和 `--regression` 多帧回归模式分派。
 - `regressionrunner.h/.cpp`：解析 PLY 目录、机械臂位姿 TXT、Eye-in-Hand XML 和回归参数，生成不依赖 GUI 操作的多帧 JSON 诊断报告。
-- `stitchingwindow.ui`：Qt Designer 界面，包含三帧 PLY 输入、Start/End 位姿、XML 标定文件、ICP 参数、接缝参数、输出目录、进度条和实时日志。
+- `stitchingwindow.ui`：Qt Designer 界面，包含任意多帧 PLY 输入、Start/End 位姿、XML 标定文件、ICP 参数、接缝参数、输出目录、进度条和实时日志。
 - `stitchingwindow.h/.cpp`：界面生命周期、空格/Tab/中英文逗号位姿解析、后台任务调度、进度显示、PLY/JSON 输出；标定和位姿矩阵统一调用手眼转换模块。
 - `handeye_transform.h/.cpp`：可复用的 Eye-in-Hand 标定读取、刚体矩阵校验、机器人位姿矩阵、扫描位姿插值、单点及整幅线扫点云机器人基坐标转换。
 - `pointcloudprocessor.h/.cpp`：复用 `pcv_io` 的并行 ASCII PLY 读取、无效点过滤、调用手眼转换模块生成机器人基坐标全分辨率点云、任意数量相邻帧 Point-to-Plane ICP、修正范围检查和诊断数据。
@@ -27,7 +27,7 @@
 → 过滤非有限点、(0,0,0) 和行程范围外点
 → PLY.Y 作为扫描起点有符号行程
 → [X,0,Z] 经 RTmatDepth2robot 和逐点机器人位姿转换到基座标
-→ GUI 正式任务保存三帧 ICP 前全分辨率机器人基坐标 PLY
+→ GUI 正式任务保存每帧 ICP 前全分辨率机器人基坐标 PLY
 → 匹配相邻帧主水平面并执行受限法向预对齐
 → 按输入顺序对所有相邻帧执行三层 Point-to-Plane ICP
 → 10 mm / 1 deg 修正安全检查
@@ -53,7 +53,7 @@
 
 - 处理内核接受至少两个 ASCII PLY；顶点必须包含 `x/y/z`，其他标量属性可忽略。
 - ASCII 输入通过与 `pointcloudview` 相同的 `pcv::detail::io::readPly()` 路径读取：优先内存映射，扫描换行边界后按原始顶点顺序分块，按文件规模自适应使用 1–4 个解析线程；映射失败时自动回退单线程。读取诊断记录工作线程数、边界扫描、解析和总耗时。
-- 当前 GUI 配准与融合模式保持三帧输入；仅手眼坐标转换模式接受一个或多个 PLY；`--regression` 模式按文件名扫描号匹配任意数量 PLY 和位姿记录。
+- GUI、`--regression` 模式和处理内核的配准与融合均接受任意 `>=2` 个 PLY；仅手眼坐标转换模式接受任意 `>=1` 个 PLY。
 - 每帧包含 Start/End `X Y Z RX RY RZ`，姿态单位为度，旋转顺序为 `Rz * Ry * Rx`。
 - 位姿输入支持空格、Tab、英文逗号和中文逗号粘贴。
 - 标定矩阵以 XML 的 `RTmatDepth2robot/RotMat/TVec` 为唯一权威来源。
@@ -128,7 +128,7 @@
 - 输出 PLY 统一为 ASCII 1.0，仅包含 `float x/y/z`；正式点云和预览点云均可直接用文本工具查看及交换。
 - 仅手眼坐标转换模式输出每帧 `*_robot_base.ply`、合并的 `transformed_robot_base.ply`、`transformed_robot_base_preview.ply` 和 `coordinate_transform_report.json`；所有 ICP 修正矩阵必须为单位矩阵。
 - 正式点云不进行点数封顶或输出降采样；预览允许独立确定性抽样。
-- GUI 实时显示读取、转换、两个相邻配准、三层 ICP、接缝、写文件和报告进度。
+- GUI 实时显示读取、转换、各相邻帧配准、三层 ICP、接缝、写文件和报告进度。
 - `stitching_report.json` 记录实际体素、对应距离、抽样步长、重叠边距、安全范围、每层指标和最终修正。
 - `--regression` 在指定路径生成 `pointcloudstitch-regression-v1` JSON，不写正式合并 PLY，适用于参数和算法回归。
 - GUI 和回归报告必须明确记录 `registration_applied`、`seam_fusion_applied`、`formal_output`；未通过验收时只能生成诊断文件，不得使用正式拼接文件名。
@@ -139,11 +139,11 @@
 ## 7. 验收
 
 - Release 必须通过 MSVC2022 64-bit + Qt 6.8.3 构建。
-- GUI 输入不满足三帧，或任一入口不满足 ASCII、恒姿态、有符号行程约束时必须给出明确错误。
+- GUI 配准输入少于两帧，或任一入口不满足 ASCII、恒姿态、有符号行程约束时必须给出明确错误。
 - 仅手眼坐标转换模式允许一个或多个有效 PLY；转换成功即允许输出，不得因 ICP 门限或相邻覆盖率拒绝。
 - 任一相邻帧 ICP 失败时不得生成 `stitched_robot_base.ply`，可输出诊断点云和报告。
 - 失败运行必须移除输出目录内同名旧 `stitched_robot_base` 正式文件，避免历史成功结果被误认为当前输出。
-- 三个 `_robot_base.ply` 必须是 ICP 前坐标；正式合并结果必须应用对应修正。
+- 每帧 `_robot_base.ply` 必须是 ICP 前坐标；正式合并结果必须应用对应修正。
 - 参考数据回归需覆盖全部相邻对，并对比每帧有效点数、裁剪点数、距离分位数、实际投影重叠、平面诊断、每层 Fitness/RMSE/对应数和修正矩阵。
 
 ## 8. 变更记录
@@ -177,3 +177,4 @@
 - 2026-08-20：完成只读大范围结构诊断。搜索扩展至平面内 ±120 mm、绕法向 ±3 deg 后，A01-A02、A02-A03、A03-A04 的最佳 5 mm 双向覆盖仅 0.2335、0.0798、0.0420，候选平移仍约为 -49.8 mm 而非继续到 -100 mm；排除简单 X 位姿整段偏移，后两对缺少足够共同工件结构。
 - 2026-08-18：完成新方案第二阶段：新增对应主水平面峰匹配、围绕源平面质心的受限法向预对齐及 `6 mm / 0.5 deg` 独立安全检查；不引入任何平面内位移。
 - 2026-08-18：新增可切换的“仅手眼坐标转换”模式，允许一个或多个 PLY 按 `T_base_flange(t) * T_flange_depth * [X,0,Z]` 输出机器人基坐标点云；该模式明确跳过预对齐、ICP、验收和接缝融合，并提供独立合并、预览及 JSON 报告文件。
+- 2026-08-20：GUI 配准模式取消固定三帧限制，改为接受任意 `>=2` 个 PLY；文件和文件夹添加均不再截断数量，单帧配准明确拒绝，仅手眼转换仍允许单帧。

@@ -651,7 +651,7 @@ StitchingWindow::StitchingWindow(QWidget *parent)
     connect(ui->cb_processing_mode, &QComboBox::currentIndexChanged,
             this, [this](int) { updateProcessingModeUi(); });
     updateProcessingModeUi();
-    statusBar()->showMessage(tr("添加三个 ASCII PLY，并填写对应扫描 Start/End 位姿"));
+    statusBar()->showMessage(tr("添加至少两个 ASCII PLY，并填写对应扫描 Start/End 位姿"));
 }
 
 StitchingWindow::~StitchingWindow()
@@ -693,20 +693,13 @@ void StitchingWindow::addPlyFolder()
     std::sort(paths.begin(), paths.end(), [](const QString &left, const QString &right) {
         return QString::localeAwareCompare(left, right) < 0;
     });
-    for (const QString &path : paths) {
-        if (ui->tbl_scans->rowCount() >= 3) break;
-        addPlyPath(path);
-    }
-    statusBar()->showMessage(tr("已按文件名顺序加入 %1/3 个 PLY")
+    for (const QString &path : paths) addPlyPath(path);
+    statusBar()->showMessage(tr("已按文件名顺序加入 %1 个 PLY")
         .arg(ui->tbl_scans->rowCount()));
 }
 
 void StitchingWindow::addPlyPath(const QString &path)
 {
-    if (ui->tbl_scans->rowCount() >= 3) {
-        statusBar()->showMessage(tr("参考流程只接受三个 PLY"));
-        return;
-    }
     const QString absolute = QFileInfo(path).absoluteFilePath();
     for (int row = 0; row < ui->tbl_scans->rowCount(); ++row)
         if (QFileInfo(ui->tbl_scans->item(row, 0)->text()).absoluteFilePath() == absolute) return;
@@ -770,11 +763,11 @@ QVector<pointcloud::WorldCloudInput> StitchingWindow::collectInputs(QString *err
 {
     QVector<pointcloud::WorldCloudInput> inputs;
     const bool transformOnly = ui->cb_processing_mode->currentIndex() == 1;
-    if ((!transformOnly && ui->tbl_scans->rowCount() != 3)
+    if ((!transformOnly && ui->tbl_scans->rowCount() < 2)
         || (transformOnly && ui->tbl_scans->rowCount() < 1)) {
         if (error) *error = transformOnly
             ? tr("仅手眼坐标转换模式至少需要一个 PLY 文件")
-            : tr("配准与融合模式严格要求三个 PLY 文件");
+            : tr("配准与融合模式至少需要两个 PLY 文件");
         return inputs;
     }
     QMatrix4x4 flangeFromDepth;
@@ -949,7 +942,7 @@ void StitchingWindow::updateProcessingModeUi()
         ? tr("转换、重叠检查、ICP、接缝和输出报告将显示在这里。")
         : tr("读取、手眼坐标转换和输出进度将显示在这里。"));
     statusBar()->showMessage(registrationMode
-        ? tr("添加三个 ASCII PLY，并填写对应扫描 Start/End 位姿")
+        ? tr("添加至少两个 ASCII PLY，并填写对应扫描 Start/End 位姿")
         : tr("添加一个或多个 ASCII PLY，转换后不执行 ICP 或接缝融合"));
 }
 
