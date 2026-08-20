@@ -542,6 +542,13 @@ D:/workpiece/pointcloudview/backups/pointcloudview_20260818_obstacle_warning_cle
 - 确定平面和 X/Y 轴后，界面输出框及状态栏显示工件坐标原点在机器人基坐标系中的
   `X/Y/Z/A/B/C`；该值与 PNG 同名 JSON 的 `workpiece_coordinate.pose_in_robot_base` 一致。
 
+### 2026-08-20：PLY 加载完成提示稳定性
+
+- PLY 加载完成后，先将 `m_loading` 置为 false，再创建由 `MainWindow` 托管并自动销毁的
+  非模态完成提示框；提示框使用 `open()`，不在 `loadFinished()` 中进入嵌套模态事件循环。
+- 不使用延迟 `QTimer` 捕获窗口指针，避免窗口关闭、文件切换或 OpenGL 缓存发布期间发生
+  异步回调与加载状态交错导致闪退。
+
 ### 2026-08-20：单通道二值图像值约束
 
 - 平面提取和边缘分割输出统一为 `QImage::Format_Grayscale8` 单通道图像。
