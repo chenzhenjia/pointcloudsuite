@@ -448,7 +448,8 @@ QVector3D tangentCoarseTranslation(const QVector<Point3D> &source,
                                    const QVector<Point3D> &target,
                                    const PlaneDiagnostic &targetPlane,
                                    const IcpOptions &options,
-                                   IcpDiagnostics *diagnostic) {
+                                   IcpDiagnostics *diagnostic,
+                                   QMatrix4x4 *coarseRotation) {
     diagnostic->tangentCoarseAlignmentAttempted=true;
     if(source.size()<options.minimumStructuralPoints||target.size()<options.minimumStructuralPoints||!targetPlane.valid){
         diagnostic->tangentCoarseAlignmentReason=QStringLiteral("结构点或目标平面不足，跳过切向粗对齐");return {};
@@ -457,11 +458,12 @@ QVector3D tangentCoarseTranslation(const QVector<Point3D> &source,
     if(moving.size()<options.minimumStructuralPoints||reference.size()<options.minimumStructuralPoints){
         diagnostic->tangentCoarseAlignmentReason=QStringLiteral("4 mm 粗搜索样本不足，跳过切向粗对齐");return {};
     }
-    constexpr float scoreDistance=3.0f;
+    const float scoreDistance=qMax(3.0f,options.tangentCoarseScoreDistanceMm);
     const SpatialIndex targetIndex=buildIndex(reference,scoreDistance),sourceIndex=buildIndex(moving,scoreDistance);
     QVector3D axisU=QVector3D::crossProduct(targetPlane.normal,QVector3D(0,0,1));
     if(axisU.lengthSquared()<1.0e-6f)axisU=QVector3D::crossProduct(targetPlane.normal,QVector3D(1,0,0));
     axisU.normalize();const QVector3D axisV=QVector3D::crossProduct(targetPlane.normal,axisU).normalized();
+    coarseRotation->setToIdentity();
     QVector3D best;float bestScore=translatedCoverage(moving,reference,targetIndex,sourceIndex,best,scoreDistance);
     diagnostic->tangentCoverageBefore=bestScore;
     const auto search=[&](float centerU,float centerV,float radius,float step,QVector3D *bestValue,float *score){
@@ -474,6 +476,17 @@ QVector3D tangentCoarseTranslation(const QVector<Point3D> &source,
             }
     };
     search(0,0,options.tangentCoarseSearchRadiusMm,options.tangentCoarseStepMm,&best,&bestScore);
+    QVector3D centroid;for(const Point3D &point:moving)centroid+=vectorOf(point);centroid/=float(moving.size());
+    float bestYaw=0.0f;
+    QVector<Point3D> translatedMoving=moving;for(Point3D &point:translatedMoving){point.x+=best.x();point.y+=best.y();point.z+=best.z();}
+    for(float angle=-options.tangentCoarseYawRadiusDegrees;angle<=options.tangentCoarseYawRadiusDegrees+.001f;angle+=options.tangentCoarseYawStepDegrees){
+        QMatrix4x4 rotation;rotation.setToIdentity();rotation.translate(centroid+best);rotation.rotate(angle,targetPlane.normal);rotation.translate(-(centroid+best));
+        QVector<Point3D> rotated=translatedMoving;applyTransform(&rotated,rotation);
+        const SpatialIndex rotatedIndex=buildIndex(rotated,scoreDistance);
+        const float value=translatedCoverage(rotated,reference,targetIndex,rotatedIndex,{},scoreDistance);
+        if(value>bestScore){bestScore=value;bestYaw=angle;*coarseRotation=rotation;}
+    }
+    diagnostic->tangentCoarseYawDegrees=bestYaw;
     const float centerU=QVector3D::dotProduct(best,axisU),centerV=QVector3D::dotProduct(best,axisV);
     search(centerU,centerV,options.tangentCoarseStepMm,options.tangentCoarseRefineStepMm,&best,&bestScore);
     diagnostic->tangentCoverageAfter=bestScore;
@@ -720,13 +733,15 @@ IcpDiagnostics registerPair(QVector<Point3D> *source,
         alignedSourcePlane.offset=QVector3D::dotProduct(alignedSourcePlane.normal,(*correction).map(sourcePlane.centroid));
         QVector<Point3D> sourceStructural=structuralPoints(overlapAlignedSource,alignedSourcePlane,options.structuralPlaneExclusionMm,actualOverlap);
         const QVector<Point3D> targetStructural=structuralPoints(targetCrop,targetPlane,options.structuralPlaneExclusionMm,actualOverlap);
-        const QVector3D coarse=tangentCoarseTranslation(sourceStructural,targetStructural,targetPlane,options,&diagnostic);
+        QMatrix4x4 coarseRotation;
+        const QVector3D coarse=tangentCoarseTranslation(sourceStructural,targetStructural,targetPlane,options,&diagnostic,&coarseRotation);
         if(diagnostic.tangentCoarseAlignmentApplied){
             QMatrix4x4 coarseMatrix;coarseMatrix.setToIdentity();coarseMatrix.translate(coarse);
-            *correction=coarseMatrix*(*correction);
-            if(translationLength(*correction)>options.maximumCorrectionTranslation){
+            *correction=coarseRotation*coarseMatrix*(*correction);
+            if(translationLength(*correction)>options.maximumCorrectionTranslation||rotationAngle(*correction)>options.maximumCorrectionAngleDegrees){
                 diagnostic.correctionTranslation=translationLength(*correction);
-                diagnostic.reason=QStringLiteral("切向粗对齐后累计修正超过 %1 mm 安全范围").arg(options.maximumCorrectionTranslation);return diagnostic;
+                diagnostic.correctionAngleDegrees=rotationAngle(*correction);
+                diagnostic.reason=QStringLiteral("平面内粗对齐后累计修正超过 %1 mm / %2 deg 安全范围").arg(options.maximumCorrectionTranslation).arg(options.maximumCorrectionAngleDegrees);return diagnostic;
             }
         }
     }else diagnostic.tangentCoarseAlignmentReason=options.tangentCoarseAlignmentEnabled
@@ -791,24 +806,34 @@ IcpDiagnostics registerPair(QVector<Point3D> *source,
             if(last.degenerate)++diagnostic.projectedIterations;
             QMatrix4x4 acceptedIncrement;
             bool overlapStepAccepted=false;
+            bool overlapCandidateAvailable=false;
             const float stepFactors[4]{1.0f,0.5f,0.25f,0.125f};
             for(float factor:stepFactors){
                 const QMatrix4x4 candidate=scaledRigidIncrement(last.matrix,factor);
                 QVector<Point3D> trial=moving;applyTransform(&trial,candidate);
                 if(countInsideBounds(trial,actualOverlap)>=minimumInside){
+                    overlapCandidateAvailable=true;
+                    const QMatrix4x4 candidateCorrection=candidate*(*correction);
+                    if(translationLength(candidateCorrection)>options.maximumCorrectionTranslation
+                        ||rotationAngle(candidateCorrection)>options.maximumCorrectionAngleDegrees){
+                        ++diagnostic.safetyConstrainedStepReductions;continue;
+                    }
                     acceptedIncrement=candidate;overlapStepAccepted=true;
                     if(factor<0.999f)++diagnostic.overlapConstrainedStepReductions;
                     break;
                 }
             }
-            if(!overlapStepAccepted){diagnostic.reason=QStringLiteral("ICP 增量会使源点滑出实际相邻帧重叠区");return diagnostic;}
+            if(!overlapStepAccepted){
+                if(overlapCandidateAvailable){diagnostic.stoppedAtSafetyBoundary=true;break;}
+                diagnostic.reason=QStringLiteral("ICP 增量会使源点滑出实际相邻帧重叠区");return diagnostic;
+            }
             last.matrix=acceptedIncrement;
             applyTransform(&moving,acceptedIncrement);
             *correction=acceptedIncrement*(*correction);
             ++diagnostic.iterations;
             const float translation=translationLength(*correction);
             const float angle=rotationAngle(*correction);
-            if(translation>options.maximumCorrectionTranslation||angle>options.maximumCorrectionAngleDegrees){diagnostic.correctionTranslation=translation;diagnostic.correctionAngleDegrees=angle;diagnostic.correctionX=(*correction)(0,3);diagnostic.correctionY=(*correction)(1,3);diagnostic.correctionZ=(*correction)(2,3);diagnostic.reason=QStringLiteral("ICP 修正超过 %1 mm / %2 deg 安全范围").arg(options.maximumCorrectionTranslation).arg(options.maximumCorrectionAngleDegrees);return diagnostic;}
+            if(translation>options.maximumCorrectionTranslation||angle>options.maximumCorrectionAngleDegrees){diagnostic.reason=QStringLiteral("内部错误：ICP 信赖域越过安全范围");return diagnostic;}
             const float fitness=float(last.correspondences)/qMax(1,moving.size());
             const float fitnessChange=previousFitness<0?std::numeric_limits<float>::max():std::abs(fitness-previousFitness)/qMax(1.0e-12f,std::abs(previousFitness));
             const float rmseChange=std::isfinite(previousRmse)?std::abs(last.rmse-previousRmse)/qMax(1.0e-12f,std::abs(previousRmse)):std::numeric_limits<float>::max();
@@ -862,20 +887,18 @@ IcpDiagnostics registerPair(QVector<Point3D> *source,
             &&targetToSource.total>=options.minimumStructuralPoints;
         const bool enoughCoverage=diagnostic.structuralBidirectionalCoverage3mm
             >=options.minimumDegenerateStructuralCoverage3mm;
-        if(diagnostic.observableDof<=3&&(!enoughStructure||!enoughCoverage)){
+        if(!enoughStructure||!enoughCoverage){
             diagnostic.structuralValidationReason=!enoughStructure
-                ?QStringLiteral("退化配准的重叠区结构点不足：%1/%2，最低各 %3")
+                ?QStringLiteral("重叠区结构点不足：%1/%2，最低各 %3")
                     .arg(sourceToTarget.total).arg(targetToSource.total).arg(options.minimumStructuralPoints)
-                :QStringLiteral("退化配准的结构点双向 3 mm 覆盖率 %1 低于 %2")
+                :QStringLiteral("结构点双向 3 mm 覆盖率 %1 低于 %2")
                     .arg(diagnostic.structuralBidirectionalCoverage3mm,0,'f',4)
                     .arg(options.minimumDegenerateStructuralCoverage3mm,0,'f',4);
             diagnostic.reason=diagnostic.structuralValidationReason;
             return diagnostic;
         }
         diagnostic.structuralValidationPassed=true;
-        diagnostic.structuralValidationReason=diagnostic.observableDof<=3
-            ?QStringLiteral("退化配准已通过结构点双向覆盖验收")
-            :QStringLiteral("非严重退化配准，结构指标仅作诊断");
+        diagnostic.structuralValidationReason=QStringLiteral("已通过结构点双向覆盖验收");
     }else{
         diagnostic.structuralValidationPassed=true;
         diagnostic.structuralValidationReason=QStringLiteral("结构点验收已禁用");

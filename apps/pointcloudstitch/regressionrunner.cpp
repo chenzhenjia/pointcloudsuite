@@ -187,6 +187,8 @@ QJsonObject diagnosticJson(const pointcloud::IcpDiagnostics &diagnostic,
     item.insert(QStringLiteral("actual_overlap_target_points"), diagnostic.actualOverlapTargetCount);
     item.insert(QStringLiteral("overlap_minimum_retention"), diagnostic.minimumOverlapRetention);
     item.insert(QStringLiteral("overlap_constrained_step_reductions"), diagnostic.overlapConstrainedStepReductions);
+    item.insert(QStringLiteral("safety_constrained_step_reductions"), diagnostic.safetyConstrainedStepReductions);
+    item.insert(QStringLiteral("stopped_at_safety_boundary"), diagnostic.stoppedAtSafetyBoundary);
     item.insert(QStringLiteral("degenerate"), diagnostic.degenerate);
     item.insert(QStringLiteral("observable_dof"), diagnostic.observableDof);
     item.insert(QStringLiteral("hessian_condition_ratio"), diagnostic.conditionRatio);
@@ -230,6 +232,7 @@ QJsonObject diagnosticJson(const pointcloud::IcpDiagnostics &diagnostic,
     item.insert(QStringLiteral("tangent_coverage_before"), diagnostic.tangentCoverageBefore);
     item.insert(QStringLiteral("tangent_coverage_after"), diagnostic.tangentCoverageAfter);
     item.insert(QStringLiteral("tangent_coarse_xyz_mm"), QJsonArray{diagnostic.tangentCoarseX,diagnostic.tangentCoarseY,diagnostic.tangentCoarseZ});
+    item.insert(QStringLiteral("tangent_coarse_yaw_deg"), diagnostic.tangentCoarseYawDegrees);
     item.insert(QStringLiteral("tangent_coarse_alignment_reason"), diagnostic.tangentCoarseAlignmentReason);
     item.insert(QStringLiteral("plane_diagnostic_valid"), diagnostic.planeDiagnosticValid);
     item.insert(QStringLiteral("plane_normal_angle_deg"), diagnostic.planeNormalAngleDegrees);
@@ -372,6 +375,9 @@ int runRegression(const QStringList &arguments)
     parameterObject.insert(QStringLiteral("tangent_coarse_search_radius_mm"), options.tangentCoarseSearchRadiusMm);
     parameterObject.insert(QStringLiteral("tangent_coarse_step_mm"), options.tangentCoarseStepMm);
     parameterObject.insert(QStringLiteral("tangent_coarse_refine_step_mm"), options.tangentCoarseRefineStepMm);
+    parameterObject.insert(QStringLiteral("tangent_coarse_score_distance_mm"), options.tangentCoarseScoreDistanceMm);
+    parameterObject.insert(QStringLiteral("tangent_coarse_yaw_radius_deg"), options.tangentCoarseYawRadiusDegrees);
+    parameterObject.insert(QStringLiteral("tangent_coarse_yaw_step_deg"), options.tangentCoarseYawStepDegrees);
     parameterObject.insert(QStringLiteral("tangent_coarse_minimum_coverage_gain"), options.tangentCoarseMinimumCoverageGain);
     parameterObject.insert(QStringLiteral("sample_stride"), options.sampleStride);
     parameterObject.insert(QStringLiteral("overlap_margin_mm"), options.overlapMargin);
@@ -400,6 +406,10 @@ int runRegression(const QStringList &arguments)
     if (!outputDirectory.isEmpty()) {
         QDir output(outputDirectory);
         if (!output.exists() && !QDir().mkpath(outputDirectory)) return 3;
+        if(options.enabled){
+            QFile::remove(output.filePath(QStringLiteral("regression_registered_robot_base.ply")));
+            QFile::remove(output.filePath(QStringLiteral("regression_registered_robot_base_preview.ply")));
+        }
         QString outputError;
         QJsonArray preFiles,postFiles;
         if(options.enabled){

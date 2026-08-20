@@ -60,6 +60,9 @@ struct IcpOptions {
     float tangentCoarseSearchRadiusMm = 10.0f;
     float tangentCoarseStepMm = 1.0f;
     float tangentCoarseRefineStepMm = 0.25f;
+    float tangentCoarseScoreDistanceMm = 5.0f;
+    float tangentCoarseYawRadiusDegrees = 1.0f;
+    float tangentCoarseYawStepDegrees = 0.25f;
     float tangentCoarseMinimumCoverageGain = 0.05f;
     std::function<bool()> isCancelled;
 };
@@ -91,6 +94,8 @@ struct IcpDiagnostics {
     int actualOverlapSourceCount = 0;
     int actualOverlapTargetCount = 0;
     int overlapConstrainedStepReductions = 0;
+    int safetyConstrainedStepReductions = 0;
+    bool stoppedAtSafetyBoundary = false;
     float minimumOverlapRetention = 0.85f;
     bool degenerate = false;
     float conditionRatio = 0.0f;
@@ -137,6 +142,7 @@ struct IcpDiagnostics {
     float tangentCoarseX = 0.0f;
     float tangentCoarseY = 0.0f;
     float tangentCoarseZ = 0.0f;
+    float tangentCoarseYawDegrees = 0.0f;
     QString tangentCoarseAlignmentReason;
     bool planeIdentityTracked = false;
     float trackedSourcePlaneHeight = 0.0f;

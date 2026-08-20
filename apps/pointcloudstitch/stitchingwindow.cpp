@@ -172,6 +172,9 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
     registration.insert(QStringLiteral("tangent_coarse_search_radius_mm"), result.icpOptions.tangentCoarseSearchRadiusMm);
     registration.insert(QStringLiteral("tangent_coarse_step_mm"), result.icpOptions.tangentCoarseStepMm);
     registration.insert(QStringLiteral("tangent_coarse_refine_step_mm"), result.icpOptions.tangentCoarseRefineStepMm);
+    registration.insert(QStringLiteral("tangent_coarse_score_distance_mm"), result.icpOptions.tangentCoarseScoreDistanceMm);
+    registration.insert(QStringLiteral("tangent_coarse_yaw_radius_deg"), result.icpOptions.tangentCoarseYawRadiusDegrees);
+    registration.insert(QStringLiteral("tangent_coarse_yaw_step_deg"), result.icpOptions.tangentCoarseYawStepDegrees);
     registration.insert(QStringLiteral("tangent_coarse_minimum_coverage_gain"), result.icpOptions.tangentCoarseMinimumCoverageGain);
     QJsonArray finalCorrections;
     for (const QMatrix4x4 &matrix : result.merge.registrationCorrections) {
@@ -261,6 +264,8 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
         item.insert(QStringLiteral("actual_overlap_target_points"), diagnostic.actualOverlapTargetCount);
         item.insert(QStringLiteral("overlap_minimum_retention"), diagnostic.minimumOverlapRetention);
         item.insert(QStringLiteral("overlap_constrained_step_reductions"), diagnostic.overlapConstrainedStepReductions);
+        item.insert(QStringLiteral("safety_constrained_step_reductions"), diagnostic.safetyConstrainedStepReductions);
+        item.insert(QStringLiteral("stopped_at_safety_boundary"), diagnostic.stoppedAtSafetyBoundary);
         item.insert(QStringLiteral("degenerate"), diagnostic.degenerate);
         item.insert(QStringLiteral("observable_dof"), diagnostic.observableDof);
         item.insert(QStringLiteral("hessian_condition_ratio"), diagnostic.conditionRatio);
@@ -304,6 +309,7 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
         item.insert(QStringLiteral("tangent_coverage_before"), diagnostic.tangentCoverageBefore);
         item.insert(QStringLiteral("tangent_coverage_after"), diagnostic.tangentCoverageAfter);
         item.insert(QStringLiteral("tangent_coarse_xyz_mm"), QJsonArray{diagnostic.tangentCoarseX,diagnostic.tangentCoarseY,diagnostic.tangentCoarseZ});
+        item.insert(QStringLiteral("tangent_coarse_yaw_deg"), diagnostic.tangentCoarseYawDegrees);
         item.insert(QStringLiteral("tangent_coarse_alignment_reason"), diagnostic.tangentCoarseAlignmentReason);
         item.insert(QStringLiteral("plane_diagnostic_valid"), diagnostic.planeDiagnosticValid);
         item.insert(QStringLiteral("plane_normal_angle_deg"), diagnostic.planeNormalAngleDegrees);
@@ -445,6 +451,11 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
     if (!directory.exists() && !QDir().mkpath(outputDirectory)) {
         result.error = QObject::tr("无法创建输出目录：%1").arg(outputDirectory);
         return result;
+    }
+    if(!result.transformOnly&&!result.registrationAccepted){
+        QFile::remove(directory.filePath(QStringLiteral("stitched_robot_base.ply")));
+        QFile::remove(directory.filePath(QStringLiteral("stitched_robot_base_preview.ply")));
+        QFile::remove(directory.filePath(QStringLiteral("stitched_robot_base.pcvmap")));
     }
     if(!result.transformOnly){
         for(int index=0;index<result.merge.diagnosticPreIcpFrames.size();++index){
