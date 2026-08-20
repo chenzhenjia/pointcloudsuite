@@ -76,3 +76,19 @@ migrated to the public boundary.
 - A lightweight second scan counts lines in each chunk and verifies that the
   sum equals the Header vertex count. The current parser still consumes chunks
   serially; parallel numeric parsing is deferred until the next stage.
+
+## Stage-three two-thread parsing
+
+- Mapped ASCII vertex payloads are split into two verified chunks and parsed
+  concurrently. Each worker writes only to its fixed, non-overlapping range in
+  the preallocated point array and maintains private bounds/error state.
+- The first boundary scan stops after the declared vertex line count, so later
+  ASCII face or other element payloads are not mistaken for vertices.
+- Results are published only after both workers join and their point counts and
+  bounds are merged. Mapping failure retains the serial buffered fallback.
+- A worker-specific parse or cancellation error is preserved through the final
+  point-count validation instead of being replaced by a generic incomplete-data
+  message.
+- `ply_reader_tests` accepts an optional external PLY path and reports its
+  format, point count, bounds and reader timings after the built-in regression
+  fixtures pass. This provides a repeatable baseline for large production data.

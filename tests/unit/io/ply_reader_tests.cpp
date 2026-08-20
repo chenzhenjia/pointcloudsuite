@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QDataStream>
 #include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 
 #include <cmath>
@@ -46,14 +47,15 @@ int main(int argc, char **argv) {
     const QByteArray fastAscii =
         "ply\nformat ascii 1.0\nelement vertex 1\n"
         "property float x\nproperty float y\nproperty float z\n"
-        "property uchar red\nproperty float intensity\nend_header\n"
-        "-1.25e+1 2.5E-1 +3.0 255 99.0\n";
+        "property uchar red\nproperty float intensity\n"
+        "element face 1\nproperty list uchar int vertex_indices\nend_header\n"
+        "-1.25e+1 2.5E-1 +3.0 255 99.0\n3 0 0 0\n";
     if (!writeFile(fastPath, fastAscii)) return fail("fast ASCII fixture write failed");
     const auto fastResult = pcv::detail::io::readPly(fastPath);
     if (!fastResult.ok || !closeTo(fastResult.points[0].x, -12.5f)
         || !closeTo(fastResult.points[0].y, 0.25f)
         || !closeTo(fastResult.points[0].z, 3.0f))
-        return fail("fast ASCII parser or trailing attribute skip failed");
+        return fail("fast ASCII parser, trailing attribute or face payload handling failed");
 
     const QString binaryPath = directory.filePath(QStringLiteral("binary.ply"));
     QFile binary(binaryPath);
@@ -81,5 +83,28 @@ int main(int argc, char **argv) {
     const pcv::detail::io::PlyReadResult cancelled = pcv::detail::io::readPly(asciiPath, cancelledOptions);
     if (!cancelled.cancelled || cancelled.ok)
         return fail("cancellation was not reported");
+
+    if (argc > 1) {
+        const QString samplePath = QString::fromLocal8Bit(argv[1]);
+        const pcv::detail::io::PlyReadResult sample =
+            pcv::detail::io::readPly(samplePath);
+        if (!sample.ok || sample.points.size() != sample.declaredPointCount)
+            return fail("external PLY sample read failed");
+        const char *format = sample.format == pcv::detail::io::PlyFormat::Ascii
+            ? "ascii"
+            : sample.format == pcv::detail::io::PlyFormat::BinaryLittleEndian
+                ? "binary_little_endian" : "binary_big_endian";
+        std::cout << "sample=" << QFileInfo(samplePath).fileName().toStdString()
+                  << " format=" << format
+                  << " points=" << sample.points.size()
+                  << " bounds_min=" << sample.minimum.x << ',' << sample.minimum.y << ','
+                  << sample.minimum.z
+                  << " bounds_max=" << sample.maximum.x << ',' << sample.maximum.y << ','
+                  << sample.maximum.z
+                  << " header_ms=" << sample.headerElapsedMs
+                  << " boundary_scan_ms=" << sample.boundaryScanElapsedMs
+                  << " parse_ms=" << sample.parseElapsedMs
+                  << " total_ms=" << sample.totalElapsedMs << '\n';
+    }
     return 0;
 }

@@ -11,8 +11,12 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <atomic>
+#include <future>
 #include <limits>
+#include <mutex>
 #include <numeric>
+#include <vector>
 
 namespace {
 
@@ -28,6 +32,14 @@ struct AsciiChunk {
     qsizetype pointCount = 0;
 };
 
+struct AsciiChunkResult {
+    qsizetype parsedCount = 0;
+    pointcloud::Point3D minimum;
+    pointcloud::Point3D maximum;
+    bool hasBounds = false;
+    QString error;
+};
+
 QVector<AsciiChunk> splitAsciiChunks(const char *begin, const char *end,
                                      qsizetype pointCount, int requestedChunks,
                                      QString *error) {
@@ -36,17 +48,28 @@ QVector<AsciiChunk> splitAsciiChunks(const char *begin, const char *end,
         if (error) *error = QStringLiteral("ASCII 顶点数据区无效");
         return chunks;
     }
+    const char *vertexEnd = begin;
+    for (qsizetype line = 0; line < pointCount; ++line) {
+        if (vertexEnd >= end) {
+            if (error) *error = QStringLiteral("ASCII 顶点数据不完整：声明 %1 点，扫描 %2 点")
+                .arg(pointCount).arg(line);
+            return chunks;
+        }
+        const char *lineEnd = static_cast<const char *>(std::memchr(
+            vertexEnd, '\n', size_t(end - vertexEnd)));
+        vertexEnd = lineEnd ? lineEnd + 1 : end;
+    }
     const int chunkCount = qBound(1, requestedChunks,
                                   int(qMin<qsizetype>(pointCount, 64)));
-    QVector<const char *> starts(chunkCount + 1, end);
+    QVector<const char *> starts(chunkCount + 1, vertexEnd);
     starts[0] = begin;
     for (int i = 1; i < chunkCount; ++i) {
-        const qsizetype offset = qsizetype((end - begin) * qint64(i) / chunkCount);
+        const qsizetype offset = qsizetype((vertexEnd - begin) * qint64(i) / chunkCount);
         const char *cursor = begin + offset;
-        while (cursor < end && cursor > begin && cursor[-1] != '\n') ++cursor;
+        while (cursor < vertexEnd && cursor > begin && cursor[-1] != '\n') ++cursor;
         starts[i] = cursor;
     }
-    starts[chunkCount] = end;
+    starts[chunkCount] = vertexEnd;
     qsizetype firstPoint = 0;
     for (int i = 0; i < chunkCount; ++i) {
         AsciiChunk chunk;
@@ -295,7 +318,6 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
         const qint64 payloadBytes = file.size() - payloadOffset;
         uchar *mapped = payloadBytes > 0 ? file.map(payloadOffset, payloadBytes) : nullptr;
         const char *mappedBegin = reinterpret_cast<const char *>(mapped);
-        const char *mappedCursor = mappedBegin;
         const char *mappedEnd = mappedBegin ? mappedBegin + payloadBytes : nullptr;
         std::array<char, 64 * 1024> buffer{};
         QVector<AsciiChunk> chunks;
@@ -305,7 +327,7 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
             QString boundaryError;
             chunks = splitAsciiChunks(mappedBegin, mappedEnd,
                                       result.declaredPointCount,
-                                      4, &boundaryError);
+                                      2, &boundaryError);
             result.boundaryScanElapsedMs = boundaryTimer.elapsed();
             if (chunks.isEmpty()) {
                 file.unmap(mapped);
@@ -314,45 +336,102 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
             }
         }
         bool parseFailed = false;
-        for (const AsciiChunk &chunk : chunks.isEmpty()
-                 ? QVector<AsciiChunk>{AsciiChunk{mappedBegin, mappedEnd, 0,
-                                                  result.declaredPointCount}}
-                 : chunks) {
-            const qsizetype chunkEnd = chunk.firstPoint + chunk.pointCount;
-            for (qsizetype index = chunk.firstPoint; index < chunkEnd; ++index) {
-            if (cancelled(index)) {
-                result.cancelled = true;
-                result.error = QStringLiteral("已取消");
-                if (mapped) file.unmap(mapped);
-                return result;
+        if (mapped) {
+            pointcloud::Point3D *output = result.points.data();
+            std::atomic<qsizetype> completed{0};
+            std::atomic_bool stop{false};
+            std::mutex callbackMutex;
+            const auto parseChunk = [&](const AsciiChunk &chunk) {
+                AsciiChunkResult local;
+                const char *cursor = chunk.begin;
+                for (qsizetype localIndex = 0; localIndex < chunk.pointCount; ++localIndex) {
+                    if (stop.load(std::memory_order_relaxed)) break;
+                    if ((localIndex % 10000) == 0 && options.isCancelled) {
+                        std::lock_guard<std::mutex> lock(callbackMutex);
+                        if (options.isCancelled()) {
+                            stop.store(true, std::memory_order_relaxed);
+                            local.error = QStringLiteral("已取消");
+                            break;
+                        }
+                    }
+                    if (cursor >= chunk.end) {
+                        local.error = QStringLiteral("Chunk %1 在顶点 %2 前提前结束")
+                            .arg(chunk.firstPoint).arg(chunk.firstPoint + localIndex);
+                        stop.store(true, std::memory_order_relaxed);
+                        break;
+                    }
+                    const char *lineEnd = static_cast<const char *>(std::memchr(
+                        cursor, '\n', size_t(chunk.end - cursor)));
+                    lineEnd = lineEnd ? lineEnd + 1 : chunk.end;
+                    pointcloud::Point3D point;
+                    if (!parseAsciiPoint(QByteArray::fromRawData(
+                                             cursor, int(lineEnd - cursor)),
+                                         indices, lastRequiredIndex, &point)) {
+                        local.error = QStringLiteral("ASCII 顶点 %1 解析失败")
+                            .arg(chunk.firstPoint + localIndex);
+                        stop.store(true, std::memory_order_relaxed);
+                        break;
+                    }
+                    output[chunk.firstPoint + localIndex] = point;
+                    if (!local.hasBounds) {
+                        local.minimum = local.maximum = point;
+                        local.hasBounds = true;
+                    } else {
+                        local.minimum.x = std::min(local.minimum.x, point.x);
+                        local.minimum.y = std::min(local.minimum.y, point.y);
+                        local.minimum.z = std::min(local.minimum.z, point.z);
+                        local.maximum.x = std::max(local.maximum.x, point.x);
+                        local.maximum.y = std::max(local.maximum.y, point.y);
+                        local.maximum.z = std::max(local.maximum.z, point.z);
+                    }
+                    ++local.parsedCount;
+                    cursor = lineEnd;
+                    const qsizetype done = completed.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if (options.progress
+                        && ((done % 10000) == 0 || done == result.declaredPointCount)) {
+                        std::lock_guard<std::mutex> lock(callbackMutex);
+                        options.progress(done, result.declaredPointCount);
+                    }
+                }
+                return local;
+            };
+            std::vector<std::future<AsciiChunkResult>> futures;
+            futures.reserve(chunks.size());
+            for (const AsciiChunk &chunk : chunks)
+                futures.push_back(std::async(std::launch::async, parseChunk, chunk));
+            for (auto &future : futures) {
+                AsciiChunkResult local = future.get();
+                parsedCount += local.parsedCount;
+                if (!local.error.isEmpty() && result.error.isEmpty()) result.error = local.error;
+                if (local.hasBounds) {
+                    updateBounds(local.minimum);
+                    updateBounds(local.maximum);
+                }
             }
-            QByteArray line;
-            if (mapped) {
-                mappedCursor = (index == chunk.firstPoint) ? chunk.begin : mappedCursor;
-                if (mappedCursor >= chunk.end) { parseFailed = true; break; }
-                const char *lineEnd = static_cast<const char *>(std::memchr(
-                    mappedCursor, '\n', size_t(chunk.end - mappedCursor)));
-                lineEnd = lineEnd ? lineEnd + 1 : chunk.end;
-                line = QByteArray::fromRawData(mappedCursor, int(lineEnd - mappedCursor));
-                mappedCursor = lineEnd;
-            } else {
+            result.cancelled = result.error == QStringLiteral("已取消");
+            parseFailed = !result.error.isEmpty();
+        } else {
+            for (qsizetype index = 0; index < result.declaredPointCount; ++index) {
+                if (cancelled(index)) {
+                    result.cancelled = true;
+                    result.error = QStringLiteral("已取消");
+                    return result;
+                }
                 const qint64 length = file.readLine(buffer.data(), buffer.size());
                 if (length <= 0) { parseFailed = true; break; }
-                line = QByteArray::fromRawData(buffer.data(), int(length));
+                pointcloud::Point3D point;
+                if (!parseAsciiPoint(QByteArray::fromRawData(buffer.data(), int(length)),
+                                     indices, lastRequiredIndex, &point)) {
+                    parseFailed = true;
+                    break;
+                }
+                result.points[parsedCount++] = point;
+                updateBounds(point);
+                reportProgress(index + 1);
             }
-            pointcloud::Point3D point;
-            if (!parseAsciiPoint(line, indices, lastRequiredIndex, &point)) {
-                parseFailed = true;
-                break;
-            }
-            result.points[parsedCount++] = point;
-            updateBounds(point);
-            reportProgress(index + 1);
-            }
-            if (parseFailed) break;
         }
         if (mapped) file.unmap(mapped);
-        if (parseFailed && parsedCount == result.declaredPointCount)
+        if (parseFailed && result.error.isEmpty())
             result.error = QStringLiteral("ASCII 分块解析失败");
     } else {
         const qsizetype bytesPerVertex = std::accumulate(
@@ -397,8 +476,10 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
     if (parsedCount != result.declaredPointCount) {
         const qsizetype actual = parsedCount;
         result.points.clear();
-        result.error = QStringLiteral("PLY 顶点数据不完整：声明 %1 点，实际读取 %2 点")
-            .arg(result.declaredPointCount).arg(actual);
+        if (result.error.isEmpty()) {
+            result.error = QStringLiteral("PLY 顶点数据不完整：声明 %1 点，实际读取 %2 点")
+                .arg(result.declaredPointCount).arg(actual);
+        }
         return result;
     }
     result.ok = true;
