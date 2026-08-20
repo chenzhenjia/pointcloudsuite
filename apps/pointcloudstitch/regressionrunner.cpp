@@ -244,6 +244,10 @@ QJsonObject diagnosticJson(const pointcloud::IcpDiagnostics &diagnostic,
     item.insert(QStringLiteral("plane_residual_after_prealignment_mm"), diagnostic.planeResidualAfterPrealignment);
     item.insert(QStringLiteral("plane_normal_angle_after_prealignment_deg"), diagnostic.planeNormalAngleAfterPrealignment);
     item.insert(QStringLiteral("plane_prealignment_reason"), diagnostic.planePrealignmentReason);
+    item.insert(QStringLiteral("plane_identity_tracked"), diagnostic.planeIdentityTracked);
+    item.insert(QStringLiteral("tracked_source_plane_height_mm"), diagnostic.trackedSourcePlaneHeight);
+    item.insert(QStringLiteral("tracked_target_plane_height_mm"), diagnostic.trackedTargetPlaneHeight);
+    item.insert(QStringLiteral("plane_identity_reason"), diagnostic.planeIdentityReason);
     item.insert(QStringLiteral("fitness"), diagnostic.fitness);
     item.insert(QStringLiteral("rmse_mm"), diagnostic.rmse);
     item.insert(QStringLiteral("correction_translation_mm"), diagnostic.correctionTranslation);
@@ -374,6 +378,14 @@ int runRegression(const QStringList &arguments)
     parameterObject.insert(QStringLiteral("plane_prealignment_enabled"), options.planePrealignmentEnabled);
     parameterObject.insert(QStringLiteral("maximum_plane_prealignment_translation_mm"), options.maximumPlanePrealignmentTranslation);
     parameterObject.insert(QStringLiteral("maximum_plane_prealignment_angle_deg"), options.maximumPlanePrealignmentAngleDegrees);
+    parameterObject.insert(QStringLiteral("plane_identity_tracking_enabled"), options.planeIdentityTrackingEnabled);
+    parameterObject.insert(QStringLiteral("plane_identity_height_tolerance_mm"), options.planeIdentityHeightToleranceMm);
+    parameterObject.insert(QStringLiteral("plane_identity_tracking_valid"), result.planeIdentityTrackingValid);
+    parameterObject.insert(QStringLiteral("plane_identity_consensus_height_mm"), result.planeIdentityConsensusHeight);
+    parameterObject.insert(QStringLiteral("plane_identity_diagnostics"), result.planeIdentityDiagnostics);
+    QJsonArray trackedPlaneHeights;
+    for(float height:result.trackedPlaneHeights)trackedPlaneHeights.append(height);
+    parameterObject.insert(QStringLiteral("tracked_plane_heights_mm"),trackedPlaneHeights);
     parameterObject.insert(QStringLiteral("maximum_correction_translation_mm"), options.maximumCorrectionTranslation);
     parameterObject.insert(QStringLiteral("maximum_correction_angle_deg"), options.maximumCorrectionAngleDegrees);
     root.insert(QStringLiteral("parameters"), parameterObject);

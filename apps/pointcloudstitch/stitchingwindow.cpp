@@ -147,6 +147,14 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
     registration.insert(QStringLiteral("plane_prealignment_enabled"), result.icpOptions.planePrealignmentEnabled);
     registration.insert(QStringLiteral("maximum_plane_prealignment_translation_mm"), result.icpOptions.maximumPlanePrealignmentTranslation);
     registration.insert(QStringLiteral("maximum_plane_prealignment_angle_deg"), result.icpOptions.maximumPlanePrealignmentAngleDegrees);
+    registration.insert(QStringLiteral("plane_identity_tracking_enabled"), result.icpOptions.planeIdentityTrackingEnabled);
+    registration.insert(QStringLiteral("plane_identity_height_tolerance_mm"), result.icpOptions.planeIdentityHeightToleranceMm);
+    registration.insert(QStringLiteral("plane_identity_tracking_valid"), result.merge.planeIdentityTrackingValid);
+    registration.insert(QStringLiteral("plane_identity_consensus_height_mm"), result.merge.planeIdentityConsensusHeight);
+    registration.insert(QStringLiteral("plane_identity_diagnostics"), result.merge.planeIdentityDiagnostics);
+    QJsonArray trackedPlaneHeights;
+    for(float height:result.merge.trackedPlaneHeights)trackedPlaneHeights.append(height);
+    registration.insert(QStringLiteral("tracked_plane_heights_mm"),trackedPlaneHeights);
     registration.insert(QStringLiteral("maximum_correction_translation_mm"),
                         result.icpOptions.maximumCorrectionTranslation);
     registration.insert(QStringLiteral("maximum_correction_angle_deg"),
@@ -307,6 +315,10 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
         item.insert(QStringLiteral("plane_residual_after_prealignment_mm"), diagnostic.planeResidualAfterPrealignment);
         item.insert(QStringLiteral("plane_normal_angle_after_prealignment_deg"), diagnostic.planeNormalAngleAfterPrealignment);
         item.insert(QStringLiteral("plane_prealignment_reason"), diagnostic.planePrealignmentReason);
+        item.insert(QStringLiteral("plane_identity_tracked"), diagnostic.planeIdentityTracked);
+        item.insert(QStringLiteral("tracked_source_plane_height_mm"), diagnostic.trackedSourcePlaneHeight);
+        item.insert(QStringLiteral("tracked_target_plane_height_mm"), diagnostic.trackedTargetPlaneHeight);
+        item.insert(QStringLiteral("plane_identity_reason"), diagnostic.planeIdentityReason);
         item.insert(QStringLiteral("fitness"), diagnostic.fitness);
         item.insert(QStringLiteral("rmse_mm"), diagnostic.rmse);
         item.insert(QStringLiteral("xy_rmse_mm"), diagnostic.xyRmse);

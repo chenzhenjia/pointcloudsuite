@@ -5,6 +5,7 @@
 
 #include <QFileInfo>
 #include <QQuaternion>
+#include <QStringList>
 #include <QVector3D>
 #include <QtMath>
 
@@ -362,6 +363,7 @@ QPair<float,float> projectionRange(const QVector<Point3D> &points, const QVector
 }
 
 struct PlaneDiagnostic { bool valid=false; QVector3D normal,centroid; float offset=0,height=0; };
+struct PlanePeak { float height=0; int count=0; };
 struct DistanceDiagnostic {
     int total=0,matched=0;
     float p50=0,p90=0,p95=0,within3=0,within5=0,within10=0;
@@ -516,9 +518,63 @@ PlaneDiagnostic pcaPlane(const QVector<Point3D> &points,
     result.centroid=mean;result.offset=QVector3D::dotProduct(mean,result.normal);result.height=dominantHeight;result.valid=true;return result;
 }
 
+QVector<PlanePeak> planePeakCandidates(const QVector<Point3D> &points) {
+    const QVector<Point3D> sample=voxelDownsample(points,1.0f);
+    QVector<PlanePeak> result;
+    if(sample.size()<100)return result;
+    constexpr float heightBin=.5f;
+    std::unordered_map<qint64,int> histogram;
+    int dominant=0;
+    for(const Point3D &point:sample)dominant=qMax(dominant,++histogram[qint64(std::floor(point.z/heightBin))]);
+    const int minimum=qMax(100,dominant/10);
+    for(const auto &entry:histogram)if(entry.second>=minimum)
+        result.push_back({(float(entry.first)+.5f)*heightBin,entry.second});
+    std::sort(result.begin(),result.end(),[](const PlanePeak &a,const PlanePeak &b){return a.height<b.height;});
+    return result;
+}
+
+bool trackPlaneIdentity(const QVector<ConvertedCloud> &clouds,
+                        const IcpOptions &options,
+                        QVector<float> *trackedHeights,
+                        float *consensusHeight,
+                        QString *reason) {
+    trackedHeights->clear();
+    if(!options.planeIdentityTrackingEnabled){if(reason)*reason=QStringLiteral("跨帧主平面身份跟踪已禁用");return false;}
+    QVector<QVector<PlanePeak>> candidates;candidates.reserve(clouds.size());
+    for(const ConvertedCloud &cloud:clouds)candidates.push_back(planePeakCandidates(cloud.sample));
+    int bestCoverage=0,bestCount=-1;float bestSpread=std::numeric_limits<float>::max(),bestAnchor=0;
+    for(const QVector<PlanePeak> &anchors:candidates)for(const PlanePeak &anchor:anchors){
+        int coverage=0,totalCount=0;float spread=0;
+        for(const QVector<PlanePeak> &frame:candidates){
+            float nearest=std::numeric_limits<float>::max();int count=0;
+            for(const PlanePeak &peak:frame){const float distance=std::abs(peak.height-anchor.height);if(distance<nearest){nearest=distance;count=peak.count;}}
+            if(nearest<=options.planeIdentityHeightToleranceMm){++coverage;spread+=nearest;totalCount+=count;}
+        }
+        if(coverage>bestCoverage||(coverage==bestCoverage&&spread<bestSpread-1.0e-6f)
+            ||(coverage==bestCoverage&&std::abs(spread-bestSpread)<=1.0e-6f&&totalCount>bestCount)){
+            bestCoverage=coverage;bestSpread=spread;bestCount=totalCount;bestAnchor=anchor.height;
+        }
+    }
+    if(bestCoverage!=clouds.size()){
+        if(reason)*reason=QStringLiteral("候选主平面只能连续覆盖 %1/%2 帧，回退相邻匹配").arg(bestCoverage).arg(clouds.size());return false;
+    }
+    for(const QVector<PlanePeak> &frame:candidates){
+        float selected=bestAnchor,nearest=std::numeric_limits<float>::max();
+        for(const PlanePeak &peak:frame){const float distance=std::abs(peak.height-bestAnchor);if(distance<nearest){nearest=distance;selected=peak.height;}}
+        trackedHeights->push_back(selected);
+    }
+    *consensusHeight=bestAnchor;
+    if(reason)*reason=QStringLiteral("同一主平面连续覆盖 %1 帧，高度轨迹：%2")
+        .arg(clouds.size()).arg([&](){QStringList values;for(float value:*trackedHeights)values<<QString::number(value,'f',2);return values.join(QStringLiteral(", "));}());
+    return true;
+}
+
 void collectInitialPairDiagnostics(const QVector<Point3D> &sourceCrop,
                                    const QVector<Point3D> &targetCrop,
                                    const QVector3D &stitchAxis,
+                                   float preferredSourceHeight,
+                                   float preferredTargetHeight,
+                                   bool planeIdentityTracked,
                                    IcpDiagnostics *diagnostic,
                                    PlaneDiagnostic *sourcePlaneOutput,
                                    PlaneDiagnostic *targetPlaneOutput) {
@@ -530,8 +586,13 @@ void collectInitialPairDiagnostics(const QVector<Point3D> &sourceCrop,
     }
     const DistanceDiagnostic distances=nearestDistanceDiagnostic(sourceCrop,targetCrop);
     diagnostic->nearestDistanceP50=distances.p50;diagnostic->nearestDistanceP90=distances.p90;diagnostic->nearestDistanceP95=distances.p95;diagnostic->coverageWithin3mm=distances.within3;diagnostic->coverageWithin5mm=distances.within5;diagnostic->coverageWithin10mm=distances.within10;
-    PlaneDiagnostic sourcePlane=pcaPlane(sourceCrop);
-    PlaneDiagnostic targetPlane=sourcePlane.valid?pcaPlane(targetCrop,sourcePlane.height):pcaPlane(targetCrop);
+    PlaneDiagnostic sourcePlane=planeIdentityTracked?pcaPlane(sourceCrop,preferredSourceHeight):pcaPlane(sourceCrop);
+    PlaneDiagnostic targetPlane=planeIdentityTracked?pcaPlane(targetCrop,preferredTargetHeight)
+        :(sourcePlane.valid?pcaPlane(targetCrop,sourcePlane.height):pcaPlane(targetCrop));
+    diagnostic->planeIdentityTracked=planeIdentityTracked;
+    diagnostic->trackedSourcePlaneHeight=preferredSourceHeight;
+    diagnostic->trackedTargetPlaneHeight=preferredTargetHeight;
+    diagnostic->planeIdentityReason=planeIdentityTracked?QStringLiteral("使用跨帧一致主平面轨迹"):QStringLiteral("使用相邻帧局部主平面匹配");
     if(sourcePlane.valid&&targetPlane.valid){if(QVector3D::dotProduct(sourcePlane.normal,targetPlane.normal)<0){targetPlane.normal=-targetPlane.normal;targetPlane.offset=-targetPlane.offset;}diagnostic->planeDiagnosticValid=true;diagnostic->planeNormalAngleDegrees=qRadiansToDegrees(std::acos(qBound(-1.0f,QVector3D::dotProduct(sourcePlane.normal,targetPlane.normal),1.0f)));diagnostic->sourcePlaneHeight=sourcePlane.height;diagnostic->targetPlaneHeight=targetPlane.height;diagnostic->planeOffsetDifference=sourcePlane.height-targetPlane.height;}
     if(sourcePlaneOutput)*sourcePlaneOutput=sourcePlane;
     if(targetPlaneOutput)*targetPlaneOutput=targetPlane;
@@ -574,6 +635,9 @@ IcpDiagnostics registerPair(QVector<Point3D> *source,
                             const IcpOptions &options,
                             int sourceIndex,
                             const QVector3D &stitchAxis,
+                            float preferredSourcePlaneHeight,
+                            float preferredTargetPlaneHeight,
+                            bool planeIdentityTracked,
                             QMatrix4x4 *correction,
                             const ProgressCallback &progress) {
     IcpDiagnostics diagnostic;
@@ -595,7 +659,8 @@ IcpDiagnostics registerPair(QVector<Point3D> *source,
     const QVector<Point3D> sourceCrop=cropCloud(*source,low,high);
     const QVector<Point3D> targetCrop=cropCloud(target,low,high);
     PlaneDiagnostic sourcePlane,targetPlane;
-    collectInitialPairDiagnostics(sourceCrop,targetCrop,stitchAxis,&diagnostic,&sourcePlane,&targetPlane);
+    collectInitialPairDiagnostics(sourceCrop,targetCrop,stitchAxis,preferredSourcePlaneHeight,
+        preferredTargetPlaneHeight,planeIdentityTracked,&diagnostic,&sourcePlane,&targetPlane);
     if(sourceCrop.size()<100||targetCrop.size()<100){diagnostic.reason=QStringLiteral("重叠区抽样点少于 100");return diagnostic;}
     if(options.planePrealignmentEnabled){
         QMatrix4x4 prealignment;
@@ -903,6 +968,9 @@ WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inpu
         clouds.push_back(std::move(converted));
     }
     result.registrationCorrections.resize(inputs.size());
+    result.planeIdentityTrackingValid=trackPlaneIdentity(clouds,icp,&result.trackedPlaneHeights,
+        &result.planeIdentityConsensusHeight,&result.planeIdentityDiagnostics);
+    result.diagnostics+=QStringLiteral("Plane identity: %1\n").arg(result.planeIdentityDiagnostics);
     for(QMatrix4x4 &matrix:result.registrationCorrections)matrix.setToIdentity();
     result.registrationCorrections[0].setToIdentity();
     IcpDiagnostics reference;reference.filePath=inputs[0].filePath;reference.sourceCloudIndex=0;reference.accepted=true;reference.reason=QStringLiteral("参考点云");
@@ -935,7 +1003,9 @@ WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inpu
                                      (inputs[index-1].startBaseFromFlange(1,3)+inputs[index-1].endBaseFromFlange(1,3))*.5f,
                                      (inputs[index-1].startBaseFromFlange(2,3)+inputs[index-1].endBaseFromFlange(2,3))*.5f);
         QMatrix4x4 correction;
-        IcpDiagnostics diagnostic=registerPair(&clouds[index].sample,clouds[index-1].sample,icp,index,sourceCenter-targetCenter,&correction,
+        IcpDiagnostics diagnostic=registerPair(&clouds[index].sample,clouds[index-1].sample,icp,index,sourceCenter-targetCenter,
+            result.trackedPlaneHeights.value(index),result.trackedPlaneHeights.value(index-1),
+            result.planeIdentityTrackingValid,&correction,
             [&](float fraction,const QString &message){update(pairStart+fraction*pairSpan,message);});
         diagnostic.filePath=inputs[index].filePath;
         result.icpDiagnostics.push_back(diagnostic);

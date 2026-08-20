@@ -43,6 +43,8 @@ struct IcpOptions {
     bool planePrealignmentEnabled = true;
     float maximumPlanePrealignmentTranslation = 6.0f;
     float maximumPlanePrealignmentAngleDegrees = 0.5f;
+    bool planeIdentityTrackingEnabled = true;
+    float planeIdentityHeightToleranceMm = 5.0f;
     float maximumCorrectionTranslation = 10.0f;
     float maximumCorrectionAngleDegrees = 1.0f;
     bool structuralValidationEnabled = true;
@@ -133,6 +135,10 @@ struct IcpDiagnostics {
     float tangentCoarseY = 0.0f;
     float tangentCoarseZ = 0.0f;
     QString tangentCoarseAlignmentReason;
+    bool planeIdentityTracked = false;
+    float trackedSourcePlaneHeight = 0.0f;
+    float trackedTargetPlaneHeight = 0.0f;
+    QString planeIdentityReason;
     bool planeDiagnosticValid = false;
     float planeNormalAngleDegrees = 0.0f;
     float sourcePlaneHeight = 0.0f;
@@ -174,6 +180,10 @@ struct WorldCloudMergeResult {
     QVector<FrameTransformMetadata> frameMetadata;
     QVector<IcpDiagnostics> icpDiagnostics;
     QVector<QMatrix4x4> registrationCorrections;
+    QVector<float> trackedPlaneHeights;
+    bool planeIdentityTrackingValid = false;
+    float planeIdentityConsensusHeight = 0.0f;
+    QString planeIdentityDiagnostics;
     QVector<QVector<Point3D>> diagnosticPreIcpFrames;
     QVector<QVector<Point3D>> diagnosticPostIcpFrames;
     QVector<OverlapDiagnostic> overlapDiagnostics;
