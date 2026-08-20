@@ -1642,8 +1642,11 @@ void MainWindow::loadFinished() {
         statusBar()->showMessage(tr("加载失败：点云为空"));
         return;
     }
-    qInfo() << "PLY load finished, points=" << result.points.size()
-            << "path=" << m_pendingPath;
+    qInfo() << "PLY load baseline: path=" << m_pendingPath
+            << "points=" << result.points.size()
+            << "header_ms=" << result.headerElapsedMs
+            << "parse_ms=" << result.parseElapsedMs
+            << "reader_total_ms=" << result.totalElapsedMs;
     m_rawPoints = std::move(result.points);
     const QFileInfo fileInfo(m_pendingPath);
     const bool keepFolderSources = m_folderScanOnly && m_sourceFiles.size() > 1
@@ -1657,8 +1660,8 @@ void MainWindow::loadFinished() {
     m_mapMin->setValue(minZ);
     m_mapMax->setValue(maxZ > minZ ? maxZ : minZ + 1.0);
     publishCanvasCache(m_rawPoints);
-    qInfo() << "PLY display publication finished, main points=" << m_points.size()
-            << "raw points=" << m_rawPoints.size();
+    qInfo() << "PLY display publication baseline: main_points=" << m_points.size()
+            << "raw_points=" << m_rawPoints.size();
     if (!keepFolderSources) {
         m_sourceFiles = {m_pendingPath};
         m_sourceDirectory = fileInfo.absolutePath();

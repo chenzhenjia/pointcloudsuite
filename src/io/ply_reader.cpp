@@ -2,6 +2,7 @@
 
 #include <QFile>
 #include <QRegularExpression>
+#include <QElapsedTimer>
 #include <QtEndian>
 
 #include <algorithm>
@@ -132,6 +133,8 @@ namespace pcv::detail::io {
 
 PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
     PlyReadResult result;
+    QElapsedTimer totalTimer;
+    totalTimer.start();
     QFile file(fileName);
     if (!file.open(QIODevice::ReadOnly)) {
         result.error = file.errorString();
@@ -142,6 +145,8 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
         return result;
     }
 
+    QElapsedTimer headerTimer;
+    headerTimer.start();
     bool inVertex = false;
     bool headerEnded = false;
     bool unsupportedVertexList = false;
@@ -181,6 +186,9 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
     else if (unsupportedVertexList) result.error = QStringLiteral("暂不支持 vertex 元素中的 list 属性");
     else if (result.declaredPointCount <= 0) result.error = QStringLiteral("PLY 文件缺少有效的 vertex 定义");
     if (!result.error.isEmpty()) return result;
+    result.headerElapsedMs = headerTimer.elapsed();
+    QElapsedTimer parseTimer;
+    parseTimer.start();
 
     int indices[6] = {-1, -1, -1, -1, -1, -1};
     for (int index = 0; index < properties.size(); ++index) {
@@ -315,6 +323,8 @@ PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
         return result;
     }
     result.ok = true;
+    result.parseElapsedMs = parseTimer.elapsed();
+    result.totalElapsedMs = totalTimer.elapsed();
     return result;
 }
 

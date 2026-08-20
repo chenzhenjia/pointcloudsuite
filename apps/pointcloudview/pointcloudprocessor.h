@@ -22,6 +22,9 @@ struct LoadResult {
     Point3D minimum;
     Point3D maximum;
     bool hasBounds = false;
+    qint64 headerElapsedMs = 0;
+    qint64 parseElapsedMs = 0;
+    qint64 totalElapsedMs = 0;
 };
 
 struct NoiseOptions {

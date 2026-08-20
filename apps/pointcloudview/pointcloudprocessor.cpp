@@ -1250,6 +1250,9 @@ LoadResult loadPlyResult(const QString &fileName) {
     result.minimum = parsed.minimum;
     result.maximum = parsed.maximum;
     result.hasBounds = parsed.hasBounds;
+    result.headerElapsedMs = parsed.headerElapsedMs;
+    result.parseElapsedMs = parsed.parseElapsedMs;
+    result.totalElapsedMs = parsed.totalElapsedMs;
     result.usedCache = false;
     return result;
 }
@@ -1266,6 +1269,9 @@ LoadResult loadPlyResultWithProgress(const QString &fileName,
     result.minimum = parsed.minimum;
     result.maximum = parsed.maximum;
     result.hasBounds = parsed.hasBounds;
+    result.headerElapsedMs = parsed.headerElapsedMs;
+    result.parseElapsedMs = parsed.parseElapsedMs;
+    result.totalElapsedMs = parsed.totalElapsedMs;
     result.usedCache = false;
     return result;
 }

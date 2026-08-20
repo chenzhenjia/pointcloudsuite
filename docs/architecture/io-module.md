@@ -58,3 +58,12 @@ migrated to the public boundary.
   existing locale-independent float parser and point order are preserved.
 - If mapping is unavailable, the reader falls back to buffered line reads, so
   network files and platforms without mapping support remain compatible.
+
+## Stage-one loading baseline
+
+- `PlyReadResult` records `headerElapsedMs`, `parseElapsedMs`, and
+  `totalElapsedMs` for successful reads. These are diagnostic timings only and
+  do not change parser or UI behavior.
+- The application logs reader timings and the cache-publication boundary;
+  VBO upload timing remains a separate rendering concern. This baseline is
+  required before enabling chunked parallel parsing.

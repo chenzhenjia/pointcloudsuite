@@ -30,6 +30,9 @@ struct PlyReadResult {
     pointcloud::Point3D minimum;
     pointcloud::Point3D maximum;
     bool hasBounds = false;
+    qint64 headerElapsedMs = 0;
+    qint64 parseElapsedMs = 0;
+    qint64 totalElapsedMs = 0;
 };
 
 PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options = {});
