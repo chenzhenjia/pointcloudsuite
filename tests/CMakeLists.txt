@@ -16,11 +16,16 @@ add_executable(statistical_filter_tests unit/filtering/statistical_filter_tests.
 target_link_libraries(statistical_filter_tests PRIVATE Qt::Core pcv_filtering)
 add_test(NAME statistical_filter_tests COMMAND statistical_filter_tests)
 
+add_executable(plane_output_tests unit/output/plane_output_tests.cpp)
+target_link_libraries(plane_output_tests PRIVATE Qt::Core Qt::Gui pcv_output)
+add_test(NAME plane_output_tests COMMAND plane_output_tests)
+
 list(APPEND PCV_APPLICATION_TEST_TARGETS
     ply_reader_tests
     cloud_cache_tests
     downsample_tests
     statistical_filter_tests)
+list(APPEND PCV_APPLICATION_TEST_TARGETS plane_output_tests)
 
 if(PCV_BUILD_POINTCLOUDVIEW)
     add_executable(pointcloudprocessor_obstacle_tests

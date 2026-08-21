@@ -304,10 +304,13 @@ Picking 使用独立颜色 ID + 深度 FBO：
 
 程序当前可输出：
 
-- 平面二维 PNG；
-- 平面二维 BMP；
+- 平面二维 PNG（`Format_Grayscale8`，前景 `255`、背景 `0`）；
+- 与 PNG 成套的 binary little-endian 平面 PLY 和 JSON 元数据；
 - 用户本地应用数据 `cache/` 中的 `.pcvbin` 加载缓存；
 - 用户本地应用数据 `logs/startup.log` 启动诊断日志。
+
+PNG、PLY、JSON 由共享 `pcv_output` 契约 writer 写出，JSON 最后通过 `QSaveFile`
+原子提交；任一文件写入失败，整体输出失败。
 
 二维图片背景为纯黑色，尺寸根据平面物理范围和实际栅格自动生成。缓存和日志属于
 运行文件，不作为源码交付内容。
@@ -348,7 +351,7 @@ Picking 使用独立颜色 ID + 深度 FBO：
 - Designer 中 `lbl_subtitle`、`lbl_source_title`、`wgt_source_panel` 等 objectName
   重复，`uic` 会警告并自动重命名生成成员。
 - 千万级点云需要完整 CPU 内存和显存，资源不足时加载或 VBO 上传会失败。
-- ASCII PLY 首次加载仍慢，后台缓存写入和分块解析尚未完成。
+- ASCII PLY 首次加载仍受浮点解析、缓存写入和 VBO 上传影响；读取器已支持内存映射和自适应并行解析。
 - 平坦 2.5D 表面可能缺少 XY 方向约束，平面目标应尽量包含孔、台阶或边缘。
 - `registration_diagnostic_runner.cpp` 是未构建历史源文件，不属于主程序功能。
 - `D:/workpiece/ply` 下旧 `.pcvbin` 因外部权限 503 暂未迁移。
@@ -546,9 +549,9 @@ D:/workpiece/pointcloudview/backups/pointcloudview_20260818_obstacle_warning_cle
 - 日志新增 `boundary_scan_ms`，用于衡量边界扫描成本；该阶段失败时不会发布部分点云，
   画布仍保持旧缓存。
 
-### 2026-08-20：分块并行解析阶段三——固定双线程解析
+### 2026-08-20：分块并行解析阶段三——并行解析
 
-- 内存映射成功的 ASCII PLY 使用两个经过边界校验的 Chunk 并行解析；两个线程分别写入
+- 内存映射成功的 ASCII PLY 使用经过边界校验的 Chunk 并行解析；各 worker 分别写入
   预分配点数组的固定、不重叠区间，不使用 `append()`，保持原文件点顺序和索引。
 - 每个线程独立统计解析点数、XYZ 最小/最大值和错误；两线程全部结束后统一合并，任何
   Chunk 失败都不会发布部分点云。
@@ -571,7 +574,7 @@ D:/workpiece/pointcloudview/backups/pointcloudview_20260818_obstacle_warning_cle
   GUI 不提供线程数控件，避免用户参数破坏稳定性。映射失败的缓冲回退仍固定单线程。
 - `PlyReadResult::asciiWorkerCount` 记录本次实际线程数；测试命令扩展为
   `ply_reader_tests.exe <PLY 路径> [线程数]`，用于同一 ASCII 文件的 1/2/4 线程对照。
-- 阶段三真实 ASCII 基线采用 `Point_Cloud_A04.ply`：约 204 MB、6,300,000 点，固定双线程
+- 阶段三真实 ASCII 基线采用 `Point_Cloud_A04.ply`：约 204 MB、6,300,000 点，
   首次记录边界扫描约 174 ms、解析约 1,015 ms、读取器总耗时约 1,016 ms。
 - 阶段四同文件顺序对照结果：单线程约 1,597 ms、双线程约 953 ms、四线程约 653 ms、
   自动模式约 638 ms；自动模式选择四线程，较双线程缩短约 33%，较单线程缩短约 60%。
@@ -623,7 +626,7 @@ D:/workpiece/pointcloudview/backups/pointcloudview_20260818_obstacle_warning_cle
 ### 2026-08-20：单通道二值图像值约束
 
 - 平面提取和边缘分割输出统一为 `QImage::Format_Grayscale8` 单通道图像。
-- 工件/平面前景像素固定为灰度 `225`，非工件区域、背景和孔洞固定为 `0` 纯黑；
+- 工件/平面前景像素固定为灰度 `255`，非工件区域、背景和孔洞固定为 `0` 纯黑；
   不再输出黄色边缘或 RGB 灰阶，保证 OpenCV 读取时通道和阈值稳定。
 - 边缘分割完成后，其生成的 Mask 会同步成为当前可保存的 2D 图像，沿用 PNG/JSON
   输出接口及上述像素值约束。

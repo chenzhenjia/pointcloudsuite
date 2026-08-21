@@ -24,6 +24,7 @@ target_link_libraries(pointcloudview
         pcv_infrastructure
         pcv_io
         pcv_filtering
+        pcv_output
 )
 
 if (WIN32)

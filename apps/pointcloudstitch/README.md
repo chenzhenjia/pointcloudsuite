@@ -52,6 +52,11 @@ PLY [X,Y,Z]
 
 输出统一为 ASCII PLY（`format ascii 1.0`），正式结果没有一千万点限制；ASCII 输出便于在文本工具中检查和与现有扫描软件交换。
 
+使用任务输出参数（`--runtime-root`、`--job-id`、`--workpiece-id`、`--base-name`）
+时，回归报告和点云输出位于同一任务根目录下，路径以任务根为相对基准；报告 schema
+为 `pointcloudstitch-regression-v2`，并明确记录 `registration_applied`、
+`seam_fusion_applied`、`formal_output` 和 `PCV_STITCH_001` 失败状态。
+
 ## Qt Creator
 
 打开本目录的 `CMakeLists.txt`，选择 `Desktop Qt 6.8.3 MSVC2022 64bit` Kit。项目只有一个可运行目标 `pointcloudstitch`，点击运行即可。
@@ -88,3 +93,6 @@ PLY [X,Y,Z]
 - 扫描期间法兰姿态必须恒定。
 - Point-to-Plane ICP 是局部优化，机器人位姿或手眼矩阵初值错误时不会自动恢复。
 - 当前使用 Qt/C++ 原生空间索引和 PCA 复现 Open3D 流程；没有引入 Open3D/PCL 的二进制依赖。
+
+本 README 描述的是 `v0.1` 当前实现基线；未通过结构覆盖或修正范围验收时，程序只保留
+诊断文件，不复用旧的正式拼接结果。

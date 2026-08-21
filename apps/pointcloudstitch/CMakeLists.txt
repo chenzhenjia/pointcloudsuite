@@ -19,7 +19,7 @@ set_property(SOURCE pointcloudprocessor.cpp APPEND PROPERTY OBJECT_DEPENDS
     "${PROJECT_SOURCE_DIR}/include/pcv/io/ply_reader.h")
 
 target_link_libraries(pointcloudstitch PRIVATE
-    Qt::Core Qt::Gui Qt::Widgets Qt::Concurrent pcv_core pcv_infrastructure pcv_io pcv_filtering)
+    Qt::Core Qt::Gui Qt::Widgets Qt::Concurrent pcv_core pcv_infrastructure pcv_io pcv_filtering pcv_output)
 
 # Qt Creator detects this as the sole runnable desktop target. Keep its working
 # directory beside the executable so direct runs and deployed runs behave alike.

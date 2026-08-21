@@ -3383,13 +3383,13 @@ PlaneEdgeResult segmentPlaneEdges(const QVector<Point3D> &points,
     }
 
     result.image = QImage(gridWidth, gridHeight, QImage::Format_Grayscale8);
-    // Edge output is a single-channel mask: workpiece=225, background=0.
+    // Edge output is a single-channel mask: workpiece=255, background=0.
     result.image.fill(0);
     for (int y = 0; y < gridHeight; ++y) {
         uchar *row = result.image.scanLine(gridHeight - 1 - y);
         for (int x = 0; x < gridWidth; ++x) {
             const int cell = y * gridWidth + x;
-            if (mask[cell]) row[x] = 225;
+            if (mask[cell]) row[x] = 255;
         }
     }
     result.gridSize = gridSize;
@@ -3766,14 +3766,14 @@ PlaneImageResult extractPlaneImage(const QVector<Point3D> &points,
     result.image = baseImage;
     // The exported plane image is a data product rather than a UI preview:
     // non-workpiece pixels must remain pure black for deterministic OpenCV masks.
-    result.image.fill(qRgb(0, 0, 0));
+    result.image.fill(0);
     int occupied = 0;
     for (int y = 0; y < height; ++y) {
         uchar *row = result.image.scanLine(height - 1 - y);
         for (int x = 0; x < width; ++x) {
             if (!valid[y * width + x]) continue;
             ++occupied;
-            row[x] = 225;
+            row[x] = 255;
         }
     }
     if (imageScale > 1) {
@@ -3828,7 +3828,7 @@ PlanePlyExportResult exportPlanePly(const QString &fileName,
     header.setEncoding(QStringConverter::Utf8);
     header << "ply\nformat binary_little_endian 1.0\n"
            << "comment source_frame robot_base\n"
-           << "comment target_frame workpiece\n"
+           << "comment target_frame robot_base\n"
            << "comment source_file " << source << "\n"
            << "comment plane_equation " << model.a << " " << model.b << " "
            << model.c << " " << model.d << "\n"

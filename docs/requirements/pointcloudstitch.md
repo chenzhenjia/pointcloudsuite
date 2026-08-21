@@ -36,6 +36,10 @@
 → ASCII 正式点云、预览点云和 stitching_report.json
 ```
 
+命令行回归可额外指定 `--runtime-root`、`--job-id`、`--workpiece-id` 和
+`--base-name`，将报告及点云写入任务目录 `jobs/<job_id>/point_cloud/`；报告 schema
+为 `pointcloudstitch-regression-v2`，路径字段相对于任务根目录。
+
 手眼坐标转换是完整配准流程不可跳过的前置步骤。界面另提供“仅手眼坐标转换”模式：接受任意 `>=1` 帧，完成相同的逐点手眼坐标链后直接输出，不执行主平面预对齐、ICP、验收或接缝融合。该模式不得把未配准结果命名为 `stitched_robot_base.ply`。
 
 当前明确不包含：FPFH/SAC-IA、PCL/Open3D 运行时依赖、自动改变手眼矩阵方向、超过实际覆盖范围的虚拟补面、正式结果点数上限和输出降采样。
@@ -130,7 +134,7 @@
 - 正式点云不进行点数封顶或输出降采样；预览允许独立确定性抽样。
 - GUI 实时显示读取、转换、各相邻帧配准、三层 ICP、接缝、写文件和报告进度。
 - `stitching_report.json` 记录实际体素、对应距离、抽样步长、重叠边距、安全范围、每层指标和最终修正。
-- `--regression` 在指定路径生成 `pointcloudstitch-regression-v1` JSON，不写正式合并 PLY，适用于参数和算法回归。
+- `--regression` 在指定路径生成 `pointcloudstitch-regression-v2` JSON，记录处理、接缝和正式输出状态，适用于参数和算法回归。
 - GUI 和回归报告必须明确记录 `registration_applied`、`seam_fusion_applied`、`formal_output`；未通过验收时只能生成诊断文件，不得使用正式拼接文件名。
 - 配准模式分别输出每帧 ICP 前后确定性抽样诊断 PLY，便于逐帧对比机器人初值和实际修正；诊断点云不替代全分辨率正式输出。
 - 接缝报告记录 `projected_range_a/b`、`actual_overlap_interval`、`seam_projection`、两侧带点数及是否实际应用裁剪。

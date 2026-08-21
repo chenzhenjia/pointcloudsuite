@@ -77,14 +77,14 @@ migrated to the public boundary.
   sum equals the Header vertex count. The current parser still consumes chunks
   serially; parallel numeric parsing is deferred until the next stage.
 
-## Stage-three two-thread parsing
+## Stage-three parallel parsing
 
-- Mapped ASCII vertex payloads are split into two verified chunks and parsed
+- Mapped ASCII vertex payloads are split into verified chunks and parsed
   concurrently. Each worker writes only to its fixed, non-overlapping range in
   the preallocated point array and maintains private bounds/error state.
 - The first boundary scan stops after the declared vertex line count, so later
   ASCII face or other element payloads are not mistaken for vertices.
-- Results are published only after both workers join and their point counts and
+- Results are published only after all workers join and their point counts and
   bounds are merged. Mapping failure retains the serial buffered fallback.
 - A worker-specific parse or cancellation error is preserved through the final
   point-count validation instead of being replaced by a generic incomplete-data

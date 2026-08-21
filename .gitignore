@@ -99,3 +99,4 @@ compile_commands.json
 **/logs/
 **/exports/
 /sdk-install*/
+/test_pointcloud_a/

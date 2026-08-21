@@ -288,16 +288,39 @@ int runRegression(const QStringList &arguments)
     const QCommandLineOption calibrationOption(QStringLiteral("calibration"), QStringLiteral("Eye-in-Hand XML"), QStringLiteral("path"));
     const QCommandLineOption reportOption(QStringLiteral("report"), QStringLiteral("输出 JSON 报告"), QStringLiteral("path"));
     const QCommandLineOption outputOption(QStringLiteral("output-dir"), QStringLiteral("转换模式输出 PLY 目录"), QStringLiteral("path"));
+    const QCommandLineOption runtimeRootOption(QStringLiteral("runtime-root"), QStringLiteral("任务运行根目录"), QStringLiteral("path"));
+    const QCommandLineOption jobIdOption(QStringLiteral("job-id"), QStringLiteral("任务 ID"), QStringLiteral("id"));
+    const QCommandLineOption workpieceIdOption(QStringLiteral("workpiece-id"), QStringLiteral("工件 ID"), QStringLiteral("id"));
+    const QCommandLineOption baseNameOption(QStringLiteral("base-name"), QStringLiteral("输出基名"), QStringLiteral("name"));
     const QCommandLineOption voxelOption(QStringLiteral("voxel-levels"), QStringLiteral("三个体素层级"), QStringLiteral("values"), QStringLiteral("1 0.5 0.2"));
     const QCommandLineOption distanceOption(QStringLiteral("correspondence-distances"), QStringLiteral("三个对应距离"), QStringLiteral("values"), QStringLiteral("3 1.5 0.6"));
     const QCommandLineOption transformOnlyOption(QStringLiteral("transform-only"), QStringLiteral("仅执行手眼坐标转换，跳过预对齐和 ICP"));
-    parser.addOptions({regressionOption, inputOption, poseOption, calibrationOption, reportOption, outputOption, voxelOption, distanceOption, transformOnlyOption});
+    parser.addOptions({regressionOption, inputOption, poseOption, calibrationOption, reportOption, outputOption,
+                       runtimeRootOption, jobIdOption, workpieceIdOption, baseNameOption,
+                       voxelOption, distanceOption, transformOnlyOption});
     parser.process(arguments);
     const QString inputDirectory = parser.value(inputOption);
     const QString posePath = parser.value(poseOption);
     const QString calibrationPath = parser.value(calibrationOption);
-    const QString reportPath = parser.value(reportOption);
-    const QString outputDirectory = parser.value(outputOption);
+    QString reportPath = parser.value(reportOption);
+    QString outputDirectory = parser.value(outputOption);
+    const QString runtimeRoot = parser.value(runtimeRootOption);
+    const QString jobId = parser.value(jobIdOption);
+    const QString workpieceId = parser.value(workpieceIdOption);
+    const QString baseName = parser.value(baseNameOption);
+    const bool taskOutput = parser.isSet(runtimeRootOption) || parser.isSet(jobIdOption)
+        || parser.isSet(workpieceIdOption) || parser.isSet(baseNameOption);
+    if (taskOutput && (runtimeRoot.trimmed().isEmpty() || jobId.trimmed().isEmpty()
+        || workpieceId.trimmed().isEmpty() || baseName.trimmed().isEmpty()
+        || jobId.contains(QStringLiteral("..")) || workpieceId.contains(QStringLiteral(".."))
+        || baseName.contains(QStringLiteral("..")) || baseName.contains(QLatin1Char('/'))
+        || baseName.contains(QLatin1Char('\\')))) return 2;
+    const QString taskJobRoot = taskOutput
+        ? QDir(runtimeRoot).filePath(QStringLiteral("jobs/%1").arg(jobId)) : QString();
+    if (taskOutput) {
+        outputDirectory = QDir(taskJobRoot).filePath(QStringLiteral("point_cloud/stitched"));
+        reportPath = QDir(taskJobRoot).filePath(QStringLiteral("point_cloud/reports/%1_stitching_report.json").arg(baseName));
+    }
     if (inputDirectory.isEmpty() || posePath.isEmpty() || calibrationPath.isEmpty() || reportPath.isEmpty()) return 2;
 
     QString error;
@@ -340,7 +363,7 @@ int runRegression(const QStringList &arguments)
             allAccepted = allAccepted && result.icpDiagnostics[index].accepted;
 
     QJsonObject root;
-    root.insert(QStringLiteral("schema"), QStringLiteral("pointcloudstitch-regression-v1"));
+    root.insert(QStringLiteral("schema"), QStringLiteral("pointcloudstitch-regression-v2"));
     root.insert(QStringLiteral("generated_at"), QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
     root.insert(QStringLiteral("success"), allAccepted);
     root.insert(QStringLiteral("processing_mode"), options.enabled
@@ -348,13 +371,24 @@ int runRegression(const QStringList &arguments)
         :QStringLiteral("hand_eye_transform_only"));
     root.insert(QStringLiteral("registration_applied"), options.enabled&&allAccepted);
     root.insert(QStringLiteral("seam_fusion_applied"), false);
-    root.insert(QStringLiteral("formal_output"), false);
+    root.insert(QStringLiteral("formal_output"), allAccepted);
+    root.insert(QStringLiteral("job_id"), taskOutput ? jobId : QString());
+    root.insert(QStringLiteral("workpiece_id"), taskOutput ? workpieceId : QString());
+    root.insert(QStringLiteral("units"), QJsonObject{{QStringLiteral("length"), QStringLiteral("mm")},
+                                                       {QStringLiteral("angle"), QStringLiteral("deg")}});
+    root.insert(QStringLiteral("coordinate_frames"), QJsonObject{{QStringLiteral("input"), QStringLiteral("robot_base")},
+                                                                    {QStringLiteral("output"), QStringLiteral("robot_base")},
+                                                                    {QStringLiteral("transform"), QStringLiteral("T_base_depth = T_base_flange * T_flange_depth")}});
+    root.insert(QStringLiteral("ply_encoding"), QStringLiteral("ascii"));
+    root.insert(QStringLiteral("error_code"), allAccepted ? QString() : QStringLiteral("PCV_STITCH_001"));
     root.insert(QStringLiteral("error"), result.error);
     root.insert(QStringLiteral("diagnostics"), result.diagnostics);
     root.insert(QStringLiteral("input_directory"), QDir::toNativeSeparators(directory.absolutePath()));
     root.insert(QStringLiteral("pose_info"), QDir::toNativeSeparators(QFileInfo(posePath).absoluteFilePath()));
     root.insert(QStringLiteral("calibration"), QDir::toNativeSeparators(QFileInfo(calibrationPath).absoluteFilePath()));
-    if (!outputDirectory.isEmpty()) root.insert(QStringLiteral("output_directory"), QDir::toNativeSeparators(QFileInfo(outputDirectory).absoluteFilePath()));
+    if (!outputDirectory.isEmpty()) root.insert(QStringLiteral("output_directory"), taskOutput
+        ? QDir(taskJobRoot).relativeFilePath(QFileInfo(outputDirectory).absoluteFilePath()).replace('\\', '/')
+        : QDir::toNativeSeparators(QFileInfo(outputDirectory).absoluteFilePath()));
     QJsonArray inputArray;
     for (int index = 0; index < inputs.size(); ++index) {
         QJsonObject input;
@@ -431,25 +465,45 @@ int runRegression(const QStringList &arguments)
                 const QString postPath=output.filePath(QStringLiteral("diagnostic_post_icp_frame_%1.ply").arg(index+1,2,10,QChar('0')));
                 if(!writeAsciiPly(prePath,result.diagnosticPreIcpFrames[index],&outputError)
                     ||!writeAsciiPly(postPath,result.diagnosticPostIcpFrames.value(index),&outputError))return 3;
-                preFiles.append(QDir::toNativeSeparators(prePath));postFiles.append(QDir::toNativeSeparators(postPath));
+                const auto outputReference = [taskOutput, &taskJobRoot](const QString &path) {
+                    return taskOutput ? QDir(taskJobRoot).relativeFilePath(path).replace('\\', '/')
+                                       : QDir::toNativeSeparators(path);
+                };
+                preFiles.append(outputReference(prePath));postFiles.append(outputReference(postPath));
             }
         }
         root.insert(QStringLiteral("diagnostic_pre_icp_frame_files"),preFiles);
         root.insert(QStringLiteral("diagnostic_post_icp_frame_files"),postFiles);
         if(allAccepted&&!result.points.isEmpty()){
-            const QString mergedPath = output.filePath(options.enabled
-                ? QStringLiteral("regression_registered_robot_base.ply")
-                : QStringLiteral("transformed_robot_base.ply"));
+            const QString mergedName = taskOutput
+                ? QStringLiteral("%1_robot_base.ply").arg(baseName)
+                : (options.enabled ? QStringLiteral("regression_registered_robot_base.ply")
+                                   : QStringLiteral("transformed_robot_base.ply"));
+            const QString mergedPath = output.filePath(mergedName);
             if (!writeAsciiPly(mergedPath, result.points, &outputError)) return 3;
             QVector<pointcloud::Point3D> preview;
             preview.reserve((result.points.size() + 15) / 16);
             for (int index = 0; index < result.points.size(); index += 16)preview.push_back(result.points.at(index));
-            const QString previewPath = output.filePath(options.enabled
-                ? QStringLiteral("regression_registered_robot_base_preview.ply")
-                : QStringLiteral("transformed_robot_base_preview.ply"));
+            const QString previewName = taskOutput
+                ? QStringLiteral("%1_robot_base_preview.ply").arg(baseName)
+                : (options.enabled ? QStringLiteral("regression_registered_robot_base_preview.ply")
+                                   : QStringLiteral("transformed_robot_base_preview.ply"));
+            const QString previewPath = output.filePath(previewName);
             if (!writeAsciiPly(previewPath, preview, &outputError)) return 3;
-            root.insert(QStringLiteral("diagnostic_registered_output"), QDir::toNativeSeparators(mergedPath));
-            root.insert(QStringLiteral("diagnostic_registered_preview"), QDir::toNativeSeparators(previewPath));
+            const QString mergedReference = taskOutput
+                ? QDir(taskJobRoot).relativeFilePath(mergedPath).replace('\\', '/')
+                : QDir::toNativeSeparators(mergedPath);
+            const QString previewReference = taskOutput
+                ? QDir(taskJobRoot).relativeFilePath(previewPath).replace('\\', '/')
+                : QDir::toNativeSeparators(previewPath);
+            root.insert(QStringLiteral("diagnostic_registered_output"), mergedReference);
+            root.insert(QStringLiteral("diagnostic_registered_preview"), previewReference);
+            root.insert(QStringLiteral("outputs"), QJsonObject{
+                {QStringLiteral("stitched_ply"), mergedReference},
+                {QStringLiteral("preview_ply"), previewReference},
+                {QStringLiteral("report_json"), taskOutput
+                    ? QDir(taskJobRoot).relativeFilePath(reportPath).replace('\\', '/')
+                    : QDir::toNativeSeparators(reportPath)}});
         }
     }
 

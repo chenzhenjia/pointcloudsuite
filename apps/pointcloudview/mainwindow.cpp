@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
+#include <pcv/output/plane_output.h>
 
 #include <QAction>
 #include <QApplication>
@@ -2734,203 +2735,52 @@ void MainWindow::savePlaneImage() {
     }
     const QString path = QFileDialog::getSaveFileName(
         this, tr("保存平面 2D 图片"), QStringLiteral("plane_2d.png"),
-        tr("PNG 图片 (*.png);;BMP 图片 (*.bmp)"));
+        tr("PNG 图片 (*.png)"));
     if (path.isEmpty()) return;
-    if (!image.save(path, "PNG")) {
-        QMessageBox::warning(this, tr("保存失败"), tr("无法写入图片：%1").arg(path));
-        statusBar()->showMessage(tr("2D 图片保存失败"));
+    // Keep the contract writer's atomic PNG/PLY/JSON output, while honoring
+    // the directory selected in the save dialog.
+    {
+        const QString baseName = QFileInfo(path).completeBaseName();
+        pcv::output::JobContext context{
+            pcv::output::defaultRuntimeRoot(),
+            QStringLiteral("job_%1").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_hhmmss_zzz"))),
+            baseName, baseName};
+        context.destinationDirectory = QFileInfo(path).absolutePath();
+        pcv::output::PlaneOutputMetadata metadata;
+        metadata.sourcePointCloud = QFileInfo(m_pendingPath).fileName();
+        metadata.sourcePlyEncoding = QStringLiteral("ascii_or_binary");
+        metadata.originInRobotBase = m_workpieceCoordinate.originInRobotBase;
+        metadata.axisXInRobotBase = m_workpieceCoordinate.axisXInRobotBase;
+        metadata.axisYInRobotBase = m_workpieceCoordinate.axisYInRobotBase;
+        metadata.axisZInRobotBase = m_workpieceCoordinate.axisZInRobotBase;
+        metadata.abcDeg = QVector3D(m_workpieceCoordinate.poseA, m_workpieceCoordinate.poseB,
+                                    m_workpieceCoordinate.poseC);
+        metadata.TBaseWorkpiece = m_workpieceCoordinate.workpieceToRobotBase;
+        metadata.TWorkpieceBase = m_workpieceCoordinate.robotBaseToWorkpiece;
+        metadata.planeEquation = QVector4D(m_threePlaneResult.model.a, m_threePlaneResult.model.b,
+                                           m_threePlaneResult.model.c, m_threePlaneResult.model.d);
+        metadata.rmsErrorMm = m_threePlaneResult.rmsError;
+        metadata.diagnostics = QJsonObject{
+            {QStringLiteral("plane_point_count"), m_threePlaneResult.planeIndices.size()},
+            {QStringLiteral("mapped_plane_point_count"), m_planeImageResult.mappedPlanePointCount},
+            {QStringLiteral("rejected_non_plane_point_count"), m_planeImageResult.rejectedNonPlanePointCount},
+            {QStringLiteral("rejected_invalid_point_count"), m_planeImageResult.rejectedInvalidPointCount}};
+        const auto output = pcv::output::writePlaneOutput(
+            context, image, m_points, m_threePlaneResult.planeIndices, metadata);
+        if (!output.success) {
+            QMessageBox::warning(this, tr("平面输出失败"),
+                                 output.errorCode + QStringLiteral(": ") + output.message);
+            statusBar()->showMessage(tr("平面输出失败"));
+        } else {
+            const QDir outputDirectory(context.destinationDirectory);
+            statusBar()->showMessage(
+                tr("平面 PNG、PLY、JSON 已成套保存：\n%1\n%2\n%3")
+                    .arg(outputDirectory.filePath(output.planePng),
+                         outputDirectory.filePath(output.planeRobotBasePly),
+                         outputDirectory.filePath(output.planeJson)));
+        }
         return;
     }
-    const QString planePlyPath = QFileInfo(path).path() + QLatin1Char('/')
-        + QFileInfo(path).completeBaseName() + QStringLiteral("_plane_robot_base.ply");
-    const pointcloud::PlanePlyExportResult planePly = pointcloud::exportPlanePly(
-        planePlyPath, m_points, m_threePlaneResult.planeIndices,
-        m_threePlaneResult.model, m_workpieceCoordinate, m_pendingPath);
-    if (!planePly.ok) {
-        QMessageBox::warning(this, tr("平面 PLY 保存失败"), planePly.error);
-        statusBar()->showMessage(tr("PNG 已保存，但平面 PLY 导出失败"));
-        return;
-    }
-    const QString jsonPath = QFileInfo(path).path() + QLatin1Char('/')
-        + QFileInfo(path).completeBaseName() + QStringLiteral(".json");
-    QJsonObject root;
-    root[QStringLiteral("schema_version")] = QStringLiteral("1.0.0");
-    root[QStringLiteral("task_id")] = QStringLiteral("task_%1")
-        .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_hhmmss_zzz")));
-    QJsonObject source;
-    source[QStringLiteral("pointcloud_file")] = QFileInfo(m_pendingPath).fileName();
-    source[QStringLiteral("pointcloud_format")] = QStringLiteral("PLY");
-    source[QStringLiteral("ply_encoding")] = QStringLiteral("ascii_or_binary");
-    source[QStringLiteral("coordinate_frame")] = QStringLiteral("robot_base");
-    root[QStringLiteral("source")] = source;
-    root[QStringLiteral("units")] = QJsonObject{{QStringLiteral("length"), QStringLiteral("mm")},
-                                                 {QStringLiteral("angle"), QStringLiteral("deg")}};
-
-    QJsonArray selectedPoints;
-    for (int i = 0; i < m_selectedPointIndices.size(); ++i) {
-        const int index = m_selectedPointIndices[i];
-        if (index < 0 || index >= m_points.size()) continue;
-        const auto &p = m_points[index];
-        selectedPoints.append(QJsonObject{{QStringLiteral("id"), QStringLiteral("P%1").arg(i + 1)},
-                                          {QStringLiteral("sequence"), i + 1},
-                                          {QStringLiteral("x"), p.x},
-                                          {QStringLiteral("y"), p.y},
-                                          {QStringLiteral("z"), p.z}});
-    }
-    root[QStringLiteral("plane_selection")] = QJsonObject{
-        {QStringLiteral("selected_point_count"), selectedPoints.size()},
-        {QStringLiteral("selected_points_in_robot_base"), selectedPoints}};
-    QJsonArray secondPoints;
-    for (int i = 0; i < m_secondPlanePointIndices.size(); ++i) {
-        const int index = m_secondPlanePointIndices[i];
-        if (index < 0 || index >= m_points.size()) continue;
-        const auto &p = m_points[index];
-        secondPoints.append(QJsonObject{{QStringLiteral("id"), QStringLiteral("Q%1").arg(i + 1)},
-                                        {QStringLiteral("sequence"), i + 1},
-                                        {QStringLiteral("x"), p.x},
-                                        {QStringLiteral("y"), p.y},
-                                        {QStringLiteral("z"), p.z}});
-    }
-    root[QStringLiteral("second_plane_validation")] = QJsonObject{
-        {QStringLiteral("selected_point_count"), secondPoints.size()},
-        {QStringLiteral("selected_points_in_robot_base"), secondPoints},
-        {QStringLiteral("validated"), m_secondPlaneValidated},
-        {QStringLiteral("same_plane"), m_secondPlaneSamePlane},
-        {QStringLiteral("normal_angle_deg"), m_secondPlaneNormalAngle},
-        {QStringLiteral("maximum_distance_mm"), m_secondPlaneMaximumDistance},
-        {QStringLiteral("normal_angle_tolerance_deg"), 3.0},
-        {QStringLiteral("distance_tolerance_mm"), 0.4}};
-
-    QJsonObject pose{{QStringLiteral("x"), m_workpieceCoordinate.originInRobotBase.x()},
-                     {QStringLiteral("y"), m_workpieceCoordinate.originInRobotBase.y()},
-                     {QStringLiteral("z"), m_workpieceCoordinate.originInRobotBase.z()},
-                     {QStringLiteral("a"), m_workpieceCoordinate.poseA},
-                     {QStringLiteral("b"), m_workpieceCoordinate.poseB},
-                     {QStringLiteral("c"), m_workpieceCoordinate.poseC}};
-    auto vectorJson = [](const QVector3D &v) {
-        return QJsonArray{v.x(), v.y(), v.z()};
-    };
-    QJsonArray transform;
-    QJsonArray inverseTransform;
-    for (int row = 0; row < 4; ++row) {
-        QJsonArray values;
-        QJsonArray inverseValues;
-        for (int col = 0; col < 4; ++col)
-            values.append(m_workpieceCoordinate.workpieceToRobotBase(row, col));
-        for (int col = 0; col < 4; ++col)
-            inverseValues.append(m_workpieceCoordinate.robotBaseToWorkpiece(row, col));
-        transform.append(values);
-        inverseTransform.append(inverseValues);
-    }
-    root[QStringLiteral("workpiece_coordinate")] = QJsonObject{
-        {QStringLiteral("origin_in_robot_base"), QJsonObject{{QStringLiteral("x"), m_workpieceCoordinate.originInRobotBase.x()},
-                                                              {QStringLiteral("y"), m_workpieceCoordinate.originInRobotBase.y()},
-                                                              {QStringLiteral("z"), m_workpieceCoordinate.originInRobotBase.z()}}},
-        {QStringLiteral("pose_in_robot_base"), pose},
-        {QStringLiteral("axes_in_robot_base"), QJsonObject{{QStringLiteral("x"), vectorJson(m_workpieceCoordinate.axisXInRobotBase)},
-                                                            {QStringLiteral("y"), vectorJson(m_workpieceCoordinate.axisYInRobotBase)},
-                                                            {QStringLiteral("z"), vectorJson(m_workpieceCoordinate.axisZInRobotBase)}}},
-        {QStringLiteral("workpiece_to_robot_base_matrix_4x4"), transform},
-        {QStringLiteral("robot_base_to_workpiece_matrix_4x4"), inverseTransform},
-        {QStringLiteral("origin_definition"), QStringLiteral("confirmed_plane_bounding_box_center")},
-        {QStringLiteral("workpiece_center_in_workpiece"), QJsonObject{
-            {QStringLiteral("x"), 0.0}, {QStringLiteral("y"), 0.0},
-            {QStringLiteral("z"), 0.0}, {QStringLiteral("a"), 0.0},
-            {QStringLiteral("b"), 0.0}, {QStringLiteral("c"), 0.0}}},
-        {QStringLiteral("workpiece_center_in_robot_base"), pose},
-        {QStringLiteral("euler_convention"), QStringLiteral("Rz(C) * Ry(B) * Rx(A)")}};
-
-    const double physicalWidth = m_planeImageResult.width > 0.0f
-        ? m_planeImageResult.width : (m_planeImageWidth ? m_planeImageWidth->value() : image.width());
-    const double physicalHeight = m_planeImageResult.height > 0.0f
-        ? m_planeImageResult.height : (m_planeImageHeight ? m_planeImageHeight->value() : image.height());
-    const double originU = physicalWidth * 0.5;
-    const double originV = physicalHeight * 0.5;
-    root[QStringLiteral("image")] = QJsonObject{
-        {QStringLiteral("file_name"), QFileInfo(path).fileName()},
-        {QStringLiteral("format"), QStringLiteral("PNG")},
-        {QStringLiteral("width_pixels"), image.width()},
-        {QStringLiteral("height_pixels"), image.height()},
-        {QStringLiteral("channels"), 1},
-        {QStringLiteral("bit_depth"), 8},
-        {QStringLiteral("image_type"), QStringLiteral("binary_mask")},
-        {QStringLiteral("background_value"), 0},
-        {QStringLiteral("foreground_value"), 225},
-        {QStringLiteral("physical_width_mm"), physicalWidth},
-        {QStringLiteral("physical_height_mm"), physicalHeight},
-        {QStringLiteral("pixel_size_mm"), m_planeImageResult.pixelSize > 0.0f
-             ? m_planeImageResult.pixelSize : 0.05},
-        {QStringLiteral("pixels_per_mm"), m_planeImageResult.pixelSize > 0.0f
-             ? 1.0 / m_planeImageResult.pixelSize : 20.0},
-        {QStringLiteral("automatic_bounds"), m_planeImageResult.automaticBounds},
-        {QStringLiteral("margin_mm"), m_planeImageResult.margin},
-        {QStringLiteral("round_increment_mm"), m_planeImageResult.automaticBounds ? 10.0 : 0.0}};
-    root[QStringLiteral("image_region")] = QJsonObject{
-        {QStringLiteral("coordinate_frame"), QStringLiteral("workpiece")},
-        {QStringLiteral("plane"), QStringLiteral("XY")},
-        {QStringLiteral("bounds_mm"), QJsonObject{{QStringLiteral("min_x"), -physicalWidth * 0.5},
-                                                   {QStringLiteral("max_x"), physicalWidth * 0.5},
-                                                   {QStringLiteral("min_y"), -physicalHeight * 0.5},
-                                                   {QStringLiteral("max_y"), physicalHeight * 0.5}}}};
-    const pointcloud::PlaneImageResult *mappingResult =
-        m_planeImageResult.ok ? &m_planeImageResult : nullptr;
-    QJsonObject mapping{
-        {QStringLiteral("source_frame"), QStringLiteral("robot_base")},
-        {QStringLiteral("target_frame"), QStringLiteral("workpiece")},
-        {QStringLiteral("formula"), QStringLiteral("P_workpiece = R_base_workpiece^T * (P_base - O_base)")},
-        {QStringLiteral("plane_distance_tolerance_mm"),
-         mappingResult ? mappingResult->usedPlaneDistanceTolerance : 0.0},
-        {QStringLiteral("mapped_plane_point_count"),
-         mappingResult ? mappingResult->mappedPlanePointCount : 0},
-        {QStringLiteral("rejected_non_plane_point_count"),
-         mappingResult ? mappingResult->rejectedNonPlanePointCount : 0},
-        {QStringLiteral("rejected_invalid_point_count"),
-         mappingResult ? mappingResult->rejectedInvalidPointCount : 0},
-        {QStringLiteral("rejected_outside_rectangle_count"),
-         mappingResult ? mappingResult->rejectedOutsideRectangleCount : 0},
-        {QStringLiteral("used_workpiece_frame"),
-         mappingResult ? mappingResult->usedWorkpieceFrame : false}};
-    if (mappingResult) {
-        mapping[QStringLiteral("workpiece_bounds_mm")] = QJsonObject{
-            {QStringLiteral("min"), vectorJson(mappingResult->workpieceMinimum)},
-            {QStringLiteral("max"), vectorJson(mappingResult->workpieceMaximum)}};
-    }
-    root[QStringLiteral("mapping")] = mapping;
-    root[QStringLiteral("pixel_coordinate")] = QJsonObject{
-        {QStringLiteral("origin"), QStringLiteral("top_left")},
-        {QStringLiteral("u_positive_direction"), QStringLiteral("workpiece_x_positive")},
-        {QStringLiteral("v_positive_direction"), QStringLiteral("workpiece_y_negative")},
-        {QStringLiteral("index_base"), 0},
-        {QStringLiteral("workpiece_origin_pixel"), QJsonObject{{QStringLiteral("u"), originU * image.width() / physicalWidth},
-                                                               {QStringLiteral("v"), originV * image.height() / physicalHeight},
-                                                               {QStringLiteral("value_type"), QStringLiteral("continuous_pixel")}}}};
-    root[QStringLiteral("hand_eye_calibration")] = QJsonObject{
-        {QStringLiteral("available"), false},
-        {QStringLiteral("source_frame"), QStringLiteral("camera")},
-        {QStringLiteral("target_frame"), QStringLiteral("robot_base")},
-        {QStringLiteral("note"), QStringLiteral("当前界面加载的是已处于机器人基坐标系的显示缓存，未在本次图像导出中重新执行手眼转换")}};
-    root[QStringLiteral("output")] = QJsonObject{
-        {QStringLiteral("png_file"), QFileInfo(path).fileName()},
-        {QStringLiteral("plane_ply_file"), QFileInfo(planePlyPath).fileName()},
-        {QStringLiteral("plane_ply_point_count"), static_cast<qint64>(planePly.exportedPointCount)},
-        {QStringLiteral("json_file"), QFileInfo(jsonPath).fileName()},
-        {QStringLiteral("generated_at"), QDateTime::currentDateTime().toString(Qt::ISODate)},
-        {QStringLiteral("png_write_success"), true},
-        {QStringLiteral("plane_ply_write_success"), true},
-        {QStringLiteral("json_write_success"), true},
-        {QStringLiteral("pair_complete"), true}};
-    QFile jsonFile(jsonPath);
-    if (!jsonFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QMessageBox::warning(this, tr("JSON 保存失败"), tr("PNG 已保存，但无法创建同名 JSON：%1").arg(jsonFile.errorString()));
-        return;
-    }
-    const QByteArray jsonBytes = QJsonDocument(root).toJson(QJsonDocument::Indented);
-    if (jsonFile.write(jsonBytes) != jsonBytes.size() || !jsonFile.flush()) {
-        QMessageBox::warning(this, tr("JSON 保存失败"), tr("PNG 已保存，但同名 JSON 写入不完整。"));
-        return;
-    }
-    jsonFile.close();
-    statusBar()->showMessage(tr("PNG 与同名 JSON 已成对保存：%1").arg(path));
 }
 
 void MainWindow::applyNoiseRemoval() {
