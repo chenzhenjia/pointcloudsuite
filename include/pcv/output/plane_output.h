@@ -49,6 +49,13 @@ struct PlaneOutputMetadata {
     QVector4D planeEquation{0.0f, 0.0f, 1.0f, 0.0f};
     double rmsErrorMm = 0.0;
     double distanceToleranceMm = 0.4;
+    double physicalWidthMm = 0.0;
+    double physicalHeightMm = 0.0;
+    double pixelSizeMm = 0.05;
+    double marginMm = 0.0;
+    double roundIncrementMm = 10.0;
+    bool automaticBounds = false;
+    bool edgeMask = false;
     QJsonObject diagnostics;
 };
 

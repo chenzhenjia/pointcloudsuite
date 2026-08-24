@@ -242,6 +242,16 @@ struct PlaneEdgeResult {
     QVector<int> edgeIndices;
     QVector<PlaneContour> contours;
     QImage image;
+    // Physical raster frame used to generate image. Image row 0 is the
+    // maximum-V side; callers flip the row when mapping UV to top-left image.
+    QVector3D origin;
+    QVector3D axisU;
+    QVector3D axisV;
+    float minimumU = 0.0f;
+    float minimumV = 0.0f;
+    int gridWidth = 0;
+    int gridHeight = 0;
+    QString imageDirection = QStringLiteral("u_positive_right_v_positive_up");
     float gridSize = 0.0f;
     float width = 0.0f;
     float height = 0.0f;
@@ -269,6 +279,7 @@ struct PlaneImageResult {
     float margin = 0.0f;
     float rawWidth = 0.0f;
     float rawHeight = 0.0f;
+    bool edgeMask = false;
     QString error;
     bool ok = false;
 };
@@ -361,6 +372,11 @@ PlaneEdgeResult segmentPlaneEdges(const QVector<Point3D>&, const QVector<int>&,
 // and can be passed to a later, independent edge-processing stage.
 PlaneImageResult extractPlaneImage(const QVector<Point3D>&, const QVector<int>&,
                                    const PlaneModel&, const PlaneEdgeOptions& = {});
+PlaneImageResult rasterizePlaneEdgeMask(const QVector<Point3D>&,
+                                        const QVector<int>&,
+                                        const PlaneModel&,
+                                        const PlaneEdgeOptions&,
+                                        const PlaneEdgeResult&);
 PlanePlyExportResult exportPlanePly(const QString &fileName,
                                     const QVector<Point3D> &points,
                                     const QVector<int> &planeIndices,

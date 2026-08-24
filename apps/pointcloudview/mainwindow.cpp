@@ -1860,9 +1860,35 @@ void MainWindow::updatePlaneEdgeUi() {
         m_extractPlaneImageButton->setEnabled(!running && !imageRunning
                                                && planeReady);
     if (m_savePlaneImageButton)
-        m_savePlaneImageButton->setEnabled(!running && !imageRunning
-                                           && m_planeImageResult.ok
-                                           && !m_planeImageResult.image.isNull());
+        m_savePlaneImageButton->setEnabled(planeImageSaveReady());
+}
+
+bool MainWindow::planeImageSaveReady(QString *error) const {
+    auto fail = [error](const QString &message) {
+        if (error) *error = message;
+        return false;
+    };
+    if (pointTaskRunning()) return fail(QStringLiteral("边缘分割或平面图像任务仍在运行，请稍候"));
+    if (!m_planeImageResult.ok) return fail(QStringLiteral("当前没有有效的平面 2D 图像"));
+    if (m_planeImageResult.image.isNull() || m_planeImageResult.image.width() <= 0
+        || m_planeImageResult.image.height() <= 0)
+        return fail(QStringLiteral("平面 2D 图像为空或尺寸无效"));
+    if (m_planeImageResult.image.format() != QImage::Format_Grayscale8)
+        return fail(QStringLiteral("平面 2D 图像必须是 Grayscale8 单通道格式"));
+    if (!m_threePlaneResult.ok) return fail(QStringLiteral("当前没有有效的拟合平面"));
+    if (m_threePlaneResult.planeIndices.isEmpty())
+        return fail(QStringLiteral("当前平面没有可保存的点索引"));
+    if (!m_workpieceCoordinate.valid)
+        return fail(QStringLiteral("请先确定有效的工件坐标系"));
+    if (m_planeImageInputRevision != m_canvasRevision)
+        return fail(QStringLiteral("当前图像对应的画布版本已失效，请重新提取"));
+    if (m_planeImageCoordinateRevision != m_coordinateFrameRevision)
+        return fail(QStringLiteral("当前图像对应的工件坐标系版本已失效，请重新提取"));
+    for (int index : m_threePlaneResult.planeIndices) {
+        if (index < 0 || index >= m_points.size())
+            return fail(QStringLiteral("当前平面索引已超出画布点云范围，请重新提取"));
+    }
+    return true;
 }
 
 void MainWindow::clearPlaneEdgeUi() {
@@ -1924,6 +1950,9 @@ void MainWindow::planeImageExtractionFinished() {
     const pointcloud::PlaneImageResult result = m_planeImageWatcher->result();
     if (m_planeImageInputRevision != m_canvasRevision
         || m_planeImageCoordinateRevision != m_coordinateFrameRevision) {
+        m_planeImageResult = {};
+        m_planeImagePreview->setPixmap({});
+        m_planeImagePreview->setText(tr("画布或工件坐标系已变化，请重新生成平面图像"));
         m_edgeOutput->setPlainText(tr("画布缓存已变化，旧平面图像已丢弃。"));
         updatePlaneEdgeUi();
         return;
@@ -2406,16 +2435,12 @@ void MainWindow::planeEdgeSegmentationFinished() {
             .arg(result.gridSize, 0, 'g', 6)
             .arg(result.image.width()).arg(result.image.height())
             .arg(result.width, 0, 'g', 7).arg(result.height, 0, 'g', 7));
-    const QSize previewSize(qMax(1, m_planeImagePreview->width() - 8),
-                            qMax(1, m_planeImagePreview->height() - 8));
-    m_planeImagePreview->setText({});
-    m_planeImagePreview->setPixmap(QPixmap::fromImage(result.image).scaled(
-        previewSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    m_planeImagePreview->setPixmap({});
+    m_planeImagePreview->setText(tr("正在按边缘 Mask 生成可保存 2D 图像..."));
     // Re-rasterize the confirmed plane with the canonical export frame. This
     // makes an edge-segmentation run obey the same 50 mm margin, 10 mm
     // physical rounding and 0.05 mm/px contract as direct plane extraction.
     pointcloud::PlaneEdgeOptions imageOptions;
-    imageOptions.edgeGridSize = float(m_edgeGridSize->value());
     imageOptions.maximumImagePixels = 100000000;
     imageOptions.useImageFrame = m_workpieceCoordinate.valid;
     imageOptions.autoImageBounds = true;
@@ -2428,6 +2453,7 @@ void MainWindow::planeEdgeSegmentationFinished() {
     const QVector<pointcloud::Point3D> imageSource = m_points;
     const QVector<int> imageIndices = m_threePlaneResult.planeIndices;
     const pointcloud::PlaneModel imageModel = m_threePlaneResult.model;
+    const pointcloud::PlaneEdgeResult edgeMask = result;
     m_planeImageInputRevision = m_canvasRevision;
     m_planeImageCoordinateRevision = m_coordinateFrameRevision;
     if (!m_planeImageWatcher) {
@@ -2436,11 +2462,12 @@ void MainWindow::planeEdgeSegmentationFinished() {
                 this, &MainWindow::planeImageExtractionFinished);
     }
     m_planeImageWatcher->setFuture(QtConcurrent::run(
-        [imageSource, imageIndices, imageModel, imageOptions]() {
-            return pointcloud::extractPlaneImage(imageSource, imageIndices,
-                                                 imageModel, imageOptions);
+        [imageSource, imageIndices, imageModel, imageOptions, edgeMask]() {
+            return pointcloud::rasterizePlaneEdgeMask(imageSource, imageIndices,
+                                                      imageModel, imageOptions,
+                                                      edgeMask);
         }));
-    m_edgeOutput->appendPlainText(tr("\n正在按自动边界重新生成可保存 2D 图像..."));
+    m_edgeOutput->appendPlainText(tr("\n正在按边缘 Mask、自动边界生成可保存 2D 图像..."));
     updatePlaneEdgeUi();
     statusBar()->showMessage(tr("边缘分割和 2D 平面图生成完成"));
 }
@@ -2480,6 +2507,12 @@ void MainWindow::handleCanvasEdgePointPicked(int index) {
 }
 
 void MainWindow::savePlaneImage() {
+    QString validationError;
+    if (!planeImageSaveReady(&validationError)) {
+        QMessageBox::warning(this, tr("无法保存平面图像"), validationError);
+        statusBar()->showMessage(validationError);
+        return;
+    }
     const QImage &image = m_planeImageResult.image;
     if (image.isNull()) {
         statusBar()->showMessage(tr("请先提取平面 2D 图像"));
@@ -2512,11 +2545,24 @@ void MainWindow::savePlaneImage() {
         metadata.planeEquation = QVector4D(m_threePlaneResult.model.a, m_threePlaneResult.model.b,
                                            m_threePlaneResult.model.c, m_threePlaneResult.model.d);
         metadata.rmsErrorMm = m_threePlaneResult.rmsError;
+        metadata.distanceToleranceMm = m_planeImageResult.usedPlaneDistanceTolerance;
+        metadata.physicalWidthMm = m_planeImageResult.width;
+        metadata.physicalHeightMm = m_planeImageResult.height;
+        metadata.pixelSizeMm = m_planeImageResult.pixelSize > 0.0f
+            ? m_planeImageResult.pixelSize : 0.05;
+        metadata.marginMm = m_planeImageResult.margin;
+        metadata.roundIncrementMm = 10.0;
+        metadata.automaticBounds = m_planeImageResult.automaticBounds;
+        metadata.edgeMask = m_planeImageResult.edgeMask;
         metadata.diagnostics = QJsonObject{
             {QStringLiteral("plane_point_count"), m_threePlaneResult.planeIndices.size()},
+            {QStringLiteral("input_index_count"), m_planeImageResult.inputIndexCount},
             {QStringLiteral("mapped_plane_point_count"), m_planeImageResult.mappedPlanePointCount},
             {QStringLiteral("rejected_non_plane_point_count"), m_planeImageResult.rejectedNonPlanePointCount},
-            {QStringLiteral("rejected_invalid_point_count"), m_planeImageResult.rejectedInvalidPointCount}};
+            {QStringLiteral("rejected_invalid_point_count"), m_planeImageResult.rejectedInvalidPointCount},
+            {QStringLiteral("rejected_outside_rectangle_count"), m_planeImageResult.rejectedOutsideRectangleCount},
+            {QStringLiteral("occupied_pixel_count"), m_planeImageResult.occupiedCellCount},
+            {QStringLiteral("edge_mask"), m_planeImageResult.edgeMask}};
         const auto output = pcv::output::writePlaneOutput(
             context, image, m_points, m_threePlaneResult.planeIndices, metadata);
         if (!output.success) {

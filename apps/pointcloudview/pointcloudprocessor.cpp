@@ -3392,9 +3392,17 @@ PlaneEdgeResult segmentPlaneEdges(const QVector<Point3D> &points,
             if (mask[cell]) row[x] = 255;
         }
     }
+    result.origin = origin;
+    result.axisU = axisU;
+    result.axisV = axisV;
+    result.minimumU = minimumU;
+    result.minimumV = minimumV;
+    result.gridWidth = gridWidth;
+    result.gridHeight = gridHeight;
+    result.imageDirection = QStringLiteral("u_positive_right_v_positive_up");
     result.gridSize = gridSize;
-    result.width = maximumU - minimumU + float(padding) * gridSize;
-    result.height = maximumV - minimumV + float(padding) * gridSize;
+    result.width = float(gridWidth) * gridSize;
+    result.height = float(gridHeight) * gridSize;
     result.ok = !result.image.isNull();
     if (!result.ok) result.error = QStringLiteral("无法创建平面 2D 图像");
     return result;
@@ -3593,6 +3601,124 @@ PlaneImageResult extractPlaneImage(const QVector<Point3D> &points,
     result.occupiedCellCount = occupied;
     result.ok = !result.image.isNull();
     if (!result.ok) result.error = QStringLiteral("无法创建平面 2D 图像");
+    return result;
+}
+
+PlaneImageResult rasterizePlaneEdgeMask(const QVector<Point3D> &points,
+                                        const QVector<int> &planeIndices,
+                                        const PlaneModel &model,
+                                        const PlaneEdgeOptions &options,
+                                        const PlaneEdgeResult &edgeResult) {
+    PlaneImageResult result = extractPlaneImage(points, planeIndices, model, options);
+    result.edgeMask = true;
+    if (!result.ok) return result;
+    if (!edgeResult.ok || edgeResult.image.isNull()
+        || edgeResult.image.format() != QImage::Format_Grayscale8
+        || edgeResult.gridWidth != edgeResult.image.width()
+        || edgeResult.gridHeight != edgeResult.image.height()
+        || edgeResult.gridWidth <= 0 || edgeResult.gridHeight <= 0
+        || !std::isfinite(edgeResult.gridSize) || edgeResult.gridSize <= 0.0f
+        || edgeResult.axisU.lengthSquared() <= 1.0e-10f
+        || edgeResult.axisV.lengthSquared() <= 1.0e-10f) {
+        result.ok = false;
+        result.error = QStringLiteral("边缘 Mask 的物理栅格信息无效");
+        result.image = {};
+        return result;
+    }
+
+    QVector3D normal(model.a, model.b, model.c);
+    const float normalLength = normal.length();
+    if (!std::isfinite(normalLength) || normalLength <= 1.0e-8f) {
+        result.ok = false;
+        result.error = QStringLiteral("平面模型无效");
+        result.image = {};
+        return result;
+    }
+    normal /= normalLength;
+    float d = model.d / normalLength;
+    if (normal.z() < 0.0f) { normal = -normal; d = -d; }
+    QVector3D origin = -d * normal;
+    QVector3D axisU;
+    QVector3D axisV;
+    if (options.useImageFrame && options.imageAxisU.lengthSquared() > 1.0e-10f
+        && options.imageAxisV.lengthSquared() > 1.0e-10f) {
+        origin = options.imageOrigin;
+        axisU = options.imageAxisU - normal * QVector3D::dotProduct(options.imageAxisU, normal);
+        axisV = options.imageAxisV - normal * QVector3D::dotProduct(options.imageAxisV, normal);
+        if (axisU.lengthSquared() <= 1.0e-10f) {
+            result.ok = false; result.error = QStringLiteral("用户 X 轴无效"); result.image = {}; return result;
+        }
+        axisU.normalize();
+        axisV -= axisU * QVector3D::dotProduct(axisV, axisU);
+        if (axisV.lengthSquared() <= 1.0e-10f) {
+            result.ok = false; result.error = QStringLiteral("用户 Y 轴无效"); result.image = {}; return result;
+        }
+        axisV.normalize();
+        if (QVector3D::dotProduct(QVector3D::crossProduct(axisU, axisV), normal) < 0.0f)
+            axisV = -axisV;
+    } else {
+        axisU = QVector3D::crossProduct(normal,
+            std::abs(normal.z()) < 0.9f ? QVector3D(0, 0, 1) : QVector3D(0, 1, 0));
+        if (axisU.lengthSquared() <= 1.0e-12f) axisU = QVector3D(1, 0, 0);
+        axisU.normalize();
+        axisV = QVector3D::crossProduct(normal, axisU).normalized();
+    }
+
+    const float pixelSize = result.pixelSize > 0.0f
+        ? result.pixelSize : (options.imagePixelSize > 0.0f ? options.imagePixelSize : 0.05f);
+    const float outputMinimumU = result.automaticBounds
+        ? -result.width * 0.5f : result.workpieceMinimum.x();
+    const float outputMinimumV = result.automaticBounds
+        ? -result.height * 0.5f : result.workpieceMinimum.y();
+    const float outputMaximumU = outputMinimumU + result.width;
+    const float outputMaximumV = outputMinimumV + result.height;
+    QImage image(result.image.size(), QImage::Format_Grayscale8);
+    if (image.isNull()) {
+        result.ok = false; result.error = QStringLiteral("无法创建边缘 Mask 输出图像"); return result;
+    }
+    image.fill(0);
+    const float halfCell = edgeResult.gridSize * 0.5f;
+    for (int sourceY = 0; sourceY < edgeResult.gridHeight; ++sourceY) {
+        const uchar *sourceRow = edgeResult.image.constScanLine(edgeResult.gridHeight - 1 - sourceY);
+        for (int sourceX = 0; sourceX < edgeResult.gridWidth; ++sourceX) {
+            if (sourceRow[sourceX] == 0) continue;
+            const QVector3D cellCenter = edgeResult.origin
+                + edgeResult.axisU * (edgeResult.minimumU + (float(sourceX) + 0.5f) * edgeResult.gridSize)
+                + edgeResult.axisV * (edgeResult.minimumV + (float(sourceY) + 0.5f) * edgeResult.gridSize);
+            const QVector3D delta = cellCenter - origin;
+            const float u = QVector3D::dotProduct(delta, axisU);
+            const float v = QVector3D::dotProduct(delta, axisV);
+            const float cellMinU = u - halfCell;
+            const float cellMaxU = u + halfCell;
+            const float cellMinV = v - halfCell;
+            const float cellMaxV = v + halfCell;
+            if (cellMaxU <= outputMinimumU || cellMinU >= outputMaximumU
+                || cellMaxV <= outputMinimumV || cellMinV >= outputMaximumV) {
+                ++result.rejectedOutsideRectangleCount;
+                continue;
+            }
+            const int x0 = qMax(0, int(std::floor((cellMinU - outputMinimumU) / pixelSize)));
+            const int x1 = qMin(image.width() - 1,
+                                int(std::ceil((cellMaxU - outputMinimumU) / pixelSize)) - 1);
+            const int y0 = qMax(0, int(std::floor((cellMinV - outputMinimumV) / pixelSize)));
+            const int y1 = qMin(image.height() - 1,
+                                int(std::ceil((cellMaxV - outputMinimumV) / pixelSize)) - 1);
+            for (int y = y0; y <= y1; ++y) {
+                uchar *row = image.scanLine(image.height() - 1 - y);
+                for (int x = x0; x <= x1; ++x) row[x] = 255;
+            }
+        }
+    }
+    int occupied = 0;
+    for (int y = 0; y < image.height(); ++y) {
+        const uchar *row = image.constScanLine(y);
+        for (int x = 0; x < image.width(); ++x) if (row[x] != 0) ++occupied;
+    }
+    result.image = image;
+    result.gridSize = pixelSize;
+    result.pixelSize = pixelSize;
+    result.occupiedCellCount = occupied;
+    result.ok = true;
     return result;
 }
 

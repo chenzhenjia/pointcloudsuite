@@ -54,6 +54,22 @@ int main(int argc, char **argv)
     assert(header.contains("format binary_little_endian 1.0"));
     assert(header.contains("comment target_frame robot_base"));
 
+    auto singularMetadata = metadata;
+    singularMetadata.TBaseWorkpiece.fill(0.0f);
+    auto singularContext = context;
+    singularContext.destinationDirectory = QDir(temporary.path()).filePath(QStringLiteral("singular"));
+    const auto singular = pcv::output::writePlaneOutput(
+        singularContext, image, points, {0, 1, 2}, singularMetadata);
+    assert(!singular.success);
+    assert(singular.errorCode == QStringLiteral("PCV_FRAME_001"));
+    assert(QDir(singularContext.destinationDirectory).entryList(QDir::Files).isEmpty());
+
+    const auto invalidIndices = pcv::output::writePlaneOutput(
+        singularContext, image, points, {0, 1, 99}, metadata);
+    assert(!invalidIndices.success);
+    assert(invalidIndices.errorCode == QStringLiteral("PCV_PLANE_001"));
+    assert(QDir(singularContext.destinationDirectory).entryList(QDir::Files).isEmpty());
+
     // A UI-selected destination must be honored instead of being redirected
     // to the default runtime_data/jobs tree.
     const QString selectedDirectory = QDir(temporary.path()).filePath(QStringLiteral("selected"));

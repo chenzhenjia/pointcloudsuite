@@ -63,6 +63,7 @@ private:
     void updatePlaneExtractionUi();
     void updatePlaneEdgeUi();
     void clearPlaneEdgeUi();
+    bool planeImageSaveReady(QString *error = nullptr) const;
     void validateSecondPlaneSelection();
     void runPlaneExtraction(bool deferFinalClassification);
     bool pointTaskRunning() const;

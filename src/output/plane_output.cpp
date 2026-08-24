@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QSaveFile>
+#include <QTemporaryDir>
 #include <QTextStream>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -17,9 +18,15 @@ namespace {
 bool invalidComponent(const QString &value)
 {
     const QString text = value.trimmed();
+    bool hasWindowsNameCharacter = false;
+    for (const QChar character : QStringLiteral("<>:\"|?*")) {
+        if (text.contains(character)) { hasWindowsNameCharacter = true; break; }
+    }
     return text.isEmpty() || text == QStringLiteral(".") || text == QStringLiteral("..")
         || text.contains(QStringLiteral("..")) || text.contains(QLatin1Char('/'))
-        || text.contains(QLatin1Char('\\')) || QFileInfo(text).isAbsolute();
+        || text.contains(QLatin1Char('\\')) || QFileInfo(text).isAbsolute()
+        || hasWindowsNameCharacter || text.endsWith(QLatin1Char('.'))
+        || text.endsWith(QLatin1Char(' '));
 }
 
 QJsonObject vector3(const QVector3D &value)
@@ -109,6 +116,17 @@ bool writePly(const QString &path, const QVector<pointcloud::Point3D> &points,
     return true;
 }
 
+bool writeJson(const QString &path, const QByteArray &bytes, QString *error)
+{
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
+        if (error) *error = file.errorString().isEmpty()
+            ? QStringLiteral("JSON 写入不完整") : file.errorString();
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 namespace pcv::output {
@@ -146,8 +164,26 @@ PlaneOutputResult writePlaneOutput(const JobContext &context, const QImage &imag
     if (image.isNull() || image.width() <= 0 || image.height() <= 0) {
         result.errorCode = QStringLiteral("PCV_IMAGE_001"); result.message = QStringLiteral("图像为空或尺寸无效"); return result;
     }
-    if (planeIndices.isEmpty() || points.isEmpty()) {
+    if (planeIndices.size() < 3 || points.isEmpty()) {
         result.errorCode = QStringLiteral("PCV_PLANE_001"); result.message = QStringLiteral("平面点不足或拟合失败"); return result;
+    }
+    for (int index : planeIndices) {
+        if (index < 0 || index >= points.size()
+            || !std::isfinite(points[index].x) || !std::isfinite(points[index].y)
+            || !std::isfinite(points[index].z)) {
+            result.errorCode = QStringLiteral("PCV_PLANE_001");
+            result.message = QStringLiteral("平面索引越界或包含无效点");
+            return result;
+        }
+    }
+    QMatrix4x4 base = metadata.TBaseWorkpiece;
+    QMatrix4x4 inverse = metadata.TWorkpieceBase;
+    if (!std::isfinite(base.determinant()) || !std::isfinite(inverse.determinant())
+        || std::abs(base.determinant()) < 1.0e-8f
+        || std::abs(inverse.determinant()) < 1.0e-8f) {
+        result.errorCode = QStringLiteral("PCV_FRAME_001");
+        result.message = QStringLiteral("工件坐标系矩阵不可逆");
+        return result;
     }
     const bool directDestination = !context.destinationDirectory.trimmed().isEmpty();
     const QString root = directDestination
@@ -169,25 +205,42 @@ PlaneOutputResult writePlaneOutput(const JobContext &context, const QImage &imag
     const QString pngRelative = QStringLiteral("%1%2.png").arg(outputPrefix, context.baseName);
     const QString jsonRelative = QStringLiteral("%1%2.json").arg(outputPrefix, context.baseName);
     const QString plyRelative = QStringLiteral("%1%2_plane_robot_base.ply").arg(outputPrefix, context.baseName);
+    const QString pngPath = directory.filePath(pngRelative);
+    const QString jsonPath = directory.filePath(jsonRelative);
+    const QString plyPath = directory.filePath(plyRelative);
+    QTemporaryDir staging(QDir(root).filePath(
+        QStringLiteral(".%1-plane-staging-XXXXXX").arg(context.baseName)));
+    if (!staging.isValid()) {
+        result.errorCode = QStringLiteral("PCV_OUTPUT_001");
+        result.message = QStringLiteral("无法创建输出临时目录");
+        return result;
+    }
+    const QString stagedPng = staging.filePath(QStringLiteral("plane.png"));
+    const QString stagedPly = staging.filePath(QStringLiteral("plane.ply"));
+    const QString stagedJson = staging.filePath(QStringLiteral("plane.json"));
     QString error;
-    if (!writeImage(directory.filePath(pngRelative), image, &error)) {
+    if (!writeImage(stagedPng, image, &error)) {
         result.errorCode = QStringLiteral("PCV_OUTPUT_002"); result.message = error; return result;
     }
     qsizetype count = 0;
-    if (!writePly(directory.filePath(plyRelative), points, planeIndices, metadata, &count, &error)) {
+    if (!writePly(stagedPly, points, planeIndices, metadata, &count, &error)) {
         result.errorCode = QStringLiteral("PCV_OUTPUT_002"); result.message = error; return result;
     }
-    QMatrix4x4 base = metadata.TBaseWorkpiece;
-    QMatrix4x4 inverse = metadata.TWorkpieceBase;
-    if (base.isIdentity() && !inverse.isIdentity()) base = inverse.inverted();
-    if (inverse.isIdentity() && !base.isIdentity()) inverse = base.inverted();
-    if (std::abs(base.determinant()) < 1.0e-8f || std::abs(inverse.determinant()) < 1.0e-8f) {
-        result.errorCode = QStringLiteral("PCV_FRAME_001");
-        result.message = QStringLiteral("工件坐标系矩阵不可逆");
-        return result;
-    }
+    const double pixelSize = metadata.pixelSizeMm > 0.0 ? metadata.pixelSizeMm : 0.05;
+    const double physicalWidth = metadata.physicalWidthMm > 0.0
+        ? metadata.physicalWidthMm : double(image.width()) * pixelSize;
+    const double physicalHeight = metadata.physicalHeightMm > 0.0
+        ? metadata.physicalHeightMm : double(image.height()) * pixelSize;
     QJsonObject imageObject{{QStringLiteral("file"), pngRelative}, {QStringLiteral("width_px"), image.width()},
-        {QStringLiteral("height_px"), image.height()}, {QStringLiteral("pixel_size_mm"), 0.05},
+        {QStringLiteral("height_px"), image.height()},
+        {QStringLiteral("physical_width_mm"), physicalWidth},
+        {QStringLiteral("physical_height_mm"), physicalHeight},
+        {QStringLiteral("pixel_size_mm"), pixelSize},
+        {QStringLiteral("pixels_per_mm"), 1.0 / pixelSize},
+        {QStringLiteral("margin_mm"), metadata.marginMm},
+        {QStringLiteral("round_increment_mm"), metadata.roundIncrementMm},
+        {QStringLiteral("automatic_bounds"), metadata.automaticBounds},
+        {QStringLiteral("edge_mask"), metadata.edgeMask},
         {QStringLiteral("origin"), QStringLiteral("top_left")}, {QStringLiteral("u_axis"), QStringLiteral("workpiece_x_positive")},
         {QStringLiteral("v_axis"), QStringLiteral("workpiece_y_negative")}, {QStringLiteral("background_value"), 0},
         {QStringLiteral("foreground_value"), 255}};
@@ -206,13 +259,59 @@ PlaneOutputResult writePlaneOutput(const JobContext &context, const QImage &imag
             {QStringLiteral("T_base_workpiece"), matrix4(base)}, {QStringLiteral("T_workpiece_base"), matrix4(inverse)}}},
         {QStringLiteral("plane"), QJsonObject{{QStringLiteral("equation"), QJsonObject{{QStringLiteral("a"), metadata.planeEquation.x()}, {QStringLiteral("b"), metadata.planeEquation.y()}, {QStringLiteral("c"), metadata.planeEquation.z()}, {QStringLiteral("d"), metadata.planeEquation.w()}}}, {QStringLiteral("rms_error_mm"), metadata.rmsErrorMm}, {QStringLiteral("distance_tolerance_mm"), metadata.distanceToleranceMm}}},
         {QStringLiteral("outputs"), QJsonObject{{QStringLiteral("plane_png"), pngRelative}, {QStringLiteral("plane_json"), jsonRelative}, {QStringLiteral("plane_robot_base_ply"), plyRelative}}},
+        {QStringLiteral("mapping"), QJsonObject{
+            {QStringLiteral("source_frame"), QStringLiteral("robot_base")},
+            {QStringLiteral("target_frame"), QStringLiteral("workpiece")},
+            {QStringLiteral("formula"), QStringLiteral("P_workpiece = R_base_workpiece^T * (P_base - O_base)")},
+            {QStringLiteral("statistics"), metadata.diagnostics}}},
         {QStringLiteral("diagnostics"), metadata.diagnostics},
         {QStringLiteral("status"), QJsonObject{{QStringLiteral("success"), true}, {QStringLiteral("error_code"), QString()}, {QStringLiteral("message"), QString()}}}
     };
     const QByteArray bytes = QJsonDocument(rootObject).toJson(QJsonDocument::Indented);
-    QSaveFile json(directory.filePath(jsonRelative));
-    if (!json.open(QIODevice::WriteOnly) || json.write(bytes) != bytes.size() || !json.commit()) {
-        result.errorCode = QStringLiteral("PCV_OUTPUT_002"); result.message = QStringLiteral("JSON 写入不完整"); return result;
+    if (!writeJson(stagedJson, bytes, &error)) {
+        result.errorCode = QStringLiteral("PCV_OUTPUT_002"); result.message = error; return result;
+    }
+    struct CommitFile {
+        QString staged;
+        QString final;
+        QString backup;
+        bool hadOriginal = false;
+        bool committed = false;
+    };
+    QVector<CommitFile> files{{stagedPng, pngPath, {}, false, false},
+                              {stagedPly, plyPath, {}, false, false},
+                              {stagedJson, jsonPath, {}, false, false}};
+    auto rollback = [&files]() {
+        for (auto &file : files) {
+            if (file.committed) QFile::remove(file.final);
+        }
+        for (auto &file : files) {
+            if (file.hadOriginal) QFile::rename(file.backup, file.final);
+        }
+    };
+    for (int i = 0; i < files.size(); ++i) {
+        auto &file = files[i];
+        if (!QFileInfo::exists(file.final)) continue;
+        file.backup = staging.filePath(QStringLiteral("backup_%1").arg(i));
+        if (!QFile::rename(file.final, file.backup)) {
+            rollback();
+            result.errorCode = QStringLiteral("PCV_OUTPUT_002");
+            result.message = QStringLiteral("无法暂存已有正式输出文件");
+            return result;
+        }
+        file.hadOriginal = true;
+    }
+    for (auto &file : files) {
+        if (!QFile::rename(file.staged, file.final)) {
+            rollback();
+            result.errorCode = QStringLiteral("PCV_OUTPUT_002");
+            result.message = QStringLiteral("正式输出文件提交失败");
+            return result;
+        }
+        file.committed = true;
+    }
+    for (auto &file : files) {
+        if (file.hadOriginal) QFile::remove(file.backup);
     }
     result.success = true; result.planePng = pngRelative; result.planeJson = jsonRelative;
     result.planeRobotBasePly = plyRelative; result.exportedPointCount = count;
