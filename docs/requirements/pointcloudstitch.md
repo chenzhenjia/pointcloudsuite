@@ -13,7 +13,7 @@
 - `regressionrunner.h/.cpp`：解析 PLY 目录、机械臂位姿 TXT、Eye-in-Hand XML 和回归参数，生成不依赖 GUI 操作的多帧 JSON 诊断报告。
 - `stitchingwindow.ui`：Qt Designer 界面，包含任意多帧 PLY 输入、Start/End 位姿、XML 标定文件、ICP 参数、接缝参数、输出目录、进度条和实时日志。
 - `stitchingwindow.h/.cpp`：界面生命周期、空格/Tab/中英文逗号位姿解析、后台任务调度、进度显示、PLY/JSON 输出；标定和位姿矩阵统一调用手眼转换模块。
-- `handeye_transform.h/.cpp`：可复用的 Eye-in-Hand 标定读取、刚体矩阵校验、机器人位姿矩阵、扫描位姿插值、单点及整幅线扫点云机器人基坐标转换。
+- `include/pcv/registration/handeye_transform.h` + `src/registration/handeye_transform.cpp`：共享的 Eye-in-Hand 标定读取、刚体矩阵校验、机器人位姿矩阵、扫描位姿插值、单点及整幅线扫点云机器人基坐标转换。
 - `pointcloudprocessor.h/.cpp`：复用 `pcv_io` 的并行 ASCII PLY 读取、无效点过滤、调用手眼转换模块生成机器人基坐标全分辨率点云、任意数量相邻帧 Point-to-Plane ICP、修正范围检查和诊断数据。
 - `seamfusion.h/.cpp`：ICP 后真实投影重叠区接缝计算、双侧接缝带检查、互为最近邻融合、二维决策块和无效接缝保护。
 - `CMakeLists.txt`：唯一可运行目标 `pointcloudstitch`，使用 Qt 6 Core/Gui/Widgets/Concurrent。
@@ -182,3 +182,4 @@
 - 2026-08-18：完成新方案第二阶段：新增对应主水平面峰匹配、围绕源平面质心的受限法向预对齐及 `6 mm / 0.5 deg` 独立安全检查；不引入任何平面内位移。
 - 2026-08-18：新增可切换的“仅手眼坐标转换”模式，允许一个或多个 PLY 按 `T_base_flange(t) * T_flange_depth * [X,0,Z]` 输出机器人基坐标点云；该模式明确跳过预对齐、ICP、验收和接缝融合，并提供独立合并、预览及 JSON 报告文件。
 - 2026-08-20：GUI 配准模式取消固定三帧限制，改为接受任意 `>=2` 个 PLY；文件和文件夹添加均不再截断数量，单帧配准明确拒绝，仅手眼转换仍允许单帧。
+- 2026-08-24：`pointcloudstitch` 和 `pcv_interface` 统一改用 `pcv_registration`；应用 CMake 不再直接编译旧 `handeye_transform.cpp`，处理器、窗口和测试改为引用公共头并链接共享库。迁移未改变 GUI、回归参数、ICP 和接缝行为，但仍需重新执行 `handeye_transform_tests`、应用构建和完整拼接回归。

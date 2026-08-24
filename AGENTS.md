@@ -74,6 +74,8 @@
 | src/infrastructure | 应用数据、缓存、日志、导出目录 |
 | src/io | PLY 读取和缓存 |
 | src/filtering | 比例、体素、统计滤波 |
+| src/registration | 手眼标定读取和线扫点云坐标转换 |
+| src/interface | 临时扫描信息解析和临时工件四件输出 |
 | src/output | 平面 PNG/JSON/PLY 契约 |
 | tests | CTest 单元测试 |
 | tools/registration_diagnostic | 默认关闭的诊断 CLI |
@@ -82,8 +84,10 @@
 | pcv_io | STATIC；pcv_core、pcv_infrastructure、Qt::Core |
 | pcv_filtering | STATIC；pcv_core、Qt::Core |
 | pcv_output | STATIC；pcv_core、pcv_infrastructure、Qt::Core、Qt::Gui |
-| pointcloudview | executable；全部 pcv_* + Qt GUI/OpenGL |
-| pointcloudstitch | executable；全部 pcv_* + Qt Core/Gui/Widgets/Concurrent |
+| pcv_registration | STATIC；pcv_core、Qt::Core、Qt::Gui |
+| pcv_interface | STATIC；pcv_core、pcv_infrastructure、pcv_io、pcv_registration、Qt::Core、Qt::Gui |
+| pointcloudview | executable；pcv_core、pcv_infrastructure、pcv_io、pcv_filtering、pcv_output、pcv_interface + Qt GUI/OpenGL |
+| pointcloudstitch | executable；pcv_core、pcv_infrastructure、pcv_io、pcv_filtering、pcv_output、pcv_registration + Qt Core/Gui/Widgets/Concurrent |
 | registration_diagnostic | executable；pcv_* + 直接编译 pointcloudview processor |
 
 ## 3. 关键共享 API
@@ -138,7 +142,8 @@ PlyReadResult 关键字段：ok、error、cancelled、points、declaredPointCoun
     JobContext: runtimeRoot, jobId, workpieceId, baseName, destinationDirectory(optional)
     PlaneOutputMetadata: sourcePointCloud, sourcePlyEncoding, origin/axisX/axisY/axisZ,
       abcDeg, TBaseWorkpiece, TWorkpieceBase, planeEquation, rmsErrorMm,
-      distanceToleranceMm, diagnostics
+      distanceToleranceMm, pixelSizeMm, physicalWidthMm, physicalHeightMm,
+      marginMm, roundIncrementMm, automaticBounds, edgeMask, diagnostics
     PlaneOutputResult: success, errorCode, message, planePng, planeJson,
       planeRobotBasePly, exportedPointCount
 
@@ -149,12 +154,14 @@ writePlaneOutput 状态机：
     validate context
       -> validate image / points / planeIndices
       -> create output directory
+      -> create staging directory
       -> write PNG: Grayscale8，非零 => 255
       -> write binary_little_endian PLY
-      -> write JSON atomically with QSaveFile
+      -> write sr2026-temp-workpiece-info-mvp-2 JSON
+      -> commit the complete set or rollback
       -> success=true
 
-默认目录：runtimeRoot/jobs/<job_id>/point_cloud/plane/；有 destinationDirectory 时直接输出到该目录。PNG、PLY、JSON 必须成套，JSON 最后提交。
+默认目录：runtimeRoot/jobs/<job_id>/point_cloud/plane/；有 destinationDirectory 时直接输出到该目录。PNG、PLY、JSON 先写临时目录后成套提交，失败时回滚。
 
 | error code | trigger |
 |---|---|
@@ -167,11 +174,33 @@ writePlaneOutput 状态机：
 
 plane_output.h 还声明 PCV_INPUT_001/002、PCV_TRANSFORM_001/002、PCV_STITCH_001 等常量；新增错误码前先检查现有定义。
 
+JSON 顶层固定为 schema_version、kind、created_at、plane、image、roi、outputs；
+plane.equation 顺序为 [X,Y,Z,RZ,RY,RX]。outputs.roi_point_cloud 和
+outputs.plane_mask 使用规范化绝对路径。
+
+### pcv::interface
+
+文件：include/pcv/interface/temp_workpiece_interface.h、src/interface/temp_workpiece_interface.cpp
+
+parseTempScanningInfo 只接受 sr2026-temp-scanning-info-mvp-2 和
+single_frame_scanning_info；point_cloud_layout 必须显式为 FullXyz 或 LineProfileXz，
+Start/End 位姿必须为 [X,Y,Z,RZ,RY,RX] 数组，plane_seed_indices 可选；同时校验
+camera -> robot_base 和相对路径穿越。generateTempBaseline 只读取
+runtimeRoot/jobs/<jobId>/interface/temp_scanning_info.json 并生成幂等的
+baseline_robot_base.ply：同名内容一致时复用，内容不同时返回 PCV_OUTPUT_002。
+generateTempWorkpiece 生成
+baseline_robot_base.ply、roi_template_robot_base.ply、plane_mask.png、
+temp_workpiece_info.json 四件套，先写临时目录，再成套提交并在失败时回滚。
+
 ## 4. 应用级关键 API
 
 ### pointcloudview
 
 文件：apps/pointcloudview/pointcloudprocessor.h
+
+界面入口：`MainWindow::openTempScanningInfo` 在后台调用
+`pcv::interface::generateTempWorkpiece`，成功后只更新统计和输出路径，不替换当前画布；
+关闭窗口时断开 watcher 信号并等待任务结束。
 
 | API | purpose | result/failure |
 |---|---|---|
@@ -187,7 +216,7 @@ plane_output.h 还声明 PCV_INPUT_001/002、PCV_TRANSFORM_001/002、PCV_STITCH_
 
 ### pointcloudstitch
 
-文件：apps/pointcloudstitch/handeye_transform.h、pointcloudprocessor.h、seamfusion.h
+文件：include/pcv/registration/handeye_transform.h、src/registration/handeye_transform.cpp、apps/pointcloudstitch/pointcloudprocessor.h、seamfusion.h
 
 | API | purpose | key contract |
 |---|---|---|
@@ -218,7 +247,7 @@ plane_output.h 还声明 PCV_INPUT_001/002、PCV_TRANSFORM_001/002、PCV_STITCH_
 ### 输出
 
 - PNG、PLY、JSON 任一失败，整体 success=false。
-- JSON 最后写入并使用 QSaveFile。
+- PNG、PLY、JSON 先写入临时目录，再成套提交并在失败时回滚。
 - 路径必须经过 JobContext 校验；禁止路径穿越。
 - 日志和报告不得写入受保护凭据。
 
@@ -230,10 +259,11 @@ plane_output.h 还声明 PCV_INPUT_001/002、PCV_TRANSFORM_001/002、PCV_STITCH_
 | Cache | 首次解析、命中、源文件变化失效 | magic/version/size/mtime/payload 错误 | cloud_cache_tests |
 | Downsample | 比例、首点体素、质心体素、source index | 空输入、非法尺寸、无效点 | downsample_tests |
 | Statistical | 邻域充足、离群点移除 | 点数/邻域不足、空结果回退 | statistical_filter_tests |
-| Plane output | 三件套、相对路径、JSON、Grayscale8、0/255 | 非法上下文、空图、空索引、不可逆矩阵、写入失败 | plane_output_tests |
+| Plane output | 三件套、schema v2、Grayscale8、0/255、指定目录 | 非法上下文、空图、空索引、不可逆矩阵、写入失败 | plane_output_tests |
+| Temporary interface | 扫描 JSON、FullXyz/LineProfileXz、平面/ROI、四件套 | 路径穿越、缺输入、标定/位姿/平面/输出失败 | temp_workpiece_interface_tests |
 | Stitch | XML、刚体矩阵链、姿态转换、旋转插值、源索引 | 非刚体、矩阵/姿态非法、取消 | handeye_transform_tests |
 
-当前 Debug CTest 目标：ply_reader_tests、cloud_cache_tests、downsample_tests、statistical_filter_tests、plane_output_tests、handeye_transform_tests。
+当前 Debug CTest 目标：ply_reader_tests、cloud_cache_tests、downsample_tests、statistical_filter_tests、plane_output_tests、temp_workpiece_interface_tests、pointcloudprocessor_obstacle_tests（当前为边缘 Mask 回归）、handeye_transform_tests。
 
 添加测试：
 
@@ -261,7 +291,7 @@ plane_output.h 还声明 PCV_INPUT_001/002、PCV_TRANSFORM_001/002、PCV_STITCH_
 src/io/ply_reader.cpp  
 src/io/cloud_cache.cpp  
 src/filtering/*  
-apps/pointcloudstitch/handeye_transform.cpp  
+src/registration/handeye_transform.cpp  
 apps/pointcloudstitch/seamfusion.cpp
 
 ### P2：静态检查或局部测试
@@ -298,7 +328,7 @@ Preset：
 
 ## 9. 入口、限制和修改汇报模板
 
-推荐入口：README.md、CMakeLists.txt、CMakePresets.json、docs/architecture/*、docs/requirements/*、include/pcv/*、src/*、apps/pointcloudview/pointcloudprocessor.h、apps/pointcloudview/mainwindow.cpp、apps/pointcloudstitch/README.md、apps/pointcloudstitch/handeye_transform.h、apps/pointcloudstitch/stitchingwindow.cpp、tests/CMakeLists.txt、tests/unit/*。
+推荐入口：README.md、CMakeLists.txt、CMakePresets.json、docs/architecture/*、docs/requirements/*、include/pcv/*、src/*、apps/pointcloudview/pointcloudprocessor.h、apps/pointcloudview/mainwindow.cpp、apps/pointcloudstitch/README.md、include/pcv/registration/handeye_transform.h、apps/pointcloudstitch/stitchingwindow.cpp、tests/CMakeLists.txt、tests/unit/*。
 
 限制：
 

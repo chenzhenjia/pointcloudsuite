@@ -1,127 +1,72 @@
-# Point-cloud I/O module
+# 点云 I/O 模块
 
-`pcv_io` is the single reusable boundary for loading PLY point clouds.
+`pcv_io` 是加载 PLY 点云的唯一可复用边界。
 
-## Supported input
+## 支持的输入
 
 - ASCII PLY
 - Binary little-endian PLY
 - Binary big-endian PLY
-- Arbitrary scalar property order
-- Optional `nx`, `ny`, and `nz` normal properties
+- 任意标量属性顺序
+- 可选 `nx`、`ny`、`nz` 法向属性
 
-The reader rejects missing `x`, `y`, or `z` properties, unsupported scalar
-types, vertex list properties, truncated payloads, and malformed headers.
+读取器拒绝缺少 `x`、`y` 或 `z` 属性、不支持的标量类型、vertex list 属性、截断载荷和错误文件头。
 
-## Cache contract
+## 缓存契约
 
-Cache files are stored below the application-local cache directory. A cache is
-accepted only when its format version, source size, source modification time,
-point count, and payload length are valid. Cache writes use `QSaveFile` so a
-crash cannot leave a partially written cache as the current entry.
+缓存文件位于应用本地缓存目录。只有格式版本、源文件大小、源文件修改时间、点数和载荷
+长度全部有效时才接受缓存。缓存使用 `QSaveFile` 写入，避免崩溃后把部分文件当作有效缓存。
 
-External consumers call the STL-based `pcv::io::readPly` and
-`pcv::io::readPlyCached` API. Existing Qt applications temporarily use the
-private `pcv::detail::io` implementation until their workflow adapters are
-migrated to the public boundary.
+外部消费者调用基于 STL 的 `pcv::io::readPly` 和 `pcv::io::readPlyCached` API。
+现有 Qt 应用暂时使用私有 `pcv::detail::io` 实现，直到流程适配器迁移到公共边界。
 
-## First-stage loading optimization
+## 第一阶段加载优化
 
-- `pointcloudview` now uses the shared `pcv::detail::io::readPly` reader for
-  asynchronous loading instead of maintaining a separate application parser.
-- The reader allocates the declared vertex array once and writes by index,
-  avoiding repeated `QVector::push_back` growth.
-- Finite XYZ bounds are accumulated during parsing and returned with the load
-  result, so the UI does not scan millions of points a second time just to set
-  the Z color range.
-- Existing ASCII and binary formats, point order, optional normals and error
-  handling remain unchanged. Memory mapping and custom numeric parsing are
-  intentionally deferred to the next optimization stage.
+- `pointcloudview` 异步加载统一使用共享 `pcv::detail::io::readPly`，不再维护应用层解析器。
+- 读取器一次分配声明的顶点数组并按索引写入，避免重复 `QVector::push_back` 扩容。
+- 解析时累计有限 XYZ 边界并随结果返回，UI 不再为设置 Z 颜色范围二次扫描数百万点。
+- ASCII/二进制格式、点顺序、可选法向和错误处理保持不变。
 
-## ASCII parser optimization
+## ASCII 解析优化
 
-- ASCII vertex values now use a locale-independent in-place float parser for
-  signed decimal and scientific notation values, avoiding `strtof` setup for
-  every field.
-- Header property positions compute `lastRequiredIndex`; values after the last
-  required coordinate/normal property are not converted and are only skipped
-  as trailing text.
-- The reader still rejects malformed numbers and non-finite/overflowing float
-  values, preserves vertex order, and keeps binary parsing unchanged.
+- ASCII 顶点值使用不依赖区域设置的原地浮点解析器，支持有符号小数和科学计数法，避免每个字段都初始化 `strtof`。
+- 根据 Header 属性位置计算 `lastRequiredIndex`；最后一个必需坐标/法向属性之后的值不再转换，只跳过尾部文本。
+- 读取器仍拒绝错误数字、非有限值和溢出浮点值，保持顶点顺序和二进制解析不变。
 
-## Memory-mapped ASCII payload
+## ASCII 内存映射载荷
 
-- After parsing the header, ASCII vertex payloads are read through `QFile::map`
-  and scanned in place with pointer arithmetic; this avoids per-line system
-  calls and temporary byte-array allocations for large files.
-- Newline boundaries are located directly in the mapped buffer, while the
-  existing locale-independent float parser and point order are preserved.
-- If mapping is unavailable, the reader falls back to buffered line reads, so
-  network files and platforms without mapping support remain compatible.
+- 解析文件头后，通过 `QFile::map` 读取 ASCII 顶点载荷，并用指针运算原地扫描，减少大文件逐行系统调用和临时字节数组分配。
+- 直接在映射缓冲区定位换行边界，同时保持现有无区域浮点解析器和点顺序。
+- 映射不可用时回退缓冲逐行读取，兼容网络文件和不支持映射的平台。
 
-## Stage-one loading baseline
+## 阶段一：加载基线
 
-- `PlyReadResult` records `headerElapsedMs`, `boundaryScanElapsedMs`, `parseElapsedMs`, and
-  `totalElapsedMs` for successful reads. These are diagnostic timings only and
-  do not change parser or UI behavior.
-- The application logs reader timings and the cache-publication boundary;
-  VBO upload timing remains a separate rendering concern. This baseline is
-  required before enabling chunked parallel parsing.
+- 成功读取时，`PlyReadResult` 记录 `headerElapsedMs`、`boundaryScanElapsedMs`、`parseElapsedMs` 和 `totalElapsedMs`。这些仅用于诊断，不改变解析器或 UI 行为。
+- 应用记录读取器耗时和缓存发布边界；VBO 上传耗时仍属于独立渲染指标。启用分块并行解析前必须保留该基线。
 
-## Stage-two ASCII chunk boundaries
+## 阶段二：ASCII 分块边界
 
-- The mapped ASCII payload is divided into four preparatory chunks. Byte split
-  candidates are advanced to the next complete newline, so no vertex line is
-  shared by two chunks.
-- A lightweight second scan counts lines in each chunk and verifies that the
-  sum equals the Header vertex count. The current parser still consumes chunks
-  serially; parallel numeric parsing is deferred until the next stage.
+- 映射的 ASCII 载荷划分为四个预备块。候选字节切分点前移到下一个完整换行，保证顶点行不会跨两个块。
+- 轻量二次扫描统计各块行数，并验证总数等于 Header 顶点数。
 
-## Stage-three parallel parsing
+## 阶段三：并行解析
 
-- Mapped ASCII vertex payloads are split into verified chunks and parsed
-  concurrently. Each worker writes only to its fixed, non-overlapping range in
-  the preallocated point array and maintains private bounds/error state.
-- The first boundary scan stops after the declared vertex line count, so later
-  ASCII face or other element payloads are not mistaken for vertices.
-- Results are published only after all workers join and their point counts and
-  bounds are merged. Mapping failure retains the serial buffered fallback.
-- A worker-specific parse or cancellation error is preserved through the final
-  point-count validation instead of being replaced by a generic incomplete-data
-  message.
-- `ply_reader_tests` accepts an optional external PLY path and reports its
-  format, point count, bounds and reader timings after the built-in regression
-  fixtures pass. This provides a repeatable baseline for large production data.
+- 映射的 ASCII 顶点载荷按已验证块并行解析。各 worker 只写预分配点数组中的固定不重叠区间，并维护私有边界和错误状态。
+- 第一次边界扫描在声明的顶点行数后停止，避免把后续 face 或其他元素误认作顶点。
+- 全部 worker 汇合并合并点数和边界后才发布结果；映射失败仍使用串行缓冲回退。
+- worker 的具体解析或取消错误会保留到最终点数校验，不会被通用“不完整数据”消息覆盖。
+- `ply_reader_tests` 可接收外部 PLY 路径，在内建回归通过后报告格式、点数、边界和读取耗时，为大型生产数据提供可重复基线。
 
-## Stage-four adaptive ASCII parallelism
+## 阶段四：自适应 ASCII 并行度
 
-- The mapped ASCII reader selects one worker for small payloads, up to two for
-  medium payloads and up to four for large payloads. The default is additionally
-  capped by `std::thread::hardware_concurrency()` so low-core systems are not
-  oversubscribed.
-- `PlyReadOptions::asciiWorkerCount` can force a diagnostic worker count from
-  one through eight. Production callers leave it at zero for adaptive behavior.
-- Mapping fallback remains single-threaded. The selected count is returned in
-  `PlyReadResult::asciiWorkerCount` and the test executable accepts it as an
-  optional second argument for repeatable one/two/four-worker comparisons.
+- 小载荷选择 1 个 worker，中等载荷最多 2 个，大载荷最多 4 个；同时受 `std::thread::hardware_concurrency()` 限制，避免低核心系统过载。
+- `PlyReadOptions::asciiWorkerCount` 可强制使用 1 到 8 个诊断 worker；生产调用保持 `0` 以使用自适应行为。
+- 映射回退保持单线程。实际数量写入 `PlyReadResult::asciiWorkerCount`，测试程序可用第二参数执行可重复的 1/2/4 worker 对照。
 
-## Stage-five compact binary XYZ fast path
+## 阶段五：紧凑 binary XYZ 快速路径
 
-- Binary PLY files whose vertex layout is exactly contiguous `float x/y/z`
-  use a mapped, index-partitioned reader. Each worker decodes its fixed point
-  range directly into the preallocated `Point3D` array and keeps private bounds.
-- Compact binary parallelism uses the same adaptive one/two/four-worker policy
-  as ASCII. The selected binary worker count remains private to the reader;
-  it is deliberately not exposed through the cross-module result structure.
-  This keeps the public ABI stable for incremental Qt Creator builds.
-- Files with normals, colors, intensity, reordered properties or other scalar
-  layouts retain the generic scalar reader. Mapping failure also falls back to
-  that path, preserving all existing binary little/big-endian compatibility.
-- Per-point atomic progress accounting is skipped when the caller did not
-  provide a progress callback. Cancellation polling and final point-count
-  validation remain active independently.
-- Both GUI processor translation units declare `ply_reader.h` as an explicit
-  CMake `OBJECT_DEPENDS` input. Localized MSVC `/showIncludes` output can leave
-  an empty dependency file under the Qt Creator Makefile generator; the
-  explicit dependency prevents a new reader library from linking against a
-  caller compiled with an older result layout.
+- 顶点布局严格为连续 `float x/y/z` 的 Binary PLY 使用映射和按索引分区的读取器。各 worker 把固定点区间直接解码到预分配 `Point3D` 数组，并维护私有边界。
+- 紧凑二进制路径使用与 ASCII 相同的自适应 1/2/4 worker 策略；二进制 worker 数仅保留在读取器内部，不暴露到跨模块结果结构，以保持 Qt Creator 增量构建时的公共 ABI 稳定。
+- 含法向、颜色、强度、属性重排或其他标量布局的文件继续走通用标量读取器；映射失败也回退该路径，保持 binary little/big-endian 兼容性。
+- 调用方未提供进度回调时跳过逐点原子进度计数；取消轮询和最终点数校验仍独立生效。
+- 两个 GUI processor 翻译单元都把 `ply_reader.h` 声明为显式 CMake `OBJECT_DEPENDS`。本地化 MSVC `/showIncludes` 在 Qt Creator Makefile generator 下可能留下空依赖文件；显式依赖可防止新读取库与按旧结果布局编译的调用方链接。

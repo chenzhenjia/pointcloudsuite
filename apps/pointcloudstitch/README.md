@@ -96,3 +96,10 @@ PLY [X,Y,Z]
 
 本 README 描述的是 `v0.1` 当前实现基线；未通过结构覆盖或修正范围验收时，程序只保留
 诊断文件，不复用旧的正式拼接结果。
+
+## 2026-08-24 共享模块说明
+
+`pointcloudstitch` 与 `pcv_interface` 现统一链接共享 `pcv_registration`；当前 CMake 目标
+不再直接编译本目录的 `handeye_transform.cpp`，源码调用改为
+`<pcv/registration/handeye_transform.h>`。迁移只收敛手眼标定和坐标转换实现，没有改变
+GUI、回归参数、ICP、接缝融合或正式输出规则；`handeye_transform_tests` 也改为链接共享库。

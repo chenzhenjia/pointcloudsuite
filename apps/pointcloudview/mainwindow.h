@@ -19,6 +19,7 @@ class QPlainTextEdit;
 class PointCloudCanvas;
 namespace Ui { class MainWindow; }
 namespace pointcloud { struct LoadResult; }
+namespace pcv::interface { struct TempWorkpieceResult; }
 template <typename T> class QFutureWatcher;
 
 class MainWindow final : public QMainWindow {
@@ -30,8 +31,10 @@ public:
 private slots:
     void openPointCloud();
     void openPointCloudSource();
+    void openTempScanningInfo();
     void loadSelectedSource();
     void loadFinished();
+    void tempWorkpieceFinished();
     void updateRenderSettings();
     void applyNoiseRemoval();
     void noiseFinished();
@@ -112,6 +115,7 @@ private:
     QString m_sourceDirectory;
     bool m_folderScanOnly = false;
     QFutureWatcher<pointcloud::LoadResult> *m_loadWatcher = nullptr;
+    QFutureWatcher<pcv::interface::TempWorkpieceResult> *m_tempWorkpieceWatcher = nullptr;
     QFutureWatcher<pointcloud::NoiseResult> *m_noiseWatcher = nullptr;
     QFutureWatcher<pointcloud::ThreePointPlaneResult> *m_threePlaneWatcher = nullptr;
     QFutureWatcher<pointcloud::PlaneEdgeResult> *m_edgeWatcher = nullptr;

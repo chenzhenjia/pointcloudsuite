@@ -67,6 +67,13 @@
         </property>
        </widget>
       </item>
+      <item>
+       <widget class="QPushButton" name="btn_open_scanning_info">
+        <property name="text">
+         <string>打开扫描 JSON</string>
+        </property>
+       </widget>
+      </item>
      </layout>
     </item>
     <item>

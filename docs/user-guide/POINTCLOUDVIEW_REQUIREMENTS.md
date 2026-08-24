@@ -21,6 +21,7 @@
 - 支持真实点体素预处理和统计离群值去除。
 - 支持 GPU Picking 精确选择三个真实点并提取 2.5D 平面。
 - 支持平面边缘分割、黄色边缘选择和纯黑背景二维图片输出。
+- 支持“打开扫描 JSON”后台生成临时工件四件套，完成后显示扫描布局、转换点数、平面点数、ROI 点数和结果 JSON 路径，不改变当前画布。
 
 ### PLY 第一阶段加载优化
 
@@ -268,12 +269,17 @@ Picking 使用独立颜色 ID + 深度 FBO：
 程序当前可输出：
 
 - 平面二维 PNG（`Format_Grayscale8`，前景 `255`、背景 `0`）；
-- 与 PNG 成套的 binary little-endian 平面 PLY 和 JSON 元数据；
+- 与 PNG 成套的 binary little-endian 平面 PLY 和 JSON 元数据；JSON 当前 schema 为
+  `sr2026-temp-workpiece-info-mvp-2`，顶层结构为 `plane/image/roi/outputs`；
 - 用户本地应用数据 `cache/` 中的 `.pcvbin` 加载缓存；
 - 用户本地应用数据 `logs/startup.log` 启动诊断日志。
 
-PNG、PLY、JSON 由共享 `pcv_output` 契约 writer 写出，JSON 最后通过 `QSaveFile`
-原子提交；任一文件写入失败，整体输出失败。
+PNG、PLY、JSON 由共享 `pcv_output` 契约 writer 写出。输出先进入临时目录，随后按
+PNG、PLY、JSON 顺序成套提交；提交失败会回滚已有正式文件，任一文件失败均不报告成功。
+用户选择的 `destinationDirectory` 会直接作为输出目录，不再重定向到默认任务目录。
+
+“打开扫描 JSON”入口使用 `QtConcurrent` 后台执行；输入/契约错误使用 warning，转换、
+平面和输出错误使用 critical。窗口关闭时先断开完成信号，再等待该后台任务结束。
 
 二维图片背景为纯黑色，尺寸根据平面物理范围和实际栅格自动生成。缓存和日志属于
 运行文件，不作为源码交付内容。
@@ -285,6 +291,8 @@ PNG、PLY、JSON 由共享 `pcv_output` 契约 writer 写出，JSON 最后通过
 - `mainwindow.ui` 已通过 `uic`。
 - 边缘默认值已确认为 `0.2 mm / 闭 1 / 开 1`。
 - 最近一次未重新运行完整算法测试和人工 GUI 测试。
+- 当前已注册 `temp_workpiece_interface_tests` 和边缘 Mask 回归目标；测试目标名
+  `pointcloudprocessor_obstacle_tests` 保留历史兼容名称，但测试内容已是边缘 Mask。
 
 仍需人工验证：
 
@@ -347,6 +355,9 @@ D:/workpiece/pointcloudview/backups/pointcloudview_20260818_obstacle_warning_cle
 算法状态复制成当前项目事实。验证数据必须注明来源和实际执行结果。
 
 ## 本次修改记录
+
+以下各日期条目记录当时的实现快照；其中旧 JSON 字段、障碍测试和历史输出顺序已由
+2026-08-24 条目取代。当前行为以本文前半部分、当前源码和测试为准。
 
 ### 2026-08-18：按参考 README 结构重排
 
@@ -588,3 +599,12 @@ D:/workpiece/pointcloudview/backups/pointcloudview_20260818_obstacle_warning_cle
   不再输出黄色边缘或 RGB 灰阶，保证 OpenCV 读取时通道和阈值稳定。
 - 边缘分割完成后，其生成的 Mask 会同步成为当前可保存的 2D 图像，沿用 PNG/JSON
   输出接口及上述像素值约束。
+
+### 2026-08-24：删除障碍检测并接入临时工件接口
+
+- 删除障碍检测算法、红色障碍点和非阻断告警；当前点云查看流程只保留平面、边缘和二维 Mask 处理。
+- 新增 `pcv_registration`：读取 `RTmatDepth2robot`，校验刚体矩阵，并按机器人位姿插值完成线扫点云到 `robot_base` 的转换。
+- 新增 `pcv_interface`：读取 `sr2026-temp-scanning-info-mvp-2`，校验相对路径不可穿越、点云布局、位姿和三点索引，生成临时工件四件套。
+- 临时工件 JSON 的 schema 为 `sr2026-temp-workpiece-info-mvp-2`；`plane.equation` 固定为 `[X,Y,Z,RZ,RY,RX]`，`outputs` 写入规范化绝对路径。
+- 边缘 Mask 输出补齐原点、轴、物理栅格尺寸和图像方向，并复用统一 `pcv_output` writer。
+- 今天前三个源码提交已经纳入本文；当前工作区的“打开扫描 JSON”界面接入也已同步记录。完整 Debug 构建、CTest 和 GUI 人工点选仍需执行后再补充实测结果。

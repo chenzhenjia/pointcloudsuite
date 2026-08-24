@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
+#include <pcv/interface/temp_workpiece_interface.h>
 #include <pcv/output/plane_output.h>
 
 #include <QAction>
@@ -1081,6 +1082,8 @@ void MainWindow::buildUi() {
     connect(ui->act_open, &QAction::triggered, this, &MainWindow::openPointCloudSource);
     connect(ui->act_exit, &QAction::triggered, qApp, &QApplication::quit);
     connect(ui->btn_open_point_cloud, &QPushButton::clicked, this, &MainWindow::openPointCloudSource);
+    connect(ui->btn_open_scanning_info, &QPushButton::clicked,
+            this, &MainWindow::openTempScanningInfo);
     connect(m_fileList, &QListWidget::currentRowChanged, this, &MainWindow::loadSelectedSource);
     connect(m_pointSize, qOverload<int>(&QSpinBox::valueChanged), m_canvas, &PointCloudCanvas::setPointSize);
     connect(ui->btn_reset_view, &QPushButton::clicked, m_canvas, &PointCloudCanvas::resetView);
@@ -1707,6 +1710,7 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points) {
 
 bool MainWindow::pointTaskRunning() const {
     return m_loading || (m_noiseWatcher && m_noiseWatcher->isRunning())
+        || (m_tempWorkpieceWatcher && m_tempWorkpieceWatcher->isRunning())
         || (m_threePlaneWatcher && m_threePlaneWatcher->isRunning())
         || (m_edgeWatcher && m_edgeWatcher->isRunning())
         || (m_planeImageWatcher && m_planeImageWatcher->isRunning());
@@ -1861,6 +1865,105 @@ void MainWindow::updatePlaneEdgeUi() {
                                                && planeReady);
     if (m_savePlaneImageButton)
         m_savePlaneImageButton->setEnabled(planeImageSaveReady());
+}
+
+void MainWindow::openTempScanningInfo() {
+    if (pointTaskRunning()) {
+        statusBar()->showMessage(tr("点云处理任务正在运行"));
+        return;
+    }
+
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("打开扫描 JSON"), QString(),
+        tr("扫描 JSON (*.json);;所有文件 (*.*)"));
+    if (path.isEmpty()) return;
+
+    const QString absolutePath = QFileInfo(path).absoluteFilePath();
+    const QString outputDirectory = QFileInfo(absolutePath).absolutePath();
+    const QStringList outputNames{
+        QStringLiteral("baseline_robot_base.ply"),
+        QStringLiteral("roi_template_robot_base.ply"),
+        QStringLiteral("plane_mask.png"),
+        QStringLiteral("temp_workpiece_info.json")
+    };
+    QStringList existingOutputs;
+    for (const QString &name : outputNames) {
+        const QString outputPath = QDir(outputDirectory).filePath(name);
+        if (QFileInfo::exists(outputPath)) existingOutputs.push_back(name);
+    }
+    if (!existingOutputs.isEmpty()) {
+        const QString question = tr("输出目录中已存在以下文件：\n%1\n\n是否覆盖？")
+            .arg(existingOutputs.join(QStringLiteral("\n")));
+        if (QMessageBox::question(this, tr("确认覆盖"), question,
+                                  QMessageBox::Yes | QMessageBox::No,
+                                  QMessageBox::No) != QMessageBox::Yes) {
+            statusBar()->showMessage(tr("已取消扫描 JSON 处理"));
+            return;
+        }
+    }
+
+    pcv::interface::TempWorkpieceOptions options;
+    options.scanningInfoPath = absolutePath;
+
+    if (!m_tempWorkpieceWatcher) {
+        m_tempWorkpieceWatcher =
+            new QFutureWatcher<pcv::interface::TempWorkpieceResult>(this);
+        connect(m_tempWorkpieceWatcher,
+                &QFutureWatcher<pcv::interface::TempWorkpieceResult>::finished,
+                this, &MainWindow::tempWorkpieceFinished);
+    }
+
+    m_progress->show();
+    m_progress->setRange(0, 0);
+    statusBar()->showMessage(tr("正在处理扫描 JSON..."));
+    const auto capturedOptions = options;
+    m_tempWorkpieceWatcher->setFuture(QtConcurrent::run([capturedOptions]() {
+        QString workerError;
+        return pcv::interface::generateTempWorkpiece(capturedOptions, &workerError);
+    }));
+}
+
+void MainWindow::tempWorkpieceFinished() {
+    pcv::interface::TempWorkpieceResult result =
+        m_tempWorkpieceWatcher->future().takeResult();
+    if (m_closing) {
+        qWarning() << "Temp workpiece result discarded because the window is closing";
+        return;
+    }
+
+    m_progress->hide();
+    if (!result.success) {
+        const QString detail = result.errorCode.isEmpty()
+            ? result.message
+            : QStringLiteral("%1: %2").arg(result.errorCode, result.message);
+        const bool inputFailure = result.errorCode == QStringLiteral("PCV_INPUT_001")
+            || result.errorCode == QStringLiteral("PCV_INPUT_002")
+            || result.errorCode == QStringLiteral("PCV_CONTRACT_001");
+        if (inputFailure)
+            QMessageBox::warning(this, tr("扫描 JSON 处理失败"), detail);
+        else
+            QMessageBox::critical(this, tr("扫描 JSON 处理失败"), detail);
+        statusBar()->showMessage(detail);
+        return;
+    }
+
+    const QString layoutName = result.pointCloudLayout
+        == pointcloud::DepthPointLayout::FullXyz
+        ? QStringLiteral("FullXyz") : QStringLiteral("LineProfileXz");
+    m_fileInfo->setText(
+        tr("扫描 JSON\nscan_id  %1\nlayout  %2\n转换点数  %3\n平面点数  %4\nROI 点数  %5\n输出目录\n%6\n结果 JSON\n%7")
+            .arg(result.scanId, layoutName)
+            .arg(QLocale().toString(result.convertedPointCount))
+            .arg(QLocale().toString(result.planePointCount))
+            .arg(QLocale().toString(result.roiPointCount))
+            .arg(QFileInfo(result.interfaceDirectory).absoluteFilePath())
+            .arg(QFileInfo(result.tempWorkpieceInfoPath).absoluteFilePath()));
+    statusBar()->showMessage(
+        tr("扫描 JSON 处理完成：%1，已生成 %2 个点，当前画布未改变")
+            .arg(layoutName)
+            .arg(QLocale().toString(result.convertedPointCount)));
+    if (!result.warning.isEmpty())
+        statusBar()->showMessage(statusBar()->currentMessage() + QStringLiteral("；") + result.warning);
 }
 
 bool MainWindow::planeImageSaveReady(QString *error) const {
@@ -2651,6 +2754,7 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     // Prevent queued watcher completions from entering slots that manipulate
     // widgets or QPixmap/QImage objects while Qt is destroying the GUI tree.
     if (m_loadWatcher) disconnect(m_loadWatcher, nullptr, this, nullptr);
+    if (m_tempWorkpieceWatcher) disconnect(m_tempWorkpieceWatcher, nullptr, this, nullptr);
     if (m_noiseWatcher) disconnect(m_noiseWatcher, nullptr, this, nullptr);
     if (m_threePlaneWatcher) disconnect(m_threePlaneWatcher, nullptr, this, nullptr);
     if (m_edgeWatcher) disconnect(m_edgeWatcher, nullptr, this, nullptr);
@@ -2659,6 +2763,10 @@ void MainWindow::closeEvent(QCloseEvent *event) {
         statusBar()->showMessage(tr("正在结束后台加载，请稍候..."));
         m_loadWatcher->waitForFinished();
         m_loading = false;
+    }
+    if (m_tempWorkpieceWatcher && m_tempWorkpieceWatcher->isRunning()) {
+        statusBar()->showMessage(tr("正在结束后台扫描 JSON 处理，请稍候..."));
+        m_tempWorkpieceWatcher->waitForFinished();
     }
     if (m_noiseWatcher && m_noiseWatcher->isRunning()) {
         statusBar()->showMessage(tr("正在结束后台噪点处理，请稍候..."));

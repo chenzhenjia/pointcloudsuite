@@ -6,8 +6,8 @@
 
 - 根工程：`CMakeLists.txt`、`CMakePresets.json`、`.gitignore`、`AGENTS.md`、`README.md`。
 - 应用：`apps/pointcloudview/`、`apps/pointcloudstitch/` 及各自的 CMake、UI、源码和 README。
-- 共享模块：`src/`、`include/pcv/`，包括 `pcv_output` 平面输出实现和头文件。
-- 测试：`tests/`，包括 `tests/unit/output/plane_output_tests.cpp` 及根测试注册文件。
+- 共享模块：`src/`、`include/pcv/`，包括 `pcv_output`、`pcv_registration`、`pcv_interface` 实现和头文件。
+- 测试：`tests/`，包括 `plane_output_tests.cpp`、`temp_workpiece_interface_tests.cpp`、边缘 Mask 回归及根测试注册文件。
 - 工具和脚本：`tools/`、`scripts/`。
 - 文档：`docs/` 下的架构、需求、契约、用户指南和开发说明。
 - 示例：`examples/` 下的配置和最小平面输出示例；不上传运行结果。
@@ -22,11 +22,13 @@
 
 ## 本期工作区摘要
 
-- 新增 `pcv_output` 共享模块和 `plane_output_tests`；
-- 平面 PNG/PLY/JSON 输出统一到共享契约 writer，PNG 前景为 `255`、背景为 `0`；
+- 新增 `pcv_output`、`pcv_registration`、`pcv_interface` 共享模块和对应测试；
+- 删除障碍检测及旧障碍测试语义，保留兼容目标名用于边缘 Mask 回归；
+- 平面 PNG/PLY/JSON 输出统一到 `sr2026-temp-workpiece-info-mvp-2`，PNG 前景为 `255`、背景为 `0`；
+- 临时工件输出新增 `baseline_robot_base.ply`、`roi_template_robot_base.ply`、`plane_mask.png` 和 `temp_workpiece_info.json`；
 - `pointcloudstitch` 回归报告升级为 `pointcloudstitch-regression-v2`，支持任务输出参数；
 - PLY ASCII 读取采用自适应 `1/2/4` worker，紧凑 binary XYZ 使用内部快速路径；
-- README、架构、需求、契约和示例已按当前源码事实同步。
+- README、架构、需求、契约、用户指南和示例已按当前源码事实同步。
 
 ## 上传前验证
 

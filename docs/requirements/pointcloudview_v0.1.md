@@ -1,7 +1,7 @@
 # PointCloudSuite 点云查看与处理程序产品开发文档
 
 版本：v0.1（当前基线）  
-日期：2026-08-20  
+日期：2026-08-24
 适用范围：`pointcloudview` 点云查看处理程序及其共享点云模块
 
 ## 1. 项目背景
@@ -23,6 +23,9 @@ PointCloudSuite 面向机器人/工业视觉点云数据的查看、平面提取
   binary `float x/y/z` 布局使用内部映射快速路径。
 - 通过 `pcv_output` 统一写出 PNG、robot_base 平面 PLY 和 JSON 三件套，并使用
   稳定错误码和 JSON 原子提交。
+- 通过 `pcv_registration` 读取 Eye-in-Hand XML 并完成线扫点云到 `robot_base` 的刚体变换。
+- 通过 `pcv_interface` 读取临时扫描信息，生成临时工件平面、ROI 和成套交换文件。
+- 主界面提供“打开扫描 JSON”入口，后台执行临时工件生成并展示统计；该动作不替换当前画布缓存。
 
 ### 2.2 系统边界
 
@@ -40,7 +43,9 @@ PointCloudSuite 面向机器人/工业视觉点云数据的查看、平面提取
 - `src/filtering/` + `include/pcv/filtering/`：体素处理和统计离群值去除。
 - `src/infrastructure/`：运行时目录（缓存、日志、导出）的平台无关管理。
 - `src/output/` + `include/pcv/output/`：平面输出上下文校验、PNG/PLY/JSON 契约。
-- `tests/`：PLY 读取、缓存、滤波、输出和手眼转换测试。
+- `src/registration/` + `include/pcv/registration/`：手眼标定和线扫坐标转换。
+- `src/interface/` + `include/pcv/interface/`：临时扫描输入和临时工件输出接口。
+- `tests/`：PLY 读取、缓存、滤波、输出、临时工件接口和手眼转换测试。
 
 主程序的 `m_points` 是后续处理唯一输入。新点云发布时必须先替换画布缓存，再清除旧平面、边缘和选点状态。
 
@@ -77,19 +82,23 @@ PointCloudSuite 面向机器人/工业视觉点云数据的查看、平面提取
 
 ### 5.5 边缘与二维输出
 
-确认平面点 → UV 栅格 → 闭运算/开运算 → 8 邻域边界 → Marching Squares。默认栅格 `0.2 mm`、形态学半径各 `1`、最大栅格数 `4,000,000`。导出边界由平面点 XY 范围自动计算，四边增加 `50 mm`，向上取整到 `10 mm`，固定 `1 px = 0.05 mm`。PNG 为 `Format_Grayscale8`：背景/孔洞为 `0`，前景为 `255`。
+确认平面点 → UV 栅格 → 闭运算/开运算 → 8 邻域边界 → Marching Squares。默认栅格 `0.2 mm`、形态学半径各 `1`、最大栅格数 `4,000,000`。导出边界由平面点 XY 范围自动计算，四边增加 `50 mm`，向上取整到 `10 mm`，固定 `1 px = 0.05 mm`。PNG 为 `Format_Grayscale8`：背景/孔洞为 `0`，前景为 `255`。边缘 Mask 导出复用同一物理栅格、坐标轴和真实平面索引，不重新读取 PLY。
+
+### 5.6 临时工件接口
+
+接口读取 `temp_scanning_info.json`（schema `sr2026-temp-scanning-info-mvp-2`），要求扫描坐标系为 `camera`、标定方向为 `camera -> robot_base`，并校验点云、XML、位姿和三点索引。点云按 `FullXyz` 或 `LineProfileXz` 转换；无效点、行程范围外点和无效刚体矩阵分别按稳定错误码拒绝。成功时生成 `baseline_robot_base.ply`、`roi_template_robot_base.ply`、`plane_mask.png` 和 `temp_workpiece_info.json`。四个文件先写入临时目录，再一次性提交；任一失败均回滚。
 
 ## 6. 输出与数据契约
 
 - 二维 PNG：平面或边缘 Mask，左上角为像素原点，前景 `255`、背景 `0`。
-- 同名 JSON：任务号、源 PLY、单位、三点、工件坐标、4×4 矩阵、图像物理/像素范围、映射统计和输出状态。
+- JSON：统一 schema `sr2026-temp-workpiece-info-mvp-2`，顶层字段为 `schema_version`、`kind`、`created_at`、`plane`、`image`、`roi`、`outputs`；`plane.equation` 顺序为 `[X, Y, Z, RZ, RY, RX]`，输出路径使用规范化绝对路径。
 - `_plane_robot_base.ply`：最终连通域平面点，binary little-endian，坐标保持机器人基坐标，并记录来源和坐标系元数据。
-- 输出由 `pcv_output` 统一写出；JSON 最后通过 `QSaveFile` 原子提交，任一文件失败均视为整体失败。
+- 输出由 `pcv_output` 统一写出；PNG、PLY、JSON 先写临时目录后成套提交并支持回滚，任一文件失败均视为整体失败。
 - `cache/*.pcvbin`：运行缓存；`logs/startup.log`：启动诊断日志。
 
 ## 7. 构建、测试与验证
 
-环境为 Windows 10/11、Qt 6.8.3 MSVC x64、C++17、OpenGL 3.3 Core。构建入口为 `scripts/build_windows.ps1`，测试入口为 `scripts/run_tests.ps1`；根目录还提供 `windows-msvc-debug` CMake preset。当前工作区新增 `pcv_output` 和 `plane_output_tests`，本轮将重新执行 Debug 构建、CTest、不同 PLY 编码、DPI Picking、超大点云、告警后续处理和最终图像质量验证。
+环境为 Windows 10/11、Qt 6.8.3 MSVC x64、C++17、OpenGL 3.3 Core。构建入口为 `scripts/build_windows.ps1`，测试入口为 `scripts/run_tests.ps1`；根目录还提供 `windows-msvc-debug` CMake preset。当前工作区包含 `pcv_output`、`pcv_registration`、`pcv_interface` 及对应测试。
 
 ## 8. 非功能需求与已知限制
 
@@ -114,4 +123,12 @@ v0.1 已形成从 PLY 输入、OpenGL 查看、真实点选、平面/边缘处�
 - 建立 PointCloudSuite 主程序与共享模块的产品边界和代码说明。
 - 固化 PLY 读取、后台解析、平面/边缘算法及默认参数。
 - 固化工件坐标、PNG/JSON/机器人基坐标 PLY 输出契约。
+- 增加临时扫描到临时工件的手眼转换和四件输出契约。
 - 汇总当前构建、测试、限制和下一版本待确认事项。
+
+### 2026-08-24：接口、边缘 Mask 与统一 JSON 契约
+
+- 删除障碍检测及其非阻断告警，不再把障碍状态写入主程序流程或文档验收项。
+- 新增 `pcv_registration` 和 `pcv_interface`，统一临时扫描输入、手眼转换、平面/ROI 提取和输出提交。
+- 平面输出 JSON 从旧 proposal schema 切换为 `sr2026-temp-workpiece-info-mvp-2`，输出路径改为规范化绝对路径，姿态顺序固定为 `[X,Y,Z,RZ,RY,RX]`。
+- 用户选择输出目录时直接写入该目录；PNG、PLY、JSON 以及临时工件四件套均采用临时目录提交和失败回滚。

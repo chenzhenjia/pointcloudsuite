@@ -8,7 +8,7 @@ PointCloudSuite 是基于 Qt 6 和 C++17 的完整点云处理项目，包含点
 
 - `pointcloudview`：点云读取、显示、处理和分析主程序。
 - `pointcloudstitch`：手眼转换、多帧配准、拼接和融合程序。
-- 共享模块：PLY 读取与缓存、降采样、统计滤波、运行目录管理、平面输出契约。
+- 共享模块：PLY 读取与缓存、降采样、统计滤波、运行目录管理、手眼变换、临时工件接口和平面输出契约。
 - 辅助能力：注册诊断工具、单元测试、构建脚本和产品文档。
 
 ## 目录结构
@@ -51,6 +51,9 @@ PointCloudSuite/
 .\scripts\build_windows.ps1 -Config Release
 ```
 
+脚本也可在普通 PowerShell 中运行：当 `cl.exe`/`nmake.exe` 不在 PATH 时，会尝试通过
+`vswhere.exe` 或标准安装路径加载 `vcvars64.bat`，并明确校验 Qt、CMake 和 CTest 路径。
+
 构建调试版本并启用测试：
 
 ```powershell
@@ -80,3 +83,12 @@ ctest --preset test-debug --output-on-failure
 各程序需求见 [docs/requirements](docs/requirements)，平面输出契约见
 [docs/contracts](docs/contracts)。当前版本仍是 `v0.1` 基线，不包含机器人控制、
 手眼标定求解或生产数据库接入。
+
+## 2026-08-24 实现同步
+
+- 删除 `pointcloudview` 的障碍检测、红色障碍显示和非阻断告警；当前流程保留平面提取、边缘分割和二维 Mask 输出。
+- 新增 `pcv_registration` 手眼变换共享模块：读取 `RTmatDepth2robot`，校验刚体矩阵，按 `T_base_flange(t) * T_flange_depth` 将线扫点转换到 `robot_base`。
+- 新增 `pcv_interface` 临时工件接口：读取 `sr2026-temp-scanning-info-mvp-2`，生成 `baseline_robot_base.ply`、`roi_template_robot_base.ply`、`plane_mask.png` 和 `temp_workpiece_info.json`。
+- 平面与边缘 Mask 输出统一使用 `sr2026-temp-workpiece-info-mvp-2`；JSON 的姿态数组顺序为 `[X, Y, Z, RZ, RY, RX]`，输出路径写入规范化绝对路径。
+- 边缘 Mask 导出复用真实平面坐标与物理栅格信息；用户选择 `destinationDirectory` 时直接写入该目录，PNG、PLY、JSON 使用临时目录成套提交并在失败时回滚。
+- 主界面新增“打开扫描 JSON”入口：后台调用 `pcv_interface`，显示 `scan_id`、布局、转换点数、平面点数、ROI 点数和输出 JSON 路径；成功后不替换当前画布，关闭窗口时等待后台任务结束。
