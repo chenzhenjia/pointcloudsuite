@@ -13,7 +13,7 @@
 namespace pcv::output {
 
 inline constexpr const char *kPlaneOutputSchema =
-    "point-cloud-plane-output-v0.1-proposal";
+    "sr2026-temp-workpiece-info-mvp-2";
 inline constexpr const char *kErrorInputMissing = "PCV_INPUT_001";
 inline constexpr const char *kErrorInputUnsupported = "PCV_INPUT_002";
 inline constexpr const char *kErrorTransformInvalid = "PCV_TRANSFORM_001";

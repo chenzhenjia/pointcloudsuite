@@ -533,20 +533,22 @@ QString poseJson(const pointcloud::RobotPose &pose)
              jsonNumber(pose.rz), jsonNumber(pose.ry), jsonNumber(pose.rx));
 }
 
-QString layoutName(pointcloud::DepthPointLayout layout)
-{
-    return layout == pointcloud::DepthPointLayout::FullXyz
-        ? QStringLiteral("FullXyz") : QStringLiteral("LineProfileXz");
-}
-
 QByteArray buildOutputJson(const QString &createdAt,
                            const PlaneSelection &selection,
                            int widthPx,
                            int heightPx,
-                           pointcloud::DepthPointLayout pointCloudLayout)
+                           const QString &baselinePath,
+                           const QString &roiPath,
+                           const QString &planeMaskPath)
 {
     const double widthMm = double(widthPx) * kDefaultPixelSizeMm;
     const double heightMm = double(heightPx) * kDefaultPixelSizeMm;
+    const QString absoluteBaselinePath = QDir::fromNativeSeparators(
+        QFileInfo(baselinePath).absoluteFilePath());
+    const QString absoluteRoiPath = QDir::fromNativeSeparators(
+        QFileInfo(roiPath).absoluteFilePath());
+    const QString absolutePlaneMaskPath = QDir::fromNativeSeparators(
+        QFileInfo(planeMaskPath).absoluteFilePath());
     QString text;
     QTextStream stream(&text);
     stream.setEncoding(QStringConverter::Utf8);
@@ -554,13 +556,12 @@ QByteArray buildOutputJson(const QString &createdAt,
            << "  \"schema_version\": " << quotedJson(QString::fromLatin1(kTempWorkpieceSchema)) << ",\n"
            << "  \"kind\": " << quotedJson(QString::fromLatin1(kTempWorkpieceKind)) << ",\n"
            << "  \"created_at\": " << quotedJson(createdAt) << ",\n"
-           << "  \"point_cloud_layout\": " << quotedJson(layoutName(pointCloudLayout)) << ",\n"
            << "  \"plane\": {\n"
            << "    \"name\": " << quotedJson(QString::fromLatin1(kTempPlaneName)) << ",\n"
            << "    \"equation\": " << poseJson(selection.pose) << "\n"
            << "  },\n"
            << "  \"image\": {\n"
-           << "    \"name\": \"plane_mask.png\",\n"
+           << "    \"name\": " << quotedJson(QFileInfo(planeMaskPath).fileName()) << ",\n"
            << "    \"width_px\": " << widthPx << ",\n"
            << "    \"height_px\": " << heightPx << ",\n"
            << "    \"width_mm\": " << jsonNumber(widthMm) << ",\n"
@@ -569,9 +570,9 @@ QByteArray buildOutputJson(const QString &createdAt,
            << "  },\n"
            << "  \"roi\": \"rectangle\",\n"
            << "  \"outputs\": {\n"
-           << "    \"robot_base_point_cloud\": \"baseline_robot_base.ply\",\n"
-           << "    \"roi_point_cloud\": \"roi_template_robot_base.ply\",\n"
-           << "    \"plane_mask\": \"plane_mask.png\"\n"
+           << "    \"robot_base_point_cloud\": " << quotedJson(absoluteBaselinePath) << ",\n"
+           << "    \"roi_point_cloud\": " << quotedJson(absoluteRoiPath) << ",\n"
+           << "    \"plane_mask\": " << quotedJson(absolutePlaneMaskPath) << "\n"
            << "  }\n"
            << "}\n";
     stream.flush();
@@ -866,19 +867,19 @@ TempWorkpieceResult generateTempWorkpiece(const TempWorkpieceOptions &options,
         return failedResult(QString::fromLatin1(kErrorOutputIncomplete), detail, error);
     }
 
-    const QString createdAt = options.createdAtIso8601.trimmed().isEmpty()
-        ? QDateTime::currentDateTime().toString(Qt::ISODateWithMs)
-        : options.createdAtIso8601;
-    const QByteArray outputJson = buildOutputJson(createdAt, selection, widthPx, heightPx,
-                                                  scan.pointCloudLayout);
-    if (!writeJsonFile(stagedJson, outputJson, &detail)) {
-        return failedResult(QString::fromLatin1(kErrorOutputIncomplete), detail, error);
-    }
-
     const QString finalBaseline = QDir(outputDirectory).filePath(QStringLiteral("baseline_robot_base.ply"));
     const QString finalRoi = QDir(outputDirectory).filePath(QStringLiteral("roi_template_robot_base.ply"));
     const QString finalMask = QDir(outputDirectory).filePath(QStringLiteral("plane_mask.png"));
     const QString finalJson = QDir(outputDirectory).filePath(QStringLiteral("temp_workpiece_info.json"));
+    const QString createdAt = options.createdAtIso8601.trimmed().isEmpty()
+        ? QDateTime::currentDateTime().toString(Qt::ISODateWithMs)
+        : options.createdAtIso8601;
+    const QByteArray outputJson = buildOutputJson(createdAt, selection, widthPx, heightPx,
+                                                  finalBaseline, finalRoi, finalMask);
+    if (!writeJsonFile(stagedJson, outputJson, &detail)) {
+        return failedResult(QString::fromLatin1(kErrorOutputIncomplete), detail, error);
+    }
+
     const QVector<QPair<QString, QString>> commits{
         {stagedBaseline, finalBaseline},
         {stagedRoi, finalRoi},

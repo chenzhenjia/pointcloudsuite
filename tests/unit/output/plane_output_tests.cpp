@@ -4,11 +4,13 @@
 #include <QCoreApplication>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
 
 #include <cassert>
+#include <cmath>
 #include <iostream>
 
 int main(int argc, char **argv)
@@ -29,6 +31,8 @@ int main(int argc, char **argv)
     QVector<pointcloud::Point3D> points{{0, 0, 0}, {1, 0, 0}, {0, 1, 0}};
     pcv::output::PlaneOutputMetadata metadata;
     metadata.sourcePointCloud = QStringLiteral("input.ply");
+    metadata.originInRobotBase = QVector3D(1.0f, 2.0f, 3.0f);
+    metadata.abcDeg = QVector3D(4.0f, 5.0f, 6.0f);
     metadata.TBaseWorkpiece.setToIdentity();
     metadata.TWorkpieceBase.setToIdentity();
     const auto result = pcv::output::writePlaneOutput(context, image, points, {0, 1, 2}, metadata);
@@ -45,9 +49,30 @@ int main(int argc, char **argv)
     QFile jsonFile(QDir(root).filePath(result.planeJson));
     assert(jsonFile.open(QIODevice::ReadOnly));
     const QJsonObject json = QJsonDocument::fromJson(jsonFile.readAll()).object();
-    assert(json.value("schema").toString() == QString::fromLatin1(pcv::output::kPlaneOutputSchema));
-    assert(json.value("image").toObject().value("pixel_size_mm").toDouble() == 0.05);
-    assert(json.value("status").toObject().value("success").toBool());
+    assert(json.value("schema_version").toString() == QString::fromLatin1(pcv::output::kPlaneOutputSchema));
+    assert(json.value("kind").toString() == QStringLiteral("single_frame_workpiece_roi"));
+    const QJsonObject plane = json.value("plane").toObject();
+    assert(plane.value("name").toString() == QStringLiteral("WObj1"));
+    const QJsonArray equation = plane.value("equation").toArray();
+    assert(equation.size() == 6);
+    assert(equation.at(0).toDouble() == 1.0);
+    assert(equation.at(1).toDouble() == 2.0);
+    assert(equation.at(2).toDouble() == 3.0);
+    assert(equation.at(3).toDouble() == 6.0);
+    assert(equation.at(4).toDouble() == 5.0);
+    assert(equation.at(5).toDouble() == 4.0);
+    const QJsonObject imageObject = json.value("image").toObject();
+    const double pixelSize = imageObject.value("pixel_size_mm").toDouble();
+    assert(pixelSize == 0.05);
+    assert(std::abs(imageObject.value("width_mm").toDouble() - image.width() * pixelSize) < 1.0e-9);
+    assert(std::abs(imageObject.value("height_mm").toDouble() - image.height() * pixelSize) < 1.0e-9);
+    assert(json.value("roi").toString() == QStringLiteral("rectangle"));
+    const QJsonObject outputs = json.value("outputs").toObject();
+    assert(outputs.value("robot_base_point_cloud").toString() == QStringLiteral("input.ply"));
+    assert(outputs.value("roi_point_cloud").toString()
+           == QDir::fromNativeSeparators(QFileInfo(QDir(root).filePath(result.planeRobotBasePly)).absoluteFilePath()));
+    assert(outputs.value("plane_mask").toString()
+           == QDir::fromNativeSeparators(QFileInfo(QDir(root).filePath(result.planePng)).absoluteFilePath()));
     QFile ply(QDir(root).filePath(result.planeRobotBasePly));
     assert(ply.open(QIODevice::ReadOnly));
     const QByteArray header = ply.read(512);

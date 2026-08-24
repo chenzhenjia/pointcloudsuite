@@ -195,8 +195,87 @@ int main(int argc, char **argv)
     }
     assert(generated.pointCloudLayout == pointcloud::DepthPointLayout::FullXyz);
     assert(generated.interfaceDirectory == QDir(inputDirectory).filePath(QStringLiteral("result")));
-    const QJsonObject output = QJsonDocument::fromJson(fileBytes(generated.tempWorkpieceInfoPath)).object();
-    assert(output.value(QStringLiteral("point_cloud_layout")).toString() == QStringLiteral("FullXyz"));
+    const QByteArray outputBytes = fileBytes(generated.tempWorkpieceInfoPath);
+    const QList<QByteArray> expectedKeys{
+        QByteArrayLiteral("schema_version"),
+        QByteArrayLiteral("kind"),
+        QByteArrayLiteral("created_at"),
+        QByteArrayLiteral("plane"),
+        QByteArrayLiteral("image"),
+        QByteArrayLiteral("roi"),
+        QByteArrayLiteral("outputs")
+    };
+    int previousKeyOffset = -1;
+    for (const QByteArray &key : expectedKeys) {
+        const QByteArray marker = QByteArrayLiteral("\n  \"") + key + QByteArrayLiteral("\":");
+        const int keyOffset = outputBytes.indexOf(marker);
+        assert(keyOffset > previousKeyOffset);
+        previousKeyOffset = keyOffset;
+    }
+    const auto assertNestedOrder = [&outputBytes](const QByteArray &container,
+                                                  const QList<QByteArray> &keys) {
+        int offset = outputBytes.indexOf(container);
+        assert(offset >= 0);
+        for (const QByteArray &key : keys) {
+            offset = outputBytes.indexOf(key, offset + 1);
+            assert(offset >= 0);
+        }
+    };
+    assertNestedOrder(QByteArrayLiteral("\n  \"plane\": {"), {
+        QByteArrayLiteral("\n    \"name\":"),
+        QByteArrayLiteral("\n    \"equation\":")});
+    assertNestedOrder(QByteArrayLiteral("\n  \"image\": {"), {
+        QByteArrayLiteral("\n    \"name\":"),
+        QByteArrayLiteral("\n    \"width_px\":"),
+        QByteArrayLiteral("\n    \"height_px\":"),
+        QByteArrayLiteral("\n    \"width_mm\":"),
+        QByteArrayLiteral("\n    \"height_mm\":"),
+        QByteArrayLiteral("\n    \"pixel_size_mm\":")});
+    assertNestedOrder(QByteArrayLiteral("\n  \"outputs\": {"), {
+        QByteArrayLiteral("\n    \"robot_base_point_cloud\":"),
+        QByteArrayLiteral("\n    \"roi_point_cloud\":"),
+        QByteArrayLiteral("\n    \"plane_mask\":")});
+    const QJsonObject output = QJsonDocument::fromJson(outputBytes).object();
+    assert(output.value(QStringLiteral("schema_version")).toString()
+           == QString::fromLatin1(pcv::interface::kTempWorkpieceSchema));
+    assert(output.value(QStringLiteral("kind")).toString()
+           == QString::fromLatin1(pcv::interface::kTempWorkpieceKind));
+    const QStringList outputKeys = output.keys();
+    const QStringList expectedOutputKeys{
+        QStringLiteral("created_at"),
+        QStringLiteral("image"),
+        QStringLiteral("kind"),
+        QStringLiteral("outputs"),
+        QStringLiteral("plane"),
+        QStringLiteral("roi"),
+        QStringLiteral("schema_version")
+    };
+    assert(outputKeys == expectedOutputKeys);
+    assert(!output.contains(QStringLiteral("point_cloud_layout")));
+    const QJsonObject image = output.value(QStringLiteral("image")).toObject();
+    const QStringList expectedImageKeys{
+        QStringLiteral("height_mm"), QStringLiteral("height_px"), QStringLiteral("name"),
+        QStringLiteral("pixel_size_mm"), QStringLiteral("width_mm"), QStringLiteral("width_px")};
+    assert(image.keys() == expectedImageKeys);
+    assert(image.value(QStringLiteral("name")).toString() == QStringLiteral("plane_mask.png"));
+    const double pixelSize = image.value(QStringLiteral("pixel_size_mm")).toDouble();
+    assert(pixelSize > 0.0);
+    assert(near(image.value(QStringLiteral("width_mm")).toDouble(),
+                image.value(QStringLiteral("width_px")).toInt() * pixelSize));
+    assert(near(image.value(QStringLiteral("height_mm")).toDouble(),
+                image.value(QStringLiteral("height_px")).toInt() * pixelSize));
+    assert(output.value(QStringLiteral("plane")).toObject()
+               .value(QStringLiteral("name")).toString() == QString::fromLatin1(pcv::interface::kTempPlaneName));
+    assert(output.value(QStringLiteral("plane")).toObject()
+               .value(QStringLiteral("equation")).toArray().size() == 6);
+    assert(output.value(QStringLiteral("roi")).toString() == QStringLiteral("rectangle"));
+    const QJsonObject outputs = output.value(QStringLiteral("outputs")).toObject();
+    assert(outputs.value(QStringLiteral("plane_mask")).toString()
+           == QDir::fromNativeSeparators(QFileInfo(generated.planeMaskPng).absoluteFilePath()));
+    assert(outputs.value(QStringLiteral("robot_base_point_cloud")).toString()
+           == QDir::fromNativeSeparators(QFileInfo(generated.baselineRobotBasePly).absoluteFilePath()));
+    assert(outputs.value(QStringLiteral("roi_point_cloud")).toString()
+           == QDir::fromNativeSeparators(QFileInfo(generated.roiTemplateRobotBasePly).absoluteFilePath()));
     assert(fileBytes(jsonPath) == originalJson);
 
     assert(generated.sourceFrame == QStringLiteral("camera"));

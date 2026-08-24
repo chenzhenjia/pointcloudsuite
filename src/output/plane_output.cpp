@@ -3,6 +3,7 @@
 #include <pcv/infrastructure/runtime_paths.h>
 
 #include <QDataStream>
+#include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
 #include <QSaveFile>
@@ -27,23 +28,6 @@ bool invalidComponent(const QString &value)
         || text.contains(QLatin1Char('\\')) || QFileInfo(text).isAbsolute()
         || hasWindowsNameCharacter || text.endsWith(QLatin1Char('.'))
         || text.endsWith(QLatin1Char(' '));
-}
-
-QJsonObject vector3(const QVector3D &value)
-{
-    return {{QStringLiteral("x"), value.x()}, {QStringLiteral("y"), value.y()},
-            {QStringLiteral("z"), value.z()}};
-}
-
-QJsonArray matrix4(const QMatrix4x4 &matrix)
-{
-    QJsonArray result;
-    for (int row = 0; row < 4; ++row) {
-        QJsonArray line;
-        for (int column = 0; column < 4; ++column) line.append(matrix(row, column));
-        result.append(line);
-    }
-    return result;
 }
 
 bool writeImage(const QString &path, const QImage &source, QString *error)
@@ -227,45 +211,34 @@ PlaneOutputResult writePlaneOutput(const JobContext &context, const QImage &imag
         result.errorCode = QStringLiteral("PCV_OUTPUT_002"); result.message = error; return result;
     }
     const double pixelSize = metadata.pixelSizeMm > 0.0 ? metadata.pixelSizeMm : 0.05;
-    const double physicalWidth = metadata.physicalWidthMm > 0.0
-        ? metadata.physicalWidthMm : double(image.width()) * pixelSize;
-    const double physicalHeight = metadata.physicalHeightMm > 0.0
-        ? metadata.physicalHeightMm : double(image.height()) * pixelSize;
-    QJsonObject imageObject{{QStringLiteral("file"), pngRelative}, {QStringLiteral("width_px"), image.width()},
+    const QString sourcePointCloud = metadata.sourcePointCloud;
+    const QString absolutePngPath = QDir::fromNativeSeparators(QFileInfo(pngPath).absoluteFilePath());
+    const QString absolutePlyPath = QDir::fromNativeSeparators(QFileInfo(plyPath).absoluteFilePath());
+    // The temporary exchange format uses robot XYZ followed by RZ, RY, RX;
+    // PlaneOutputMetadata stores the conventional A, B, C (RX, RY, RZ).
+    const QJsonArray poseEquation{
+        metadata.originInRobotBase.x(), metadata.originInRobotBase.y(), metadata.originInRobotBase.z(),
+        metadata.abcDeg.z(), metadata.abcDeg.y(), metadata.abcDeg.x()};
+    const QJsonObject imageObject{
+        {QStringLiteral("name"), QFileInfo(pngPath).fileName()},
+        {QStringLiteral("width_px"), image.width()},
         {QStringLiteral("height_px"), image.height()},
-        {QStringLiteral("physical_width_mm"), physicalWidth},
-        {QStringLiteral("physical_height_mm"), physicalHeight},
-        {QStringLiteral("pixel_size_mm"), pixelSize},
-        {QStringLiteral("pixels_per_mm"), 1.0 / pixelSize},
-        {QStringLiteral("margin_mm"), metadata.marginMm},
-        {QStringLiteral("round_increment_mm"), metadata.roundIncrementMm},
-        {QStringLiteral("automatic_bounds"), metadata.automaticBounds},
-        {QStringLiteral("edge_mask"), metadata.edgeMask},
-        {QStringLiteral("origin"), QStringLiteral("top_left")}, {QStringLiteral("u_axis"), QStringLiteral("workpiece_x_positive")},
-        {QStringLiteral("v_axis"), QStringLiteral("workpiece_y_negative")}, {QStringLiteral("background_value"), 0},
-        {QStringLiteral("foreground_value"), 255}};
+        {QStringLiteral("width_mm"), double(image.width()) * pixelSize},
+        {QStringLiteral("height_mm"), double(image.height()) * pixelSize},
+        {QStringLiteral("pixel_size_mm"), pixelSize}};
     QJsonObject rootObject{
-        {QStringLiteral("schema"), QString::fromLatin1(kPlaneOutputSchema)},
-        {QStringLiteral("job_id"), context.jobId}, {QStringLiteral("workpiece_id"), context.workpieceId},
-        {QStringLiteral("source_point_cloud"), metadata.sourcePointCloud},
-        {QStringLiteral("units"), QJsonObject{{QStringLiteral("length"), QStringLiteral("mm")}, {QStringLiteral("angle"), QStringLiteral("deg")}}},
-        {QStringLiteral("coordinate_frames"), QJsonObject{{QStringLiteral("source"), QStringLiteral("robot_base")}, {QStringLiteral("workpiece"), QStringLiteral("workpiece")}}},
+        {QStringLiteral("schema_version"), QString::fromLatin1(kPlaneOutputSchema)},
+        {QStringLiteral("kind"), QStringLiteral("single_frame_workpiece_roi")},
+        {QStringLiteral("created_at"), QDateTime::currentDateTime().toString(Qt::ISODate)},
+        {QStringLiteral("plane"), QJsonObject{
+            {QStringLiteral("name"), QStringLiteral("WObj1")},
+            {QStringLiteral("equation"), poseEquation}}},
         {QStringLiteral("image"), imageObject},
-        {QStringLiteral("workpiece_coordinate"), QJsonObject{
-            {QStringLiteral("origin_in_robot_base"), vector3(metadata.originInRobotBase)},
-            {QStringLiteral("x_axis"), vector3(metadata.axisXInRobotBase)}, {QStringLiteral("y_axis"), vector3(metadata.axisYInRobotBase)},
-            {QStringLiteral("z_axis"), vector3(metadata.axisZInRobotBase)},
-            {QStringLiteral("abc_deg"), QJsonObject{{QStringLiteral("a"), metadata.abcDeg.x()}, {QStringLiteral("b"), metadata.abcDeg.y()}, {QStringLiteral("c"), metadata.abcDeg.z()}}},
-            {QStringLiteral("T_base_workpiece"), matrix4(base)}, {QStringLiteral("T_workpiece_base"), matrix4(inverse)}}},
-        {QStringLiteral("plane"), QJsonObject{{QStringLiteral("equation"), QJsonObject{{QStringLiteral("a"), metadata.planeEquation.x()}, {QStringLiteral("b"), metadata.planeEquation.y()}, {QStringLiteral("c"), metadata.planeEquation.z()}, {QStringLiteral("d"), metadata.planeEquation.w()}}}, {QStringLiteral("rms_error_mm"), metadata.rmsErrorMm}, {QStringLiteral("distance_tolerance_mm"), metadata.distanceToleranceMm}}},
-        {QStringLiteral("outputs"), QJsonObject{{QStringLiteral("plane_png"), pngRelative}, {QStringLiteral("plane_json"), jsonRelative}, {QStringLiteral("plane_robot_base_ply"), plyRelative}}},
-        {QStringLiteral("mapping"), QJsonObject{
-            {QStringLiteral("source_frame"), QStringLiteral("robot_base")},
-            {QStringLiteral("target_frame"), QStringLiteral("workpiece")},
-            {QStringLiteral("formula"), QStringLiteral("P_workpiece = R_base_workpiece^T * (P_base - O_base)")},
-            {QStringLiteral("statistics"), metadata.diagnostics}}},
-        {QStringLiteral("diagnostics"), metadata.diagnostics},
-        {QStringLiteral("status"), QJsonObject{{QStringLiteral("success"), true}, {QStringLiteral("error_code"), QString()}, {QStringLiteral("message"), QString()}}}
+        {QStringLiteral("roi"), QStringLiteral("rectangle")},
+        {QStringLiteral("outputs"), QJsonObject{
+            {QStringLiteral("robot_base_point_cloud"), sourcePointCloud},
+            {QStringLiteral("roi_point_cloud"), absolutePlyPath},
+            {QStringLiteral("plane_mask"), absolutePngPath}}}
     };
     const QByteArray bytes = QJsonDocument(rootObject).toJson(QJsonDocument::Indented);
     if (!writeJson(stagedJson, bytes, &error)) {
