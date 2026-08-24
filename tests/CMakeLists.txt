@@ -20,28 +20,17 @@ add_executable(plane_output_tests unit/output/plane_output_tests.cpp)
 target_link_libraries(plane_output_tests PRIVATE Qt::Core Qt::Gui pcv_output)
 add_test(NAME plane_output_tests COMMAND plane_output_tests)
 
+add_executable(temp_workpiece_interface_tests unit/interface/temp_workpiece_interface_tests.cpp)
+target_link_libraries(temp_workpiece_interface_tests PRIVATE Qt::Core Qt::Gui pcv_interface)
+add_test(NAME temp_workpiece_interface_tests COMMAND temp_workpiece_interface_tests)
+
 list(APPEND PCV_APPLICATION_TEST_TARGETS
     ply_reader_tests
     cloud_cache_tests
     downsample_tests
     statistical_filter_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS plane_output_tests)
-
-if(PCV_BUILD_POINTCLOUDVIEW)
-    add_executable(pointcloudprocessor_obstacle_tests
-        unit/pointcloudview/pointcloudprocessor_obstacle_tests.cpp
-        ../apps/pointcloudview/pointcloudprocessor.cpp
-        ../apps/pointcloudview/pointcloudprocessor.h
-    )
-    target_include_directories(pointcloudprocessor_obstacle_tests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/pointcloudview
-    )
-    target_link_libraries(pointcloudprocessor_obstacle_tests PRIVATE
-        Qt::Core Qt::Gui pcv_core pcv_infrastructure pcv_io pcv_filtering)
-    add_test(NAME pointcloudprocessor_obstacle_tests COMMAND pointcloudprocessor_obstacle_tests)
-    list(APPEND PCV_APPLICATION_TEST_TARGETS pointcloudprocessor_obstacle_tests)
-endif()
+list(APPEND PCV_APPLICATION_TEST_TARGETS temp_workpiece_interface_tests)
 
 if(PCV_BUILD_POINTCLOUDSTITCH)
     add_executable(handeye_transform_tests

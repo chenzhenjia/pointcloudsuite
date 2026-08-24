@@ -295,45 +295,6 @@ struct PlanePlyExportResult {
     bool ok = false;
 };
 
-// First-stage obstacle detection for a 2.5D workpiece surface. Candidates are
-// points whose absolute distance from the confirmed reference plane exceeds
-// the height threshold and whose UV projection lies inside the measured plane
-// footprint. Positive and negative plane sides are grouped independently.
-struct ObstacleDetectionOptions {
-    float minimumHeight = 1.0f;
-    float gridSize = 0.0f;
-    int minimumPointCount = 30;
-    float minimumArea = 4.0f;
-    int connectivityRadiusCells = 2;
-    int maximumGridCells = 4000000;
-};
-
-struct ObstacleRegion {
-    int id = -1;
-    QVector<int> pointIndices;
-    Point3D centroid;
-    Point3D minimumBound;
-    Point3D maximumBound;
-    float area = 0.0f;
-    float meanHeight = 0.0f;
-    float maximumHeight = 0.0f;
-    int sideSign = 1;
-};
-
-struct ObstacleDetectionResult {
-    QVector<int> obstacleIndices;
-    QVector<ObstacleRegion> regions;
-    int candidatePointCount = 0;
-    int positiveCandidatePointCount = 0;
-    int negativeCandidatePointCount = 0;
-    int planeComponentCount = 0;
-    float gridSize = 0.0f;
-    bool disconnectedPlaneSurface = false;
-    QString summary;
-    QString error;
-    bool ok = false;
-};
-
 struct NoiseResult {
     QVector<Point3D> points;
     QString error;
@@ -406,9 +367,4 @@ PlanePlyExportResult exportPlanePly(const QString &fileName,
                                     const PlaneModel &model,
                                     const WorkpieceCoordinateSystem &frame,
                                     const QString &sourceFile = {});
-ObstacleDetectionResult detectObstacles(const QVector<Point3D>&,
-                                        const QVector<int>&,
-                                        const PlaneModel&,
-                                        const ObstacleDetectionOptions& = {});
-
 } // namespace pointcloud

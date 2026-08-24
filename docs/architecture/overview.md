@@ -32,5 +32,5 @@ directory.
 shared modules do not depend on either application; `pcv_output` additionally uses
 `Qt::Gui` for `QImage` and matrix types. The current Debug CTest targets are
 `ply_reader_tests`, `cloud_cache_tests`, `downsample_tests`,
-`statistical_filter_tests`, `plane_output_tests`,
-`pointcloudprocessor_obstacle_tests`, and `handeye_transform_tests`.
+`statistical_filter_tests`, `plane_output_tests`, and
+`handeye_transform_tests`.

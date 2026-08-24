@@ -68,7 +68,7 @@
 
 | path/target | responsibility/type |
 |---|---|
-| apps/pointcloudview | Qt Widgets + OpenGL 查看、处理、平面/障碍/边缘 |
+| apps/pointcloudview | Qt Widgets + OpenGL 查看、处理、平面/边缘 |
 | apps/pointcloudstitch | 手眼转换、多帧 ICP、接缝融合 |
 | src/core | Point3D 基础类型 |
 | src/infrastructure | 应用数据、缓存、日志、导出目录 |
@@ -180,9 +180,8 @@ plane_output.h 还声明 PCV_INPUT_001/002、PCV_TRANSFORM_001/002、PCV_STITCH_
 | extractPlaneFromThreePoints | 三点初始面 + RANSAC/PCA/连通域 | ThreePointPlaneResult；共线、内点不足、索引/网格非法失败 |
 | buildWorkpieceCoordinateSystem | 建立右手工件坐标系 | WorkpieceCoordinateSystem；点近/共线/矩阵不可逆失败 |
 | extractPlaneImage | 平面映射到工件 XY 图像 | PlaneImageResult；无效/非平面/越界/像素超限被拒绝 |
-| detectObstacles | 2.5D 平面两侧障碍 | ObstacleDetectionResult；障碍是非阻断告警 |
 
-默认值：障碍高度 1.0 mm、最少 30 点、面积 4.0 mm²；图像 margin 50 mm、pixel size 0.05 mm、round increment 10 mm、maximumImagePixels 100000000。
+默认值：图像 margin 50 mm、pixel size 0.05 mm、round increment 10 mm、maximumImagePixels 100000000。
 
 异步约束：工作线程不访问 QWidget/OpenGL；发布前校验画布/坐标系版本和关闭状态；关闭时断开 watcher 信号、等待任务、再释放大 QVector；UI 用 QMessageBox，算法层只返回结果。
 
@@ -232,10 +231,9 @@ plane_output.h 还声明 PCV_INPUT_001/002、PCV_TRANSFORM_001/002、PCV_STITCH_
 | Downsample | 比例、首点体素、质心体素、source index | 空输入、非法尺寸、无效点 | downsample_tests |
 | Statistical | 邻域充足、离群点移除 | 点数/邻域不足、空结果回退 | statistical_filter_tests |
 | Plane output | 三件套、相对路径、JSON、Grayscale8、0/255 | 非法上下文、空图、空索引、不可逆矩阵、写入失败 | plane_output_tests |
-| Pointcloudview app | 障碍区域、正/负侧、边界 | 无效平面、连通域边界、网格限制 | pointcloudprocessor_obstacle_tests |
 | Stitch | XML、刚体矩阵链、姿态转换、旋转插值、源索引 | 非刚体、矩阵/姿态非法、取消 | handeye_transform_tests |
 
-当前 Debug CTest 目标：ply_reader_tests、cloud_cache_tests、downsample_tests、statistical_filter_tests、plane_output_tests、pointcloudprocessor_obstacle_tests、handeye_transform_tests。
+当前 Debug CTest 目标：ply_reader_tests、cloud_cache_tests、downsample_tests、statistical_filter_tests、plane_output_tests、handeye_transform_tests。
 
 添加测试：
 

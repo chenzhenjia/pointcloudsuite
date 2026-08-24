@@ -67,7 +67,7 @@ flowchart TB
 | `pcv_io` | 静态库 | `ply_reader`（ASCII/二进制 LE/BE，进度、取消、并行解析）、`cloud_cache`（校验缓存） | pcv_core、pcv_infrastructure、Qt::Core |
 | `pcv_filtering` | 静态库 | `downsample`（比例/体素，首点与质心策略）、`statistical_filter` | pcv_core、Qt::Core |
 | `pcv_output` | 静态库 | `plane_output`：作业上下文校验、平面 PNG/JSON/PLY 契约导出、错误码 | pcv_infrastructure、pcv_core、Qt::Core、Qt::Gui |
-| `pointcloudview` | 可执行程序 | PLY 加载/缓存、降噪、三点平面提取、工件坐标系、障碍检测、平面边缘分割、平面图像导出 | 全部 pcv 库 + Qt Widgets/Concurrent/OpenGL/OpenGLWidgets |
+| `pointcloudview` | 可执行程序 | PLY 加载/缓存、降噪、三点平面提取、工件坐标系、平面边缘分割、平面图像导出 | 全部 pcv 库 + Qt Widgets/Concurrent/OpenGL/OpenGLWidgets |
 | `pointcloudstitch` | 可执行程序 | 手眼标定读取、逐帧机器人坐标转换、相邻帧 ICP 配准（平面预对齐/结构验收/信赖域）、接缝融合、回归模式 | 全部 pcv 库 + Qt Core/Gui/Widgets/Concurrent |
 | `registration_diagnostic` | CLI（默认关闭） | 直接编译 `apps/pointcloudview/pointcloudprocessor.cpp` | pcv_core、pcv_infrastructure、pcv_io、pcv_filtering |
 | 单元测试（5 个共享模块/适配测试 + 2 个 app 源码测试） | CTest | `tests/unit/{io,filtering,output,pointcloudview,registration}` | 对应 pcv 库；app 测试直接编译 `apps/` 内源文件 |
