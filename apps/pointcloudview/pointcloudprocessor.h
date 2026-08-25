@@ -238,6 +238,26 @@ struct ThreePointPlaneResult {
     QString error;
     bool ok = false;
 };
+enum class PlaneConsistencyStatus : quint8 {
+    Passed,
+    InvalidInput,
+    ReusedPoint,
+    Collinear,
+    AngleExceeded,
+    DistanceExceeded
+};
+struct PlaneConsistencyResult {
+    PlaneConsistencyStatus status = PlaneConsistencyStatus::InvalidInput;
+    float normalAngleDegrees = 0.0f;
+    float maximumDistanceMm = 0.0f;
+    QString error;
+    bool passed = false;
+};
+struct PlaneBoundsCenterResult {
+    QVector3D center;
+    QString error;
+    bool ok = false;
+};
 struct PlaneEdgeResult {
     QVector<int> edgeIndices;
     QVector<PlaneContour> contours;
@@ -270,6 +290,9 @@ struct PlaneImageResult {
     int rejectedInvalidPointCount = 0;
     int rejectedNonPlanePointCount = 0;
     int rejectedOutsideRectangleCount = 0;
+    // Real source points that passed the fitted-plane and rectangular ROI tests.
+    // This preserves input order and is the only index set used for ROI export.
+    QVector<int> roiIndices;
     float usedPlaneDistanceTolerance = 0.0f;
     QVector3D workpieceMinimum;
     QVector3D workpieceMaximum;
@@ -357,6 +380,12 @@ PlaneSegmentationResult segmentPlanes(const QVector<Point3D>&, const PlaneSegmen
 EdgePipelineResult runEdgeAwarePipeline(const QVector<Point3D>&, const EdgePipelineOptions& = {});
 ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D>&, const QVector<int>&, const ThreePointPlaneOptions& = {});
 ThreePointPlaneResult selectPlaneFromThreeSeeds(const QVector<Point3D>&, const QVector<int>&, const ThreePointPlaneOptions& = {});
+PlaneConsistencyResult validatePlaneConsistency(
+    const QVector<Point3D> &, const PlaneModel &, const QVector<int> &referenceIndices,
+    const QVector<int> &verificationIndices, float angleToleranceDegrees = 1.0f,
+    float distanceToleranceMm = 0.4f);
+PlaneBoundsCenterResult calculatePlaneBoundsCenter(
+    const QVector<Point3D> &, const QVector<int> &planeIndices);
 WorkpieceCoordinateSystem buildWorkpieceCoordinateSystem(
     const QVector<Point3D> &, const QVector<int> &, int originIndex = -1,
     bool preferPositiveZ = true);
@@ -365,6 +394,12 @@ WorkpieceCoordinateSystem buildWorkpieceCoordinateSystem(
     const QVector3D &planeNormal,
     int xAxisPointIndex, int yAxisPointIndex,
     bool preferPositiveZ = false);
+// Builds the JSON-flow WObj1 without user-picked axis points. The robot-base
+// X/Y axes are projected onto the fitted plane and the Z sign follows the
+// robot-base Z direction.
+WorkpieceCoordinateSystem buildWorkpieceCoordinateSystemFromRobotAxes(
+    const QVector3D &origin, const QVector3D &planeNormal,
+    bool preferPositiveZ = true);
 PlaneEdgeResult segmentPlaneEdges(const QVector<Point3D>&, const QVector<int>&,
                                   const PlaneModel&, const PlaneEdgeOptions& = {});
 // Projects the selected plane from the current display cache into a 2D image

@@ -82,16 +82,16 @@ PointCloudSuite 面向机器人/工业视觉点云数据的查看、平面提取
 
 ### 5.5 边缘与二维输出
 
-确认平面点 → UV 栅格 → 闭运算/开运算 → 8 邻域边界 → Marching Squares。默认栅格 `0.2 mm`、形态学半径各 `1`、最大栅格数 `4,000,000`。导出边界由平面点 XY 范围自动计算，四边增加 `50 mm`，向上取整到 `10 mm`，固定 `1 px = 0.05 mm`。PNG 为 `Format_Grayscale8`：背景/孔洞为 `0`，前景为 `255`。边缘 Mask 导出复用同一物理栅格、坐标轴和真实平面索引，不重新读取 PLY。
+确认平面与 WObj1 后，导出矩形由平面点 WObj1 XY 范围自动计算，四边增加 `50 mm`，向上取整到 `10 mm`，固定 `1 px = 0.05 mm`。JSON 流程的 `plane_mask.png` 使用工件坐标系下的边缘分割 `Format_Grayscale8` Mask：背景为 `0`，边缘前景为 `255`。边缘分割完成后自动进入四件套事务提交。
 
 ### 5.6 临时工件接口
 
-接口读取 `temp_scanning_info.json`（schema `sr2026-temp-scanning-info-mvp-2`），要求扫描坐标系为 `camera`、标定方向为 `camera -> robot_base`，并校验点云、XML、位姿和三点索引。点云按 `FullXyz` 或 `LineProfileXz` 转换；无效点、行程范围外点和无效刚体矩阵分别按稳定错误码拒绝。成功时生成 `baseline_robot_base.ply`、`roi_template_robot_base.ply`、`plane_mask.png` 和 `temp_workpiece_info.json`。四个文件先写入临时目录，再一次性提交；任一失败均回滚。
+接口读取 `temp_scanning_info.json`（schema `sr2026-temp-scanning-info-mvp-2`），要求扫描坐标系为 `camera`、标定方向为 `camera -> robot_base`，并校验点云、XML、位姿、三点索引和必填的 ISO 8601 `created_at`。临时扫描接口只接受 `LineProfileXz`；缺少 `point_cloud_layout` 时默认该布局并提示，显式使用 `FullXyz` 时拒绝输入。转换使用点内 `y` 作为扫描比例，并按 Start/End 位姿插值；无效点、行程范围外点、无效刚体矩阵或缺少时间戳分别按稳定错误码拒绝。用户完成平面二次验证和 WObj1 后，边缘分割与四件套提交自动执行，输出 `baseline_robot_base.ply`、`roi_template_robot_base.ply`、边缘 `plane_mask.png` 和 `temp_workpiece_info.json`。四个文件先写入临时目录，再一次性提交；任一失败均回滚。
 
 ## 6. 输出与数据契约
 
 - 二维 PNG：平面或边缘 Mask，左上角为像素原点，前景 `255`、背景 `0`。
-- JSON：统一 schema `sr2026-temp-workpiece-info-mvp-2`，顶层字段为 `schema_version`、`kind`、`created_at`、`plane`、`image`、`roi`、`outputs`；`plane.equation` 顺序为 `[X, Y, Z, RZ, RY, RX]`，输出路径使用规范化绝对路径。
+- JSON：统一 schema `sr2026-temp-workpiece-info-mvp-2`，只允许顶层字段 `schema_version`、`kind`、`created_at`、`plane`、`image`、`roi`、`outputs`。`plane` 只包含 `name`、`equation`，`image` 只包含名称、像素尺寸、物理尺寸和像素尺寸，`roi` 固定为字符串 `rectangle`，`outputs` 只包含三条规范化绝对路径；`plane.equation` 顺序为 `[X, Y, Z, RX, RY, RZ]`。临时工件 `created_at` 原样沿用扫描 JSON，普通平面输出使用生成时间。
 - `_plane_robot_base.ply`：最终连通域平面点，binary little-endian，坐标保持机器人基坐标，并记录来源和坐标系元数据。
 - 输出由 `pcv_output` 统一写出；PNG、PLY、JSON 先写临时目录后成套提交并支持回滚，任一文件失败均视为整体失败。
 - `cache/*.pcvbin`：运行缓存；`logs/startup.log`：启动诊断日志。
@@ -130,5 +130,5 @@ v0.1 已形成从 PLY 输入、OpenGL 查看、真实点选、平面/边缘处�
 
 - 删除障碍检测及其非阻断告警，不再把障碍状态写入主程序流程或文档验收项。
 - 新增 `pcv_registration` 和 `pcv_interface`，统一临时扫描输入、手眼转换、平面/ROI 提取和输出提交。
-- 平面输出 JSON 从旧 proposal schema 切换为 `sr2026-temp-workpiece-info-mvp-2`，输出路径改为规范化绝对路径，姿态顺序固定为 `[X,Y,Z,RZ,RY,RX]`。
+- 平面输出 JSON 从旧 proposal schema 切换为 `sr2026-temp-workpiece-info-mvp-2`，输出路径改为规范化绝对路径，姿态顺序固定为 `[X,Y,Z,RX,RY,RZ]`。
 - 用户选择输出目录时直接写入该目录；PNG、PLY、JSON 以及临时工件四件套均采用临时目录提交和失败回滚。

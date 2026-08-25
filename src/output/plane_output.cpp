@@ -211,14 +211,14 @@ PlaneOutputResult writePlaneOutput(const JobContext &context, const QImage &imag
         result.errorCode = QStringLiteral("PCV_OUTPUT_002"); result.message = error; return result;
     }
     const double pixelSize = metadata.pixelSizeMm > 0.0 ? metadata.pixelSizeMm : 0.05;
-    const QString sourcePointCloud = metadata.sourcePointCloud;
+    const QString sourcePointCloud = QDir::fromNativeSeparators(
+        QFileInfo(metadata.sourcePointCloud).absoluteFilePath());
     const QString absolutePngPath = QDir::fromNativeSeparators(QFileInfo(pngPath).absoluteFilePath());
     const QString absolutePlyPath = QDir::fromNativeSeparators(QFileInfo(plyPath).absoluteFilePath());
-    // The temporary exchange format uses robot XYZ followed by RZ, RY, RX;
-    // PlaneOutputMetadata stores the conventional A, B, C (RX, RY, RZ).
+    // The exchange format uses robot XYZ followed by RX, RY, RZ.
     const QJsonArray poseEquation{
         metadata.originInRobotBase.x(), metadata.originInRobotBase.y(), metadata.originInRobotBase.z(),
-        metadata.abcDeg.z(), metadata.abcDeg.y(), metadata.abcDeg.x()};
+        metadata.abcDeg.x(), metadata.abcDeg.y(), metadata.abcDeg.z()};
     const QJsonObject imageObject{
         {QStringLiteral("name"), QFileInfo(pngPath).fileName()},
         {QStringLiteral("width_px"), image.width()},

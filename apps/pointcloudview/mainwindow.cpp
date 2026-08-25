@@ -8,6 +8,8 @@
 #include <QComboBox>
 #include <QCheckBox>
 #include <QDoubleSpinBox>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QFutureWatcher>
 #include <QFileDialog>
 #include <QFile>
@@ -1068,6 +1070,7 @@ void MainWindow::buildUi() {
     m_clearEdgeSelectionButton = ui->btn_clear_edge;
     m_extractPlaneImageButton = ui->btn_extract_plane_image;
     m_savePlaneImageButton = ui->btn_save_plane_image;
+    m_finalizeTempWorkpieceButton = ui->btn_finalize_temp_workpiece;
     m_planeImagePreview = ui->lbl_plane_image_preview;
     m_edgeOutput = ui->pte_edge_output;
     connect(ui->btn_pick_axes, &QPushButton::clicked,
@@ -1121,6 +1124,8 @@ void MainWindow::buildUi() {
     connect(m_clearEdgeSelectionButton, &QPushButton::clicked, this, &MainWindow::clearEdgePointSelection);
     connect(m_extractPlaneImageButton, &QPushButton::clicked, this, &MainWindow::extractPlaneImage);
     connect(m_savePlaneImageButton, &QPushButton::clicked, this, &MainWindow::savePlaneImage);
+    connect(m_finalizeTempWorkpieceButton, &QPushButton::clicked,
+            this, &MainWindow::finalizeTempWorkpiece);
     ui->splitter_main->setStretchFactor(0, 0);
     ui->splitter_main->setStretchFactor(1, 1);
     ui->splitter_main->setStretchFactor(2, 0);
@@ -1657,7 +1662,39 @@ void MainWindow::updateRenderSettings() {
                                 m_mapMin->value(), m_mapMax->value());
 }
 
-void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points) {
+void MainWindow::applyDepthRenderRange(const QVector<pointcloud::Point3D> &points) {
+    if (!m_canvas || !m_colorMode || !m_mapMin || !m_mapMax) return;
+    float minimum = std::numeric_limits<float>::max();
+    float maximum = std::numeric_limits<float>::lowest();
+    bool hasFiniteDepth = false;
+    for (const pointcloud::Point3D &point : points) {
+        if (!std::isfinite(point.z)) continue;
+        minimum = qMin(minimum, point.z);
+        maximum = qMax(maximum, point.z);
+        hasFiniteDepth = true;
+    }
+    if (!hasFiniteDepth) {
+        qWarning() << "JSON depth rendering skipped: no finite robot_base.z values";
+        return;
+    }
+    if (!(maximum > minimum)) maximum = minimum + 1.0f;
+
+    // Keep the JSON workflow deterministic: the transformed robot_base Z
+    // range drives the height colormap and is also reflected in the controls.
+    const QSignalBlocker colorBlocker(m_colorMode);
+    const QSignalBlocker minimumBlocker(m_mapMin);
+    const QSignalBlocker maximumBlocker(m_mapMax);
+    m_colorMode->setCurrentIndex(0);
+    m_mapMin->setValue(double(minimum));
+    m_mapMax->setValue(double(maximum));
+    if (m_mapMax->value() <= m_mapMin->value())
+        m_mapMax->setValue(m_mapMin->value() + 1.0);
+    updateRenderSettings();
+    qInfo() << "JSON depth rendering range: robot_base.z" << minimum << maximum;
+}
+
+void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points,
+                                    bool preserveTempWorkpieceSession) {
     const qsizetype incomingCount = points.size();
 
     // No GUI or OpenGL state may be touched once closeEvent() has started.
@@ -1672,6 +1709,13 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points) {
     // operation. A temporarily unavailable OpenGL widget must never discard a
     // successfully loaded cloud or leave the UI reporting zero displayed
     // points while m_rawPoints is populated.
+    if (!preserveTempWorkpieceSession && m_tempWorkpieceSessionActive) {
+        m_tempWorkpieceSessionActive = false;
+        m_tempWorkpieceSourceIndices.clear();
+        m_tempWorkpieceOutputDirectory.clear();
+        m_tempWorkpieceCreatedAtIso8601.clear();
+        m_tempWorkpieceScanId.clear();
+    }
     m_points = std::move(points);
     ++m_canvasRevision;
     qInfo() << "Main display cache published, points=" << m_points.size()
@@ -1679,17 +1723,16 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points) {
             << "canvas=" << static_cast<const void *>(m_canvas)
             << "closing=" << m_closing;
     m_selectedPointIndices.clear();
-    m_secondPlanePointIndices.clear();
+    resetSecondPlaneVerification();
     m_axisSelectionActive = false;
     m_xAxisPointIndex = m_yAxisPointIndex = -1;
     m_planeCenter = {};
+    m_planeCenterValid = false;
     m_threePlaneResult = {};
     m_workpieceCoordinate = {};
     m_threePointSelectionActive = false;
-    m_secondPlaneSelectionActive = false;
-    m_secondPlaneValidated = false;
-    m_secondPlaneSamePlane = false;
     m_planeCandidateConfirmed = false;
+    m_planeFinalizationPending = false;
     if (m_canvas) {
         m_canvas->setSelectionMode(false);
         // setCloud() clears every derived point-state layer. Do not call
@@ -1711,9 +1754,19 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points) {
 bool MainWindow::pointTaskRunning() const {
     return m_loading || (m_noiseWatcher && m_noiseWatcher->isRunning())
         || (m_tempWorkpieceWatcher && m_tempWorkpieceWatcher->isRunning())
+        || (m_tempWorkpieceFinalizeWatcher && m_tempWorkpieceFinalizeWatcher->isRunning())
         || (m_threePlaneWatcher && m_threePlaneWatcher->isRunning())
         || (m_edgeWatcher && m_edgeWatcher->isRunning())
         || (m_planeImageWatcher && m_planeImageWatcher->isRunning());
+}
+
+void MainWindow::resetSecondPlaneVerification() {
+    m_secondPlanePointIndices.clear();
+    m_secondPlaneSelectionActive = false;
+    m_secondPlaneValidated = false;
+    m_secondPlaneSamePlane = false;
+    m_secondPlaneNormalAngle = 0.0f;
+    m_secondPlaneMaximumDistance = 0.0f;
 }
 
 void MainWindow::startPlanePointSelection() {
@@ -1726,21 +1779,18 @@ void MainWindow::startPlanePointSelection() {
         return;
     }
     m_selectedPointIndices.clear();
-    m_secondPlanePointIndices.clear();
+    resetSecondPlaneVerification();
     m_axisSelectionActive = false;
     m_xAxisPointIndex = m_yAxisPointIndex = -1;
     m_planeCenter = {};
+    m_planeCenterValid = false;
     m_threePlaneResult = {};
     m_workpieceCoordinate = {};
     ++m_coordinateFrameRevision;
     clearPlaneEdgeUi();
     m_planeCandidateConfirmed = false;
+    m_planeFinalizationPending = false;
     m_threePointSelectionActive = true;
-    m_secondPlaneSelectionActive = false;
-    m_secondPlaneValidated = false;
-    m_secondPlaneSamePlane = false;
-    m_secondPlaneValidated = false;
-    m_secondPlaneSamePlane = false;
     m_canvas->clearPlaneResult();
     m_canvas->clearWorkpieceCoordinateSystem();
     m_canvas->setSelectedIndices({});
@@ -1756,18 +1806,16 @@ void MainWindow::abandonPlanePointSelection() {
         return;
     }
     m_selectedPointIndices.clear();
-    m_secondPlanePointIndices.clear();
+    resetSecondPlaneVerification();
     m_threePlaneResult = {};
+    m_planeCenter = {};
+    m_planeCenterValid = false;
     m_workpieceCoordinate = {};
     ++m_coordinateFrameRevision;
     clearPlaneEdgeUi();
     m_planeCandidateConfirmed = false;
+    m_planeFinalizationPending = false;
     m_threePointSelectionActive = false;
-    m_secondPlaneSelectionActive = false;
-    m_secondPlaneValidated = false;
-    m_secondPlaneSamePlane = false;
-    m_secondPlaneValidated = false;
-    m_secondPlaneSamePlane = false;
     if (m_canvas) {
         m_canvas->setSelectionMode(false);
         m_canvas->setSelectedIndices({});
@@ -1787,16 +1835,18 @@ void MainWindow::undoPlanePointSelection() {
     }
     if (m_selectedPointIndices.isEmpty()) return;
     m_selectedPointIndices.removeLast();
+    resetSecondPlaneVerification();
     m_axisSelectionActive = false;
     m_xAxisPointIndex = m_yAxisPointIndex = -1;
     m_planeCenter = {};
+    m_planeCenterValid = false;
     m_threePlaneResult = {};
     m_workpieceCoordinate = {};
     ++m_coordinateFrameRevision;
     clearPlaneEdgeUi();
     m_planeCandidateConfirmed = false;
+    m_planeFinalizationPending = false;
     m_threePointSelectionActive = true;
-    m_secondPlaneSelectionActive = false;
     m_canvas->clearPlaneResult();
     m_canvas->clearWorkpieceCoordinateSystem();
     m_canvas->setSelectedIndices(m_selectedPointIndices);
@@ -1811,6 +1861,8 @@ void MainWindow::updatePlaneExtractionUi() {
     const bool hasThreePoints = m_selectedPointIndices.size() == 3;
     const bool hasCandidate = m_threePlaneResult.ok;
     const bool hasAxes = m_xAxisPointIndex >= 0 && m_yAxisPointIndex >= 0;
+    const bool verificationPassed = m_secondPlaneValidated && m_secondPlaneSamePlane;
+    const bool automaticJsonFrame = m_tempWorkpieceSessionActive;
     if (m_pickPointsButton) m_pickPointsButton->setEnabled(!running && !m_points.isEmpty());
     if (m_abandonPointsButton)
         m_abandonPointsButton->setEnabled(!running && !m_selectedPointIndices.isEmpty());
@@ -1820,17 +1872,30 @@ void MainWindow::updatePlaneExtractionUi() {
         m_determinePlaneButton->setEnabled(!running && hasThreePoints && !hasCandidate);
     if (m_confirmCandidateButton)
         m_confirmCandidateButton->setEnabled(!running && hasCandidate
+                                             && (m_planeFinalizationPending
+                                                 || (verificationPassed
+                                                     && (automaticJsonFrame || hasAxes)))
                                              && !m_planeCandidateConfirmed);
     if (m_cancelCandidateButton)
         m_cancelCandidateButton->setEnabled(!running && hasCandidate);
     if (m_pickSecondPlaneButton)
-        m_pickSecondPlaneButton->setEnabled(!running && m_planeCandidateConfirmed);
+        m_pickSecondPlaneButton->setEnabled(!running && hasCandidate
+                                            && !m_planeFinalizationPending
+                                            && !m_planeCandidateConfirmed);
     if (m_cancelSecondPlaneButton)
         m_cancelSecondPlaneButton->setEnabled(!running && m_secondPlaneSelectionActive);
-    if (ui->btn_pick_axes)
-        ui->btn_pick_axes->setEnabled(!running && hasCandidate && !m_points.isEmpty());
+    if (ui->btn_pick_axes) {
+        ui->btn_pick_axes->setEnabled(!automaticJsonFrame && !running && hasCandidate
+                                      && verificationPassed
+                                      && !m_points.isEmpty()
+                                      && !m_planeCandidateConfirmed);
+        ui->btn_pick_axes->setVisible(!automaticJsonFrame);
+    }
     if (ui->btn_clear_axes)
-        ui->btn_clear_axes->setEnabled(!running && (hasAxes || m_axisSelectionActive));
+        ui->btn_clear_axes->setEnabled(!automaticJsonFrame && !running
+                                       && (hasAxes || m_axisSelectionActive));
+    if (ui->btn_clear_axes)
+        ui->btn_clear_axes->setVisible(!automaticJsonFrame);
     if (!m_threeOutput || hasCandidate) return;
     QStringList lines;
     for (int i = 0; i < m_selectedPointIndices.size(); ++i) {
@@ -1865,6 +1930,14 @@ void MainWindow::updatePlaneEdgeUi() {
                                                && planeReady);
     if (m_savePlaneImageButton)
         m_savePlaneImageButton->setEnabled(planeImageSaveReady());
+    if (m_finalizeTempWorkpieceButton) {
+        QString finalizeError;
+        const bool visible = m_tempWorkpieceSessionActive;
+        m_finalizeTempWorkpieceButton->setVisible(visible);
+        m_finalizeTempWorkpieceButton->setEnabled(
+            visible && tempWorkpieceFinalizeReady(&finalizeError));
+        m_finalizeTempWorkpieceButton->setToolTip(finalizeError);
+    }
 }
 
 void MainWindow::openTempScanningInfo() {
@@ -1879,37 +1952,86 @@ void MainWindow::openTempScanningInfo() {
     if (path.isEmpty()) return;
 
     const QString absolutePath = QFileInfo(path).absoluteFilePath();
-    const QString outputDirectory = QFileInfo(absolutePath).absolutePath();
-    const QStringList outputNames{
-        QStringLiteral("baseline_robot_base.ply"),
-        QStringLiteral("roi_template_robot_base.ply"),
-        QStringLiteral("plane_mask.png"),
-        QStringLiteral("temp_workpiece_info.json")
-    };
-    QStringList existingOutputs;
-    for (const QString &name : outputNames) {
-        const QString outputPath = QDir(outputDirectory).filePath(name);
-        if (QFileInfo::exists(outputPath)) existingOutputs.push_back(name);
+    pcv::interface::TempScanningInfo scanInfo;
+    QString parseError;
+    if (!pcv::interface::parseTempScanningInfo(absolutePath, &scanInfo, &parseError)) {
+        QMessageBox::warning(this, tr("扫描 JSON 无效"), parseError);
+        return;
     }
-    if (!existingOutputs.isEmpty()) {
-        const QString question = tr("输出目录中已存在以下文件：\n%1\n\n是否覆盖？")
-            .arg(existingOutputs.join(QStringLiteral("\n")));
-        if (QMessageBox::question(this, tr("确认覆盖"), question,
-                                  QMessageBox::Yes | QMessageBox::No,
-                                  QMessageBox::No) != QMessageBox::Yes) {
-            statusBar()->showMessage(tr("已取消扫描 JSON 处理"));
-            return;
-        }
+
+    const QString jsonDirectory = QFileInfo(absolutePath).absolutePath();
+    const auto displayPath = [jsonDirectory](const QString &input) {
+        const QFileInfo inputInfo(input);
+        return QDir::cleanPath(inputInfo.isAbsolute()
+            ? inputInfo.absoluteFilePath()
+            : QFileInfo(QDir(jsonDirectory).filePath(input)).absoluteFilePath());
+    };
+    const auto poseText = [](const pointcloud::RobotPose &pose) {
+        return QStringLiteral("[%1, %2, %3, %4, %5, %6]")
+            .arg(pose.x, 0, 'g', 12).arg(pose.y, 0, 'g', 12).arg(pose.z, 0, 'g', 12)
+            .arg(pose.rz, 0, 'g', 12).arg(pose.ry, 0, 'g', 12).arg(pose.rx, 0, 'g', 12);
+    };
+    const QString layoutName = QStringLiteral("LineProfileXz");
+    QDialog inputDialog(this);
+    inputDialog.setWindowTitle(tr("临时扫描坐标转换"));
+    inputDialog.setModal(true);
+    auto *form = new QFormLayout(&inputDialog);
+    auto *jsonValue = new QLabel(absolutePath, &inputDialog);
+    auto *plyValue = new QLabel(displayPath(scanInfo.pointCloudFile), &inputDialog);
+    auto *xmlValue = new QLabel(displayPath(scanInfo.calibrationFile), &inputDialog);
+    for (QLabel *label : {jsonValue, plyValue, xmlValue}) {
+        label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        label->setWordWrap(true);
+    }
+    form->addRow(tr("输入 JSON"), jsonValue);
+    form->addRow(tr("点云 PLY"), plyValue);
+    form->addRow(tr("手眼 XML"), xmlValue);
+    form->addRow(tr("坐标方向"), new QLabel(
+        QStringLiteral("%1 -> %2").arg(scanInfo.calibrationSourceFrame,
+                                        scanInfo.calibrationTargetFrame), &inputDialog));
+    form->addRow(tr("点云布局"), new QLabel(layoutName, &inputDialog));
+    form->addRow(tr("Start 位姿"), new QLabel(poseText(scanInfo.robotPoseStart), &inputDialog));
+    form->addRow(tr("End 位姿"), new QLabel(poseText(scanInfo.robotPoseEnd), &inputDialog));
+    if (!scanInfo.warning.isEmpty()) {
+        auto *warning = new QLabel(tr("提示：%1").arg(scanInfo.warning), &inputDialog);
+        warning->setWordWrap(true);
+        warning->setStyleSheet(QStringLiteral("color:#a06000;"));
+        form->addRow(tr("输入提示"), warning);
+    }
+
+    QString calibrationOverridePath;
+    auto *changeXml = new QPushButton(tr("更换 XML..."), &inputDialog);
+    form->addRow(QString(), changeXml);
+    connect(changeXml, &QPushButton::clicked, &inputDialog, [&]() {
+        const QString selected = QFileDialog::getOpenFileName(
+            &inputDialog, tr("选择手眼标定 XML"), xmlValue->text(),
+            tr("XML 文件 (*.xml);;所有文件 (*.*)"));
+        if (selected.isEmpty()) return;
+        calibrationOverridePath = QFileInfo(selected).absoluteFilePath();
+        xmlValue->setText(calibrationOverridePath);
+    });
+
+    auto *buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &inputDialog);
+    buttons->button(QDialogButtonBox::Ok)->setText(tr("执行转换"));
+    connect(buttons, &QDialogButtonBox::accepted, &inputDialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &inputDialog, &QDialog::reject);
+    form->addRow(buttons);
+    inputDialog.resize(760, inputDialog.sizeHint().height());
+    if (inputDialog.exec() != QDialog::Accepted) {
+        statusBar()->showMessage(tr("已取消扫描 JSON 转换"));
+        return;
     }
 
     pcv::interface::TempWorkpieceOptions options;
     options.scanningInfoPath = absolutePath;
+    options.calibrationOverridePath = calibrationOverridePath;
 
     if (!m_tempWorkpieceWatcher) {
         m_tempWorkpieceWatcher =
-            new QFutureWatcher<pcv::interface::TempWorkpieceResult>(this);
+            new QFutureWatcher<pcv::interface::TempWorkpiecePreparation>(this);
         connect(m_tempWorkpieceWatcher,
-                &QFutureWatcher<pcv::interface::TempWorkpieceResult>::finished,
+                &QFutureWatcher<pcv::interface::TempWorkpiecePreparation>::finished,
                 this, &MainWindow::tempWorkpieceFinished);
     }
 
@@ -1919,12 +2041,12 @@ void MainWindow::openTempScanningInfo() {
     const auto capturedOptions = options;
     m_tempWorkpieceWatcher->setFuture(QtConcurrent::run([capturedOptions]() {
         QString workerError;
-        return pcv::interface::generateTempWorkpiece(capturedOptions, &workerError);
+        return pcv::interface::prepareTempWorkpiece(capturedOptions, &workerError);
     }));
 }
 
 void MainWindow::tempWorkpieceFinished() {
-    pcv::interface::TempWorkpieceResult result =
+    pcv::interface::TempWorkpiecePreparation result =
         m_tempWorkpieceWatcher->future().takeResult();
     if (m_closing) {
         qWarning() << "Temp workpiece result discarded because the window is closing";
@@ -1947,19 +2069,30 @@ void MainWindow::tempWorkpieceFinished() {
         return;
     }
 
-    const QString layoutName = result.pointCloudLayout
-        == pointcloud::DepthPointLayout::FullXyz
-        ? QStringLiteral("FullXyz") : QStringLiteral("LineProfileXz");
+    const QString layoutName = QStringLiteral("LineProfileXz");
+    m_rawPoints = result.robotBasePoints;
+    m_tempWorkpieceSourceIndices = std::move(result.sourceIndices);
+    m_tempWorkpieceScanId = result.scanId;
+    m_tempWorkpieceOutputDirectory = result.outputDirectory;
+    m_tempWorkpieceCreatedAtIso8601 = result.createdAtIso8601;
+    m_pendingPath = result.resolvedPointCloudFile;
+    m_sourceFiles = {m_pendingPath};
+    m_sourceDirectory = QFileInfo(m_pendingPath).absolutePath();
+    publishCanvasCache(std::move(result.robotBasePoints), true);
+    applyDepthRenderRange(m_points);
+    m_tempWorkpieceSessionActive = true;
+    m_tempWorkpieceSessionRevision = m_canvasRevision;
+    ui->tw_main->setCurrentWidget(ui->wgt_plane);
+    startPlanePointSelection();
     m_fileInfo->setText(
-        tr("扫描 JSON\nscan_id  %1\nlayout  %2\n转换点数  %3\n平面点数  %4\nROI 点数  %5\n输出目录\n%6\n结果 JSON\n%7")
+        tr("扫描 JSON\nscan_id  %1\nlayout  %2\n转换点数  %3\nPLY\n%4\nXML\n%5\n后续输出目录（本阶段未写入）\n%6\n请在平面提取页人工选择 P1、P2、P3")
             .arg(result.scanId, layoutName)
             .arg(QLocale().toString(result.convertedPointCount))
-            .arg(QLocale().toString(result.planePointCount))
-            .arg(QLocale().toString(result.roiPointCount))
-            .arg(QFileInfo(result.interfaceDirectory).absoluteFilePath())
-            .arg(QFileInfo(result.tempWorkpieceInfoPath).absoluteFilePath()));
+            .arg(QFileInfo(result.resolvedPointCloudFile).absoluteFilePath())
+            .arg(QFileInfo(result.resolvedCalibrationFile).absoluteFilePath())
+            .arg(QFileInfo(result.outputDirectory).absoluteFilePath()));
     statusBar()->showMessage(
-        tr("扫描 JSON 处理完成：%1，已生成 %2 个点，当前画布未改变")
+        tr("扫描 JSON 已转换并发布到当前画布：%1，已生成 %2 个点；请依次人工选择 P1、P2、P3")
             .arg(layoutName)
             .arg(QLocale().toString(result.convertedPointCount)));
     if (!result.warning.isEmpty())
@@ -1990,6 +2123,38 @@ bool MainWindow::planeImageSaveReady(QString *error) const {
     for (int index : m_threePlaneResult.planeIndices) {
         if (index < 0 || index >= m_points.size())
             return fail(QStringLiteral("当前平面索引已超出画布点云范围，请重新提取"));
+    }
+    return true;
+}
+
+bool MainWindow::tempWorkpieceFinalizeReady(QString *error) const {
+    auto fail = [error](const QString &message) {
+        if (error) *error = message;
+        return false;
+    };
+    if (!m_tempWorkpieceSessionActive)
+        return fail(QStringLiteral("当前不是临时扫描会话"));
+    if (m_tempWorkpieceSessionRevision != m_canvasRevision)
+        return fail(QStringLiteral("临时扫描会话已过期，请重新打开扫描 JSON"));
+    if (!m_secondPlaneValidated || !m_secondPlaneSamePlane)
+        return fail(QStringLiteral("请先通过第二组三点平面验证"));
+    if (!m_planeCandidateConfirmed || !m_workpieceCoordinate.valid)
+        return fail(QStringLiteral("请先确定有效的 WObj1 坐标系"));
+    if (m_tempWorkpieceSourceIndices.size() != m_points.size())
+        return fail(QStringLiteral("临时扫描 source index 与当前画布不一致"));
+    if (m_tempWorkpieceOutputDirectory.trimmed().isEmpty())
+        return fail(QStringLiteral("临时工件输出目录无效"));
+    QString imageError;
+    if (!planeImageSaveReady(&imageError)) return fail(imageError);
+    if (!m_planeImageResult.edgeMask)
+        return fail(QStringLiteral("临时工件输出必须使用边缘分割后的平面 Mask"));
+    if (m_planeImageResult.occupiedCellCount <= 0)
+        return fail(QStringLiteral("边缘 Mask 没有有效前景像素，无法提交临时工件"));
+    if (m_planeImageResult.roiIndices.size() < 3)
+        return fail(QStringLiteral("最终矩形 ROI 内没有足够的真实平面点"));
+    for (const int index : m_planeImageResult.roiIndices) {
+        if (index < 0 || index >= m_points.size())
+            return fail(QStringLiteral("当前 ROI 索引已超出画布点云范围，请重新提取"));
     }
     return true;
 }
@@ -2026,7 +2191,8 @@ void MainWindow::extractPlaneImage() {
     options.imageRoundIncrement = 10.0f;
     options.maximumImagePixels = 100000000;
     if (options.useImageFrame) {
-        options.imageOrigin = m_planeCenter;
+        options.imageOrigin = m_tempWorkpieceSessionActive
+            ? m_workpieceCoordinate.originInRobotBase : m_planeCenter;
         options.imageAxisU = m_workpieceCoordinate.axisXInRobotBase;
         options.imageAxisV = m_workpieceCoordinate.axisYInRobotBase;
         options.imageCropWidth = float(m_planeImageWidth->value());
@@ -2071,13 +2237,115 @@ void MainWindow::planeImageExtractionFinished() {
     m_planeImagePreview->setPixmap(QPixmap::fromImage(result.image).scaled(
         m_planeImagePreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
     m_edgeOutput->setPlainText(tr("平面 2D 图像已提取\n尺寸：%1 × %2 px\n栅格尺寸：%3 mm\n占用像素：%4\n"
-                                 "工件坐标映射点：%5\n平面外拒绝：%6\n矩形外裁剪：%7")
+                                 "工件坐标映射点：%5\n矩形 ROI 点：%6\n平面外拒绝：%7\n矩形外裁剪：%8\nMask 类型：%9")
         .arg(result.image.width()).arg(result.image.height())
         .arg(result.gridSize, 0, 'g', 6).arg(QLocale().toString(result.occupiedCellCount))
         .arg(QLocale().toString(result.mappedPlanePointCount))
+        .arg(QLocale().toString(result.roiIndices.size()))
         .arg(QLocale().toString(result.rejectedNonPlanePointCount))
-        .arg(QLocale().toString(result.rejectedOutsideRectangleCount)));
+        .arg(QLocale().toString(result.rejectedOutsideRectangleCount))
+        .arg(result.edgeMask ? tr("边缘 Mask") : tr("填充平面 Mask")));
     updatePlaneEdgeUi();
+    if (m_tempWorkpieceSessionActive && result.edgeMask) {
+        statusBar()->showMessage(tr("边缘 PNG 已生成，正在提交临时工件四件套"));
+        finalizeTempWorkpiece();
+    }
+}
+
+void MainWindow::finalizeTempWorkpiece() {
+    QString validationError;
+    if (!tempWorkpieceFinalizeReady(&validationError)) {
+        statusBar()->showMessage(validationError);
+        return;
+    }
+    const QStringList outputNames{
+        QStringLiteral("baseline_robot_base.ply"),
+        QStringLiteral("roi_template_robot_base.ply"),
+        QStringLiteral("plane_mask.png"),
+        QStringLiteral("temp_workpiece_info.json")};
+    QStringList existingOutputs;
+    for (const QString &name : outputNames) {
+        if (QFileInfo::exists(QDir(m_tempWorkpieceOutputDirectory).filePath(name)))
+            existingOutputs.push_back(name);
+    }
+    if (!existingOutputs.isEmpty()) {
+        const QString question = tr("输出目录中已存在以下正式文件：\n%1\n\n是否覆盖？")
+            .arg(existingOutputs.join(QStringLiteral("\n")));
+        if (QMessageBox::question(this, tr("确认覆盖正式输出"), question,
+                                  QMessageBox::Yes | QMessageBox::No,
+                                  QMessageBox::No) != QMessageBox::Yes) {
+            statusBar()->showMessage(tr("已取消覆盖，人工确认结果仍保留在当前会话"));
+            return;
+        }
+    }
+
+    const QVector<int> roiIndices = m_planeImageResult.roiIndices;
+
+    pcv::interface::TempWorkpiecePreparation prepared;
+    prepared.success = true;
+    prepared.scanId = m_tempWorkpieceScanId;
+    prepared.resolvedPointCloudFile = m_pendingPath;
+    prepared.createdAtIso8601 = m_tempWorkpieceCreatedAtIso8601;
+    prepared.robotBasePoints = m_points;
+    prepared.sourceIndices = m_tempWorkpieceSourceIndices;
+    pcv::interface::TempWorkpieceFinalizeOptions options;
+    options.outputDirectory = m_tempWorkpieceOutputDirectory;
+    options.allowOverwrite = true;
+    options.planeIndices = m_threePlaneResult.planeIndices;
+    options.roiIndices = roiIndices;
+    options.planeMask = m_planeImageResult.image;
+    options.planeModel = QVector4D(m_threePlaneResult.model.a, m_threePlaneResult.model.b,
+                                   m_threePlaneResult.model.c, m_threePlaneResult.model.d);
+    options.rmsErrorMm = m_threePlaneResult.rmsError;
+    options.planeDistanceToleranceMm = m_planeImageResult.usedPlaneDistanceTolerance;
+    options.originInRobotBase = m_workpieceCoordinate.originInRobotBase;
+    options.axisXInRobotBase = m_workpieceCoordinate.axisXInRobotBase;
+    options.axisYInRobotBase = m_workpieceCoordinate.axisYInRobotBase;
+    options.axisZInRobotBase = m_workpieceCoordinate.axisZInRobotBase;
+    options.abcDeg = QVector3D(m_workpieceCoordinate.poseA, m_workpieceCoordinate.poseB,
+                               m_workpieceCoordinate.poseC);
+    options.TBaseWorkpiece = m_workpieceCoordinate.workpieceToRobotBase;
+    options.TWorkpieceBase = m_workpieceCoordinate.robotBaseToWorkpiece;
+    if (!m_tempWorkpieceFinalizeWatcher) {
+        m_tempWorkpieceFinalizeWatcher = new QFutureWatcher<pcv::interface::TempWorkpieceResult>(this);
+        connect(m_tempWorkpieceFinalizeWatcher,
+                &QFutureWatcher<pcv::interface::TempWorkpieceResult>::finished,
+                this, &MainWindow::tempWorkpieceFinalizeFinished);
+    }
+    m_progress->show();
+    m_progress->setRange(0, 0);
+    statusBar()->showMessage(tr("正在事务性提交临时工件四件套..."));
+    updatePlaneEdgeUi();
+    m_tempWorkpieceFinalizeWatcher->setFuture(QtConcurrent::run([prepared, options]() {
+        QString workerError;
+        return pcv::interface::finalizeTempWorkpiece(prepared, options, &workerError);
+    }));
+}
+
+void MainWindow::tempWorkpieceFinalizeFinished() {
+    const pcv::interface::TempWorkpieceResult result =
+        m_tempWorkpieceFinalizeWatcher->future().takeResult();
+    if (m_closing) return;
+    m_progress->hide();
+    if (!result.success) {
+        const QString detail = result.errorCode.isEmpty()
+            ? result.message : QStringLiteral("%1: %2").arg(result.errorCode, result.message);
+        QMessageBox::critical(this, tr("临时工件输出失败"), detail);
+        statusBar()->showMessage(detail);
+        updatePlaneEdgeUi();
+        return;
+    }
+    m_tempWorkpieceSessionActive = false;
+    m_tempWorkpieceSessionRevision = 0;
+    m_tempWorkpieceSourceIndices.clear();
+    m_tempWorkpieceScanId.clear();
+    m_tempWorkpieceOutputDirectory.clear();
+    m_tempWorkpieceCreatedAtIso8601.clear();
+    updatePlaneExtractionUi();
+    updatePlaneEdgeUi();
+    statusBar()->showMessage(tr("临时工件四件套已提交：%1\n%2\n%3\n%4")
+        .arg(result.tempWorkpieceInfoPath, result.baselineRobotBasePly,
+             result.roiTemplateRobotBasePly, result.planeMaskPng));
 }
 
 void MainWindow::handleCanvasPointPicked(int index) {
@@ -2087,8 +2355,9 @@ void MainWindow::handleCanvasPointPicked(int index) {
             return;
         }
         if (index == m_xAxisPointIndex || index == m_yAxisPointIndex
-            || m_selectedPointIndices.contains(index)) {
-            statusBar()->showMessage(tr("轴点不能与三点平面种子或另一个轴点重复"));
+            || m_selectedPointIndices.contains(index)
+            || m_secondPlanePointIndices.contains(index)) {
+            statusBar()->showMessage(tr("轴点不能与两组三点平面种子或另一个轴点重复"));
             return;
         }
         if (m_xAxisPointIndex < 0) {
@@ -2101,6 +2370,7 @@ void MainWindow::handleCanvasPointPicked(int index) {
             statusBar()->showMessage(tr("X/Y 轴点已选择，可确定工件坐标系"));
         }
         QVector<int> marked = m_selectedPointIndices;
+        marked += m_secondPlanePointIndices;
         if (m_xAxisPointIndex >= 0) marked.push_back(m_xAxisPointIndex);
         if (m_yAxisPointIndex >= 0) marked.push_back(m_yAxisPointIndex);
         m_canvas->setSelectedIndices(marked);
@@ -2159,11 +2429,18 @@ void MainWindow::determinePlaneCandidate() {
 }
 
 void MainWindow::startSecondPlanePointSelection() {
-    if (pointTaskRunning() || !m_threePlaneResult.ok || !m_planeCandidateConfirmed) {
-        statusBar()->showMessage(tr("请先确定第一平面候选结果"));
+    if (pointTaskRunning() || !m_threePlaneResult.ok || m_planeCandidateConfirmed) {
+        statusBar()->showMessage(tr("请先生成尚未确定的第一平面候选结果"));
         return;
     }
-    m_secondPlanePointIndices.clear();
+    resetSecondPlaneVerification();
+    m_axisSelectionActive = false;
+    m_xAxisPointIndex = m_yAxisPointIndex = -1;
+    m_workpieceCoordinate = {};
+    ++m_coordinateFrameRevision;
+    clearPlaneEdgeUi();
+    m_canvas->clearWorkpieceCoordinateSystem();
+    m_canvas->setSelectedIndices(m_selectedPointIndices);
     m_secondPlaneSelectionActive = true;
     m_canvas->setSelectionMode(true);
     statusBar()->showMessage(tr("请在同一平面上选择第二组三点"));
@@ -2172,8 +2449,7 @@ void MainWindow::startSecondPlanePointSelection() {
 
 void MainWindow::cancelSecondPlanePointSelection() {
     if (pointTaskRunning()) return;
-    m_secondPlaneSelectionActive = false;
-    m_secondPlanePointIndices.clear();
+    resetSecondPlaneVerification();
     if (m_canvas) {
         m_canvas->setSelectionMode(false);
         m_canvas->setSelectedIndices(m_selectedPointIndices);
@@ -2184,63 +2460,74 @@ void MainWindow::cancelSecondPlanePointSelection() {
 
 void MainWindow::validateSecondPlaneSelection() {
     if (m_secondPlanePointIndices.size() != 3 || !m_threePlaneResult.ok) return;
-    const auto point = [this](int index) {
-        const auto &p = m_points[index];
-        return QVector3D(p.x, p.y, p.z);
-    };
-    const QVector3D p1 = point(m_secondPlanePointIndices[0]);
-    const QVector3D p2 = point(m_secondPlanePointIndices[1]);
-    const QVector3D p3 = point(m_secondPlanePointIndices[2]);
-    QVector3D secondNormal = QVector3D::crossProduct(p2 - p1, p3 - p1);
-    if (secondNormal.lengthSquared() < 1.0e-10f) {
-        QMessageBox::warning(this, tr("第二组三点无效"),
-                             tr("第二组三点近似共线，无法确定平面。"));
-        return;
-    }
-    secondNormal.normalize();
-    QVector3D firstNormal(m_threePlaneResult.model.a,
-                          m_threePlaneResult.model.b,
-                          m_threePlaneResult.model.c);
-    firstNormal.normalize();
-    const float normalAngle = float(qRadiansToDegrees(std::acos(
-        qBound(-1.0f, std::abs(QVector3D::dotProduct(firstNormal, secondNormal)), 1.0f))));
-    const float planeNorm = std::sqrt(m_threePlaneResult.model.a * m_threePlaneResult.model.a
-                                    + m_threePlaneResult.model.b * m_threePlaneResult.model.b
-                                    + m_threePlaneResult.model.c * m_threePlaneResult.model.c);
-    const auto distanceToFirst = [this, planeNorm](const QVector3D &p) {
-        return planeNorm > 1.0e-8f
-            ? std::abs(m_threePlaneResult.model.a * p.x()
-                     + m_threePlaneResult.model.b * p.y()
-                     + m_threePlaneResult.model.c * p.z()
-                     + m_threePlaneResult.model.d) / planeNorm : 1.0e9f;
-    };
-    const float maxDistance = qMax(qMax(distanceToFirst(p1), distanceToFirst(p2)),
-                                   distanceToFirst(p3));
-    constexpr float angleTolerance = 3.0f;
+    constexpr float angleTolerance = 1.0f;
     constexpr float distanceTolerance = 0.4f;
-    const bool samePlane = normalAngle <= angleTolerance
-        && maxDistance <= distanceTolerance;
-    m_secondPlaneValidated = true;
-    m_secondPlaneSamePlane = samePlane;
-    m_secondPlaneNormalAngle = normalAngle;
-    m_secondPlaneMaximumDistance = maxDistance;
+    bool autoConfirmJsonFrame = false;
+    const pointcloud::PlaneConsistencyResult validation =
+        pointcloud::validatePlaneConsistency(
+            m_points, m_threePlaneResult.model, m_selectedPointIndices,
+            m_secondPlanePointIndices, angleTolerance, distanceTolerance);
+    m_secondPlaneNormalAngle = validation.normalAngleDegrees;
+    m_secondPlaneMaximumDistance = validation.maximumDistanceMm;
     m_threeOutput->appendPlainText(tr("\n第二组三点校验：法向夹角 %1°，最大距离 %2 mm")
-        .arg(normalAngle, 0, 'f', 3).arg(maxDistance, 0, 'f', 4));
-    if (!samePlane) {
+        .arg(validation.normalAngleDegrees, 0, 'f', 3)
+        .arg(validation.maximumDistanceMm, 0, 'f', 4));
+    if (validation.status == pointcloud::PlaneConsistencyStatus::Passed) {
+        m_secondPlaneValidated = true;
+        m_secondPlaneSamePlane = true;
+        autoConfirmJsonFrame = m_tempWorkpieceSessionActive;
+        statusBar()->showMessage(m_tempWorkpieceSessionActive
+            ? tr("第二组三点确认属于同一平面，JSON 流程将自动建立 WObj1")
+            : tr("第二组三点确认属于同一平面，请选择 WObj1 的 X/Y 轴点"));
+    } else if (validation.status == pointcloud::PlaneConsistencyStatus::Collinear
+               || validation.status == pointcloud::PlaneConsistencyStatus::InvalidInput
+               || validation.status == pointcloud::PlaneConsistencyStatus::ReusedPoint) {
+        const QString error = validation.error;
+        resetSecondPlaneVerification();
+        m_canvas->setSelectedIndices(m_selectedPointIndices);
+        QMessageBox::warning(this, tr("第二组三点无效"), error);
+        statusBar()->showMessage(tr("第二组三点已清除，请重新选择"));
+    } else {
+        const QString error = validation.error;
+        m_threePlaneResult = {};
+        m_selectedPointIndices.clear();
+        resetSecondPlaneVerification();
+        m_planeCenter = {};
+        m_planeCenterValid = false;
+        m_xAxisPointIndex = m_yAxisPointIndex = -1;
+        m_axisSelectionActive = false;
+        m_workpieceCoordinate = {};
+        ++m_coordinateFrameRevision;
+        clearPlaneEdgeUi();
+        m_planeCandidateConfirmed = false;
+        m_planeFinalizationPending = false;
+        m_threePointSelectionActive = true;
+        m_canvas->clearPlaneResult();
+        m_canvas->clearWorkpieceCoordinateSystem();
+        m_canvas->setSelectedIndices({});
+        m_canvas->setSelectionMode(true);
         QMessageBox::warning(this, tr("平面不一致"),
             tr("第二组三点不属于当前确认平面。\n法向夹角：%1°（阈值 %2°）\n"
                "最大距离：%3 mm（阈值 %4 mm）\n请检查选点或台阶。")
-                .arg(normalAngle, 0, 'f', 3).arg(angleTolerance, 0, 'f', 1)
-                .arg(maxDistance, 0, 'f', 4).arg(distanceTolerance, 0, 'f', 2));
-        statusBar()->showMessage(tr("第二组三点与当前平面不一致"));
-    } else {
-        statusBar()->showMessage(tr("第二组三点确认属于同一平面"));
+                .arg(validation.normalAngleDegrees, 0, 'f', 3).arg(angleTolerance, 0, 'f', 1)
+                .arg(validation.maximumDistanceMm, 0, 'f', 4).arg(distanceTolerance, 0, 'f', 2));
+        m_threeOutput->appendPlainText(error);
+        statusBar()->showMessage(tr("当前候选已清除，请重新选择第一组三点"));
     }
+    updatePlaneExtractionUi();
+    updatePlaneEdgeUi();
+    if (autoConfirmJsonFrame)
+        confirmPlaneCandidate();
 }
 
 void MainWindow::startWorkpieceAxisSelection() {
-    if (!m_threePlaneResult.ok || pointTaskRunning() || m_planeCenter.isNull()) {
-        statusBar()->showMessage(tr("请先确定平面并计算平面中心"));
+    if (m_tempWorkpieceSessionActive) {
+        statusBar()->showMessage(tr("JSON 流程按机器人基坐标 X/Y 轴自动建立 WObj1"));
+        return;
+    }
+    if (!m_threePlaneResult.ok || pointTaskRunning() || !m_planeCenterValid
+        || !m_secondPlaneValidated || !m_secondPlaneSamePlane) {
+        statusBar()->showMessage(tr("请先通过第二组三点的平面验证"));
         return;
     }
     m_xAxisPointIndex = -1;
@@ -2260,7 +2547,9 @@ void MainWindow::clearWorkpieceAxisSelection() {
     clearPlaneEdgeUi();
     m_canvas->setSelectionMode(false);
     m_canvas->setWorkpieceCoordinateSystem({});
-    m_canvas->setSelectedIndices(m_selectedPointIndices);
+    QVector<int> marked = m_selectedPointIndices;
+    marked += m_secondPlanePointIndices;
+    m_canvas->setSelectedIndices(marked);
     statusBar()->showMessage(tr("已清除 X/Y 轴点"));
     updatePlaneExtractionUi();
 }
@@ -2271,6 +2560,17 @@ void MainWindow::runPlaneExtraction(bool deferFinalClassification) {
         statusBar()->showMessage(tr("请先在画布中指定三个点"));
         return;
     }
+    resetSecondPlaneVerification();
+    m_axisSelectionActive = false;
+    m_xAxisPointIndex = m_yAxisPointIndex = -1;
+    m_planeCenter = {};
+    m_planeCenterValid = false;
+    m_workpieceCoordinate = {};
+    ++m_coordinateFrameRevision;
+    clearPlaneEdgeUi();
+    m_planeCandidateConfirmed = false;
+    m_planeFinalizationPending = false;
+    if (m_canvas) m_canvas->clearWorkpieceCoordinateSystem();
     pointcloud::ThreePointPlaneOptions options;
     options.initialTolerance = 1.0f;
     options.surfaceTolerance = 0.4f;
@@ -2308,6 +2608,10 @@ void MainWindow::planeExtractionFinished() {
     }
     if (!result.ok) {
         m_threePlaneResult = {};
+        m_planeCenter = {};
+        m_planeCenterValid = false;
+        resetSecondPlaneVerification();
+        m_planeFinalizationPending = false;
         // Keep P1/P2 and let the user replace the invalid third seed.
         if (m_selectedPointIndices.size() >= 3)
             m_selectedPointIndices.removeLast();
@@ -2320,29 +2624,30 @@ void MainWindow::planeExtractionFinished() {
         statusBar()->showMessage(result.error);
         return;
     }
-    const bool completingCandidate = m_planeFinalizationPending && !result.deferred;
-    m_threePlaneResult = result;
-    m_planeCenter = {};
-    if (!result.planeIndices.isEmpty()) {
-        QVector3D minimum(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
-        QVector3D maximum(std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest());
-        qsizetype count = 0;
-        for (int index : result.planeIndices) {
-            if (index < 0 || index >= m_points.size()) continue;
-            const auto &p = m_points[index];
-            minimum.setX(qMin(minimum.x(), p.x)); minimum.setY(qMin(minimum.y(), p.y)); minimum.setZ(qMin(minimum.z(), p.z));
-            maximum.setX(qMax(maximum.x(), p.x)); maximum.setY(qMax(maximum.y(), p.y)); maximum.setZ(qMax(maximum.z(), p.z));
-            ++count;
-        }
-        if (count > 0) m_planeCenter = (minimum + maximum) * 0.5f;
+    const pointcloud::PlaneBoundsCenterResult center =
+        pointcloud::calculatePlaneBoundsCenter(m_points, result.planeIndices);
+    if (!center.ok) {
+        m_threePlaneResult = {};
+        m_planeCenter = {};
+        m_planeCenterValid = false;
+        resetSecondPlaneVerification();
+        m_planeFinalizationPending = false;
+        m_canvas->clearPlaneResult();
+        m_threeOutput->appendPlainText(QStringLiteral("\n") + center.error);
+        updatePlaneExtractionUi();
+        statusBar()->showMessage(center.error);
+        return;
     }
+    m_threePlaneResult = result;
+    m_planeCenter = center.center;
+    m_planeCenterValid = true;
+    resetSecondPlaneVerification();
     m_xAxisPointIndex = m_yAxisPointIndex = -1;
     m_axisSelectionActive = false;
     ++m_coordinateFrameRevision;
     clearPlaneEdgeUi();
     m_planeCandidateConfirmed = false;
     m_planeFinalizationPending = result.deferred;
-    m_planeCandidateConfirmed = completingCandidate;
     m_canvas->setExtractedPlane(result.planeIndices);
     const auto &plane = result.model;
     QStringList lines;
@@ -2370,8 +2675,7 @@ void MainWindow::planeExtractionFinished() {
                  .arg(m_planeCenter.z(), 0, 'f', 3)
           << QString() << (result.deferred
               ? tr("快速候选平面已生成，请确认后完成全量分类")
-              : (completingCandidate ? tr("候选平面已完成全量分类并确定")
-                                     : tr("候选平面已生成")));
+              : tr("候选平面已生成，请进行第二组三点验证"));
     m_threeOutput->setPlainText(lines.join(QLatin1Char('\n')));
     updatePlaneExtractionUi();
     updatePlaneEdgeUi();
@@ -2388,16 +2692,32 @@ void MainWindow::confirmPlaneCandidate() {
         runPlaneExtraction(false);
         return;
     }
-    if (m_xAxisPointIndex < 0 || m_yAxisPointIndex < 0) {
-        statusBar()->showMessage(tr("请先点击“选择 X/Y 轴点”，分别指定 X 轴点和 Y 轴点"));
+    if (!m_secondPlaneValidated || !m_secondPlaneSamePlane) {
+        statusBar()->showMessage(tr("请先完成并通过第二组三点平面验证"));
         return;
     }
-    const pointcloud::WorkpieceCoordinateSystem frame =
-        pointcloud::buildWorkpieceCoordinateSystem(
-            m_points, m_planeCenter,
-            QVector3D(m_threePlaneResult.model.a, m_threePlaneResult.model.b,
-                      m_threePlaneResult.model.c),
+    if (!m_planeCenterValid) {
+        statusBar()->showMessage(m_tempWorkpieceSessionActive
+            ? tr("当前平面中心无效，无法建立 WObj1")
+            : tr("请先点击“选择 X/Y 轴点”，分别指定 X 轴点和 Y 轴点"));
+        return;
+    }
+    pointcloud::WorkpieceCoordinateSystem frame;
+    const QVector3D planeNormal(m_threePlaneResult.model.a,
+                                m_threePlaneResult.model.b,
+                                m_threePlaneResult.model.c);
+    if (m_tempWorkpieceSessionActive) {
+        frame = pointcloud::buildWorkpieceCoordinateSystemFromRobotAxes(
+            m_planeCenter, planeNormal, true);
+    } else {
+        if (m_xAxisPointIndex < 0 || m_yAxisPointIndex < 0) {
+            statusBar()->showMessage(tr("请先点击“选择 X/Y 轴点”，分别指定 X 轴点和 Y 轴点"));
+            return;
+        }
+        frame = pointcloud::buildWorkpieceCoordinateSystem(
+            m_points, m_planeCenter, planeNormal,
             m_xAxisPointIndex, m_yAxisPointIndex, true);
+    }
     if (!frame.valid) {
         statusBar()->showMessage(frame.error);
         m_threeOutput->appendPlainText(QStringLiteral("\n") + frame.error);
@@ -2422,14 +2742,20 @@ void MainWindow::confirmPlaneCandidate() {
                       .arg(frame.poseB, 0, 'f', 4)
                       .arg(frame.poseC, 0, 'f', 4)
                << tr("姿态约定：Rz(C) × Ry(B) × Rx(A)")
-               << tr("X 轴（用户点 #%4）：[%1, %2, %3]")
+               << (m_tempWorkpieceSessionActive
+                       ? tr("X 轴（机器人基坐标 X 轴投影）：[%1, %2, %3]")
+                       : tr("X 轴（用户点 #%4）：[%1, %2, %3]"))
                       .arg(frame.axisXInRobotBase.x(), 0, 'g', 8)
                       .arg(frame.axisXInRobotBase.y(), 0, 'g', 8)
-                      .arg(frame.axisXInRobotBase.z(), 0, 'g', 8).arg(m_xAxisPointIndex)
-               << tr("Y 轴（用户点 #%4）：[%1, %2, %3]")
+                      .arg(frame.axisXInRobotBase.z(), 0, 'g', 8)
+                      .arg(m_xAxisPointIndex)
+               << (m_tempWorkpieceSessionActive
+                       ? tr("Y 轴（机器人基坐标 Y 轴投影）：[%1, %2, %3]")
+                       : tr("Y 轴（用户点 #%4）：[%1, %2, %3]"))
                       .arg(frame.axisYInRobotBase.x(), 0, 'g', 8)
                       .arg(frame.axisYInRobotBase.y(), 0, 'g', 8)
-                      .arg(frame.axisYInRobotBase.z(), 0, 'g', 8).arg(m_yAxisPointIndex)
+                      .arg(frame.axisYInRobotBase.z(), 0, 'g', 8)
+                      .arg(m_yAxisPointIndex)
                << tr("Z 轴：[%1, %2, %3]")
                       .arg(frame.axisZInRobotBase.x(), 0, 'g', 8)
                       .arg(frame.axisZInRobotBase.y(), 0, 'g', 8)
@@ -2447,6 +2773,11 @@ void MainWindow::confirmPlaneCandidate() {
                                    + frameLines.join(QLatin1Char('\n')));
     updatePlaneExtractionUi();
     updatePlaneEdgeUi();
+    if (m_tempWorkpieceSessionActive) {
+        statusBar()->showMessage(tr("WObj1 已自动建立，正在执行工件坐标系下的边缘分割"));
+        applyPlaneEdgeSegmentation();
+        return;
+    }
     statusBar()->showMessage(tr("工件坐标系已确定：原点 X %1 Y %2 Z %3 mm，A %4 B %5 C %6°")
                                 .arg(frame.originInRobotBase.x(), 0, 'f', 3)
                                 .arg(frame.originInRobotBase.y(), 0, 'f', 3)
@@ -2459,12 +2790,17 @@ void MainWindow::confirmPlaneCandidate() {
 void MainWindow::cancelPlaneCandidate() {
     if (!m_threePlaneResult.ok || pointTaskRunning()) return;
     m_threePlaneResult = {};
-    m_secondPlanePointIndices.clear();
+    resetSecondPlaneVerification();
+    m_planeCenter = {};
+    m_planeCenterValid = false;
+    m_axisSelectionActive = false;
+    m_xAxisPointIndex = m_yAxisPointIndex = -1;
     m_workpieceCoordinate = {};
+    ++m_coordinateFrameRevision;
     clearPlaneEdgeUi();
     m_planeCandidateConfirmed = false;
     m_threePointSelectionActive = false;
-    m_secondPlaneSelectionActive = false;
+    m_planeFinalizationPending = false;
     m_canvas->clearPlaneResult();
     m_canvas->clearWorkpieceCoordinateSystem();
     m_canvas->setSelectionMode(false);
@@ -2486,6 +2822,12 @@ void MainWindow::applyPlaneEdgeSegmentation() {
     options.edgeGridSize = float(m_edgeGridSize->value());
     options.morphologyCloseRadius = m_edgeCloseRadius->value();
     options.morphologyOpenRadius = m_edgeOpenRadius->value();
+    options.useImageFrame = m_workpieceCoordinate.valid;
+    if (options.useImageFrame) {
+        options.imageOrigin = m_workpieceCoordinate.originInRobotBase;
+        options.imageAxisU = m_workpieceCoordinate.axisXInRobotBase;
+        options.imageAxisV = m_workpieceCoordinate.axisYInRobotBase;
+    }
     if (!m_edgeWatcher) {
         m_edgeWatcher = new QFutureWatcher<pointcloud::PlaneEdgeResult>(this);
         connect(m_edgeWatcher, &QFutureWatcher<pointcloud::PlaneEdgeResult>::finished,
@@ -2550,7 +2892,7 @@ void MainWindow::planeEdgeSegmentationFinished() {
     imageOptions.imageMargin = 50.0f;
     imageOptions.imagePixelSize = 0.05f;
     imageOptions.imageRoundIncrement = 10.0f;
-    imageOptions.imageOrigin = m_planeCenter;
+    imageOptions.imageOrigin = m_workpieceCoordinate.originInRobotBase;
     imageOptions.imageAxisU = m_workpieceCoordinate.axisXInRobotBase;
     imageOptions.imageAxisV = m_workpieceCoordinate.axisYInRobotBase;
     const QVector<pointcloud::Point3D> imageSource = m_points;
@@ -2635,7 +2977,7 @@ void MainWindow::savePlaneImage() {
             baseName, baseName};
         context.destinationDirectory = QFileInfo(path).absolutePath();
         pcv::output::PlaneOutputMetadata metadata;
-        metadata.sourcePointCloud = QFileInfo(m_pendingPath).fileName();
+        metadata.sourcePointCloud = QFileInfo(m_pendingPath).absoluteFilePath();
         metadata.sourcePlyEncoding = QStringLiteral("ascii_or_binary");
         metadata.originInRobotBase = m_workpieceCoordinate.originInRobotBase;
         metadata.axisXInRobotBase = m_workpieceCoordinate.axisXInRobotBase;
@@ -2755,6 +3097,8 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     // widgets or QPixmap/QImage objects while Qt is destroying the GUI tree.
     if (m_loadWatcher) disconnect(m_loadWatcher, nullptr, this, nullptr);
     if (m_tempWorkpieceWatcher) disconnect(m_tempWorkpieceWatcher, nullptr, this, nullptr);
+    if (m_tempWorkpieceFinalizeWatcher)
+        disconnect(m_tempWorkpieceFinalizeWatcher, nullptr, this, nullptr);
     if (m_noiseWatcher) disconnect(m_noiseWatcher, nullptr, this, nullptr);
     if (m_threePlaneWatcher) disconnect(m_threePlaneWatcher, nullptr, this, nullptr);
     if (m_edgeWatcher) disconnect(m_edgeWatcher, nullptr, this, nullptr);
@@ -2767,6 +3111,10 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     if (m_tempWorkpieceWatcher && m_tempWorkpieceWatcher->isRunning()) {
         statusBar()->showMessage(tr("正在结束后台扫描 JSON 处理，请稍候..."));
         m_tempWorkpieceWatcher->waitForFinished();
+    }
+    if (m_tempWorkpieceFinalizeWatcher && m_tempWorkpieceFinalizeWatcher->isRunning()) {
+        statusBar()->showMessage(tr("正在结束后台临时工件输出，请稍候..."));
+        m_tempWorkpieceFinalizeWatcher->waitForFinished();
     }
     if (m_noiseWatcher && m_noiseWatcher->isRunning()) {
         statusBar()->showMessage(tr("正在结束后台噪点处理，请稍候..."));

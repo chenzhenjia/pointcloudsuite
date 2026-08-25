@@ -21,7 +21,7 @@
 - 支持真实点体素预处理和统计离群值去除。
 - 支持 GPU Picking 精确选择三个真实点并提取 2.5D 平面。
 - 支持平面边缘分割、黄色边缘选择和纯黑背景二维图片输出。
-- 支持“打开扫描 JSON”后台生成临时工件四件套，完成后显示扫描布局、转换点数、平面点数、ROI 点数和结果 JSON 路径，不改变当前画布。
+- 支持“打开扫描 JSON”后台完成手眼转换并发布当前画布；通过平面二次验证和 WObj1 后自动生成边缘 Mask 和临时工件四件套。
 
 ### PLY 第一阶段加载优化
 
@@ -605,6 +605,6 @@ D:/workpiece/pointcloudview/backups/pointcloudview_20260818_obstacle_warning_cle
 - 删除障碍检测算法、红色障碍点和非阻断告警；当前点云查看流程只保留平面、边缘和二维 Mask 处理。
 - 新增 `pcv_registration`：读取 `RTmatDepth2robot`，校验刚体矩阵，并按机器人位姿插值完成线扫点云到 `robot_base` 的转换。
 - 新增 `pcv_interface`：读取 `sr2026-temp-scanning-info-mvp-2`，校验相对路径不可穿越、点云布局、位姿和三点索引，生成临时工件四件套。
-- 临时工件 JSON 的 schema 为 `sr2026-temp-workpiece-info-mvp-2`；`plane.equation` 固定为 `[X,Y,Z,RZ,RY,RX]`，`outputs` 写入规范化绝对路径。
+- 临时工件 JSON 的 schema 为 `sr2026-temp-workpiece-info-mvp-2`；`plane.equation` 固定为 `[X,Y,Z,RX,RY,RZ]`，`outputs` 写入规范化绝对路径。
 - 边缘 Mask 输出补齐原点、轴、物理栅格尺寸和图像方向，并复用统一 `pcv_output` writer。
 - 今天前三个源码提交已经纳入本文；当前工作区的“打开扫描 JSON”界面接入也已同步记录。完整 Debug 构建、CTest 和 GUI 人工点选仍需执行后再补充实测结果。

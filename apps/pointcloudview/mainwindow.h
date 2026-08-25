@@ -19,7 +19,10 @@ class QPlainTextEdit;
 class PointCloudCanvas;
 namespace Ui { class MainWindow; }
 namespace pointcloud { struct LoadResult; }
-namespace pcv::interface { struct TempWorkpieceResult; }
+namespace pcv::interface {
+struct TempWorkpiecePreparation;
+struct TempWorkpieceResult;
+}
 template <typename T> class QFutureWatcher;
 
 class MainWindow final : public QMainWindow {
@@ -35,6 +38,7 @@ private slots:
     void loadSelectedSource();
     void loadFinished();
     void tempWorkpieceFinished();
+    void tempWorkpieceFinalizeFinished();
     void updateRenderSettings();
     void applyNoiseRemoval();
     void noiseFinished();
@@ -62,11 +66,16 @@ private slots:
 private:
     void closeEvent(QCloseEvent *event) override;
     void buildUi();
-    void publishCanvasCache(QVector<pointcloud::Point3D> points);
+    void applyDepthRenderRange(const QVector<pointcloud::Point3D> &points);
+    void publishCanvasCache(QVector<pointcloud::Point3D> points,
+                            bool preserveTempWorkpieceSession = false);
+    void finalizeTempWorkpiece();
+    void resetSecondPlaneVerification();
     void updatePlaneExtractionUi();
     void updatePlaneEdgeUi();
     void clearPlaneEdgeUi();
     bool planeImageSaveReady(QString *error = nullptr) const;
+    bool tempWorkpieceFinalizeReady(QString *error = nullptr) const;
     void validateSecondPlaneSelection();
     void runPlaneExtraction(bool deferFinalClassification);
     bool pointTaskRunning() const;
@@ -104,6 +113,7 @@ private:
     QPushButton *m_clearEdgeSelectionButton = nullptr;
     QPushButton *m_extractPlaneImageButton = nullptr;
     QPushButton *m_savePlaneImageButton = nullptr;
+    QPushButton *m_finalizeTempWorkpieceButton = nullptr;
     QLabel *m_planeImagePreview = nullptr;
     QPlainTextEdit *m_edgeOutput = nullptr;
     PointCloudCanvas *m_canvas = nullptr;
@@ -115,7 +125,8 @@ private:
     QString m_sourceDirectory;
     bool m_folderScanOnly = false;
     QFutureWatcher<pointcloud::LoadResult> *m_loadWatcher = nullptr;
-    QFutureWatcher<pcv::interface::TempWorkpieceResult> *m_tempWorkpieceWatcher = nullptr;
+    QFutureWatcher<pcv::interface::TempWorkpiecePreparation> *m_tempWorkpieceWatcher = nullptr;
+    QFutureWatcher<pcv::interface::TempWorkpieceResult> *m_tempWorkpieceFinalizeWatcher = nullptr;
     QFutureWatcher<pointcloud::NoiseResult> *m_noiseWatcher = nullptr;
     QFutureWatcher<pointcloud::ThreePointPlaneResult> *m_threePlaneWatcher = nullptr;
     QFutureWatcher<pointcloud::PlaneEdgeResult> *m_edgeWatcher = nullptr;
@@ -128,6 +139,7 @@ private:
     quint64 m_planeImageInputRevision = 0;
     quint64 m_coordinateFrameRevision = 0;
     quint64 m_planeImageCoordinateRevision = 0;
+    quint64 m_tempWorkpieceSessionRevision = 0;
     pointcloud::ThreePointPlaneResult m_threePlaneResult;
     pointcloud::WorkpieceCoordinateSystem m_workpieceCoordinate;
     pointcloud::PlaneEdgeResult m_planeEdgeResult;
@@ -144,10 +156,16 @@ private:
     float m_secondPlaneMaximumDistance = 0.0f;
     bool m_axisSelectionActive = false;
     QVector3D m_planeCenter;
+    bool m_planeCenterValid = false;
     int m_xAxisPointIndex = -1;
     int m_yAxisPointIndex = -1;
     bool m_planeCandidateConfirmed = false;
     bool m_planeFinalizationPending = false;
+    bool m_tempWorkpieceSessionActive = false;
+    QString m_tempWorkpieceScanId;
+    QString m_tempWorkpieceOutputDirectory;
+    QString m_tempWorkpieceCreatedAtIso8601;
+    QVector<qsizetype> m_tempWorkpieceSourceIndices;
     bool m_closing = false;
     Ui::MainWindow *ui = nullptr;
 };

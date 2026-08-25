@@ -639,6 +639,13 @@
              </widget>
             </item>
             <item>
+             <widget class="QPushButton" name="btn_finalize_temp_workpiece">
+              <property name="text">
+               <string>提交临时工件四件套</string>
+              </property>
+             </widget>
+            </item>
+            <item>
              <widget class="QPushButton" name="btn_apply_edge">
               <property name="text">
                <string>执行边缘分割</string>

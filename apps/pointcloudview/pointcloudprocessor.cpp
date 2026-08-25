@@ -3251,12 +3251,34 @@ PlaneEdgeResult segmentPlaneEdges(const QVector<Point3D> &points,
     const float normalizedD = model.d / normalLength
         * (QVector3D::dotProduct(normal, QVector3D(model.a, model.b, model.c)) >= 0.0f
                ? 1.0f : -1.0f);
-    const QVector3D origin = -normalizedD * normal;
-    QVector3D axisU = QVector3D::crossProduct(normal,
-        std::abs(normal.z()) < 0.9f ? QVector3D(0, 0, 1) : QVector3D(0, 1, 0));
-    if (axisU.lengthSquared() <= 1.0e-12f) axisU = QVector3D(1, 0, 0);
-    axisU.normalize();
-    const QVector3D axisV = QVector3D::crossProduct(normal, axisU).normalized();
+    QVector3D origin = -normalizedD * normal;
+    QVector3D axisU;
+    QVector3D axisV;
+    if (options.useImageFrame && options.imageAxisU.lengthSquared() > 1.0e-10f
+        && options.imageAxisV.lengthSquared() > 1.0e-10f) {
+        origin = options.imageOrigin;
+        axisU = options.imageAxisU - normal * QVector3D::dotProduct(options.imageAxisU, normal);
+        axisV = options.imageAxisV - normal * QVector3D::dotProduct(options.imageAxisV, normal);
+        if (axisU.lengthSquared() <= 1.0e-10f || axisV.lengthSquared() <= 1.0e-10f) {
+            result.error = QStringLiteral("工件坐标系 X/Y 轴无法投影到拟合平面");
+            return result;
+        }
+        axisU.normalize();
+        axisV -= axisU * QVector3D::dotProduct(axisV, axisU);
+        if (axisV.lengthSquared() <= 1.0e-10f) {
+            result.error = QStringLiteral("工件坐标系 X/Y 轴近似共线");
+            return result;
+        }
+        axisV.normalize();
+        if (QVector3D::dotProduct(QVector3D::crossProduct(axisU, axisV), normal) < 0.0f)
+            axisV = -axisV;
+    } else {
+        axisU = QVector3D::crossProduct(normal,
+            std::abs(normal.z()) < 0.9f ? QVector3D(0, 0, 1) : QVector3D(0, 1, 0));
+        if (axisU.lengthSquared() <= 1.0e-12f) axisU = QVector3D(1, 0, 0);
+        axisU.normalize();
+        axisV = QVector3D::crossProduct(normal, axisU).normalized();
+    }
 
     QVector<QVector2D> projected;
     QVector<int> validIndices;
@@ -3461,7 +3483,9 @@ PlaneImageResult extractPlaneImage(const QVector<Point3D> &points,
         axisV = QVector3D::crossProduct(normal, axisU).normalized();
     }
     QVector<QVector2D> projected;
+    QVector<int> projectedIndices;
     projected.reserve(planeIndices.size());
+    projectedIndices.reserve(planeIndices.size());
     float minU = std::numeric_limits<float>::max(), minV = minU;
     float maxU = std::numeric_limits<float>::lowest(), maxV = maxU;
     QVector3D mappedMinimum(std::numeric_limits<float>::max(),
@@ -3499,6 +3523,7 @@ PlaneImageResult extractPlaneImage(const QVector<Point3D> &points,
         mappedMaximum.setZ(qMax(mappedMaximum.z(), workpiecePoint.z()));
         const QVector2D uv(workpiecePoint.x(), workpiecePoint.y());
         projected.push_back(uv);
+        projectedIndices.push_back(index);
         minU = qMin(minU, uv.x()); maxU = qMax(maxU, uv.x());
         minV = qMin(minV, uv.y()); maxV = qMax(maxV, uv.y());
     }
@@ -3560,12 +3585,15 @@ PlaneImageResult extractPlaneImage(const QVector<Point3D> &points,
     if (width <= 2 || height <= 2) { result.error = QStringLiteral("平面范围过大，无法生成 2D 图像"); return result; }
     minU -= padding * gridSize; minV -= padding * gridSize;
     QVector<quint8> valid(width * height, 0);
-    for (const QVector2D &uv : projected) {
-        if (uv.x() < minU || uv.x() > maxU
-                                || uv.y() < minV || uv.y() > maxV) {
+    const float rectangleEpsilon = qMax(1.0e-6f, gridSize * 1.0e-4f);
+    for (qsizetype projectedIndex = 0; projectedIndex < projected.size(); ++projectedIndex) {
+        const QVector2D &uv = projected[projectedIndex];
+        if (uv.x() < minU - rectangleEpsilon || uv.x() > maxU + rectangleEpsilon
+                                || uv.y() < minV - rectangleEpsilon || uv.y() > maxV + rectangleEpsilon) {
             ++result.rejectedOutsideRectangleCount;
             continue;
         }
+        result.roiIndices.push_back(projectedIndices[projectedIndex]);
         const int x = qBound(0, int(std::floor((uv.x() - minU) / gridSize)), width - 1);
         const int y = qBound(0, int(std::floor((uv.y() - minV) / gridSize)), height - 1);
         valid[y * width + x] = 1;
@@ -3797,6 +3825,126 @@ ThreePointPlaneResult selectPlaneFromThreeSeeds(const QVector<Point3D> &points,
     return extractPlaneFromThreePoints(points, seedIndices, options);
 }
 
+PlaneConsistencyResult validatePlaneConsistency(
+    const QVector<Point3D> &points, const PlaneModel &referencePlane,
+    const QVector<int> &referenceIndices, const QVector<int> &verificationIndices,
+    float angleToleranceDegrees, float distanceToleranceMm) {
+    PlaneConsistencyResult result;
+    const auto fail = [&result](PlaneConsistencyStatus status, const QString &error) {
+        result.status = status;
+        result.error = error;
+        return result;
+    };
+    if (referenceIndices.size() != 3 || verificationIndices.size() != 3
+        || !std::isfinite(angleToleranceDegrees) || angleToleranceDegrees < 0.0f
+        || !std::isfinite(distanceToleranceMm) || distanceToleranceMm < 0.0f) {
+        return fail(PlaneConsistencyStatus::InvalidInput,
+                    QStringLiteral("平面校验输入或阈值无效"));
+    }
+    const auto validIndex = [&points](int index) {
+        return index >= 0 && index < points.size();
+    };
+    const auto finitePoint = [](const Point3D &point) {
+        return std::isfinite(point.x) && std::isfinite(point.y)
+            && std::isfinite(point.z);
+    };
+    for (int i = 0; i < 3; ++i) {
+        if (!validIndex(referenceIndices[i]) || !validIndex(verificationIndices[i])
+            || !finitePoint(points[referenceIndices[i]])
+            || !finitePoint(points[verificationIndices[i]])) {
+            return fail(PlaneConsistencyStatus::InvalidInput,
+                        QStringLiteral("平面校验点索引越界或包含无效点"));
+        }
+        for (int j = i + 1; j < 3; ++j) {
+            if (referenceIndices[i] == referenceIndices[j]
+                || verificationIndices[i] == verificationIndices[j]) {
+                return fail(PlaneConsistencyStatus::ReusedPoint,
+                            QStringLiteral("每组三点必须使用不同的点"));
+            }
+        }
+        if (referenceIndices.contains(verificationIndices[i])) {
+            return fail(PlaneConsistencyStatus::ReusedPoint,
+                        QStringLiteral("第二组三点不能复用第一组三点"));
+        }
+    }
+    QVector3D referenceNormal(referencePlane.a, referencePlane.b, referencePlane.c);
+    if (!std::isfinite(referencePlane.a) || !std::isfinite(referencePlane.b)
+        || !std::isfinite(referencePlane.c) || !std::isfinite(referencePlane.d)
+        || referenceNormal.lengthSquared() <= 1.0e-10f) {
+        return fail(PlaneConsistencyStatus::InvalidInput,
+                    QStringLiteral("第一拟合平面无效"));
+    }
+    const auto position = [&points](int index) {
+        const Point3D &point = points[index];
+        return QVector3D(point.x, point.y, point.z);
+    };
+    const QVector3D p1 = position(verificationIndices[0]);
+    const QVector3D p2 = position(verificationIndices[1]);
+    const QVector3D p3 = position(verificationIndices[2]);
+    QVector3D verificationNormal = QVector3D::crossProduct(p2 - p1, p3 - p1);
+    if (verificationNormal.lengthSquared() <= 1.0e-10f) {
+        return fail(PlaneConsistencyStatus::Collinear,
+                    QStringLiteral("第二组三点近似共线，无法确定平面"));
+    }
+    const float planeNorm = referenceNormal.length();
+    const float normalizedD = referencePlane.d / planeNorm;
+    referenceNormal /= planeNorm;
+    verificationNormal.normalize();
+    result.normalAngleDegrees = float(qRadiansToDegrees(std::acos(
+        qBound(-1.0f, std::abs(QVector3D::dotProduct(
+            referenceNormal, verificationNormal)), 1.0f))));
+    const auto distanceToReference = [&referenceNormal, normalizedD](const QVector3D &point) {
+        return std::abs(QVector3D::dotProduct(referenceNormal, point) + normalizedD);
+    };
+    result.maximumDistanceMm = qMax(qMax(distanceToReference(p1),
+                                         distanceToReference(p2)),
+                                    distanceToReference(p3));
+    if (result.normalAngleDegrees > angleToleranceDegrees) {
+        return fail(PlaneConsistencyStatus::AngleExceeded,
+                    QStringLiteral("第二组三点平面夹角超过阈值"));
+    }
+    if (result.maximumDistanceMm > distanceToleranceMm) {
+        return fail(PlaneConsistencyStatus::DistanceExceeded,
+                    QStringLiteral("第二组三点到第一拟合平面的距离超过阈值"));
+    }
+    result.status = PlaneConsistencyStatus::Passed;
+    result.passed = true;
+    return result;
+}
+
+PlaneBoundsCenterResult calculatePlaneBoundsCenter(
+    const QVector<Point3D> &points, const QVector<int> &planeIndices) {
+    PlaneBoundsCenterResult result;
+    if (planeIndices.isEmpty()) {
+        result.error = QStringLiteral("最终平面点为空");
+        return result;
+    }
+    QVector3D minimum(std::numeric_limits<float>::max(),
+                      std::numeric_limits<float>::max(),
+                      std::numeric_limits<float>::max());
+    QVector3D maximum(std::numeric_limits<float>::lowest(),
+                      std::numeric_limits<float>::lowest(),
+                      std::numeric_limits<float>::lowest());
+    for (const int index : planeIndices) {
+        if (index < 0 || index >= points.size()
+            || !std::isfinite(points[index].x) || !std::isfinite(points[index].y)
+            || !std::isfinite(points[index].z)) {
+            result.error = QStringLiteral("最终平面索引越界或包含无效点");
+            return result;
+        }
+        const Point3D &point = points[index];
+        minimum.setX(qMin(minimum.x(), point.x));
+        minimum.setY(qMin(minimum.y(), point.y));
+        minimum.setZ(qMin(minimum.z(), point.z));
+        maximum.setX(qMax(maximum.x(), point.x));
+        maximum.setY(qMax(maximum.y(), point.y));
+        maximum.setZ(qMax(maximum.z(), point.z));
+    }
+    result.center = (minimum + maximum) * 0.5f;
+    result.ok = true;
+    return result;
+}
+
 WorkpieceCoordinateSystem buildWorkpieceCoordinateSystem(
     const QVector<Point3D> &points, const QVector<int> &seedIndices,
     int originIndex, bool preferPositiveZ) {
@@ -3851,6 +3999,89 @@ WorkpieceCoordinateSystem buildWorkpieceCoordinateSystem(
         return result;
     }
     const QVector3D origin = position(actualOriginIndex);
+    result.originInRobotBase = origin;
+    result.axisXInRobotBase = x;
+    result.axisYInRobotBase = y;
+    result.axisZInRobotBase = z;
+    result.orthogonalityError = qMax(qMax(std::abs(QVector3D::dotProduct(x, y)),
+                                          std::abs(QVector3D::dotProduct(x, z))),
+                                     std::abs(QVector3D::dotProduct(y, z)));
+    result.workpieceToRobotBase.setToIdentity();
+    for (int row = 0; row < 3; ++row) {
+        result.workpieceToRobotBase(row, 0) = x[row];
+        result.workpieceToRobotBase(row, 1) = y[row];
+        result.workpieceToRobotBase(row, 2) = z[row];
+        result.workpieceToRobotBase(row, 3) = origin[row];
+    }
+    bool invertible = false;
+    result.robotBaseToWorkpiece = result.workpieceToRobotBase.inverted(&invertible);
+    if (!invertible) {
+        result.error = QStringLiteral("工件坐标系矩阵不可逆");
+        return result;
+    }
+    const double ry = std::asin(std::clamp(
+        -double(result.workpieceToRobotBase(2, 0)), -1.0, 1.0));
+    const double cosRy = std::cos(ry);
+    double rx = 0.0;
+    double rz = 0.0;
+    if (std::abs(cosRy) > 1.0e-8) {
+        rx = std::atan2(double(result.workpieceToRobotBase(2, 1)),
+                        double(result.workpieceToRobotBase(2, 2)));
+        rz = std::atan2(double(result.workpieceToRobotBase(1, 0)),
+                        double(result.workpieceToRobotBase(0, 0)));
+    } else {
+        rz = std::atan2(-double(result.workpieceToRobotBase(0, 1)),
+                        double(result.workpieceToRobotBase(1, 1)));
+    }
+    result.poseA = float(qRadiansToDegrees(rx));
+    result.poseB = float(qRadiansToDegrees(ry));
+    result.poseC = float(qRadiansToDegrees(rz));
+    result.valid = true;
+    return result;
+}
+
+WorkpieceCoordinateSystem buildWorkpieceCoordinateSystemFromRobotAxes(
+    const QVector3D &origin, const QVector3D &planeNormal, bool preferPositiveZ) {
+    WorkpieceCoordinateSystem result;
+    const auto finiteVector = [](const QVector3D &value) {
+        return std::isfinite(value.x()) && std::isfinite(value.y())
+            && std::isfinite(value.z());
+    };
+    if (!finiteVector(origin)) {
+        result.error = QStringLiteral("工件坐标系原点包含无效值");
+        return result;
+    }
+    QVector3D z = planeNormal;
+    if (!finiteVector(z) || z.lengthSquared() <= 1.0e-10f) {
+        result.error = QStringLiteral("拟合平面法向量无效");
+        return result;
+    }
+    z.normalize();
+    const QVector3D robotX(1.0f, 0.0f, 0.0f);
+    const QVector3D robotY(0.0f, 1.0f, 0.0f);
+    const QVector3D robotZ(0.0f, 0.0f, 1.0f);
+    if (preferPositiveZ && QVector3D::dotProduct(z, robotZ) < 0.0f)
+        z = -z;
+
+    QVector3D x = robotX - z * QVector3D::dotProduct(robotX, z);
+    if (x.lengthSquared() <= 1.0e-10f)
+        x = robotY - z * QVector3D::dotProduct(robotY, z);
+    if (x.lengthSquared() <= 1.0e-10f) {
+        result.error = QStringLiteral("机器人基坐标 X/Y 轴投影无法形成工件 X 轴");
+        return result;
+    }
+    x.normalize();
+    QVector3D y = QVector3D::crossProduct(z, x);
+    if (y.lengthSquared() <= 1.0e-10f) {
+        result.error = QStringLiteral("机器人基坐标轴无法形成工件 Y 轴");
+        return result;
+    }
+    y.normalize();
+    if (QVector3D::dotProduct(y, robotY) < 0.0f) {
+        x = -x;
+        y = -y;
+    }
+
     result.originInRobotBase = origin;
     result.axisXInRobotBase = x;
     result.axisYInRobotBase = y;

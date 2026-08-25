@@ -15,7 +15,7 @@
 * `<base>.json`：当前 schema 的 `plane/image/roi/outputs` 元数据。
 * `<base>_plane_robot_base.ply`：`binary_little_endian`，坐标为 `robot_base`。
 
-JSON 的 `plane.equation` 为 `[X, Y, Z, RZ, RY, RX]`；`outputs.robot_base_point_cloud` 为来源点云，`outputs.roi_point_cloud` 和 `outputs.plane_mask` 为规范化绝对路径。
+JSON 只包含 `schema_version`、`kind`、`created_at`、`plane`、`image`、`roi` 和 `outputs`。`plane` 只包含 `name` 与 `[X, Y, Z, RX, RY, RZ]` 形式的 `equation`；`image` 只包含名称、像素尺寸、物理尺寸和像素尺寸；`roi` 固定为字符串 `rectangle`；三个 `outputs` 路径均为规范化绝对路径。诊断、平面模型、轴、矩阵、统计和来源扫描元数据不属于正式 JSON。
 
 图像记录 `width_px`、`height_px`、`width_mm`、`height_mm` 和 `pixel_size_mm`。
 
@@ -23,4 +23,4 @@ JSON 的 `plane.equation` 为 `[X, Y, Z, RZ, RY, RX]`；`outputs.robot_base_poin
 
 ## 临时工件四件套
 
-`pcv_interface::generateTempWorkpiece` 读取 `sr2026-temp-scanning-info-mvp-2` 扫描 JSON 和 XML 标定，按 `FullXyz` 或 `LineProfileXz` 完成手眼转换、平面提取和矩形 ROI，输出 `baseline_robot_base.ply`、`roi_template_robot_base.ply`、`plane_mask.png` 和 `temp_workpiece_info.json`。四件文件全部先写入临时目录，再一次性提交；输入缺失、路径穿越、标定无效、平面失败或写入不完整时不留下部分正式结果。
+`pcv_interface::prepareTempWorkpiece` 读取 `sr2026-temp-scanning-info-mvp-2` 扫描 JSON 和 XML 标定，要求有效的 `created_at`，按 `LineProfileXz` 完成手眼转换并发布临时画布。用户完成平面二次验证和 WObj1 后，JSON 流程自动执行工件坐标系下的边缘分割和矩形 ROI，并由 `finalizeTempWorkpiece` 输出 `baseline_robot_base.ply`、`roi_template_robot_base.ply`、边缘 `plane_mask.png` 和 `temp_workpiece_info.json`；该 JSON 的 `created_at` 原样使用扫描输入时间。四件文件全部先写入临时目录，再一次性提交；输入缺失、路径穿越、标定无效、平面失败或写入不完整时不留下部分正式结果。

@@ -30,7 +30,7 @@ int main(int argc, char **argv)
     image.setPixel(1, 1, 225);
     QVector<pointcloud::Point3D> points{{0, 0, 0}, {1, 0, 0}, {0, 1, 0}};
     pcv::output::PlaneOutputMetadata metadata;
-    metadata.sourcePointCloud = QStringLiteral("input.ply");
+    metadata.sourcePointCloud = QDir(temporary.path()).filePath(QStringLiteral("input.ply"));
     metadata.originInRobotBase = QVector3D(1.0f, 2.0f, 3.0f);
     metadata.abcDeg = QVector3D(4.0f, 5.0f, 6.0f);
     metadata.TBaseWorkpiece.setToIdentity();
@@ -49,26 +49,38 @@ int main(int argc, char **argv)
     QFile jsonFile(QDir(root).filePath(result.planeJson));
     assert(jsonFile.open(QIODevice::ReadOnly));
     const QJsonObject json = QJsonDocument::fromJson(jsonFile.readAll()).object();
+    assert((json.keys() == QStringList{
+        QStringLiteral("created_at"), QStringLiteral("image"), QStringLiteral("kind"),
+        QStringLiteral("outputs"), QStringLiteral("plane"), QStringLiteral("roi"),
+        QStringLiteral("schema_version")}));
     assert(json.value("schema_version").toString() == QString::fromLatin1(pcv::output::kPlaneOutputSchema));
     assert(json.value("kind").toString() == QStringLiteral("single_frame_workpiece_roi"));
     const QJsonObject plane = json.value("plane").toObject();
+    assert((plane.keys() == QStringList{QStringLiteral("equation"), QStringLiteral("name")}));
     assert(plane.value("name").toString() == QStringLiteral("WObj1"));
     const QJsonArray equation = plane.value("equation").toArray();
     assert(equation.size() == 6);
     assert(equation.at(0).toDouble() == 1.0);
     assert(equation.at(1).toDouble() == 2.0);
     assert(equation.at(2).toDouble() == 3.0);
-    assert(equation.at(3).toDouble() == 6.0);
+    assert(equation.at(3).toDouble() == 4.0);
     assert(equation.at(4).toDouble() == 5.0);
-    assert(equation.at(5).toDouble() == 4.0);
+    assert(equation.at(5).toDouble() == 6.0);
     const QJsonObject imageObject = json.value("image").toObject();
+    assert((imageObject.keys() == QStringList{
+        QStringLiteral("height_mm"), QStringLiteral("height_px"), QStringLiteral("name"),
+        QStringLiteral("pixel_size_mm"), QStringLiteral("width_mm"), QStringLiteral("width_px")}));
     const double pixelSize = imageObject.value("pixel_size_mm").toDouble();
     assert(pixelSize == 0.05);
     assert(std::abs(imageObject.value("width_mm").toDouble() - image.width() * pixelSize) < 1.0e-9);
     assert(std::abs(imageObject.value("height_mm").toDouble() - image.height() * pixelSize) < 1.0e-9);
     assert(json.value("roi").toString() == QStringLiteral("rectangle"));
     const QJsonObject outputs = json.value("outputs").toObject();
-    assert(outputs.value("robot_base_point_cloud").toString() == QStringLiteral("input.ply"));
+    assert((outputs.keys() == QStringList{
+        QStringLiteral("plane_mask"), QStringLiteral("robot_base_point_cloud"),
+        QStringLiteral("roi_point_cloud")}));
+    assert(outputs.value("robot_base_point_cloud").toString()
+           == QDir::fromNativeSeparators(QFileInfo(metadata.sourcePointCloud).absoluteFilePath()));
     assert(outputs.value("roi_point_cloud").toString()
            == QDir::fromNativeSeparators(QFileInfo(QDir(root).filePath(result.planeRobotBasePly)).absoluteFilePath()));
     assert(outputs.value("plane_mask").toString()

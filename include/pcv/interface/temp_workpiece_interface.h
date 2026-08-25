@@ -1,10 +1,14 @@
 #pragma once
 
+#include <pcv/core/point_types.h>
 #include <pcv/registration/handeye_transform.h>
 
-#include <QJsonObject>
+#include <QImage>
+#include <QMatrix4x4>
 #include <QString>
 #include <QVector>
+#include <QVector3D>
+#include <QVector4D>
 
 namespace pcv::interface {
 
@@ -31,10 +35,12 @@ inline constexpr const char *kErrorContract = "PCV_CONTRACT_001";
 struct TempScanningInfo {
     QString schemaVersion;
     QString kind;
+    QString createdAtIso8601;
     QString scanId;
     QString pointCloudFile;
     pointcloud::DepthPointLayout pointCloudLayout = pointcloud::DepthPointLayout::LineProfileXz;
     QString layoutWarning;
+    QString warning;
     QString coordinateFrame;
     pointcloud::RobotPose robotPoseStart;
     pointcloud::RobotPose robotPoseEnd;
@@ -49,13 +55,12 @@ struct TempWorkpieceOptions {
     QString runtimeRoot;
     QString jobId;
     QString scanningInfoPath;
+    // Optional UI-selected calibration override. It never modifies the input JSON.
+    QString calibrationOverridePath;
     QString outputDirectory;
-    QVector<int> planeSeedIndices;
-    QString createdAtIso8601;
-    int minimumPlaneInliers = 0;
 };
 
-struct TempWorkpieceResult {
+struct TempWorkpiecePreparation {
     bool success = false;
     QString errorCode;
     QString message;
@@ -63,6 +68,7 @@ struct TempWorkpieceResult {
     QString jobId;
     QString interfaceDirectory;
     QString scanningInfoPath;
+    QString outputDirectory;
     QString tempWorkpieceInfoPath;
     QString baselineRobotBasePly;
     QString roiTemplateRobotBasePly;
@@ -73,6 +79,7 @@ struct TempWorkpieceResult {
     QString sourceFrame;
     QString targetFrame;
     QString coordinateFrame;
+    QString createdAtIso8601;
     QString calibrationSourceFrame;
     QString calibrationTargetFrame;
     pointcloud::RobotPose robotPoseStart;
@@ -85,6 +92,38 @@ struct TempWorkpieceResult {
     qsizetype convertedPointCount = 0;
     qsizetype rejectedInvalidPointCount = 0;
     qsizetype rejectedRangePointCount = 0;
+    QVector<pointcloud::Point3D> robotBasePoints;
+    QVector<qsizetype> sourceIndices;
+};
+
+struct TempWorkpieceFinalizeOptions {
+    QString outputDirectory;
+    bool allowOverwrite = false;
+    QVector<int> planeIndices;
+    QVector<int> roiIndices;
+    QImage planeMask;
+    QVector4D planeModel;
+    double rmsErrorMm = 0.0;
+    double planeDistanceToleranceMm = 0.4;
+    QVector3D originInRobotBase;
+    QVector3D axisXInRobotBase{1.0f, 0.0f, 0.0f};
+    QVector3D axisYInRobotBase{0.0f, 1.0f, 0.0f};
+    QVector3D axisZInRobotBase{0.0f, 0.0f, 1.0f};
+    QVector3D abcDeg;
+    QMatrix4x4 TBaseWorkpiece;
+    QMatrix4x4 TWorkpieceBase;
+};
+
+struct TempWorkpieceResult {
+    bool success = false;
+    QString errorCode;
+    QString message;
+    QString outputDirectory;
+    QString tempWorkpieceInfoPath;
+    QString baselineRobotBasePly;
+    QString roiTemplateRobotBasePly;
+    QString planeMaskPng;
+    QString createdAtIso8601;
     qsizetype planePointCount = 0;
     qsizetype roiPointCount = 0;
     int imageWidthPx = 0;
@@ -98,7 +137,10 @@ QString defaultRuntimeRoot();
 bool parseTempScanningInfo(const QString &filePath,
                            TempScanningInfo *info,
                            QString *error = nullptr);
-TempWorkpieceResult generateTempWorkpiece(const TempWorkpieceOptions &options,
+TempWorkpiecePreparation prepareTempWorkpiece(const TempWorkpieceOptions &options,
+                                              QString *error = nullptr);
+TempWorkpieceResult finalizeTempWorkpiece(const TempWorkpiecePreparation &prepared,
+                                          const TempWorkpieceFinalizeOptions &options,
                                           QString *error = nullptr);
 
 } // namespace pcv::interface
