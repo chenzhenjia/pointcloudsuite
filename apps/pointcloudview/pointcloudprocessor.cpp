@@ -4213,4 +4213,93 @@ WorkpieceCoordinateSystem buildWorkpieceCoordinateSystem(
     return result;
 }
 
+WorkpieceCoordinateSystem buildWorkpieceCoordinateSystemFromThreePoints(
+    const QVector<Point3D> &points, const QVector3D &origin,
+    int xAxisPointIndex, int yAxisPointIndex) {
+    WorkpieceCoordinateSystem result;
+    const auto validIndex = [&points](int index) {
+        return index >= 0 && index < points.size();
+    };
+    if (!validIndex(xAxisPointIndex) || !validIndex(yAxisPointIndex)) {
+        result.error = QStringLiteral("X+/Y+ 点索引超出当前画布缓存");
+        return result;
+    }
+    if (xAxisPointIndex == yAxisPointIndex) {
+        result.error = QStringLiteral("X+/Y+ 必须使用两个不同的点");
+        return result;
+    }
+    const auto position = [&points](int index) {
+        const Point3D &p = points[index];
+        return QVector3D(p.x, p.y, p.z);
+    };
+    const QVector3D xHint = position(xAxisPointIndex) - origin;
+    const QVector3D yHint = position(yAxisPointIndex) - origin;
+    const auto finite = [](const QVector3D &value) {
+        return std::isfinite(value.x()) && std::isfinite(value.y())
+            && std::isfinite(value.z());
+    };
+    if (!finite(origin) || !finite(xHint) || !finite(yHint)) {
+        result.error = QStringLiteral("平面中心或 X+/Y+ 点包含无效坐标");
+        return result;
+    }
+    if (xHint.lengthSquared() <= 1.0e-12f
+        || yHint.lengthSquared() <= 1.0e-12f) {
+        result.error = QStringLiteral("O 到 X+/Y+ 的方向长度过小");
+        return result;
+    }
+    QVector3D x = xHint.normalized();
+    QVector3D z = QVector3D::crossProduct(x, yHint);
+    if (z.lengthSquared() <= 1.0e-12f) {
+        result.error = QStringLiteral("O/X+/Y+ 三点近似共线");
+        return result;
+    }
+    z.normalize();
+    QVector3D y = QVector3D::crossProduct(z, x);
+    if (y.lengthSquared() <= 1.0e-12f) {
+        result.error = QStringLiteral("WObj1 Y 轴计算失败");
+        return result;
+    }
+    y.normalize();
+    if (QVector3D::dotProduct(y, yHint) < 0.0f) {
+        y = -y;
+        z = -z;
+    }
+
+    result.originInRobotBase = origin;
+    result.axisXInRobotBase = x;
+    result.axisYInRobotBase = y;
+    result.axisZInRobotBase = z;
+    result.orthogonalityError = qMax(qMax(std::abs(QVector3D::dotProduct(x, y)),
+                                          std::abs(QVector3D::dotProduct(x, z))),
+                                     std::abs(QVector3D::dotProduct(y, z)));
+    result.workpieceToRobotBase.setToIdentity();
+    for (int row = 0; row < 3; ++row) {
+        result.workpieceToRobotBase(row, 0) = x[row];
+        result.workpieceToRobotBase(row, 1) = y[row];
+        result.workpieceToRobotBase(row, 2) = z[row];
+        result.workpieceToRobotBase(row, 3) = origin[row];
+    }
+    bool invertible = false;
+    result.robotBaseToWorkpiece = result.workpieceToRobotBase.inverted(&invertible);
+    if (!invertible) {
+        result.error = QStringLiteral("WObj1 坐标系矩阵不可逆");
+        return result;
+    }
+
+    // Reference convention: R = Rz(A) * Ry(B) * Rx(C).
+    const double a = std::atan2(double(result.workpieceToRobotBase(1, 0)),
+                                double(result.workpieceToRobotBase(0, 0)));
+    const double b = std::atan2(
+        -double(result.workpieceToRobotBase(2, 0)),
+        std::hypot(double(result.workpieceToRobotBase(2, 1)),
+                   double(result.workpieceToRobotBase(2, 2))));
+    const double c = std::atan2(double(result.workpieceToRobotBase(2, 1)),
+                                double(result.workpieceToRobotBase(2, 2)));
+    result.poseA = float(qRadiansToDegrees(a));
+    result.poseB = float(qRadiansToDegrees(b));
+    result.poseC = float(qRadiansToDegrees(c));
+    result.valid = true;
+    return result;
+}
+
 } // namespace pointcloud

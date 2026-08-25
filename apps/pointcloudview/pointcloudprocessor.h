@@ -314,6 +314,7 @@ struct WorkpieceCoordinateSystem {
     QVector3D axisZInRobotBase;
     QMatrix4x4 workpieceToRobotBase;
     QMatrix4x4 robotBaseToWorkpiece;
+    // Controller-style angles from R = Rz(A) * Ry(B) * Rx(C).
     float poseA = 0.0f;
     float poseB = 0.0f;
     float poseC = 0.0f;
@@ -394,6 +395,12 @@ WorkpieceCoordinateSystem buildWorkpieceCoordinateSystem(
     const QVector3D &planeNormal,
     int xAxisPointIndex, int yAxisPointIndex,
     bool preferPositiveZ = false);
+// Builds WObj1 with the reference-tool three-point convention. The O point
+// is the supplied plane bounding-box center; X+/Y+ are direction samples
+// relative to that same O/WObj1 origin.
+WorkpieceCoordinateSystem buildWorkpieceCoordinateSystemFromThreePoints(
+    const QVector<Point3D> &, const QVector3D &origin,
+    int xAxisPointIndex, int yAxisPointIndex);
 // Builds the JSON-flow WObj1 without user-picked axis points. The robot-base
 // X/Y axes are projected onto the fitted plane and the Z sign follows the
 // robot-base Z direction.

@@ -1860,9 +1860,7 @@ void MainWindow::updatePlaneExtractionUi() {
     const bool running = m_threePlaneWatcher && m_threePlaneWatcher->isRunning();
     const bool hasThreePoints = m_selectedPointIndices.size() == 3;
     const bool hasCandidate = m_threePlaneResult.ok;
-    const bool hasAxes = m_xAxisPointIndex >= 0 && m_yAxisPointIndex >= 0;
     const bool verificationPassed = m_secondPlaneValidated && m_secondPlaneSamePlane;
-    const bool automaticJsonFrame = m_tempWorkpieceSessionActive;
     if (m_pickPointsButton) m_pickPointsButton->setEnabled(!running && !m_points.isEmpty());
     if (m_abandonPointsButton)
         m_abandonPointsButton->setEnabled(!running && !m_selectedPointIndices.isEmpty());
@@ -1873,8 +1871,7 @@ void MainWindow::updatePlaneExtractionUi() {
     if (m_confirmCandidateButton)
         m_confirmCandidateButton->setEnabled(!running && hasCandidate
                                              && (m_planeFinalizationPending
-                                                 || (verificationPassed
-                                                     && (automaticJsonFrame || hasAxes)))
+                                                 || verificationPassed)
                                              && !m_planeCandidateConfirmed);
     if (m_cancelCandidateButton)
         m_cancelCandidateButton->setEnabled(!running && hasCandidate);
@@ -1885,17 +1882,13 @@ void MainWindow::updatePlaneExtractionUi() {
     if (m_cancelSecondPlaneButton)
         m_cancelSecondPlaneButton->setEnabled(!running && m_secondPlaneSelectionActive);
     if (ui->btn_pick_axes) {
-        ui->btn_pick_axes->setEnabled(!automaticJsonFrame && !running && hasCandidate
-                                      && verificationPassed
-                                      && !m_points.isEmpty()
-                                      && !m_planeCandidateConfirmed);
-        ui->btn_pick_axes->setVisible(!automaticJsonFrame);
+        ui->btn_pick_axes->setEnabled(false);
+        ui->btn_pick_axes->setVisible(false);
     }
     if (ui->btn_clear_axes)
-        ui->btn_clear_axes->setEnabled(!automaticJsonFrame && !running
-                                       && (hasAxes || m_axisSelectionActive));
+        ui->btn_clear_axes->setEnabled(false);
     if (ui->btn_clear_axes)
-        ui->btn_clear_axes->setVisible(!automaticJsonFrame);
+        ui->btn_clear_axes->setVisible(false);
     if (!m_threeOutput || hasCandidate) return;
     QStringList lines;
     for (int i = 0; i < m_selectedPointIndices.size(); ++i) {
@@ -2669,7 +2662,7 @@ void MainWindow::planeExtractionFinished() {
           << tr("PCA 平面性：%1").arg(result.planarity, 0, 'f', 6)
           << tr("PCA 精拟合轮次：%1").arg(result.pcaRefinementCount)
           << tr("Z 方向 RMS：%1 mm").arg(result.rmsError, 0, 'g', 7)
-          << tr("平面中心（坐标原点候选）：X %1  Y %2  Z %3 mm")
+          << tr("平面包围盒中心（WObj1 原点 O）：X %1  Y %2  Z %3 mm")
                  .arg(m_planeCenter.x(), 0, 'f', 3)
                  .arg(m_planeCenter.y(), 0, 'f', 3)
                  .arg(m_planeCenter.z(), 0, 'f', 3)
@@ -2697,27 +2690,17 @@ void MainWindow::confirmPlaneCandidate() {
         return;
     }
     if (!m_planeCenterValid) {
-        statusBar()->showMessage(m_tempWorkpieceSessionActive
-            ? tr("当前平面中心无效，无法建立 WObj1")
-            : tr("请先点击“选择 X/Y 轴点”，分别指定 X 轴点和 Y 轴点"));
+        statusBar()->showMessage(tr("当前平面包围盒中心无效，无法建立 WObj1"));
+        return;
+    }
+    if (m_selectedPointIndices.size() != 3) {
+        statusBar()->showMessage(tr("建立 WObj1 需要第一组三点的 X+/Y+ 方向点"));
         return;
     }
     pointcloud::WorkpieceCoordinateSystem frame;
-    const QVector3D planeNormal(m_threePlaneResult.model.a,
-                                m_threePlaneResult.model.b,
-                                m_threePlaneResult.model.c);
-    if (m_tempWorkpieceSessionActive) {
-        frame = pointcloud::buildWorkpieceCoordinateSystemFromRobotAxes(
-            m_planeCenter, planeNormal, true);
-    } else {
-        if (m_xAxisPointIndex < 0 || m_yAxisPointIndex < 0) {
-            statusBar()->showMessage(tr("请先点击“选择 X/Y 轴点”，分别指定 X 轴点和 Y 轴点"));
-            return;
-        }
-        frame = pointcloud::buildWorkpieceCoordinateSystem(
-            m_points, m_planeCenter, planeNormal,
-            m_xAxisPointIndex, m_yAxisPointIndex, true);
-    }
+    frame = pointcloud::buildWorkpieceCoordinateSystemFromThreePoints(
+        m_points, m_planeCenter, m_selectedPointIndices[1],
+        m_selectedPointIndices[2]);
     if (!frame.valid) {
         statusBar()->showMessage(frame.error);
         m_threeOutput->appendPlainText(QStringLiteral("\n") + frame.error);
@@ -2732,7 +2715,8 @@ void MainWindow::confirmPlaneCandidate() {
     m_canvas->setSelectionMode(false);
     m_canvas->setWorkpieceCoordinateSystem(m_workpieceCoordinate);
     QStringList frameLines;
-    frameLines << tr("候选平面已确定，平面中心已作为坐标原点")
+    frameLines << tr("候选平面已确定，平面包围盒中心作为 O/WObj1 原点")
+               << tr("第一组三点中的 X+/Y+ 用于确定轴方向")
                << tr("工件原点（机器人基坐标）：X %1  Y %2  Z %3 mm")
                       .arg(frame.originInRobotBase.x(), 0, 'f', 3)
                       .arg(frame.originInRobotBase.y(), 0, 'f', 3)
@@ -2741,21 +2725,15 @@ void MainWindow::confirmPlaneCandidate() {
                       .arg(frame.poseA, 0, 'f', 4)
                       .arg(frame.poseB, 0, 'f', 4)
                       .arg(frame.poseC, 0, 'f', 4)
-               << tr("姿态约定：Rz(C) × Ry(B) × Rx(A)")
-               << (m_tempWorkpieceSessionActive
-                       ? tr("X 轴（机器人基坐标 X 轴投影）：[%1, %2, %3]")
-                       : tr("X 轴（用户点 #%4）：[%1, %2, %3]"))
+               << tr("姿态约定：Rz(A) × Ry(B) × Rx(C)")
+               << tr("X 轴（O -> X+，O 为平面包围盒中心）：[%1, %2, %3]")
                       .arg(frame.axisXInRobotBase.x(), 0, 'g', 8)
                       .arg(frame.axisXInRobotBase.y(), 0, 'g', 8)
                       .arg(frame.axisXInRobotBase.z(), 0, 'g', 8)
-                      .arg(m_xAxisPointIndex)
-               << (m_tempWorkpieceSessionActive
-                       ? tr("Y 轴（机器人基坐标 Y 轴投影）：[%1, %2, %3]")
-                       : tr("Y 轴（用户点 #%4）：[%1, %2, %3]"))
+               << tr("Y 轴（O -> Y+，O 为平面包围盒中心，正交化）：[%1, %2, %3]")
                       .arg(frame.axisYInRobotBase.x(), 0, 'g', 8)
                       .arg(frame.axisYInRobotBase.y(), 0, 'g', 8)
                       .arg(frame.axisYInRobotBase.z(), 0, 'g', 8)
-                      .arg(m_yAxisPointIndex)
                << tr("Z 轴：[%1, %2, %3]")
                       .arg(frame.axisZInRobotBase.x(), 0, 'g', 8)
                       .arg(frame.axisZInRobotBase.y(), 0, 'g', 8)

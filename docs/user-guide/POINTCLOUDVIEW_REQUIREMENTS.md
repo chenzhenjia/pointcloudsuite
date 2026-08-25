@@ -409,9 +409,9 @@ D:/workpiece/pointcloudview/backups/pointcloudview_20260818_obstacle_warning_cle
 ### 2026-08-19：三点建立工件坐标系（第二阶段）
 
 - 在现有平面提取流程中，用户确认候选平面后，按当前画布缓存中的 P1/P2/P3 建立正式工件坐标系；所有输入点均视为机器人基坐标系坐标。
-- 默认工件原点为 P1；工件 X 轴取 P1→P2 在三点平面内的单位方向，工件 Z 轴取 `(P2-P1) × (P3-P1)` 并默认统一到机器人正 Z 半空间，工件 Y 轴取 `Z × X`，保证右手坐标系。
+- 最终提取平面 XYZ 包围盒中心同时作为 O 点和 WObj1 原点；X+/Y+ 方向点相对该中心确定工件 X/Y 轴，工件 Z 轴垂直平面并保持右手坐标系。
 - 三点数量错误、索引越界、点间过近、近似共线、轴方向退化或矩阵不可逆时拒绝建立坐标系并显示明确原因。
-- 计算并保留 `T_base_workpiece`（工件坐标到机器人基坐标）和 `T_workpiece_base`（机器人基坐标到工件坐标）；姿态角采用 `Rz(C) × Ry(B) × Rx(A)`，单位为度。
+- 计算并保留 `T_base_workpiece`（工件坐标到机器人基坐标）和 `T_workpiece_base`（机器人基坐标到工件坐标）；第一组三点按 `O/X+/Y+` 建立 WObj1，姿态角采用 `Rz(A) × Ry(B) × Rx(C)`，单位为度。
 - 平面确认输出中显示工件原点机器人基坐标、A/B/C、三条单位轴、正交误差和完整 `T_base_workpiece` 矩阵。
 - 画布使用 QPainter 投影显示工件原点及红色 X、绿色 Y、蓝色 Z 三条坐标轴；旋转、缩放、平移后坐标轴使用与点云一致的当前视图矩阵重新投影。
 - 新点云发布、重新取点、放弃取点、撤销或取消候选平面时同步清空旧工件坐标系，禁止旧矩阵继续作用于新画布缓存。
@@ -605,6 +605,6 @@ D:/workpiece/pointcloudview/backups/pointcloudview_20260818_obstacle_warning_cle
 - 删除障碍检测算法、红色障碍点和非阻断告警；当前点云查看流程只保留平面、边缘和二维 Mask 处理。
 - 新增 `pcv_registration`：读取 `RTmatDepth2robot`，校验刚体矩阵，并按机器人位姿插值完成线扫点云到 `robot_base` 的转换。
 - 新增 `pcv_interface`：读取 `sr2026-temp-scanning-info-mvp-2`，校验相对路径不可穿越、点云布局、位姿和三点索引，生成临时工件四件套。
-- 临时工件 JSON 的 schema 为 `sr2026-temp-workpiece-info-mvp-2`；`plane.equation` 固定为 `[X,Y,Z,RX,RY,RZ]`，`outputs` 写入规范化绝对路径。
+- 临时工件 JSON 的 schema 为 `sr2026-temp-workpiece-info-mvp-2`；`plane.equation` 固定为控制器格式 `[X,Y,Z,A,B,C]`，`outputs` 写入规范化绝对路径。
 - 边缘 Mask 输出补齐原点、轴、物理栅格尺寸和图像方向，并复用统一 `pcv_output` writer。
 - 今天前三个源码提交已经纳入本文；当前工作区的“打开扫描 JSON”界面接入也已同步记录。完整 Debug 构建、CTest 和 GUI 人工点选仍需执行后再补充实测结果。

@@ -1256,6 +1256,7 @@ QJsonArray matrixArray(const QMatrix4x4 &matrix)
 
 QJsonArray workpieceEquation(const TempWorkpieceFinalizeOptions &options)
 {
+    // sr2026-temp-workpiece-info-mvp-2 uses controller order X,Y,Z,A,B,C.
     return QJsonArray{options.originInRobotBase.x(), options.originInRobotBase.y(),
                       options.originInRobotBase.z(), options.abcDeg.x(),
                       options.abcDeg.y(), options.abcDeg.z()};

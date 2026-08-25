@@ -246,6 +246,33 @@ bool buildsRobotAxisWorkpieceCoordinate()
     return expect(!invalid.valid, "zero plane normal must reject robot-axis WObj1");
 }
 
+bool buildsReferenceThreePointWorkpieceCoordinate()
+{
+    const QVector<pointcloud::Point3D> points{
+        {100.0f, 100.0f, 100.0f}, // not the WObj1 origin
+        {10.0f, 21.0f, 30.0f}, // X+
+        {9.0f, 20.0f, 30.0f},  // Y+
+        {10.0f, 20.0f, 31.0f},
+        {10.0f, 22.0f, 30.0f}};
+    const QVector3D origin(10.0f, 20.0f, 30.0f); // plane bounding-box center
+    const auto frame = pointcloud::buildWorkpieceCoordinateSystemFromThreePoints(
+        points, origin, 1, 2);
+    if (!expect(frame.valid, "plane-center O/X+/Y+ should build a WObj1 frame")) return false;
+    if (!expect(frame.originInRobotBase == origin,
+                "WObj1 origin must be the plane bounding-box center")) return false;
+    if (!expect((frame.axisXInRobotBase - QVector3D(0.0f, 1.0f, 0.0f)).length() < 1.0e-5f
+                && (frame.axisYInRobotBase - QVector3D(-1.0f, 0.0f, 0.0f)).length() < 1.0e-5f
+                && (frame.axisZInRobotBase - QVector3D(0.0f, 0.0f, 1.0f)).length() < 1.0e-5f,
+                "WObj1 axes must follow the reference three-point construction")) return false;
+    if (!expect(std::abs(frame.poseA - 90.0f) < 1.0e-4f
+                && std::abs(frame.poseB) < 1.0e-4f
+                && std::abs(frame.poseC) < 1.0e-4f,
+                "WObj1 pose must use reference A/B/C decomposition")) return false;
+    const auto collinear = pointcloud::buildWorkpieceCoordinateSystemFromThreePoints(
+        points, origin, 1, 4);
+    return expect(!collinear.valid, "collinear X+/Y+ directions should be rejected");
+}
+
 bool segmentsEdgesInWorkpieceFrame()
 {
     QVector<pointcloud::Point3D> points;
@@ -281,7 +308,9 @@ int main()
     const bool ok = rasterizesCompleteEdgeMask() && extractsRealPointOccupancy()
         && extractsAutomaticRectangularRoi()
         && validatesPlaneConsistency() && calculatesBoundsAndBuildsWorkpieceCoordinate()
-        && buildsRobotAxisWorkpieceCoordinate() && segmentsEdgesInWorkpieceFrame();
+        && buildsRobotAxisWorkpieceCoordinate()
+        && buildsReferenceThreePointWorkpieceCoordinate()
+        && segmentsEdgesInWorkpieceFrame();
     if (ok) std::cout << "pointcloudprocessor_obstacle_tests: PASS\n";
     return ok ? 0 : 1;
 }

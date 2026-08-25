@@ -215,7 +215,7 @@ PlaneOutputResult writePlaneOutput(const JobContext &context, const QImage &imag
         QFileInfo(metadata.sourcePointCloud).absoluteFilePath());
     const QString absolutePngPath = QDir::fromNativeSeparators(QFileInfo(pngPath).absoluteFilePath());
     const QString absolutePlyPath = QDir::fromNativeSeparators(QFileInfo(plyPath).absoluteFilePath());
-    // The exchange format uses robot XYZ followed by RX, RY, RZ.
+    // The exchange format uses controller XYZABC order.
     const QJsonArray poseEquation{
         metadata.originInRobotBase.x(), metadata.originInRobotBase.y(), metadata.originInRobotBase.z(),
         metadata.abcDeg.x(), metadata.abcDeg.y(), metadata.abcDeg.z()};

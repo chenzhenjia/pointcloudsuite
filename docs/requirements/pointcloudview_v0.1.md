@@ -78,7 +78,7 @@ PointCloudSuite 面向机器人/工业视觉点云数据的查看、平面提取
 
 ### 5.4 工件坐标系
 
-平面 XY 包围盒中心作为原点；Z 轴绑定拟合平面法向，用户 X 轴点投影到平面后归一化，Y 轴由 `Z × X` 得到，并用用户 Y 轴点判断方向。输出 `T_base_workpiece`、逆矩阵及 `Rz(C)×Ry(B)×Rx(A)` 姿态角。点过近、共线、方向退化或矩阵不可逆时拒绝建立。
+第一组三点按 `O/X+/Y+` 建立 WObj1：最终提取平面 XYZ 包围盒中心同时作为 O 点和 WObj1 原点，第二点确定 X+，第三点确定 Y+；X 轴归一化，Z 轴为 `X × Y`，Y 轴由 `Z × X` 正交化并按 Y+ 方向定向。输出 `T_base_workpiece`、逆矩阵及 `Rz(A)×Ry(B)×Rx(C)` 姿态角。方向点过近、共线、方向退化或矩阵不可逆时拒绝建立。
 
 ### 5.5 边缘与二维输出
 
@@ -91,7 +91,7 @@ PointCloudSuite 面向机器人/工业视觉点云数据的查看、平面提取
 ## 6. 输出与数据契约
 
 - 二维 PNG：平面或边缘 Mask，左上角为像素原点，前景 `255`、背景 `0`。
-- JSON：统一 schema `sr2026-temp-workpiece-info-mvp-2`，只允许顶层字段 `schema_version`、`kind`、`created_at`、`plane`、`image`、`roi`、`outputs`。`plane` 只包含 `name`、`equation`，`image` 只包含名称、像素尺寸、物理尺寸和像素尺寸，`roi` 固定为字符串 `rectangle`，`outputs` 只包含三条规范化绝对路径；`plane.equation` 顺序为 `[X, Y, Z, RX, RY, RZ]`。临时工件 `created_at` 原样沿用扫描 JSON，普通平面输出使用生成时间。
+- JSON：统一 schema `sr2026-temp-workpiece-info-mvp-2`，只允许顶层字段 `schema_version`、`kind`、`created_at`、`plane`、`image`、`roi`、`outputs`。`plane` 只包含 `name`、`equation`，`image` 只包含名称、像素尺寸、物理尺寸和像素尺寸，`roi` 固定为字符串 `rectangle`，`outputs` 只包含三条规范化绝对路径；`plane.equation` 顺序为控制器格式 `[X, Y, Z, A, B, C]`，姿态约定为 `Rz(A)×Ry(B)×Rx(C)`。临时工件 `created_at` 原样沿用扫描 JSON，普通平面输出使用生成时间。
 - `_plane_robot_base.ply`：最终连通域平面点，binary little-endian，坐标保持机器人基坐标，并记录来源和坐标系元数据。
 - 输出由 `pcv_output` 统一写出；PNG、PLY、JSON 先写临时目录后成套提交并支持回滚，任一文件失败均视为整体失败。
 - `cache/*.pcvbin`：运行缓存；`logs/startup.log`：启动诊断日志。
@@ -130,5 +130,5 @@ v0.1 已形成从 PLY 输入、OpenGL 查看、真实点选、平面/边缘处�
 
 - 删除障碍检测及其非阻断告警，不再把障碍状态写入主程序流程或文档验收项。
 - 新增 `pcv_registration` 和 `pcv_interface`，统一临时扫描输入、手眼转换、平面/ROI 提取和输出提交。
-- 平面输出 JSON 从旧 proposal schema 切换为 `sr2026-temp-workpiece-info-mvp-2`，输出路径改为规范化绝对路径，姿态顺序固定为 `[X,Y,Z,RX,RY,RZ]`。
+- 平面输出 JSON 使用 `sr2026-temp-workpiece-info-mvp-2`，输出路径为规范化绝对路径，姿态顺序固定为控制器格式 `[X,Y,Z,A,B,C]`。
 - 用户选择输出目录时直接写入该目录；PNG、PLY、JSON 以及临时工件四件套均采用临时目录提交和失败回滚。

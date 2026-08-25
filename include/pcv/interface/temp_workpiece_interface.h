@@ -109,6 +109,8 @@ struct TempWorkpieceFinalizeOptions {
     QVector3D axisXInRobotBase{1.0f, 0.0f, 0.0f};
     QVector3D axisYInRobotBase{0.0f, 1.0f, 0.0f};
     QVector3D axisZInRobotBase{0.0f, 0.0f, 1.0f};
+    // Controller-style WObj1 angles: A/B/C for
+    // R = Rz(A) * Ry(B) * Rx(C).
     QVector3D abcDeg;
     QMatrix4x4 TBaseWorkpiece;
     QMatrix4x4 TWorkpieceBase;
