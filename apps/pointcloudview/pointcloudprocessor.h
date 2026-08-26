@@ -314,12 +314,25 @@ struct WorkpieceCoordinateSystem {
     QVector3D axisZInRobotBase;
     QMatrix4x4 workpieceToRobotBase;
     QMatrix4x4 robotBaseToWorkpiece;
-    // Controller-style angles from R = Rz(A) * Ry(B) * Rx(C).
+    // Controller-style [A,B,C] angles: A=Rx, B=Ry, C=Rz;
+    // R = Rz(C) * Ry(B) * Rx(A).
     float poseA = 0.0f;
     float poseB = 0.0f;
     float poseC = 0.0f;
     float orthogonalityError = 0.0f;
     bool valid = false;
+    QString error;
+};
+
+struct AutomaticAxisPointSelection {
+    int xPointIndex = -1;
+    int yPointIndex = -1;
+    float targetDistanceMm = 0.0f;
+    float xActualDistanceMm = 0.0f;
+    float yActualDistanceMm = 0.0f;
+    bool xUsedFallback = false;
+    bool yUsedFallback = false;
+    bool ok = false;
     QString error;
 };
 
@@ -395,18 +408,20 @@ WorkpieceCoordinateSystem buildWorkpieceCoordinateSystem(
     const QVector3D &planeNormal,
     int xAxisPointIndex, int yAxisPointIndex,
     bool preferPositiveZ = false);
-// Builds WObj1 with the reference-tool three-point convention. The O point
-// is the supplied plane bounding-box center; X+/Y+ are direction samples
-// relative to that same O/WObj1 origin.
+// Builds WObj1 strictly from O, X+ and Y+ points.  The fitted plane normal
+// and robot-base axis projections are not used for the exported orientation.
 WorkpieceCoordinateSystem buildWorkpieceCoordinateSystemFromThreePoints(
     const QVector<Point3D> &, const QVector3D &origin,
     int xAxisPointIndex, int yAxisPointIndex);
-// Builds the JSON-flow WObj1 without user-picked axis points. The robot-base
-// X/Y axes are projected onto the fitted plane and the Z sign follows the
-// robot-base Z direction.
 WorkpieceCoordinateSystem buildWorkpieceCoordinateSystemFromRobotAxes(
     const QVector3D &origin, const QVector3D &planeNormal,
     bool preferPositiveZ = true);
+// Selects X+/Y+ helper points using robot-base axis projections. The selected
+// points are later passed to the O/X+/Y+ three-point WObj1 construction.
+AutomaticAxisPointSelection selectAutomaticWorkpieceAxisPoints(
+    const QVector<Point3D> &, const QVector<int> &planeIndices,
+    const QVector3D &origin, const QVector3D &planeNormal,
+    float planeToleranceMm = 0.4f);
 PlaneEdgeResult segmentPlaneEdges(const QVector<Point3D>&, const QVector<int>&,
                                   const PlaneModel&, const PlaneEdgeOptions& = {});
 // Projects the selected plane from the current display cache into a 2D image

@@ -15,7 +15,7 @@
 * `<base>.json`：当前 schema 的 `plane/image/roi/outputs` 元数据。
 * `<base>_plane_robot_base.ply`：`binary_little_endian`，坐标为 `robot_base`。
 
-JSON 只包含 `schema_version`、`kind`、`created_at`、`plane`、`image`、`roi` 和 `outputs`。`plane` 只包含 `name` 与控制器格式 `[X, Y, Z, A, B, C]` 形式的 `equation`；其中 `R = Rz(A) × Ry(B) × Rx(C)`，平面 XYZ 包围盒中心作为 O/WObj1 原点，第一组三点的 X+/Y+ 方向点用于建立 WObj1。`image` 只包含名称、像素尺寸、物理尺寸和像素尺寸；`roi` 固定为字符串 `rectangle`；三个 `outputs` 路径均为规范化绝对路径。诊断、平面模型、轴、矩阵、统计和来源扫描元数据不属于正式 JSON。
+JSON 只包含 `schema_version`、`kind`、`created_at`、`plane`、`image`、`roi` 和 `outputs`。`plane` 只包含 `name` 与控制器格式 `[X, Y, Z, A, B, C]` 形式的 `equation`；其中 A=Rx、B=Ry、C=Rz，`R = Rz(C) × Ry(B) × Rx(A)`，equation 的 XYZ 来自 WObj1 原点 O，ABC 只来自 O/X+/Y+ 三点法最终计算结果。`image` 只包含名称、像素尺寸、物理尺寸和像素尺寸；`roi` 固定为字符串 `rectangle`；三个 `outputs` 路径均为规范化绝对路径。诊断、平面模型、轴、矩阵、统计和来源扫描元数据不属于正式 JSON。
 
 图像记录 `width_px`、`height_px`、`width_mm`、`height_mm` 和 `pixel_size_mm`。
 

@@ -110,7 +110,7 @@ struct TempWorkpieceFinalizeOptions {
     QVector3D axisYInRobotBase{0.0f, 1.0f, 0.0f};
     QVector3D axisZInRobotBase{0.0f, 0.0f, 1.0f};
     // Controller-style WObj1 angles: A/B/C for
-    // R = Rz(A) * Ry(B) * Rx(C).
+    // Controller order is A=Rx, B=Ry, C=Rz; R = Rz(C) * Ry(B) * Rx(A).
     QVector3D abcDeg;
     QMatrix4x4 TBaseWorkpiece;
     QMatrix4x4 TWorkpieceBase;

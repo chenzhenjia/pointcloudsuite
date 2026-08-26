@@ -3460,7 +3460,7 @@ PlaneImageResult extractPlaneImage(const QVector<Point3D> &points,
         origin = options.imageOrigin;
         axisU = options.imageAxisU - normal * QVector3D::dotProduct(options.imageAxisU, normal);
         if (axisU.lengthSquared() <= 1.0e-10f) {
-            result.error = QStringLiteral("用户 X 轴点接近平面法向，无法建立图像坐标轴");
+            result.error = QStringLiteral("工件 X 轴接近平面法向，无法建立图像坐标轴");
             return result;
         }
         axisU.normalize();
@@ -4060,14 +4060,10 @@ WorkpieceCoordinateSystem buildWorkpieceCoordinateSystemFromRobotAxes(
     const QVector3D robotX(1.0f, 0.0f, 0.0f);
     const QVector3D robotY(0.0f, 1.0f, 0.0f);
     const QVector3D robotZ(0.0f, 0.0f, 1.0f);
-    if (preferPositiveZ && QVector3D::dotProduct(z, robotZ) < 0.0f)
-        z = -z;
-
+    if (preferPositiveZ && QVector3D::dotProduct(z, robotZ) < 0.0f) z = -z;
     QVector3D x = robotX - z * QVector3D::dotProduct(robotX, z);
-    if (x.lengthSquared() <= 1.0e-10f)
-        x = robotY - z * QVector3D::dotProduct(robotY, z);
     if (x.lengthSquared() <= 1.0e-10f) {
-        result.error = QStringLiteral("机器人基坐标 X/Y 轴投影无法形成工件 X 轴");
+        result.error = QStringLiteral("机器人基坐标 X 轴在拟合平面上的投影退化");
         return result;
     }
     x.normalize();
@@ -4077,11 +4073,7 @@ WorkpieceCoordinateSystem buildWorkpieceCoordinateSystemFromRobotAxes(
         return result;
     }
     y.normalize();
-    if (QVector3D::dotProduct(y, robotY) < 0.0f) {
-        x = -x;
-        y = -y;
-    }
-
+    if (QVector3D::dotProduct(y, robotY) < 0.0f) { x = -x; y = -y; }
     result.originInRobotBase = origin;
     result.axisXInRobotBase = x;
     result.axisYInRobotBase = y;
@@ -4102,24 +4094,153 @@ WorkpieceCoordinateSystem buildWorkpieceCoordinateSystemFromRobotAxes(
         result.error = QStringLiteral("工件坐标系矩阵不可逆");
         return result;
     }
-    const double ry = std::asin(std::clamp(
-        -double(result.workpieceToRobotBase(2, 0)), -1.0, 1.0));
-    const double cosRy = std::cos(ry);
-    double rx = 0.0;
-    double rz = 0.0;
-    if (std::abs(cosRy) > 1.0e-8) {
-        rx = std::atan2(double(result.workpieceToRobotBase(2, 1)),
-                        double(result.workpieceToRobotBase(2, 2)));
-        rz = std::atan2(double(result.workpieceToRobotBase(1, 0)),
-                        double(result.workpieceToRobotBase(0, 0)));
+    const double b = std::asin(std::clamp(-double(result.workpieceToRobotBase(2, 0)), -1.0, 1.0));
+    const double cb = std::cos(b);
+    double c = 0.0, a = 0.0;
+    if (std::abs(cb) > 1.0e-8) {
+        c = std::atan2(double(result.workpieceToRobotBase(2, 1)), double(result.workpieceToRobotBase(2, 2)));
+        a = std::atan2(double(result.workpieceToRobotBase(1, 0)), double(result.workpieceToRobotBase(0, 0)));
     } else {
-        rz = std::atan2(-double(result.workpieceToRobotBase(0, 1)),
-                        double(result.workpieceToRobotBase(1, 1)));
+        a = std::atan2(-double(result.workpieceToRobotBase(0, 1)), double(result.workpieceToRobotBase(1, 1)));
     }
-    result.poseA = float(qRadiansToDegrees(rx));
-    result.poseB = float(qRadiansToDegrees(ry));
-    result.poseC = float(qRadiansToDegrees(rz));
+    result.poseA = float(qRadiansToDegrees(c));
+    result.poseB = float(qRadiansToDegrees(b));
+    result.poseC = float(qRadiansToDegrees(a));
     result.valid = true;
+    return result;
+}
+
+AutomaticAxisPointSelection selectAutomaticWorkpieceAxisPoints(
+    const QVector<Point3D> &points, const QVector<int> &planeIndices,
+    const QVector3D &origin, const QVector3D &planeNormal,
+    float planeToleranceMm) {
+    AutomaticAxisPointSelection result;
+    const auto finiteVector = [](const QVector3D &value) {
+        return std::isfinite(value.x()) && std::isfinite(value.y())
+            && std::isfinite(value.z());
+    };
+    if (!finiteVector(origin)) {
+        result.error = QStringLiteral("平面中心无效，无法自动取辅助点");
+        return result;
+    }
+    QVector3D z = planeNormal;
+    if (!finiteVector(z) || z.lengthSquared() <= 1.0e-10f) {
+        result.error = QStringLiteral("拟合平面法向量无效，无法自动取辅助点");
+        return result;
+    }
+    z.normalize();
+    if (QVector3D::dotProduct(z, QVector3D(0.0f, 0.0f, 1.0f)) < 0.0f) z = -z;
+    QVector3D x = QVector3D(1.0f, 0.0f, 0.0f)
+        - z * QVector3D::dotProduct(QVector3D(1.0f, 0.0f, 0.0f), z);
+    if (x.lengthSquared() <= 1.0e-10f) {
+        result.error = QStringLiteral("机器人基坐标 X 轴投影退化，无法自动取 X+ 点");
+        return result;
+    }
+    x.normalize();
+    QVector3D y = QVector3D::crossProduct(z, x);
+    if (y.lengthSquared() <= 1.0e-10f) {
+        result.error = QStringLiteral("机器人基坐标 Y 轴投影退化，无法自动取 Y+ 点");
+        return result;
+    }
+    y.normalize();
+    if (QVector3D::dotProduct(y, QVector3D(0.0f, 1.0f, 0.0f)) < 0.0f) {
+        x = -x;
+        y = -y;
+    }
+    if (planeIndices.isEmpty()) {
+        result.error = QStringLiteral("最终平面没有可用于自动取点的点");
+        return result;
+    }
+    const auto finite = [](const QVector3D &value) {
+        return std::isfinite(value.x()) && std::isfinite(value.y())
+            && std::isfinite(value.z());
+    };
+    const auto position = [&points](int index) {
+        const Point3D &point = points[index];
+        return QVector3D(point.x, point.y, point.z);
+    };
+    const auto validIndex = [&points](int index) {
+        return index >= 0 && index < points.size();
+    };
+    const float tolerance = qMax(0.0f, planeToleranceMm);
+    float minimumU = std::numeric_limits<float>::max();
+    float maximumU = std::numeric_limits<float>::lowest();
+    float minimumV = std::numeric_limits<float>::max();
+    float maximumV = std::numeric_limits<float>::lowest();
+    QVector<int> validPlaneIndices;
+    validPlaneIndices.reserve(planeIndices.size());
+    for (const int index : planeIndices) {
+        if (!validIndex(index)) continue;
+        const QVector3D delta = position(index) - origin;
+        if (!finite(delta)) continue;
+        const float w = QVector3D::dotProduct(delta, z);
+        if (!std::isfinite(w) || std::abs(w) > tolerance) continue;
+        const float u = QVector3D::dotProduct(delta, x);
+        const float v = QVector3D::dotProduct(delta, y);
+        if (!std::isfinite(u) || !std::isfinite(v)) continue;
+        minimumU = qMin(minimumU, u);
+        maximumU = qMax(maximumU, u);
+        minimumV = qMin(minimumV, v);
+        maximumV = qMax(maximumV, v);
+        validPlaneIndices.push_back(index);
+    }
+    if (validPlaneIndices.isEmpty()) {
+        result.error = QStringLiteral("最终平面没有有限且满足平面容差的点");
+        return result;
+    }
+    const float minimumExtent = qMin(maximumU - minimumU, maximumV - minimumV);
+    if (!std::isfinite(minimumExtent) || minimumExtent <= 0.0f) {
+        result.error = QStringLiteral("最终平面 XY 范围不足，无法计算自动取点距离");
+        return result;
+    }
+    result.targetDistanceMm = std::clamp(0.25f * minimumExtent, 5.0f, 50.0f);
+
+    const auto selectOnAxis = [&](const QVector3D &axis, int forbiddenIndex,
+                                  int *selectedIndex, float *actualDistance,
+                                  bool *usedFallback) {
+        int targetIndex = -1;
+        int fallbackIndex = -1;
+        float targetDistanceSquared = std::numeric_limits<float>::max();
+        float maximumProjection = 0.0f;
+        for (const int index : validPlaneIndices) {
+            if (index == forbiddenIndex) continue;
+            const QVector3D delta = position(index) - origin;
+            const float projection = QVector3D::dotProduct(delta, axis);
+            if (!std::isfinite(projection) || projection <= 1.0e-5f) continue;
+            if (projection > maximumProjection
+                || (qFuzzyCompare(projection, maximumProjection)
+                    && (fallbackIndex < 0 || index < fallbackIndex))) {
+                maximumProjection = projection;
+                fallbackIndex = index;
+            }
+            if (projection < result.targetDistanceMm) continue;
+            const QVector3D error = delta - axis * result.targetDistanceMm;
+            const float distanceSquared = error.lengthSquared();
+            if (distanceSquared < targetDistanceSquared
+                || (qFuzzyCompare(distanceSquared, targetDistanceSquared)
+                    && (targetIndex < 0 || index < targetIndex))) {
+                targetDistanceSquared = distanceSquared;
+                targetIndex = index;
+            }
+        }
+        if (targetIndex >= 0) {
+            *selectedIndex = targetIndex;
+            *usedFallback = false;
+        } else if (fallbackIndex >= 0) {
+            *selectedIndex = fallbackIndex;
+            *usedFallback = true;
+        }
+        if (*selectedIndex >= 0)
+            *actualDistance = (position(*selectedIndex) - origin).length();
+    };
+    selectOnAxis(x, -1, &result.xPointIndex,
+                 &result.xActualDistanceMm, &result.xUsedFallback);
+    selectOnAxis(y, result.xPointIndex, &result.yPointIndex,
+                 &result.yActualDistanceMm, &result.yUsedFallback);
+    result.ok = result.xPointIndex >= 0 && result.yPointIndex >= 0;
+    if (!result.ok) {
+        result.error = QStringLiteral("机器人基坐标正 X/Y 方向缺少可用平面点");
+    }
     return result;
 }
 
@@ -4286,7 +4407,7 @@ WorkpieceCoordinateSystem buildWorkpieceCoordinateSystemFromThreePoints(
         return result;
     }
 
-    // Reference convention: R = Rz(A) * Ry(B) * Rx(C).
+    // Controller order is A=Rx, B=Ry, C=Rz; the matrix is Rz(C)*Ry(B)*Rx(A).
     const double a = std::atan2(double(result.workpieceToRobotBase(1, 0)),
                                 double(result.workpieceToRobotBase(0, 0)));
     const double b = std::atan2(
@@ -4295,9 +4416,9 @@ WorkpieceCoordinateSystem buildWorkpieceCoordinateSystemFromThreePoints(
                    double(result.workpieceToRobotBase(2, 2))));
     const double c = std::atan2(double(result.workpieceToRobotBase(2, 1)),
                                 double(result.workpieceToRobotBase(2, 2)));
-    result.poseA = float(qRadiansToDegrees(a));
+    result.poseA = float(qRadiansToDegrees(c));
     result.poseB = float(qRadiansToDegrees(b));
-    result.poseC = float(qRadiansToDegrees(c));
+    result.poseC = float(qRadiansToDegrees(a));
     result.valid = true;
     return result;
 }

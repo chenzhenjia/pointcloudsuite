@@ -26,7 +26,7 @@ D:\workpiece\pointcloudview\pointcloudview\docs\pointcloudview_phase2_developmen
     -> 候选/全量平面分类
     -> 第二组三点强制验证
     -> 平面包围盒中心作为 WObj1 原点
-    -> 独立选择 X/Y 轴点
+    -> 按机器人基坐标轴投影自动建立 WObj1
     -> 建立并显示 WObj1
 ```
 
@@ -41,7 +41,7 @@ p_robot_base = T_base_flange(t) * T_flange_depth * p_depth
 ## 冻结的业务规则
 
 - 二次验证适用于临时扫描和普通 PLY 的全部三点取平面流程。
-- 第一组三点是平面种子，第二组三点和 WObj1 轴点都不得复用。
+- 第一组三点是平面种子，第二组三点只用于平面一致性验证；WObj1 轴不依赖任何取点方向。
 - 第二组三点内部不得重复且不能共线。
 - 法向夹角使用 `acos(abs(dot(normal1, normal2)))`，方向相反视为同一法向。
 - 法向夹角阈值固定为 `1.0 deg`。
@@ -50,7 +50,7 @@ p_robot_base = T_base_flange(t) * T_flange_depth * p_depth
 - 夹角或距离超限：清除第一平面候选、第二组三点和 WObj1，强制返回第一组三点流程。
 - 快速候选和全量分类生成新平面结果时都必须重置二次验证状态。
 - WObj1 原点固定为最终平面点 XYZ 包围盒中心 `m_planeCenter`；原点 `[0,0,0]` 合法。
-- WObj1 的 X/Y 轴点必须独立选择，不能复用第一组、第二组或另一个轴点。
+- 自动辅助点仅用于显示和距离诊断，不参与 WObj1 轴计算。
 - Z 轴使用最终拟合平面单位法向，继续复用现有右手系和 Y 点定向逻辑。
 - WObj1 失败时保留已经通过的平面二次验证，但禁止进入后续流程。
 
@@ -108,9 +108,8 @@ distance = std::abs(QVector3D::dotProduct(referenceNormal, point) + normalizedD)
 
 - `verificationPassed = m_secondPlaneValidated && m_secondPlaneSamePlane`；
 - 第二组三点按钮依赖候选存在，不应依赖候选已经确认；
-- X/Y 轴点按钮在临时会话中可见；
-- X/Y 轴点只在二次验证通过后启用；
-- “确定候选平面”要求候选、二次验证通过、X/Y 轴点齐全且尚未确认。
+- X/Y 轴点按钮不再作为 WObj1 建立条件；
+- “确定候选平面”只要求候选平面和二次验证通过。
 
 此部分尚未编译，也尚未完成周边状态同步。
 
@@ -121,7 +120,7 @@ distance = std::abs(QVector3D::dotProduct(referenceNormal, point) + normalizedD)
 1. 修正 `validatePlaneConsistency()` 的平面归一化和距离实现，然后先编译处理器测试目标。
 2. 重写 `MainWindow::validateSecondPlaneSelection()`，统一调用 `pointcloud::validatePlaneConsistency(...)`。
 3. 实现验证结果分流：
-   - `Passed`：保存角度/距离并允许选择 WObj1 轴点；
+   - `Passed`：保存角度/距离并允许按机器人基坐标轴投影自动建立 WObj1；
    - `Collinear`、`InvalidInput`、`ReusedPoint`：只清除第二组三点；
    - `AngleExceeded`、`DistanceExceeded`：清除当前候选、两组三点相关状态、WObj1、边缘/图像状态并回到第一组三点选择。
 4. 在 `startPlanePointSelection()`、`abandonPlanePointSelection()`、`runPlaneExtraction()` 或 `planeExtractionFinished()`、`cancelPlaneCandidate()` 和新画布发布路径中统一重置二次验证状态；删除目前明显重复的 reset 语句。

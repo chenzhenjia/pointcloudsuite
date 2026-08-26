@@ -43,8 +43,8 @@
       <property name="alternatingRowColors"><bool>true</bool></property>
       <property name="columnCount"><number>3</number></property>
       <column><property name="text"><string>PLY 文件</string></property></column>
-      <column><property name="text"><string>Start（X Y Z RX RY RZ）</string></property></column>
-      <column><property name="text"><string>End（X Y Z RX RY RZ）</string></property></column>
+      <column><property name="text"><string>Start（X Y Z A B C）</string></property></column>
+      <column><property name="text"><string>End（X Y Z A B C）</string></property></column>
      </widget>
     </item>
     <item>

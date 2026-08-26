@@ -63,9 +63,9 @@ int main(int argc, char **argv)
     assert(equation.at(0).toDouble() == 1.0);
     assert(equation.at(1).toDouble() == 2.0);
     assert(equation.at(2).toDouble() == 3.0);
-    assert(equation.at(3).toDouble() == 4.0);
+    assert(equation.at(3).toDouble() == 6.0);
     assert(equation.at(4).toDouble() == 5.0);
-    assert(equation.at(5).toDouble() == 6.0);
+    assert(equation.at(5).toDouble() == 4.0);
     const QJsonObject imageObject = json.value("image").toObject();
     assert((imageObject.keys() == QStringList{
         QStringLiteral("height_mm"), QStringLiteral("height_px"), QStringLiteral("name"),

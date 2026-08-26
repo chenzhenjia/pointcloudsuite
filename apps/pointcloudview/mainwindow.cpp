@@ -1726,6 +1726,7 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points,
     resetSecondPlaneVerification();
     m_axisSelectionActive = false;
     m_xAxisPointIndex = m_yAxisPointIndex = -1;
+    m_automaticAxisPointSelection = {};
     m_planeCenter = {};
     m_planeCenterValid = false;
     m_threePlaneResult = {};
@@ -1782,6 +1783,7 @@ void MainWindow::startPlanePointSelection() {
     resetSecondPlaneVerification();
     m_axisSelectionActive = false;
     m_xAxisPointIndex = m_yAxisPointIndex = -1;
+    m_automaticAxisPointSelection = {};
     m_planeCenter = {};
     m_planeCenterValid = false;
     m_threePlaneResult = {};
@@ -1810,6 +1812,7 @@ void MainWindow::abandonPlanePointSelection() {
     m_threePlaneResult = {};
     m_planeCenter = {};
     m_planeCenterValid = false;
+    m_automaticAxisPointSelection = {};
     m_workpieceCoordinate = {};
     ++m_coordinateFrameRevision;
     clearPlaneEdgeUi();
@@ -1838,6 +1841,7 @@ void MainWindow::undoPlanePointSelection() {
     resetSecondPlaneVerification();
     m_axisSelectionActive = false;
     m_xAxisPointIndex = m_yAxisPointIndex = -1;
+    m_automaticAxisPointSelection = {};
     m_planeCenter = {};
     m_planeCenterValid = false;
     m_threePlaneResult = {};
@@ -2184,8 +2188,7 @@ void MainWindow::extractPlaneImage() {
     options.imageRoundIncrement = 10.0f;
     options.maximumImagePixels = 100000000;
     if (options.useImageFrame) {
-        options.imageOrigin = m_tempWorkpieceSessionActive
-            ? m_workpieceCoordinate.originInRobotBase : m_planeCenter;
+        options.imageOrigin = m_workpieceCoordinate.originInRobotBase;
         options.imageAxisU = m_workpieceCoordinate.axisXInRobotBase;
         options.imageAxisV = m_workpieceCoordinate.axisYInRobotBase;
         options.imageCropWidth = float(m_planeImageWidth->value());
@@ -2342,34 +2345,6 @@ void MainWindow::tempWorkpieceFinalizeFinished() {
 }
 
 void MainWindow::handleCanvasPointPicked(int index) {
-    if (m_axisSelectionActive) {
-        if (index < 0) {
-            statusBar()->showMessage(tr("鼠标位置没有可选点"));
-            return;
-        }
-        if (index == m_xAxisPointIndex || index == m_yAxisPointIndex
-            || m_selectedPointIndices.contains(index)
-            || m_secondPlanePointIndices.contains(index)) {
-            statusBar()->showMessage(tr("轴点不能与两组三点平面种子或另一个轴点重复"));
-            return;
-        }
-        if (m_xAxisPointIndex < 0) {
-            m_xAxisPointIndex = index;
-            statusBar()->showMessage(tr("已选择 X 轴点，请选择 Y 轴点"));
-        } else {
-            m_yAxisPointIndex = index;
-            m_axisSelectionActive = false;
-            m_canvas->setSelectionMode(false);
-            statusBar()->showMessage(tr("X/Y 轴点已选择，可确定工件坐标系"));
-        }
-        QVector<int> marked = m_selectedPointIndices;
-        marked += m_secondPlanePointIndices;
-        if (m_xAxisPointIndex >= 0) marked.push_back(m_xAxisPointIndex);
-        if (m_yAxisPointIndex >= 0) marked.push_back(m_yAxisPointIndex);
-        m_canvas->setSelectedIndices(marked);
-        updatePlaneExtractionUi();
-        return;
-    }
     if (m_secondPlaneSelectionActive) {
         if (index < 0) {
             statusBar()->showMessage(tr("鼠标位置没有可选点"));
@@ -2471,7 +2446,7 @@ void MainWindow::validateSecondPlaneSelection() {
         autoConfirmJsonFrame = m_tempWorkpieceSessionActive;
         statusBar()->showMessage(m_tempWorkpieceSessionActive
             ? tr("第二组三点确认属于同一平面，JSON 流程将自动建立 WObj1")
-            : tr("第二组三点确认属于同一平面，请选择 WObj1 的 X/Y 轴点"));
+            : tr("第二组三点确认属于同一平面，系统将按机器人基坐标轴自动建立 WObj1"));
     } else if (validation.status == pointcloud::PlaneConsistencyStatus::Collinear
                || validation.status == pointcloud::PlaneConsistencyStatus::InvalidInput
                || validation.status == pointcloud::PlaneConsistencyStatus::ReusedPoint) {
@@ -2514,27 +2489,15 @@ void MainWindow::validateSecondPlaneSelection() {
 }
 
 void MainWindow::startWorkpieceAxisSelection() {
-    if (m_tempWorkpieceSessionActive) {
-        statusBar()->showMessage(tr("JSON 流程按机器人基坐标 X/Y 轴自动建立 WObj1"));
-        return;
-    }
-    if (!m_threePlaneResult.ok || pointTaskRunning() || !m_planeCenterValid
-        || !m_secondPlaneValidated || !m_secondPlaneSamePlane) {
-        statusBar()->showMessage(tr("请先通过第二组三点的平面验证"));
-        return;
-    }
-    m_xAxisPointIndex = -1;
-    m_yAxisPointIndex = -1;
-    m_axisSelectionActive = true;
-    m_canvas->setSelectionMode(true);
-    statusBar()->showMessage(tr("请在平面内选择 X 轴点，再选择 Y 轴点"));
-    updatePlaneExtractionUi();
+    m_axisSelectionActive = false;
+    statusBar()->showMessage(tr("WObj1 已按机器人基坐标 X/Y 轴投影自动建立，无需人工选轴点"));
 }
 
 void MainWindow::clearWorkpieceAxisSelection() {
     if (pointTaskRunning()) return;
     m_axisSelectionActive = false;
     m_xAxisPointIndex = m_yAxisPointIndex = -1;
+    m_automaticAxisPointSelection = {};
     m_workpieceCoordinate = {};
     ++m_coordinateFrameRevision;
     clearPlaneEdgeUi();
@@ -2543,7 +2506,7 @@ void MainWindow::clearWorkpieceAxisSelection() {
     QVector<int> marked = m_selectedPointIndices;
     marked += m_secondPlanePointIndices;
     m_canvas->setSelectedIndices(marked);
-    statusBar()->showMessage(tr("已清除 X/Y 轴点"));
+    statusBar()->showMessage(tr("已清除自动辅助轴点和 WObj1"));
     updatePlaneExtractionUi();
 }
 
@@ -2636,6 +2599,7 @@ void MainWindow::planeExtractionFinished() {
     m_planeCenterValid = true;
     resetSecondPlaneVerification();
     m_xAxisPointIndex = m_yAxisPointIndex = -1;
+    m_automaticAxisPointSelection = {};
     m_axisSelectionActive = false;
     ++m_coordinateFrameRevision;
     clearPlaneEdgeUi();
@@ -2694,13 +2658,26 @@ void MainWindow::confirmPlaneCandidate() {
         return;
     }
     if (m_selectedPointIndices.size() != 3) {
-        statusBar()->showMessage(tr("建立 WObj1 需要第一组三点的 X+/Y+ 方向点"));
+        statusBar()->showMessage(tr("建立 WObj1 需要有效的第一组三点平面种子"));
         return;
     }
     pointcloud::WorkpieceCoordinateSystem frame;
+    const QVector3D fittedNormal(m_threePlaneResult.model.a,
+                                 m_threePlaneResult.model.b,
+                                 m_threePlaneResult.model.c);
+    m_automaticAxisPointSelection = pointcloud::selectAutomaticWorkpieceAxisPoints(
+        m_points, m_threePlaneResult.planeIndices, m_planeCenter, fittedNormal);
+    m_xAxisPointIndex = m_automaticAxisPointSelection.xPointIndex;
+    m_yAxisPointIndex = m_automaticAxisPointSelection.yPointIndex;
+    if (!m_automaticAxisPointSelection.ok) {
+        const QString error = QStringLiteral("无法完成 O/X+/Y+ 自动三点取点：%1")
+            .arg(m_automaticAxisPointSelection.error);
+        statusBar()->showMessage(error);
+        m_threeOutput->appendPlainText(QStringLiteral("\n") + error);
+        return;
+    }
     frame = pointcloud::buildWorkpieceCoordinateSystemFromThreePoints(
-        m_points, m_planeCenter, m_selectedPointIndices[1],
-        m_selectedPointIndices[2]);
+        m_points, m_planeCenter, m_xAxisPointIndex, m_yAxisPointIndex);
     if (!frame.valid) {
         statusBar()->showMessage(frame.error);
         m_threeOutput->appendPlainText(QStringLiteral("\n") + frame.error);
@@ -2714,23 +2691,51 @@ void MainWindow::confirmPlaneCandidate() {
     m_secondPlaneSelectionActive = false;
     m_canvas->setSelectionMode(false);
     m_canvas->setWorkpieceCoordinateSystem(m_workpieceCoordinate);
+    QVector<int> marked = m_selectedPointIndices;
+    marked += m_secondPlanePointIndices;
+    if (m_xAxisPointIndex >= 0 && !marked.contains(m_xAxisPointIndex))
+        marked.push_back(m_xAxisPointIndex);
+    if (m_yAxisPointIndex >= 0 && !marked.contains(m_yAxisPointIndex))
+        marked.push_back(m_yAxisPointIndex);
+    m_canvas->setSelectedIndices(marked);
     QStringList frameLines;
     frameLines << tr("候选平面已确定，平面包围盒中心作为 O/WObj1 原点")
-               << tr("第一组三点中的 X+/Y+ 用于确定轴方向")
+               << tr("O/X+/Y+ 三点：O 为 WObj1 原点，X+/Y+ 为机器人轴投影方向的自动辅助点")
                << tr("工件原点（机器人基坐标）：X %1  Y %2  Z %3 mm")
                       .arg(frame.originInRobotBase.x(), 0, 'f', 3)
                       .arg(frame.originInRobotBase.y(), 0, 'f', 3)
                       .arg(frame.originInRobotBase.z(), 0, 'f', 3)
+               << tr("O 点（机器人基坐标）：[%1, %2, %3]")
+                      .arg(frame.originInRobotBase.x(), 0, 'f', 6)
+                      .arg(frame.originInRobotBase.y(), 0, 'f', 6)
+                      .arg(frame.originInRobotBase.z(), 0, 'f', 6);
+    const auto appendBasePoint = [this, &frameLines](const QString &name, int index) {
+        if (index < 0 || index >= m_points.size()) {
+            frameLines << tr("%1 点（机器人基坐标）：无效索引 #%2")
+                              .arg(name).arg(index);
+            return;
+        }
+        const pointcloud::Point3D &point = m_points[index];
+        frameLines << tr("%1 点（机器人基坐标）：[%2, %3, %4]（索引 #%5）")
+                          .arg(name)
+                          .arg(point.x, 0, 'f', 6)
+                          .arg(point.y, 0, 'f', 6)
+                          .arg(point.z, 0, 'f', 6)
+                          .arg(index);
+    };
+    appendBasePoint(QStringLiteral("X+"), m_xAxisPointIndex);
+    appendBasePoint(QStringLiteral("Y+"), m_yAxisPointIndex);
+    frameLines << tr("O/X+/Y+ 三点均为机器人基坐标系 XYZ 坐标，作为 WObj1 输出依据")
                << tr("工件姿态：A %1°  B %2°  C %3°")
                       .arg(frame.poseA, 0, 'f', 4)
                       .arg(frame.poseB, 0, 'f', 4)
                       .arg(frame.poseC, 0, 'f', 4)
-               << tr("姿态约定：Rz(A) × Ry(B) × Rx(C)")
-               << tr("X 轴（O -> X+，O 为平面包围盒中心）：[%1, %2, %3]")
+               << tr("姿态约定：A=Rx、B=Ry、C=Rz；Rz(C) × Ry(B) × Rx(A)")
+               << tr("X 轴（O -> 自动 X+，三点法计算）：[%1, %2, %3]")
                       .arg(frame.axisXInRobotBase.x(), 0, 'g', 8)
                       .arg(frame.axisXInRobotBase.y(), 0, 'g', 8)
                       .arg(frame.axisXInRobotBase.z(), 0, 'g', 8)
-               << tr("Y 轴（O -> Y+，O 为平面包围盒中心，正交化）：[%1, %2, %3]")
+               << tr("Y 轴（O -> 自动 Y+，三点法正交化）：[%1, %2, %3]")
                       .arg(frame.axisYInRobotBase.x(), 0, 'g', 8)
                       .arg(frame.axisYInRobotBase.y(), 0, 'g', 8)
                       .arg(frame.axisYInRobotBase.z(), 0, 'g', 8)
@@ -2740,6 +2745,23 @@ void MainWindow::confirmPlaneCandidate() {
                       .arg(frame.axisZInRobotBase.z(), 0, 'g', 8)
                << tr("正交误差：%1").arg(frame.orthogonalityError, 0, 'g', 6)
                << tr("T_base_workpiece：");
+    if (m_automaticAxisPointSelection.ok) {
+        frameLines << tr("自动 X 辅助点：#%1，实际距离 %2 mm%3")
+                          .arg(m_automaticAxisPointSelection.xPointIndex)
+                          .arg(m_automaticAxisPointSelection.xActualDistanceMm, 0, 'f', 3)
+                          .arg(m_automaticAxisPointSelection.xUsedFallback
+                                   ? tr("（fallback）") : QString())
+                   << tr("自动 Y 辅助点：#%1，实际距离 %2 mm%3")
+                          .arg(m_automaticAxisPointSelection.yPointIndex)
+                          .arg(m_automaticAxisPointSelection.yActualDistanceMm, 0, 'f', 3)
+                          .arg(m_automaticAxisPointSelection.yUsedFallback
+                                   ? tr("（fallback）") : QString())
+                   << tr("自动取点目标距离：%1 mm")
+                          .arg(m_automaticAxisPointSelection.targetDistanceMm, 0, 'f', 3);
+    } else {
+        frameLines << tr("自动辅助点警告：%1")
+                          .arg(m_automaticAxisPointSelection.error);
+    }
     for (int row = 0; row < 4; ++row) {
         frameLines << QStringLiteral("[%1  %2  %3  %4]")
             .arg(frame.workpieceToRobotBase(row, 0), 0, 'g', 9)
@@ -2773,6 +2795,7 @@ void MainWindow::cancelPlaneCandidate() {
     m_planeCenterValid = false;
     m_axisSelectionActive = false;
     m_xAxisPointIndex = m_yAxisPointIndex = -1;
+    m_automaticAxisPointSelection = {};
     m_workpieceCoordinate = {};
     ++m_coordinateFrameRevision;
     clearPlaneEdgeUi();

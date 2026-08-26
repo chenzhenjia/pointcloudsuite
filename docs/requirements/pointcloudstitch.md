@@ -58,7 +58,7 @@
 - 处理内核接受至少两个 ASCII PLY；顶点必须包含 `x/y/z`，其他标量属性可忽略。
 - ASCII 输入通过与 `pointcloudview` 相同的 `pcv::detail::io::readPly()` 路径读取：优先内存映射，扫描换行边界后按原始顶点顺序分块，按文件规模自适应使用 1–4 个解析线程；映射失败时自动回退单线程。读取诊断记录工作线程数、边界扫描、解析和总耗时。
 - GUI、`--regression` 模式和处理内核的配准与融合均接受任意 `>=2` 个 PLY；仅手眼坐标转换模式接受任意 `>=1` 个 PLY。
-- 每帧包含 Start/End `X Y Z RX RY RZ`，姿态单位为度，旋转顺序为 `Rz * Ry * Rx`。
+- 每帧包含 Start/End `X Y Z A B C`，其中 A=Rx、B=Ry、C=Rz；姿态单位为度，矩阵顺序为 `Rz(C) * Ry(B) * Rx(A)`。
 - 位姿输入支持空格、Tab、英文逗号和中文逗号粘贴。
 - 标定矩阵以 XML 的 `RTmatDepth2robot/RotMat/TVec` 为唯一权威来源。
 - 线扫模式的 Start/End 必须形成非零扫描行程；Start/End 姿态允许不同，并按采样进度执行四元数 SLERP。
@@ -67,7 +67,7 @@
 
 - 公共接口定义在 `handeye_transform.h`。`loadHandEyeCalibration(...)` 读取并校验标定，`robotPoseToMatrix(...)` 和 `matrixToRobotPose(...)` 统一位姿约定，`transformPointToRobotBase(...)` 转换单点，`transformLineScanToRobotBase(...)` 转换当前线扫点云。
 - 精确矩阵链为 `p_base = T_base_flange(t) * T_flange_depth * p_depth`，其中 `T_flange_depth` 直接来自 XML `RTmatDepth2robot`，禁止求逆或交换乘法顺序。
-- 机器人位姿采用毫米和角度，旋转约定为 `Rz(RZ) * Ry(RY) * Rx(RX)`。
+- 机器人位姿采用毫米和角度，数组顺序为 `[X,Y,Z,A,B,C]`，旋转约定为 `Rz(C) * Ry(B) * Rx(A)`。
 - 剔除 `(0,0,0)` 和非有限点。
 - 机器人 Start→End 位移绝对值最大的轴决定有符号行程 `signed_travel`。
 - `ratio = PLY.Y / signed_travel`；仅接受 `-0.02 <= ratio <= 1.02`，转换时裁剪到 `[0,1]`。

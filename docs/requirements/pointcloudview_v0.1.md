@@ -57,7 +57,7 @@ PointCloudSuite 面向机器人/工业视觉点云数据的查看、平面提取
 4. 可选执行体素处理、统计离群值去除。
 5. 开启取点，依次 GPU Picking 选择 P1/P2/P3，确认候选平面。
 6. RANSAC/PCA 精拟合、距离分类和连通域过滤，显示平面与统计信息。
-7. 选择 X/Y 轴点，生成右手工件坐标系。
+7. 按机器人基坐标轴投影自动生成右手工件坐标系。
 8. 执行边缘分割和二维 Mask 生成，保存 PNG；同时可保存同名 JSON 和机器人基坐标平面 PLY。
 
 异步任务只在工作线程读取和计算，不访问 QWidget 或 OpenGL；结果返回时校验画布版本，过期结果直接丢弃。
@@ -78,7 +78,7 @@ PointCloudSuite 面向机器人/工业视觉点云数据的查看、平面提取
 
 ### 5.4 工件坐标系
 
-第一组三点按 `O/X+/Y+` 建立 WObj1：最终提取平面 XYZ 包围盒中心同时作为 O 点和 WObj1 原点，第二点确定 X+，第三点确定 Y+；X 轴归一化，Z 轴为 `X × Y`，Y 轴由 `Z × X` 正交化并按 Y+ 方向定向。输出 `T_base_workpiece`、逆矩阵及 `Rz(A)×Ry(B)×Rx(C)` 姿态角。方向点过近、共线、方向退化或矩阵不可逆时拒绝建立。
+自动建立 WObj1：最终提取平面 XYZ 包围盒中心作为 O/WObj1 原点；根据机器人基坐标 X/Y 轴投影自动选取 X+/Y+ 辅助点，再使用 O/X+/Y+ 三点法计算最终坐标系。Z 轴使用拟合平面法向并调整至机器人基坐标 +Z 同向。输出 `T_base_workpiece`、逆矩阵及控制器 `[X,Y,Z,A,B,C]` 姿态角（A=Rx、B=Ry、C=Rz，矩阵为 `Rz(C)×Ry(B)×Rx(A)`），JSON `plane.equation` 只取该三点法最终结果。
 
 ### 5.5 边缘与二维输出
 
@@ -91,7 +91,7 @@ PointCloudSuite 面向机器人/工业视觉点云数据的查看、平面提取
 ## 6. 输出与数据契约
 
 - 二维 PNG：平面或边缘 Mask，左上角为像素原点，前景 `255`、背景 `0`。
-- JSON：统一 schema `sr2026-temp-workpiece-info-mvp-2`，只允许顶层字段 `schema_version`、`kind`、`created_at`、`plane`、`image`、`roi`、`outputs`。`plane` 只包含 `name`、`equation`，`image` 只包含名称、像素尺寸、物理尺寸和像素尺寸，`roi` 固定为字符串 `rectangle`，`outputs` 只包含三条规范化绝对路径；`plane.equation` 顺序为控制器格式 `[X, Y, Z, A, B, C]`，姿态约定为 `Rz(A)×Ry(B)×Rx(C)`。临时工件 `created_at` 原样沿用扫描 JSON，普通平面输出使用生成时间。
+- JSON：统一 schema `sr2026-temp-workpiece-info-mvp-2`，只允许顶层字段 `schema_version`、`kind`、`created_at`、`plane`、`image`、`roi`、`outputs`。`plane` 只包含 `name`、`equation`，`image` 只包含名称、像素尺寸、物理尺寸和像素尺寸，`roi` 固定为字符串 `rectangle`，`outputs` 只包含三条规范化绝对路径；`plane.equation` 顺序为控制器格式 `[X, Y, Z, A, B, C]`，A=Rx、B=Ry、C=Rz，矩阵约定为 `Rz(C)×Ry(B)×Rx(A)`。临时工件 `created_at` 原样沿用扫描 JSON，普通平面输出使用生成时间。
 - `_plane_robot_base.ply`：最终连通域平面点，binary little-endian，坐标保持机器人基坐标，并记录来源和坐标系元数据。
 - 输出由 `pcv_output` 统一写出；PNG、PLY、JSON 先写临时目录后成套提交并支持回滚，任一文件失败均视为整体失败。
 - `cache/*.pcvbin`：运行缓存；`logs/startup.log`：启动诊断日志。

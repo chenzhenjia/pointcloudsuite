@@ -89,6 +89,6 @@ ctest --preset test-debug --output-on-failure
 - 删除 `pointcloudview` 的障碍检测、红色障碍显示和非阻断告警；当前流程保留平面提取、边缘分割和二维 Mask 输出。
 - 新增 `pcv_registration` 手眼变换共享模块：读取 `RTmatDepth2robot`，校验刚体矩阵，按 `T_base_flange(t) * T_flange_depth` 将线扫点转换到 `robot_base`。
 - 新增 `pcv_interface` 临时工件接口：读取 `sr2026-temp-scanning-info-mvp-2`，生成 `baseline_robot_base.ply`、`roi_template_robot_base.ply`、`plane_mask.png` 和 `temp_workpiece_info.json`。
-- 平面与边缘 Mask 输出统一使用 `sr2026-temp-workpiece-info-mvp-2`；JSON 的姿态数组顺序为 `[X, Y, Z, RZ, RY, RX]`，输出路径写入规范化绝对路径。
+- 平面与边缘 Mask 输出统一使用 `sr2026-temp-workpiece-info-mvp-2`；所有位姿数组统一使用控制器顺序 `[X, Y, Z, A, B, C]`（A=Rx、B=Ry、C=Rz），矩阵约定为 `Rz(C)*Ry(B)*Rx(A)`，输出路径写入规范化绝对路径。
 - 边缘 Mask 导出复用真实平面坐标与物理栅格信息；用户选择 `destinationDirectory` 时直接写入该目录，PNG、PLY、JSON 使用临时目录成套提交并在失败时回滚。
 - 主界面新增“打开扫描 JSON”入口：后台调用 `pcv_interface`，显示 `scan_id`、布局、转换点数、平面点数、ROI 点数和输出 JSON 路径；成功后不替换当前画布，关闭窗口时等待后台任务结束。

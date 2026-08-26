@@ -59,6 +59,7 @@ QMatrix4x4 poseMatrix(const QVector<double> &pose)
 {
     QMatrix4x4 matrix;
     matrix.setToIdentity();
+    // Pose text uses controller order [X,Y,Z,A,B,C], A=Rx, B=Ry, C=Rz.
     matrix.rotate(float(pose.value(5)), 0.0f, 0.0f, 1.0f);
     matrix.rotate(float(pose.value(4)), 0.0f, 1.0f, 0.0f);
     matrix.rotate(float(pose.value(3)), 1.0f, 0.0f, 0.0f);
@@ -123,7 +124,7 @@ bool readPoseInfo(const QString &path, QHash<int, PoseRecord> *records, QString 
     }
     const QString number = QStringLiteral("([-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?)");
     const QRegularExpression pattern(
-        QStringLiteral("A(\\d+)\\s+Start\\s+X%1\\s+Y%1\\s+Z%1\\s+RX%1\\s+RY%1\\s+RZ%1\\s*;\\s*END\\s+X%1\\s+Y%1\\s+Z%1\\s+RX%1\\s+RY%1\\s+RZ%1")
+        QStringLiteral("A(\\d+)\\s+Start\\s+X%1\\s+Y%1\\s+Z%1\\s+A%1\\s+B%1\\s+C%1\\s*;\\s*END\\s+X%1\\s+Y%1\\s+Z%1\\s+A%1\\s+B%1\\s+C%1")
             .arg(number), QRegularExpression::CaseInsensitiveOption);
     while (!file.atEnd()) {
         const QString line = QString::fromUtf8(file.readLine()).trimmed();

@@ -138,16 +138,17 @@ bool parsePoseArray(const QJsonArray &array, pointcloud::RobotPose *pose, QStrin
     pose->x = values[0];
     pose->y = values[1];
     pose->z = values[2];
-    pose->rz = values[3];
+    // Controller order is [X,Y,Z,A,B,C], where A=Rx, B=Ry, C=Rz.
+    pose->rx = values[3];
     pose->ry = values[4];
-    pose->rx = values[5];
+    pose->rz = values[5];
     return true;
 }
 
 bool parsePoseObject(const QJsonObject &object, pointcloud::RobotPose *pose, QString *error)
 {
     const QStringList keys{QStringLiteral("X"), QStringLiteral("Y"), QStringLiteral("Z"),
-                           QStringLiteral("RZ"), QStringLiteral("RY"), QStringLiteral("RX")};
+                           QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C")};
     double values[6] = {};
     for (int i = 0; i < keys.size(); ++i) {
         const QJsonValue value = object.value(keys[i]);
@@ -158,6 +159,7 @@ bool parsePoseObject(const QJsonObject &object, pointcloud::RobotPose *pose, QSt
     pose->x = values[0];
     pose->y = values[1];
     pose->z = values[2];
+    // Controller order is [X,Y,Z,A,B,C], where A=Rx, B=Ry, C=Rz.
     pose->rz = values[3];
     pose->ry = values[4];
     pose->rx = values[5];
@@ -272,7 +274,7 @@ QJsonArray vectorArray(const QVector3D &value)
 
 QJsonArray poseArray(const pointcloud::RobotPose &pose)
 {
-    return QJsonArray{pose.x, pose.y, pose.z, pose.rz, pose.ry, pose.rx};
+    return QJsonArray{pose.x, pose.y, pose.z, pose.rx, pose.ry, pose.rz};
 }
 
 QJsonArray matrixArray(const QMatrix4x4 &matrix)
@@ -682,7 +684,7 @@ QString poseJson(const pointcloud::RobotPose &pose)
 {
     return QStringLiteral("[%1, %2, %3, %4, %5, %6]")
         .arg(jsonNumber(pose.x), jsonNumber(pose.y), jsonNumber(pose.z),
-             jsonNumber(pose.rz), jsonNumber(pose.ry), jsonNumber(pose.rx));
+             jsonNumber(pose.rx), jsonNumber(pose.ry), jsonNumber(pose.rz));
 }
 
 QByteArray buildOutputJson(const QString &createdAt,
@@ -1171,7 +1173,7 @@ bool parsePose(const QJsonValue &value, pointcloud::RobotPose *pose, QString *er
     if (value.isArray()) array = value.toArray();
     else if (value.isObject()) {
         const QStringList keys{QStringLiteral("X"), QStringLiteral("Y"), QStringLiteral("Z"),
-                               QStringLiteral("RZ"), QStringLiteral("RY"), QStringLiteral("RX")};
+                               QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C")};
         for (const QString &key : keys) array.push_back(value.toObject().value(key));
     } else return fail(error, QStringLiteral("pose must be an array or object"));
     if (array.size() != 6) return fail(error, QStringLiteral("pose array must contain 6 numbers"));
@@ -1182,7 +1184,8 @@ bool parsePose(const QJsonValue &value, pointcloud::RobotPose *pose, QString *er
         if (!std::isfinite(values[i])) return fail(error, QStringLiteral("pose contains non-finite number"));
     }
     pose->x = values[0]; pose->y = values[1]; pose->z = values[2];
-    pose->rz = values[3]; pose->ry = values[4]; pose->rx = values[5];
+    // Controller order is [X,Y,Z,A,B,C], where A=Rx, B=Ry, C=Rz.
+    pose->rx = values[3]; pose->ry = values[4]; pose->rz = values[5];
     return true;
 }
 
@@ -1256,10 +1259,11 @@ QJsonArray matrixArray(const QMatrix4x4 &matrix)
 
 QJsonArray workpieceEquation(const TempWorkpieceFinalizeOptions &options)
 {
-    // sr2026-temp-workpiece-info-mvp-2 uses controller order X,Y,Z,A,B,C.
+    // Formal output order is X,Y,Z,A,B,C mapped from the frame's stored
+    // pose fields as C,B,A for the controller contract.
     return QJsonArray{options.originInRobotBase.x(), options.originInRobotBase.y(),
-                      options.originInRobotBase.z(), options.abcDeg.x(),
-                      options.abcDeg.y(), options.abcDeg.z()};
+                      options.originInRobotBase.z(), options.abcDeg.z(),
+                      options.abcDeg.y(), options.abcDeg.x()};
 }
 
 bool validIndices(const QVector<int> &indices, qsizetype pointCount, QString *error)

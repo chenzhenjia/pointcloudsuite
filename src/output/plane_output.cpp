@@ -215,10 +215,11 @@ PlaneOutputResult writePlaneOutput(const JobContext &context, const QImage &imag
         QFileInfo(metadata.sourcePointCloud).absoluteFilePath());
     const QString absolutePngPath = QDir::fromNativeSeparators(QFileInfo(pngPath).absoluteFilePath());
     const QString absolutePlyPath = QDir::fromNativeSeparators(QFileInfo(plyPath).absoluteFilePath());
-    // The exchange format uses controller XYZABC order.
+    // The frame stores angles as A/B/C fields; formal JSON emits the
+    // controller order requested by the contract as C,B,A.
     const QJsonArray poseEquation{
         metadata.originInRobotBase.x(), metadata.originInRobotBase.y(), metadata.originInRobotBase.z(),
-        metadata.abcDeg.x(), metadata.abcDeg.y(), metadata.abcDeg.z()};
+        metadata.abcDeg.z(), metadata.abcDeg.y(), metadata.abcDeg.x()};
     const QJsonObject imageObject{
         {QStringLiteral("name"), QFileInfo(pngPath).fileName()},
         {QStringLiteral("width_px"), image.width()},

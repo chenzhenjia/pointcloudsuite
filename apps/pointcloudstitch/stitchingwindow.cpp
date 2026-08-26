@@ -724,7 +724,7 @@ void StitchingWindow::addPlyPath(const QString &path)
     const QVector<QVector<double>> poses = {start, end};
     for (int column = 1; column <= 2; ++column) {
         auto *item = new QTableWidgetItem(poseText(poses[column - 1]));
-        item->setToolTip(tr("按 X Y Z RX RY RZ 顺序输入 6 个数；支持空格、Tab 或逗号分隔，可整串复制粘贴"));
+        item->setToolTip(tr("按 X Y Z A B C 顺序输入 6 个数（A=Rx，B=Ry，C=Rz）；支持空格、Tab 或逗号分隔，可整串复制粘贴"));
         ui->tbl_scans->setItem(row, column, item);
     }
     if (ui->le_output_directory->text().trimmed().isEmpty())
@@ -776,15 +776,16 @@ QVector<pointcloud::WorldCloudInput> StitchingWindow::collectInputs(QString *err
     for (int row = 0; row < ui->tbl_scans->rowCount(); ++row) {
         QVector<double> start, end;
         if (!parsePoseText(ui->tbl_scans->item(row, 1)->text(), &start)) {
-            if (error) *error = tr("第 %1 行 Start 必须包含 6 个有效数字：X Y Z RX RY RZ").arg(row + 1);
+            if (error) *error = tr("第 %1 行 Start 必须包含 6 个有效数字：X Y Z A B C").arg(row + 1);
             return {};
         }
         if (!parsePoseText(ui->tbl_scans->item(row, 2)->text(), &end)) {
-            if (error) *error = tr("第 %1 行 End 必须包含 6 个有效数字：X Y Z RX RY RZ").arg(row + 1);
+            if (error) *error = tr("第 %1 行 End 必须包含 6 个有效数字：X Y Z A B C").arg(row + 1);
             return {};
         }
         pointcloud::WorldCloudInput input;
         input.filePath = ui->tbl_scans->item(row, 0)->text();
+        // Input arrays are controller order [X,Y,Z,A,B,C], A=Rx, B=Ry, C=Rz.
         const pointcloud::RobotPose startPose{start[0], start[1], start[2],
                                                start[3], start[4], start[5]};
         const pointcloud::RobotPose endPose{end[0], end[1], end[2],

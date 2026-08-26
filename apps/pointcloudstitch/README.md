@@ -9,7 +9,7 @@
 
 ## 固定流程
 
-1. GUI 提供“配准与融合”和“仅手眼坐标转换”两种模式。配准模式接受任意 `>=2` 个 ASCII PLY；转换模式接受任意 `>=1` 个 PLY。每帧均填写 Start/End `X Y Z RX RY RZ`。
+1. GUI 提供“配准与融合”和“仅手眼坐标转换”两种模式。配准模式接受任意 `>=2` 个 ASCII PLY；转换模式接受任意 `>=1` 个 PLY。每帧均填写 Start/End `X Y Z A B C`（A=Rx、B=Ry、C=Rz）。
 2. 直接读取 XML 中 `RTmatDepth2robot/RotMat/TVec` 作为 Depth 到法兰矩阵。
 3. 扫描期间 Start/End 法兰旋转必须相同。
 4. PLY.Y 是沿机器人主运动轴的有符号行程，允许比例范围 `-0.02 .. 1.02`。
@@ -85,7 +85,7 @@ PLY [X,Y,Z]
 
 在上述命令末尾增加 `--transform-only`，可以只验证多帧手眼坐标转换并跳过全部 ICP。可同时增加 `--output-dir "D:\path\to\output"`，直接写出 `transformed_robot_base.ply` 和轻量预览 `transformed_robot_base_preview.ply`。
 
-位姿文件每行格式为 `A01 Start X... Y... Z... RX... RY... RZ... ; END X... Y... Z... RX... RY... RZ...`。报告包含全部相邻对的裁剪点数、投影重叠宽度、结构点双向覆盖率、主水平面诊断和 ICP 结果。回归报告明确记录 `registration_applied`、`seam_fusion_applied` 和 `formal_output`；回归输出只属于诊断，不冒充正式融合结果。指定输出目录时，还会分别生成每帧 `diagnostic_pre_icp_frame_XX.ply` 和 `diagnostic_post_icp_frame_XX.ply`。
+位姿文件每行格式为 `A01 Start X... Y... Z... A... B... C... ; END X... Y... Z... A... B... C...`。报告包含全部相邻对的裁剪点数、投影重叠宽度、结构点双向覆盖率、主水平面诊断和 ICP 结果。回归报告明确记录 `registration_applied`、`seam_fusion_applied` 和 `formal_output`；回归输出只属于诊断，不冒充正式融合结果。指定输出目录时，还会分别生成每帧 `diagnostic_pre_icp_frame_XX.ply` 和 `diagnostic_post_icp_frame_XX.ply`。
 
 ## 限制
 

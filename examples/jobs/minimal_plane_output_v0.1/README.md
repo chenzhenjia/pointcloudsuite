@@ -4,7 +4,7 @@
 
 输入：一个已位于 `robot_base` 的 PLY 平面点云；`pixel_size_mm` 固定为 `0.05`。
 
-任务参数：`runtime_root=runtime_data`、`job_id=job_demo_001`、`workpiece_id=workpiece_demo_001`、`base_name=demo`。JSON 的 `plane.equation` 使用 `[X,Y,Z,RZ,RY,RX]`。
+任务参数：`runtime_root=runtime_data`、`job_id=job_demo_001`、`workpiece_id=workpiece_demo_001`、`base_name=demo`。JSON 的 `plane.equation` 使用控制器顺序 `[X,Y,Z,A,B,C]`（A=Rx、B=Ry、C=Rz）。
 
 生成目录：`runtime_data/jobs/job_demo_001/`。
 

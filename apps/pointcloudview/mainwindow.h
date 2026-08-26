@@ -159,6 +159,7 @@ private:
     bool m_planeCenterValid = false;
     int m_xAxisPointIndex = -1;
     int m_yAxisPointIndex = -1;
+    pointcloud::AutomaticAxisPointSelection m_automaticAxisPointSelection;
     bool m_planeCandidateConfirmed = false;
     bool m_planeFinalizationPending = false;
     bool m_tempWorkpieceSessionActive = false;

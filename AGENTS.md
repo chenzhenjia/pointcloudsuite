@@ -175,7 +175,7 @@ writePlaneOutput 状态机：
 plane_output.h 还声明 PCV_INPUT_001/002、PCV_TRANSFORM_001/002、PCV_STITCH_001 等常量；新增错误码前先检查现有定义。
 
 JSON 顶层固定为 schema_version、kind、created_at、plane、image、roi、outputs；
-plane.equation 顺序为 [X,Y,Z,RZ,RY,RX]。outputs.roi_point_cloud 和
+所有位姿数组统一顺序为控制器格式 [X,Y,Z,A,B,C]，其中 A=Rx、B=Ry、C=Rz。矩阵约定为 Rz(C)*Ry(B)*Rx(A)。outputs.roi_point_cloud 和
 outputs.plane_mask 使用规范化绝对路径。
 
 ### pcv::interface
@@ -184,7 +184,7 @@ outputs.plane_mask 使用规范化绝对路径。
 
 parseTempScanningInfo 只接受 sr2026-temp-scanning-info-mvp-2 和
 single_frame_scanning_info；point_cloud_layout 必须显式为 FullXyz 或 LineProfileXz，
-Start/End 位姿必须为 [X,Y,Z,RZ,RY,RX] 数组，plane_seed_indices 可选；同时校验
+Start/End 位姿必须为 [X,Y,Z,A,B,C] 数组，plane_seed_indices 可选；同时校验
 camera -> robot_base 和相对路径穿越。generateTempBaseline 只读取
 runtimeRoot/jobs/<jobId>/interface/temp_scanning_info.json 并生成幂等的
 baseline_robot_base.ply：同名内容一致时复用，内容不同时返回 PCV_OUTPUT_002。
