@@ -40,16 +40,16 @@ cmake --build --preset build-debug
 ctest --preset test-debug --output-on-failure
 ```
 
-## 本轮验证结果（2026-08-21）
+## 本轮验证结果（2026-08-26）
 
 - `git diff --check`：通过；
 - 文档残留扫描：通过，未发现已废弃的旧输出值、旧图像格式、旧并行策略或旧回归 schema 描述；
-- `cmake --preset windows-msvc-debug`：默认路径无写权限，改用等价的仓库内
-  `build-v0.1-upload` + Visual Studio 2026 Developer Command Prompt 配置通过；
-- Debug 构建：通过，`pointcloudview`、`pointcloudstitch`、诊断工具及 7 个测试目标均成功生成；
-- CTest：`7/7 passed`；
+- `cmake -S . -B .codex-build-debug -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Debug
+  -DCMAKE_PREFIX_PATH="C:\\Qt\\6.8.3\\msvc2022_64" -DPCV_BUILD_TESTS=ON -DPCV_BUILD_TOOLS=ON`：配置通过；
+- Debug 构建：通过，`pointcloudview`、`pointcloudstitch`、诊断工具及 8 个测试目标均成功生成；
+- CTest：`8/8 passed`；
 - `test_pointcloud_a`：源目录已移除，归档目录 16 个文件、`1,028,473,767` bytes，
   移动前后一致。
 
-本次上传目标：`gitee` remote 的 `develop` 分支。提交和推送结果以本次操作后的
+本次上传目标：`gitee` remote 的 `develop` 分支。当前本地提交和推送结果以本次操作后的
 Git 状态和远端确认信息为准。

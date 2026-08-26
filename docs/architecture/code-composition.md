@@ -80,7 +80,7 @@ flowchart TB
 | `pointcloudview` | 可执行程序 | PLY 加载/缓存、降噪、三点平面提取、工件坐标系、平面边缘分割、平面图像导出 | 全部 pcv 库 + Qt Widgets/Concurrent/OpenGL/OpenGLWidgets |
 | `pointcloudstitch` | 可执行程序 | 手眼标定读取、逐帧机器人坐标转换、相邻帧 ICP 配准（平面预对齐/结构验收/信赖域）、接缝融合、回归模式 | 全部 pcv 库 + Qt Core/Gui/Widgets/Concurrent |
 | `registration_diagnostic` | CLI（默认关闭） | 直接编译 `apps/pointcloudview/pointcloudprocessor.cpp` | pcv_core、pcv_infrastructure、pcv_io、pcv_filtering |
-| 单元测试（7 个共享模块测试 + 1 个 app 源码兼容测试） | CTest | `tests/unit/{io,filtering,output,interface,pointcloudview,registration}` | 对应 pcv 库；`pointcloudprocessor_obstacle_tests` 保留历史目标名，当前验证边缘 Mask；`handeye_transform_tests` 链接 pcv_registration |
+| 单元测试（8 个测试目标） | CTest | `tests/unit/{io,filtering,output,interface,pointcloudview,registration}` | 7 个共享模块测试加 1 个 app 源码兼容测试；`pointcloudprocessor_obstacle_tests` 保留历史目标名，当前验证边缘 Mask；`handeye_transform_tests` 链接 pcv_registration |
 
 ## 代码规模（按目录）
 

@@ -334,7 +334,8 @@ D:/workpiece/pointcloudview/backups/pointcloudview_20260818_obstacle_warning_cle
 ```
 
 首次失败目录 `backups/pointcloudview_20260818_obstacle_warning` 包含生成文件，
-不作为有效备份。Git 操作当前暂停，不自动 add、commit 或 push。
+不作为有效备份。Git 提交和推送由发布操作单独执行；本次 `develop` 上传前已完成
+工作区检查、文档同步、Debug 构建和 CTest 验证。
 
 ## 后续需求文档格式
 

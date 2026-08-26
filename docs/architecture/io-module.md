@@ -17,8 +17,9 @@
 缓存文件位于应用本地缓存目录。只有格式版本、源文件大小、源文件修改时间、点数和载荷
 长度全部有效时才接受缓存。缓存使用 `QSaveFile` 写入，避免崩溃后把部分文件当作有效缓存。
 
-外部消费者调用基于 STL 的 `pcv::io::readPly` 和 `pcv::io::readPlyCached` API。
-现有 Qt 应用暂时使用私有 `pcv::detail::io` 实现，直到流程适配器迁移到公共边界。
+当前公共头文件导出的读取 API 位于 `pcv::detail::io` 命名空间，调用
+`pcv::detail::io::readPly` 和 `pcv::detail::io::readPlyCached`；Qt 应用、测试和诊断工具
+均通过该共享边界复用实现。
 
 ## 第一阶段加载优化
 
