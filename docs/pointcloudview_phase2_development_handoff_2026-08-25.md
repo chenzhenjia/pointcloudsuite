@@ -2,17 +2,19 @@
 
 更新时间：2026-08-25  
 工作区：`D:\workpiece\pointcloudview\pointcloudview`  
-当前状态：第二阶段部分实现，尚未构建或测试，不得视为完成。
+当前状态：第二阶段实现已完成并已纳入本地提交；2026-08-26 使用 Qt 6.8.3/MSVC x64
+完成 Debug 配置、全目标构建和 CTest `8/8 passed`。真实 GUI 点选流程仍需现场 fixture
+验证，不应将自动化测试结果等同于 GUI 验收。
 
 ## 新对话接续提示
 
-在新对话中先发送以下内容，并让开发 Agent 先阅读本文件和当前 `git diff`：
+以下接续提示保留用于历史复盘；本阶段已完成时无需再次执行：
 
 ```text
 继续 PointCloudView 第二阶段开发。请先阅读：
 D:\workpiece\pointcloudview\pointcloudview\docs\pointcloudview_phase2_development_handoff_2026-08-25.md
 
-必须先执行 git status --short，保留当前全部未提交修改，不修改 workpiece_list.json。
+必须先执行 git status --short，保留用户修改，不修改 workpiece_list.json。
 按交接记录完成“平面二次验证与 WObj1 坐标系”，然后进行完整 Debug 构建、CTest 和 git diff --check。
 不要开始第三阶段 ROI、2D 正式输出或四件套提交。
 ```
@@ -54,7 +56,7 @@ p_robot_base = T_base_flange(t) * T_flange_depth * p_depth
 - Z 轴使用最终拟合平面单位法向，继续复用现有右手系和 Y 点定向逻辑。
 - WObj1 失败时保留已经通过的平面二次验证，但禁止进入后续流程。
 
-## 当前未提交修改
+## 阶段实现变更（已提交）
 
 执行 `git status --short` 时共有以下 10 个修改文件：
 
@@ -73,7 +75,7 @@ M tests/unit/pointcloudview/pointcloudprocessor_obstacle_tests.cpp
 
 这些文件包含用户已有的第一阶段和临时流程改动。禁止 `git reset`、`git restore` 或覆盖式回退。
 
-## 已落地但尚未验证的第二阶段改动
+## 已落地并完成自动化验证的第二阶段改动
 
 ### 纯几何 API
 
@@ -156,7 +158,7 @@ pointcloud::buildWorkpieceCoordinateSystem(
 - `planeImageExtractionFinished()` 仍会自动调用 `finalizeTempWorkpiece()`。
 - 多个状态重置位置存在重复的 `m_secondPlaneValidated = false` 和 `m_secondPlaneSamePlane = false`。
 
-## 待补测试
+## 后续验证与测试
 
 在现有 `tests/unit/pointcloudview/pointcloudprocessor_obstacle_tests.cpp` 中补充纯几何覆盖：
 
@@ -201,7 +203,8 @@ ply_reader_tests
 cloud_cache_tests
 ```
 
-第一阶段此前记录为 `8/8 passed`，但第二阶段新增修改后尚未重新构建，不能沿用该结果宣称当前代码通过。
+2026-08-26 已在 `.codex-build-debug` 重新配置并完整构建；CTest 当前结果为 `8/8 passed`。
+该结果覆盖自动化测试，不包含真实 GUI 点选和现场设备数据验收。
 
 ## 风险和人工验收
 
