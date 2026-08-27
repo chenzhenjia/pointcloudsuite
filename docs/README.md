@@ -8,7 +8,9 @@
 - `user-guide/`：主程序操作、参数、故障处理和验证记录；
 - `development/`：Windows + Qt/MSVC 构建说明。
 
-当前文档基线为 `v0.1`；2026-08-24 的源码同步记录在各需求档案和用户指南末尾。
+当前文档基线为 `v0.2` 维护清理版；`v0.1` 文档保留为历史基线，2026-08-24 的源码同步记录仍在各历史需求档案和用户指南末尾。
+v0.2 需求文档位于 `requirements/pointcloudview_v0.2.md`，本地提交范围见根目录
+`UPLOAD_MANIFEST_v0.2.md`。
 构建和测试命令以根目录 `CMakePresets.json`、`scripts/build_windows.ps1` 和
 `scripts/run_tests.ps1` 为准。当前共享模块还包括 `pcv_registration` 和
 `pcv_interface`，其公共头文件分别位于 `include/pcv/registration/` 与

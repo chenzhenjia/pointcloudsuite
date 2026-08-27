@@ -81,8 +81,11 @@ ctest --preset test-debug --output-on-failure
 
 详细架构见 [docs/architecture/overview.md](docs/architecture/overview.md)，
 各程序需求见 [docs/requirements](docs/requirements)，平面输出契约见
-[docs/contracts](docs/contracts)。当前版本仍是 `v0.1` 基线，不包含机器人控制、
-手眼标定求解或生产数据库接入。
+[docs/contracts](docs/contracts)。当前版本为 `v0.2` 维护清理版；`v0.1` 文档保留为历史基线，
+不包含机器人控制、手眼标定求解或生产数据库接入。
+
+v0.2 仅删除未编译的历史代码和零引用符号，保持 v0.1 的活动功能、错误码和输出契约不变。
+构建工具若位于工作区外并被执行环境拦截，请在 Windows Developer PowerShell 或具备授权的本机环境执行构建。
 
 ## 2026-08-24 实现同步
 

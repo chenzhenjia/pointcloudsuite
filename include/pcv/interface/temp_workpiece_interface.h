@@ -20,7 +20,6 @@ inline constexpr const char *kTempWorkpieceSchema =
     "sr2026-temp-workpiece-info-mvp-2";
 inline constexpr const char *kTempWorkpieceKind =
     "single_frame_workpiece_roi";
-inline constexpr const char *kTempPlaneName = "WObj1";
 inline constexpr const char *kErrorInputMissing = "PCV_INPUT_001";
 inline constexpr const char *kErrorInputUnsupported = "PCV_INPUT_002";
 inline constexpr const char *kErrorTransformInvalid = "PCV_TRANSFORM_001";
