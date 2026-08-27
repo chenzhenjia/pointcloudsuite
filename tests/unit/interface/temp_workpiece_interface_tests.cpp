@@ -96,7 +96,7 @@ void assertMinimalWorkpieceJson(const QJsonObject &output)
         QStringLiteral("outputs"), QStringLiteral("plane"), QStringLiteral("roi"),
         QStringLiteral("schema_version")}));
     assert((output.value(QStringLiteral("plane")).toObject().keys() == QStringList{
-        QStringLiteral("equation"), QStringLiteral("name")}));
+        QStringLiteral("equation"), QStringLiteral("wobj_num")}));
     assert((output.value(QStringLiteral("image")).toObject().keys() == QStringList{
         QStringLiteral("height_mm"), QStringLiteral("height_px"), QStringLiteral("name"),
         QStringLiteral("pixel_size_mm"), QStringLiteral("width_mm"), QStringLiteral("width_px")}));
@@ -139,6 +139,22 @@ int main(int argc, char **argv)
     assert(prepared.resolvedPointCloudFile == QFileInfo(ply).absoluteFilePath());
     assert(prepared.resolvedCalibrationFile == QFileInfo(xml).absoluteFilePath());
     assert(!QFileInfo::exists(QDir(dir).filePath(QStringLiteral("baseline_robot_base.ply"))));
+
+    const auto assertFixedEquationText = [](const QByteArray &bytes) {
+        const QByteArray marker = QByteArrayLiteral("\"equation\": [");
+        const int begin = bytes.indexOf(marker);
+        assert(begin >= 0);
+        const int end = bytes.indexOf(']', begin + marker.size());
+        assert(end > begin);
+        const QList<QByteArray> values = bytes.mid(begin + marker.size(), end - begin - marker.size()).split(',');
+        assert(values.size() == 6);
+        for (QByteArray value : values) {
+            value = value.trimmed();
+            const int dot = value.indexOf('.');
+            assert(dot > 0);
+            assert(value.size() - dot - 1 == 3);
+        }
+    };
 
     QJsonObject missingLayout = inputJson(QStringLiteral("LineProfileXz"),
                                           QStringLiteral("scan.ply"),
@@ -243,8 +259,8 @@ int main(int argc, char **argv)
     finalize.planeMask.setPixel(3, 3, 255);
     finalize.planeMask.setPixel(4, 3, 127);
     finalize.planeModel = QVector4D(0, 0, 1, 0);
-    finalize.originInRobotBase = QVector3D(1, 2, 3);
-    finalize.abcDeg = QVector3D(4, 5, 6);
+    finalize.originInRobotBase = QVector3D(1.23456f, -2.3456f, 3.9999f);
+    finalize.abcDeg = QVector3D(4.4444f, 5.5564f, 6.6666f);
     finalize.TBaseWorkpiece.setToIdentity();
     finalize.TWorkpieceBase.setToIdentity();
     const auto generated = pcv::interface::finalizeTempWorkpiece(prepared, finalize, &error);
@@ -260,20 +276,23 @@ int main(int argc, char **argv)
     assert(writtenMask.constScanLine(3)[4] == 255);
     assert(readFile(generated.baselineRobotBasePly).startsWith(
         QByteArrayLiteral("ply\nformat binary_little_endian 1.0\n")));
-    const QJsonObject output = QJsonDocument::fromJson(readFile(generated.tempWorkpieceInfoPath)).object();
+    const QByteArray metadataBytes = readFile(generated.tempWorkpieceInfoPath);
+    assertFixedEquationText(metadataBytes);
+    assert(metadataBytes.contains(QByteArrayLiteral(
+        "[\n      1.235,\n      -2.346,\n      4.000,\n      6.667,\n      5.556,\n      4.444\n    ]")));
+    const QJsonObject output = QJsonDocument::fromJson(metadataBytes).object();
     assertMinimalWorkpieceJson(output);
     assert(output.value(QStringLiteral("created_at")).toString() == info.createdAtIso8601);
-    assert(output.value(QStringLiteral("plane")).toObject().value(QStringLiteral("name")).toString()
-           == QStringLiteral("WObj1"));
+    assert(output.value(QStringLiteral("plane")).toObject().value(QStringLiteral("wobj_num")).toInt() == 1);
     const QJsonArray equation = output.value(QStringLiteral("plane")).toObject()
                                    .value(QStringLiteral("equation")).toArray();
     assert(equation.size() == 6);
-    assert(equation.at(0).toDouble() == 1.0);
-    assert(equation.at(1).toDouble() == 2.0);
-    assert(equation.at(2).toDouble() == 3.0);
-    assert(equation.at(3).toDouble() == 6.0);
-    assert(equation.at(4).toDouble() == 5.0);
-    assert(equation.at(5).toDouble() == 4.0);
+    assert(std::abs(equation.at(0).toDouble() - 1.235) < 1.0e-9);
+    assert(std::abs(equation.at(1).toDouble() + 2.346) < 1.0e-9);
+    assert(std::abs(equation.at(2).toDouble() - 4.000) < 1.0e-9);
+    assert(std::abs(equation.at(3).toDouble() - 6.667) < 1.0e-9);
+    assert(std::abs(equation.at(4).toDouble() - 5.556) < 1.0e-9);
+    assert(std::abs(equation.at(5).toDouble() - 4.444) < 1.0e-9);
     assert(output.value(QStringLiteral("image")).toObject().value(QStringLiteral("pixel_size_mm")).toDouble() == 0.05);
     assert(output.value(QStringLiteral("outputs")).toObject().value(QStringLiteral("plane_mask")).toString()
            == QDir::fromNativeSeparators(QFileInfo(generated.planeMaskPng).absoluteFilePath()));

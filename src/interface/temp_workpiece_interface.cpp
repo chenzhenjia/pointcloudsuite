@@ -680,11 +680,23 @@ QString jsonNumber(double value)
     return QString::number(value, 'g', 15);
 }
 
+QString jsonNumberFixed3(double value)
+{
+    return QString::number(value, 'f', 3);
+}
+
 QString poseJson(const pointcloud::RobotPose &pose)
 {
-    return QStringLiteral("[%1, %2, %3, %4, %5, %6]")
-        .arg(jsonNumber(pose.x), jsonNumber(pose.y), jsonNumber(pose.z),
-             jsonNumber(pose.rx), jsonNumber(pose.ry), jsonNumber(pose.rz));
+    return QStringLiteral("[\n"
+                          "      %1,\n"
+                          "      %2,\n"
+                          "      %3,\n"
+                          "      %4,\n"
+                          "      %5,\n"
+                          "      %6\n"
+                          "    ]")
+        .arg(jsonNumberFixed3(pose.x), jsonNumberFixed3(pose.y), jsonNumberFixed3(pose.z),
+             jsonNumberFixed3(pose.rx), jsonNumberFixed3(pose.ry), jsonNumberFixed3(pose.rz));
 }
 
 QByteArray buildOutputJson(const QString &createdAt,
@@ -711,8 +723,8 @@ QByteArray buildOutputJson(const QString &createdAt,
            << "  \"kind\": " << quotedJson(QString::fromLatin1(kTempWorkpieceKind)) << ",\n"
            << "  \"created_at\": " << quotedJson(createdAt) << ",\n"
            << "  \"plane\": {\n"
-           << "    \"name\": " << quotedJson(QString::fromLatin1(kTempPlaneName)) << ",\n"
-           << "    \"equation\": " << poseJson(selection.pose) << "\n"
+           << "    \"equation\": " << poseJson(selection.pose) << ",\n"
+           << "    \"wobj_num\": 1\n"
            << "  },\n"
            << "  \"image\": {\n"
            << "    \"name\": " << quotedJson(QFileInfo(planeMaskPath).fileName()) << ",\n"
@@ -1257,13 +1269,41 @@ QJsonArray matrixArray(const QMatrix4x4 &matrix)
     return result;
 }
 
-QJsonArray workpieceEquation(const TempWorkpieceFinalizeOptions &options)
+QString quotedJsonMetadata(const QString &value)
+{
+    const QString array = QString::fromUtf8(
+        QJsonDocument(QJsonArray{value}).toJson(QJsonDocument::Compact));
+    return array.mid(1, array.size() - 2);
+}
+
+QString jsonNumberMetadata(double value)
+{
+    return QString::number(value, 'g', 15);
+}
+
+QString jsonNumberFixed3Metadata(double value)
+{
+    return QString::number(value, 'f', 3);
+}
+
+QString workpieceEquationJson(const TempWorkpieceFinalizeOptions &options)
 {
     // Formal output order is X,Y,Z,A,B,C mapped from the frame's stored
     // pose fields as C,B,A for the controller contract.
-    return QJsonArray{options.originInRobotBase.x(), options.originInRobotBase.y(),
-                      options.originInRobotBase.z(), options.abcDeg.z(),
-                      options.abcDeg.y(), options.abcDeg.x()};
+    return QStringLiteral("[\n"
+                          "      %1,\n"
+                          "      %2,\n"
+                          "      %3,\n"
+                          "      %4,\n"
+                          "      %5,\n"
+                          "      %6\n"
+                          "    ]")
+        .arg(jsonNumberFixed3Metadata(options.originInRobotBase.x()),
+             jsonNumberFixed3Metadata(options.originInRobotBase.y()),
+             jsonNumberFixed3Metadata(options.originInRobotBase.z()),
+             jsonNumberFixed3Metadata(options.abcDeg.z()),
+             jsonNumberFixed3Metadata(options.abcDeg.y()),
+             jsonNumberFixed3Metadata(options.abcDeg.x()));
 }
 
 bool validIndices(const QVector<int> &indices, qsizetype pointCount, QString *error)
@@ -1329,33 +1369,37 @@ bool writeMetadata(const QString &path, const TempWorkpieceFinalizeOptions &opti
                    const QString &baseline, const QString &roiPath, const QString &mask,
                    QString *error)
 {
-    const QJsonObject plane{
-        {QStringLiteral("name"), QString::fromLatin1(kTempPlaneName)},
-        {QStringLiteral("equation"), workpieceEquation(options)}
-    };
-    const QJsonObject image{
-        {QStringLiteral("name"), QStringLiteral("plane_mask.png")},
-        {QStringLiteral("width_px"), options.planeMask.width()},
-        {QStringLiteral("height_px"), options.planeMask.height()},
-        {QStringLiteral("width_mm"), options.planeMask.width() * 0.05},
-        {QStringLiteral("height_mm"), options.planeMask.height() * 0.05},
-        {QStringLiteral("pixel_size_mm"), 0.05}
-    };
-    const QJsonObject outputs{
-        {QStringLiteral("robot_base_point_cloud"), jsonPath(baseline)},
-        {QStringLiteral("roi_point_cloud"), jsonPath(roiPath)},
-        {QStringLiteral("plane_mask"), jsonPath(mask)}
-    };
-    QJsonObject root{
-        {QStringLiteral("schema_version"), QString::fromLatin1(kTempWorkpieceSchema)},
-        {QStringLiteral("kind"), QString::fromLatin1(kTempWorkpieceKind)},
-        {QStringLiteral("created_at"), createdAt},
-        {QStringLiteral("plane"), plane},
-        {QStringLiteral("image"), image},
-        {QStringLiteral("roi"), QStringLiteral("rectangle")},
-        {QStringLiteral("outputs"), outputs}
-    };
-    const QByteArray bytes = QJsonDocument(root).toJson(QJsonDocument::Indented);
+    const QString baselinePath = jsonPath(baseline);
+    const QString roiPathValue = jsonPath(roiPath);
+    const QString maskPath = jsonPath(mask);
+    QString text;
+    QTextStream stream(&text);
+    stream.setEncoding(QStringConverter::Utf8);
+    stream << "{\n"
+           << "  \"schema_version\": " << quotedJsonMetadata(QString::fromLatin1(kTempWorkpieceSchema)) << ",\n"
+           << "  \"kind\": " << quotedJsonMetadata(QString::fromLatin1(kTempWorkpieceKind)) << ",\n"
+           << "  \"created_at\": " << quotedJsonMetadata(createdAt) << ",\n"
+           << "  \"plane\": {\n"
+           << "    \"equation\": " << workpieceEquationJson(options) << ",\n"
+           << "    \"wobj_num\": 1\n"
+           << "  },\n"
+           << "  \"image\": {\n"
+           << "    \"name\": \"plane_mask.png\",\n"
+           << "    \"width_px\": " << options.planeMask.width() << ",\n"
+           << "    \"height_px\": " << options.planeMask.height() << ",\n"
+           << "    \"width_mm\": " << jsonNumberMetadata(options.planeMask.width() * 0.05) << ",\n"
+           << "    \"height_mm\": " << jsonNumberMetadata(options.planeMask.height() * 0.05) << ",\n"
+           << "    \"pixel_size_mm\": " << jsonNumberMetadata(0.05) << "\n"
+           << "  },\n"
+           << "  \"roi\": \"rectangle\",\n"
+           << "  \"outputs\": {\n"
+           << "    \"robot_base_point_cloud\": " << quotedJsonMetadata(baselinePath) << ",\n"
+           << "    \"roi_point_cloud\": " << quotedJsonMetadata(roiPathValue) << ",\n"
+           << "    \"plane_mask\": " << quotedJsonMetadata(maskPath) << "\n"
+           << "  }\n"
+           << "}\n";
+    stream.flush();
+    const QByteArray bytes = text.toUtf8();
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit())
         return fail(error, file.errorString().isEmpty()
