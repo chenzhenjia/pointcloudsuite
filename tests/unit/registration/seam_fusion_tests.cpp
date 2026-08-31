@@ -86,6 +86,20 @@ int main(int argc, char **argv)
                  && fused.diagnostics.first().applied,
                  "valid overlapping frames must produce seam diagnostics and fused points")) return 1;
 
+    pointcloud::SeamFusionOptions cancelledOptions = enabled;
+    cancelledOptions.isCancelled = [] { return true; };
+    const auto cancelled = pointcloud::applyTrajectorySeamFusion(&valid, cancelledOptions);
+    if (!require(cancelled.cancelled && !cancelled.ok
+                 && valid.points.size() == fused.outputPoints,
+                 "cancelled seam must not publish a new result")) return 1;
+
+    pointcloud::MultiFrameRegistrationResult missingMetadata = valid;
+    missingMetadata.registrationCorrections.clear();
+    const auto metadataFailure = pointcloud::applyTrajectorySeamFusion(
+        &missingMetadata, enabled);
+    if (!require(!metadataFailure.ok && metadataFailure.error.contains(QStringLiteral("元数据")),
+                 "missing registration metadata must fail closed")) return 1;
+
     std::cout << "Seam fusion safety tests passed.\n";
     return 0;
 }
