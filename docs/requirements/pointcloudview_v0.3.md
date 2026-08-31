@@ -136,3 +136,10 @@ v0.3 将当前 PointCloudSuite 统一为企业级模块化项目。源码、CMak
 - `apps/pointcloudstitch/pointcloudprocessor.cpp` 仍负责读取 PLY、手眼转换和来源索引生成；转换后的 `RobotBaseFrame` 统一交给 `registerRobotBaseFrames()` 执行 ICP、重叠诊断和结果拼装。
 - 应用层旧 `registerPair()` 及后续拼接代码保留在兼容源中但不再执行，待工具和回归夹具完成迁移后单独删除。
 - Debug 构建和完整 CTest `14/14` 通过；未执行真实 GUI/生产夹具验收。
+
+### 2026-08-31（M5.4 发布审计阶段）
+
+- Debug 与 Release 构建均已完成，两个配置的完整 CTest 均为 `14/14`。
+- `rg` 审计确认 `pcv_io`、`pcv_registration`、`pcv_output`、旧 processor 源和 forwarding header 仍有兼容引用，因此本阶段不删除兼容层。
+- `90_interferenceplane`、`100_qualityreport` 继续保持“未实现”。
+- 发布候选仍未达成：缺少真实 GUI 点选/矩形选区/视角交互、生产拼接夹具逐字段比对，以及旧算法兼容代码清理评审。
