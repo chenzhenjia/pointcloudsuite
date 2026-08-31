@@ -1,15 +1,12 @@
 # 共享源码
 
-本目录保存两个应用共同使用的实现代码：
+`src/` 保存基础设施、过滤和迁移期兼容聚合 target。v0.3 规范算法实现位于 `modules/`。
 
-- `core/`：点云基础数据类型。
-- `io/`：PLY 读取和点云缓存。
-- `filtering/`：比例、体素和统计滤波。
-- `infrastructure/`：缓存、日志和导出目录等运行环境能力。
-- `registration/`：手眼标定读取、刚体校验、机器人位姿插值和线扫点云转换。
-- `interface/`：临时扫描信息读取、临时工件平面/ROI 生成和成套文件提交。
-- `output/`：平面或边缘 Mask 的 PNG、robot_base PLY、JSON 输出契约。
+- `src/core`：`pointcloud::Point3D` 等基础类型。
+- `src/infrastructure`：运行目录、缓存和日志路径能力。
+- `src/filtering`：比例、体素和统计滤波。
+- `src/io`、`src/registration`、`src/interface`、`src/output`：迁移期兼容 target 和旧实现边界。
 
-共享实现不得依赖 Qt Widgets，也不得依赖 `apps/` 中的文件。新增模块时在
-本目录的 `CMakeLists.txt` 注册，并将对应项目头文件放在
-`include/pcv/<module>/`。
+共享实现不得依赖 `apps/` 或 Qt Widgets。新增公共算法应放入对应 `modules/<编号>_<名称>/src`，公共头放入模块 `include/`。
+
+最后核对日期：2026-08-31。

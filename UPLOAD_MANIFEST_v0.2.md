@@ -1,5 +1,7 @@
 # PointCloudSuite v0.2 本地 Git 上传清单
 
+> 状态：历史归档。当前项目基线请参阅 `docs/requirements/pointcloudview_v0.3.md`。本文仅保留 v0.2 历史事实，不作为当前发布清单。最后核对日期：2026-08-31。
+
 用途：核对 v0.2 维护清理版的本地 commit 范围和验证状态。本清单不授权任何 remote push。
 
 ## 应提交

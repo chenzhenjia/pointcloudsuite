@@ -1,8 +1,10 @@
 # 60_planefitting：平面拟合
 
-状态：算法实现已下沉，兼容层保留。`modules/60_planefitting` 现提供完整三点/n 点拟合、RANSAC/PCA 细化、连通域和诊断；应用入口仅负责参数转换和结果映射。旧 `extractPlaneFromPointsLegacy` 源码暂保留待独立清理提交，生产调用已不再使用。
+状态：已实现，兼容入口保留。规范实现位于 `modules/60_planefitting/{include,src}`，模块 target 为 `pcv_m60_planefitting`；应用入口仅负责参数转换和结果映射。
 
-接口/测试：`extractPlaneFromThreePoints`、n 点拟合和一致性校验；`pointcloudprocessor_obstacle_tests`（当前为几何/Mask 回归）。
+接口/测试：`pcv::planefitting::fit`、一致性校验；`plane_fitting_tests`。ROI/Mask 测试归入对应接口和应用测试。
+
+最后核对日期：2026-08-31。纯算法实现不得依赖 `apps/` 或 Qt Widgets。
 
 ## 变更记录
 

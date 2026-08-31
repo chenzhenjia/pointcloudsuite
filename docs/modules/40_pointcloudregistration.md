@@ -2,7 +2,11 @@
 
 状态：已实现。规范实现位于 `modules/40_pointcloudregistration/{include,src}`，负责 ICP、相邻帧配准、结构点覆盖和诊断；模块 target 为 `pcv_m40_pointcloudregistration`。
 
+规范目录：`modules/40_pointcloudregistration/{include,src}`；模块 target：`pcv_m40_pointcloudregistration`；兼容 target：`pcv_registration`。
+
 接口/测试：`multiframe_registration`、`seam_fusion`；`multiframe_registration_tests`、`seam_fusion_tests`。
+
+最后核对日期：2026-08-31。该模块是 ICP、结构校验和 seam fusion 的唯一算法来源。
 
 ## 变更记录
 

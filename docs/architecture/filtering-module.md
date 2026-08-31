@@ -1,19 +1,15 @@
-# Filtering 模块
+# 点云过滤模块
 
-`pcv_filtering` 负责可复用的点数缩减算法。
+`pcv_filtering` 提供可复用的点数缩减和统计滤波算法。
 
-## 体素策略
+## 算法边界
 
-- `FirstInputPoint` 保留真实测量点并返回源索引。
-- `Centroid` 生成算术平均点，用于配准和诊断采样。
+- 比例降采样按输入顺序保留真实点。
+- 体素降采样明确区分 `FirstInputPoint` 和 `Centroid`。
+- 统计滤波保留有效点和 source index；邻域不足或结果为空时按接口约定回退并返回诊断。
+- 非法参数不得悄悄生成虚拟点。
+- 共享过滤模块不得依赖应用或 Qt Widgets。
 
-产品调用点必须显式选择策略。查看和最终测量流程使用真实输入点；ICP 金字塔构建可以使用质心。
+详细参数、默认值和测试入口以 `src/filtering`、`include/pcv/filtering` 和 `tests/` 为准。
 
-## 统计滤波
-
-`statistical_filter` 负责自适应网格尺寸估计、空间哈希、扩展邻域壳层、K 近邻平均距离和
-全局均值加标准差阈值，并返回实际网格尺寸、阈值和测量点数供诊断。
-
-查看器现有的 `removeNoise` 函数保留为兼容和流程适配器；滤波算法本身不再依赖应用。
-外部消费者使用基于 `std::vector` 点云的 `pcv::filtering`，Qt 应用适配器暂时仍是
-`pcv::detail::filtering` 客户端。
+最后核对日期：2026-08-31。

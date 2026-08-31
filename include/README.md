@@ -1,16 +1,18 @@
-# 项目头文件
+# 公共头文件
 
-本目录保存根 `src/` 中共享模块的项目头文件。引用时使用带模块前缀的形式，
-例如：
+`include/pcv/` 保存共享模块的公共头文件和迁移期 forwarding header。
+
+当前规范头路径按模块组织，例如：
 
 ```cpp
 #include <pcv/io/ply_reader.h>
-#include <pcv/filtering/downsample.h>
-#include <pcv/registration/handeye_transform.h>
-#include <pcv/interface/temp_workpiece_interface.h>
+#include <pcv/registration/multiframe_registration.h>
+#include <pcv/interface/stitching_interface.h>
+#include <pcv/planefitting/plane_fitting.h>
+#include <pcv/render/pointcloud_canvas.h>
+#include <pcv/output/plane_output.h>
 ```
 
-平面输出契约位于 `pcv/output/plane_output.h`，负责作业上下文校验以及 PNG、
-binary little-endian PLY、JSON 三件套输出；临时工件接口位于
-`pcv/interface/temp_workpiece_interface.h`，负责临时扫描输入到四件输出的转换。这些头文件用于本仓库内的应用、
-测试和工具，不代表独立 SDK 的兼容性承诺。
+公共头必须保持与规范模块 API 一致。兼容头仅用于迁移，不得新增重复实现，也不代表独立 SDK 的长期兼容承诺。
+
+最后核对日期：2026-08-31。

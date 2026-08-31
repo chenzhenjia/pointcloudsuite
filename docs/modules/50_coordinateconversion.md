@@ -6,6 +6,8 @@
 
 接口/测试：`loadHandEyeCalibration`、`transformLineScanToRobotBase`；`handeye_transform_tests`。
 
+最后核对日期：2026-08-31。
+
 ## 变更记录
 
 ### 2026-08-31

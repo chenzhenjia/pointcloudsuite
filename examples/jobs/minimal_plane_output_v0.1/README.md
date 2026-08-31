@@ -1,5 +1,7 @@
 # minimal plane output v0.1
 
+> 状态：历史示例归档。该示例用于说明 v0.1 文件结构，不代表当前生产输入或完整 v0.3 验收。当前契约请参阅 `docs/requirements/pointcloudview_v0.3.md`。最后核对日期：2026-08-31。
+
 这是 `sr2026-temp-workpiece-info-mvp-2` 契约的最小非生产示例。
 
 输入：一个已位于 `robot_base` 的 PLY 平面点云；`pixel_size_mm` 固定为 `0.05`。

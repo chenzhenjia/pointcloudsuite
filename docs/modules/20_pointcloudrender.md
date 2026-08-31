@@ -2,9 +2,13 @@
 
 状态：迁移完成，真实桌面验收待完成。规范实现位于 `modules/20_pointcloudrender`，应用仅负责业务状态和 DTO 转换。
 
-依赖：可依赖 Qt Widgets/OpenGL 及 `10_pointcloudread`；算法线程不得访问 QWidget/OpenGL。
+规范目录：`modules/20_pointcloudrender`；模块 target：`pcv_m20_pointcloudrender`。
 
-接口/测试：`MainWindow`、OpenGL widget 和 processor 加载入口；需补充 VBO、版本校验、关闭烟测和 GUI 验收。
+依赖：可依赖 Qt Widgets/OpenGL 及 `pcv_core`；不得依赖 `apps/`。算法线程不得访问 QWidget/OpenGL。
+
+接口/测试：`PointCloudCanvas`、`pointcloud_canvas_contract_tests`；真实 Windows 桌面交互和关闭生命周期需单独验收。
+
+最后核对日期：2026-08-31。实现位于 `modules/20_pointcloudrender/src/pointcloud_canvas.cpp`。
 
 ## 变更记录
 

@@ -1,8 +1,10 @@
 # 70_roi_template：ROI/模板
 
-状态：部分实现。当前实现分布于 `pcv_interface` 和 `apps/pointcloudview`，负责工件坐标系、矩形 ROI、平面映射、模板点云和 Mask。
+状态：接口已实现，部分 UI 编排保留在应用。规范实现位于 `modules/70_roi_template`，模块 target 为 `pcv_m70_roi_template`，负责工件坐标系、矩形 ROI、平面映射、模板点云和 Mask。
 
 接口/测试：`extractPlaneImage`、`generateTempWorkpiece`；`temp_workpiece_interface_tests` 和几何回归测试。
+
+最后核对日期：2026-08-31。
 
 ## 变更记录
 

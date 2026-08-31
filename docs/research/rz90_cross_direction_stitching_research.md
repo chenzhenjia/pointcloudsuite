@@ -1,5 +1,7 @@
 # 基于相机姿态旋转（RZ 90°）的多方向点云拼接方案调研报告
 
+> 状态：历史调研归档。本文仅记录当时的分析和验证，不代表当前实现或发布结论。当前项目基线请参阅 `docs/requirements/pointcloudview_v0.3.md`。最后核对日期：2026-08-31。
+
 > 范围：当前 pointcloudstitch 模块（含共享 pcv_registration）。仅调研与可行性分析，
 > 未修改任何现有模块、算法或核心处理流程。
 > 依据：源码事实（include/pcv/registration/*、src/registration/*、apps/pointcloudstitch/*、

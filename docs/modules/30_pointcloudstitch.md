@@ -1,6 +1,10 @@
 # 30_pointcloudstitch：点云拼接
 
-状态：部分实现。当前实现位于 `apps/pointcloudstitch`，负责多帧流程编排、结果管理和接缝融合调用；配准算法归属 `40_pointcloudregistration`。
+状态：流程模块已实现，应用级 UI 适配保留。规范实现位于 `modules/30_pointcloudstitch`，模块 target 为 `pcv_m30_pointcloudstitch`；配准算法归属 `40_pointcloudregistration`。
+
+接口：`pcv::interface::stitchRawLineProfiles`。测试：`stitching_interface_tests`。应用只负责输入组织、进度、窗口状态和结果展示。
+
+最后核对日期：2026-08-31。
 
 ### 2026-08-31（M5.1 seam pipeline）
 

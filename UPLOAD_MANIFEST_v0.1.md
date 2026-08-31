@@ -1,5 +1,7 @@
 # PointCloudSuite v0.1 手动上传清单
 
+> 状态：历史归档。当前项目基线请参阅 `docs/requirements/pointcloudview_v0.3.md`。本文仅保留 v0.1 历史事实，不作为当前发布清单。最后核对日期：2026-08-31。
+
 用途：本文件用于核对本期 Gitee `develop` 分支上传范围和验证结果。
 
 ## 应上传

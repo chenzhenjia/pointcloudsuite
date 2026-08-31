@@ -1,10 +1,12 @@
 # 10_pointcloudread：点云读写
 
-状态：已实现。规范实现位于 `modules/10_pointcloudread/{include,src}`，兼容 target 为 `pcv_io`，模块 target 为 `pcv_m10_pointcloudread`。
+状态：已实现。规范实现位于 `modules/10_pointcloudread/{include,src}`，模块 target 为 `pcv_m10_pointcloudread`；`pcv_io` 为迁移期兼容 target。
 
 职责：PLY ASCII/binary LE/BE 读取与写入、属性校验、缓存、取消、进度、点序和 bounds 保持。不得依赖应用或 Qt Widgets。
 
 接口/测试：`pcv::detail::io::readPly`、`readPlyCached`；`ply_reader_tests`、`cloud_cache_tests`。
+
+最后核对日期：2026-08-31。当前状态以源码、CMake 和测试为准。
 
 ## 变更记录
 

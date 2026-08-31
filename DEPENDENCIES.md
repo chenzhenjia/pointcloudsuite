@@ -1,14 +1,28 @@
-# Dependencies
+# 依赖与构建环境
 
-## Build requirements
+## 必需环境
 
-- Windows 10 or Windows 11
-- CMake 3.19 or newer
-- MSVC x64 with C++17 support
-- Qt 6.5 or newer, using a kit that provides `Core`, `Gui`, `Widgets`, `Concurrent`, `OpenGL`, and `OpenGLWidgets`
+- Windows 10 或 Windows 11
+- CMake 3.19 或更高版本
+- 支持 C++17 的 MSVC x64
+- Qt 6.5 或更高版本，需提供 Core、Gui、Widgets、Concurrent、OpenGL 和 OpenGLWidgets
 
-Open the repository-root `CMakeLists.txt` in Qt Creator and select a compatible Desktop Qt/MSVC kit. Qt Creator supplies the Qt location through its kit; no Qt installation path is stored in the repository.
+## 构建方式
 
-For command-line builds, place `cmake.exe` and either `qtpaths6.exe`, `qtpaths.exe`, or `qmake.exe` on `PATH`, set `CMAKE_PREFIX_PATH`/`Qt6_DIR`, or pass `-QtDir <Qt prefix>` to `scripts/build_windows.ps1`. The script uses `vswhere.exe` to locate the MSVC environment.
+推荐使用仓库脚本：
 
-Windows deployment uses Qt `windeployqt` and the MSVC runtime. The project does not require Python, PCL, Open3D, VTK, CUDA, a database, or a cloud service.
+```powershell
+.\scripts\build_windows.ps1 -Config Debug -BuildTests -QtDir <QtDir> -BuildDir <BuildDir> -CMakePath <cmake.exe>
+```
+
+也可以在 Qt Creator 中打开根目录 `CMakeLists.txt`，由 Kit 提供 Qt 路径。命令行环境可通过 `CMAKE_PREFIX_PATH`、`Qt6_DIR` 或 `-QtDir` 指定 Qt。
+
+## 运行时部署
+
+Windows 构建会使用 Qt 的 `windeployqt` 部署运行库和插件。构建、缓存、日志、导出和运行数据应放在源码树之外。
+
+## 不使用的外部依赖
+
+项目不要求 Python、PCL、Open3D、VTK、CUDA、数据库或云服务。
+
+最后核对日期：2026-08-31。

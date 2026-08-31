@@ -1,5 +1,7 @@
 # 平面与临时工件输出契约 v0.1
 
+> 状态：历史契约归档。当前实现以 `docs/requirements/pointcloudview_v0.3.md`、`modules/80_planeoutput` 和源码测试为准。本文保留 v0.1 契约事实，不作为当前唯一规范。最后核对日期：2026-08-31。
+
 文件名保留 `proposal` 后缀以兼容已有引用，但当前实现以源码常量和测试为准。
 平面与边缘 Mask 输出统一使用 schema `sr2026-temp-workpiece-info-mvp-2`，临时扫描输入
 使用 schema `sr2026-temp-scanning-info-mvp-2`。长度单位为 `mm`，角度单位为 `deg`。

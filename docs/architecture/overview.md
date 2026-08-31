@@ -1,44 +1,43 @@
 # 架构概览
 
-PointCloudSuite 是一个多应用 CMake 工作区，应用依赖共享库，共享库不反向依赖应用。
+PointCloudSuite v0.3 是多应用 CMake 工作区。应用依赖共享模块，共享模块不得反向依赖应用。
+
+## 分层结构
 
 ```text
-apps -> shared libraries in src -> Qt and platform services
-tests -> shared libraries and selected compatibility sources
-tools -> shared libraries and diagnostic entry points
+apps/
+  pointcloudview       Qt Widgets/OpenGL 查看与处理
+  pointcloudstitch     Qt 多帧拼接界面
+modules/
+  10_pointcloudread    PLY 读写与缓存
+  20_pointcloudrender  Qt/OpenGL 点云画布
+  30_pointcloudstitch  拼接流程编排
+  40_pointcloudregistration ICP、结构校验、seam fusion
+  50_coordinateconversion 手眼标定和坐标转换
+  60_planefitting      纯平面算法
+  70_roi_template      ROI、模板和临时工件接口
+  80_planeoutput       PNG、PLY、JSON 成套输出
+src/                  基础设施、过滤和兼容聚合 target
+tests/                CTest 测试
+tools/                可选诊断工具
 ```
-
-## 当前共享模块
-
-- `pcv_core`：点云基础值类型。
-- `pcv_infrastructure`：缓存、日志和导出目录的操作系统路径管理。
-- `pcv_io`：ASCII/二进制 PLY 读取、取消、进度和校验缓存文件。
-- `pcv_filtering`：比例与体素采样，显式区分真实点和质心策略。
-- `pcv_output`：平面/边缘 Mask PNG、JSON 和 binary little-endian PLY 输出契约。
-- `pcv_registration`：XML 手眼标定读取、刚体矩阵校验、位姿插值和线扫点云到 `robot_base` 的转换。
-- `pcv_interface`：临时扫描信息契约解析、平面/ROI 提取以及临时工件四件输出的事务提交。
-
-现有 processor 源文件仍是应用边界，算法会逐步抽取。新的可复用代码放入 `src/`，
-项目头文件放入 `include/pcv/`，不得直接放入应用目录充当共享实现。
-
-v0.3 迁移后，`modules/10_pointcloudread`、`modules/30_pointcloudstitch`、
-`modules/40_pointcloudregistration`、`modules/50_coordinateconversion`、
-`modules/70_roi_template` 和 `modules/80_planeoutput` 已承载规范源码与独立
-`pcv_m<编号>_<名称>` target；原 `src/*` target 保留为兼容聚合入口，待调用方完全切换后清理。
 
 ## 依赖规则
 
-- 共享算法代码不得依赖 Qt Widgets。
-- 应用可以依赖共享模块；共享模块不得依赖应用。
-- 运行时生成文件不得写入源码树。
-- 测试只能从根目录 `tests/` 注册。
+- 共享算法放在模块 `src/`，公共头放在模块 `include/`。
+- `20_pointcloudrender` 是唯一允许依赖 Qt Widgets/OpenGL 的共享模块。
+- `30_pointcloudstitch` 只负责流程编排。
+- `40_pointcloudregistration` 是 ICP、相邻帧配准和 seam fusion 的唯一算法来源。
+- `60_planefitting` 只负责纯几何拟合和诊断。
+- 应用负责 UI、异步任务和用户提示。
+- 运行数据不得写入源码树。
 
-当前 `pointcloudview` 直接链接 `pcv_interface`，并通过它复用 `pcv_registration`；
-`pointcloudstitch` 也已改为链接 `pcv_registration`，不再直接编译应用目录的
-`handeye_transform.cpp`。共享模块不依赖任一应用。`pcv_output` 和 `pcv_interface` 额外使用
-`Qt::Gui` 的 `QImage` 和矩阵类型。
-当前 Debug CTest 目标为
-`ply_reader_tests`, `cloud_cache_tests`, `downsample_tests`,
-`statistical_filter_tests`, `plane_output_tests`, `temp_workpiece_interface_tests`,
-`pointcloudprocessor_obstacle_tests`（当前内容为边缘 Mask 回归）和
-链接 `pcv_registration` 的 `handeye_transform_tests`。
+## 当前入口
+
+`pointcloudview` 使用 `pcv_m10_pointcloudread`、`pcv_m20_pointcloudrender`、`pcv_m60_planefitting`、`pcv_m70_roi_template` 和 `pcv_m80_planeoutput` 等模块。
+
+`pointcloudstitch` 使用 `pcv_m30_pointcloudstitch`、`pcv_m40_pointcloudregistration` 和 `pcv_m50_coordinateconversion` 等模块。
+
+`registration_diagnostic` 通过 `pcv::interface::stitchRawLineProfiles` 调用统一拼接接口。
+
+最后核对日期：2026-08-31。
