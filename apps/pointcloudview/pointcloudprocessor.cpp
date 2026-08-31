@@ -3290,7 +3290,39 @@ static ThreePointPlaneResult extractPlaneFromPointsLegacy(const QVector<Point3D>
 ThreePointPlaneResult extractPlaneFromPoints(const QVector<Point3D> &points,
                                              const QVector<int> &seedIndices,
                                              const ThreePointPlaneOptions &options) {
-    return extractPlaneFromPointsLegacy(points, seedIndices, options);
+    pcv::planefitting::Options moduleOptions;
+    moduleOptions.initialTolerance = options.initialTolerance;
+    moduleOptions.surfaceTolerance = options.surfaceTolerance;
+    moduleOptions.connectivityRadius = options.connectivityRadius;
+    moduleOptions.ransacIterations = options.ransacIterations;
+    moduleOptions.minInliers = options.minInliers;
+    moduleOptions.randomSeed = options.randomSeed;
+    moduleOptions.keepSeedComponentOnly = options.keepSeedComponentOnly;
+    moduleOptions.useZAxisResidual = options.useZAxisResidual;
+    moduleOptions.maxNormalTiltDegrees = options.maxNormalTiltDegrees;
+    moduleOptions.pcaRefinementIterations = options.pcaRefinementIterations;
+    moduleOptions.minimumDisconnectedComponentPoints = options.minimumDisconnectedComponentPoints;
+    moduleOptions.minimumDisconnectedComponentRatio = options.minimumDisconnectedComponentRatio;
+    moduleOptions.deferFinalClassification = options.deferFinalClassification;
+    const auto fitted = pcv::planefitting::fit(points, seedIndices, moduleOptions);
+    ThreePointPlaneResult result;
+    result.model = {fitted.model.a, fitted.model.b, fitted.model.c, fitted.model.d,
+                    fitted.model.inlierCount, fitted.model.meanDistance, fitted.model.maxDistance};
+    result.candidateIndices = fitted.candidateIndices;
+    result.planeIndices = fitted.planeIndices;
+    result.disconnectedPlaneIndices = fitted.disconnectedPlaneIndices;
+    result.controlPoints = fitted.controlPoints;
+    result.planePoints = fitted.planePoints;
+    result.rmsError = fitted.rmsError;
+    result.usedThreshold = fitted.usedThreshold;
+    result.planarity = fitted.planarity;
+    result.pcaRefinementCount = fitted.pcaRefinementCount;
+    result.connectedComponentCount = fitted.connectedComponentCount;
+    result.significantComponentCount = fitted.significantComponentCount;
+    result.deferred = fitted.deferred;
+    result.error = fitted.error;
+    result.ok = fitted.ok;
+    return result;
 }
 
 PlaneEdgeResult segmentPlaneEdges(const QVector<Point3D> &points,

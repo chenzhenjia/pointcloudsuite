@@ -123,3 +123,10 @@ v0.3 将当前 PointCloudSuite 统一为企业级模块化项目。源码、CMak
 ### 2026-08-31（M5.1 输入 DTO 下沉）
 
 - 拼接输入纯数据类型已归属 `pcv::stitching`，应用通过兼容别名接入；本阶段未改变 PLY、位姿或输出契约。
+
+### 2026-08-31（M5.2 平面拟合算法迁移）
+
+- `pcv_m60_planefitting` 已成为平面拟合算法的生产调用入口，覆盖 PCA 初始平面、RANSAC、PCA 细化、连通域筛选、预览延迟分类和诊断字段。
+- `apps/pointcloudview/pointcloudprocessor.cpp` 的 `extractPlaneFromPoints` 仅执行 `ThreePointPlaneOptions -> pcv::planefitting::Options` 和结果字段映射；二维图像映射、ROI/Mask 和 UI 状态仍保留在应用侧。
+- 验证：Debug 构建 `pointcloudview`、`pointcloudstitch` 和 `plane_fitting_tests` 成功；完整 Debug CTest `14/14` 通过。
+- 风险：旧 `extractPlaneFromPointsLegacy` 函数仍在处理器源文件中保留，尚未删除；删除需单独提交并重新验证直接编译该处理器的工具和测试。
