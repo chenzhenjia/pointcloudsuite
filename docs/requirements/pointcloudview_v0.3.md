@@ -101,3 +101,4 @@ v0.3 将当前 PointCloudSuite 统一为企业级模块化项目。源码、CMak
 - 当前仍有生产代码直接编译 `apps/pointcloudstitch/pointcloudprocessor.cpp`，其中保留独立 `registerPair()`/`mergePlyCloudsInWorld()`，因此 `40_pointcloudregistration` 尚未成为应用配准唯一事实来源。
 - `tools/registration_diagnostic`、旧 forwarding header、`pcv_registration`/`pcv_io`/`pcv_output` 聚合 target 仍存在引用；不得删除。
 - `20_pointcloudrender` 已具备独立 DTO 和快照契约，但 `PointCloudCanvas` 实体仍位于 `mainwindow.cpp`；需完成真实 OpenGL 组件迁移及 GUI 验收后再进入清理阶段。
+- `40_pointcloudregistration` seam fusion 已在帧扫描、融合带构建和最近邻插值阶段加入周期性取消检查；取消时保持输入映射和正式输出不变。

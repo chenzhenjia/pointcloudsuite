@@ -93,6 +93,19 @@ int main(int argc, char **argv)
                  && valid.points.size() == fused.outputPoints,
                  "cancelled seam must not publish a new result")) return 1;
 
+    pointcloud::MultiFrameRegistrationResult midCancelledInput = valid;
+    int cancellationChecks = 0;
+    pointcloud::SeamFusionOptions midCancelledOptions = enabled;
+    midCancelledOptions.isCancelled = [&cancellationChecks] {
+        return ++cancellationChecks >= 2;
+    };
+    const qsizetype beforeMidCancellation = midCancelledInput.points.size();
+    const auto midCancelled = pointcloud::applyTrajectorySeamFusion(
+        &midCancelledInput, midCancelledOptions);
+    if (!require(midCancelled.cancelled && !midCancelled.ok
+                 && midCancelledInput.points.size() == beforeMidCancellation,
+                 "mid-seam cancellation must preserve the input cloud")) return 1;
+
     pointcloud::MultiFrameRegistrationResult missingMetadata = valid;
     missingMetadata.registrationCorrections.clear();
     const auto metadataFailure = pointcloud::applyTrajectorySeamFusion(
