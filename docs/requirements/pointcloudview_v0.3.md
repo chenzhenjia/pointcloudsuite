@@ -143,3 +143,9 @@ v0.3 将当前 PointCloudSuite 统一为企业级模块化项目。源码、CMak
 - `rg` 审计确认 `pcv_io`、`pcv_registration`、`pcv_output`、旧 processor 源和 forwarding header 仍有兼容引用，因此本阶段不删除兼容层。
 - `90_interferenceplane`、`100_qualityreport` 继续保持“未实现”。
 - 发布候选仍未达成：缺少真实 GUI 点选/矩形选区/视角交互、生产拼接夹具逐字段比对，以及旧算法兼容代码清理评审。
+
+### 2026-08-31（M5.4 代码清理）
+
+- 已删除应用层重复 ICP/配准流程和 `extractPlaneFromPointsLegacy()`；生产配准与平面算法分别唯一归属 `40_pointcloudregistration`、`60_planefitting`。
+- `20_pointcloudrender` 新增独立 `.cpp` 编译单元，但为保持源码兼容，画布方法体暂未全部移出头文件。
+- 兼容 target、forwarding header 和 `registration_diagnostic` 仍保留，待工具迁移及弃用周期完成后执行独立删除提交。

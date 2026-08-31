@@ -1,4 +1,5 @@
 add_library(pcv_m20_pointcloudrender STATIC
+    src/pointcloud_canvas.cpp
     src/pointcloud_canvas_contract.cpp
     include/pcv/render/pointcloud_canvas.h
     include/pcv/render/pointcloud_canvas_contract.h
