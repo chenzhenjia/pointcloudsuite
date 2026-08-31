@@ -95,3 +95,9 @@ v0.3 将当前 PointCloudSuite 统一为企业级模块化项目。源码、CMak
 - `PointCloudCanvas` 已在应用入口接入快照校验和渲染版本递增；实体迁移仍需先完成公共渲染 DTO 下沉。
 - 已新增 `pcv::render::CoordinateFrame`、`pcv::render::Contour` DTO，应用显式转换后调用画布；该步骤解除渲染实体迁移对 processor 类型的直接依赖。
 - `stitchRawLineProfiles` 已解除 seam fusion 占位禁用；无真实投影重叠时按 fail-closed 契约保留点云并输出诊断，真实重叠融合失败仍阻止正式输出。
+
+### M5.4 兼容层审计（2026-08-31）
+
+- 当前仍有生产代码直接编译 `apps/pointcloudstitch/pointcloudprocessor.cpp`，其中保留独立 `registerPair()`/`mergePlyCloudsInWorld()`，因此 `40_pointcloudregistration` 尚未成为应用配准唯一事实来源。
+- `tools/registration_diagnostic`、旧 forwarding header、`pcv_registration`/`pcv_io`/`pcv_output` 聚合 target 仍存在引用；不得删除。
+- `20_pointcloudrender` 已具备独立 DTO 和快照契约，但 `PointCloudCanvas` 实体仍位于 `mainwindow.cpp`；需完成真实 OpenGL 组件迁移及 GUI 验收后再进入清理阶段。
