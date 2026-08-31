@@ -83,4 +83,47 @@ Result fit(const QVector<pointcloud::Point3D> &points,
     return result;
 }
 
+ConsistencyResult validateConsistency(const QVector<pointcloud::Point3D> &points,
+                                       const PlaneModel &referencePlane,
+                                       const QVector<int> &referenceIndices,
+                                       const QVector<int> &verificationIndices,
+                                       float angleToleranceDegrees,
+                                       float distanceToleranceMm)
+{
+    ConsistencyResult result;
+    const auto fail = [&result](ConsistencyStatus status, const QString &message) {
+        result.status = status; result.error = message; return result;
+    };
+    if (referenceIndices.size() < 3 || verificationIndices.size() != 3
+        || !std::isfinite(angleToleranceDegrees) || angleToleranceDegrees < 0.0f
+        || !std::isfinite(distanceToleranceMm) || distanceToleranceMm < 0.0f)
+        return fail(ConsistencyStatus::InvalidInput, QStringLiteral("平面校验输入或阈值无效"));
+    const auto valid = [&points](int i) { return i >= 0 && i < points.size(); };
+    const auto finite = [](const pointcloud::Point3D &p) { return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z); };
+    for (int i = 0; i < referenceIndices.size(); ++i) {
+        if (!valid(referenceIndices[i]) || !finite(points[referenceIndices[i]])) return fail(ConsistencyStatus::InvalidInput, QStringLiteral("平面校验点索引越界或包含无效点"));
+        for (int j = i + 1; j < referenceIndices.size(); ++j) if (referenceIndices[i] == referenceIndices[j]) return fail(ConsistencyStatus::ReusedPoint, QStringLiteral("第一组采样点必须使用不同的点"));
+    }
+    for (int i = 0; i < 3; ++i) {
+        const int index = verificationIndices[i];
+        if (!valid(index) || !finite(points[index])) return fail(ConsistencyStatus::InvalidInput, QStringLiteral("平面校验点索引越界或包含无效点"));
+        for (int j = i + 1; j < 3; ++j) if (verificationIndices[i] == verificationIndices[j]) return fail(ConsistencyStatus::ReusedPoint, QStringLiteral("第二组三点必须使用不同的点"));
+        if (referenceIndices.contains(index)) return fail(ConsistencyStatus::ReusedPoint, QStringLiteral("第二组三点不能复用第一组三点"));
+    }
+    QVector3D referenceNormal(referencePlane.a, referencePlane.b, referencePlane.c);
+    if (!std::isfinite(referencePlane.a) || !std::isfinite(referencePlane.b) || !std::isfinite(referencePlane.c) || !std::isfinite(referencePlane.d) || referenceNormal.lengthSquared() <= 1.0e-10f) return fail(ConsistencyStatus::InvalidInput, QStringLiteral("第一拟合平面无效"));
+    const QVector3D p1(points[verificationIndices[0]].x, points[verificationIndices[0]].y, points[verificationIndices[0]].z);
+    const QVector3D p2(points[verificationIndices[1]].x, points[verificationIndices[1]].y, points[verificationIndices[1]].z);
+    const QVector3D p3(points[verificationIndices[2]].x, points[verificationIndices[2]].y, points[verificationIndices[2]].z);
+    QVector3D verificationNormal = QVector3D::crossProduct(p2 - p1, p3 - p1);
+    if (verificationNormal.lengthSquared() <= 1.0e-10f) return fail(ConsistencyStatus::Collinear, QStringLiteral("第二组三点近似共线，无法确定平面"));
+    const float norm = referenceNormal.length(); const float normalizedD = referencePlane.d / norm; referenceNormal /= norm; verificationNormal.normalize();
+    result.normalAngleDegrees = qRadiansToDegrees(std::acos(qBound(-1.0f, std::abs(QVector3D::dotProduct(referenceNormal, verificationNormal)), 1.0f)));
+    const auto distance = [&referenceNormal, normalizedD](const QVector3D &p) { return std::abs(QVector3D::dotProduct(referenceNormal, p) + normalizedD); };
+    result.maximumDistanceMm = qMax(qMax(distance(p1), distance(p2)), distance(p3));
+    if (result.normalAngleDegrees > angleToleranceDegrees) return fail(ConsistencyStatus::AngleExceeded, QStringLiteral("第二组三点平面夹角超过阈值"));
+    if (result.maximumDistanceMm > distanceToleranceMm) return fail(ConsistencyStatus::DistanceExceeded, QStringLiteral("第二组三点到第一拟合平面的距离超过阈值"));
+    result.status = ConsistencyStatus::Passed; result.passed = true; return result;
+}
+
 } // namespace pcv::planefitting

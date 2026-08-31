@@ -37,8 +37,28 @@ struct Result {
     bool ok = false;
 };
 
+enum class ConsistencyStatus : quint8 {
+    Passed, InvalidInput, ReusedPoint, Collinear, AngleExceeded, DistanceExceeded
+};
+
+struct ConsistencyResult {
+    ConsistencyStatus status = ConsistencyStatus::InvalidInput;
+    float normalAngleDegrees = 0.0f;
+    float maximumDistanceMm = 0.0f;
+    QString error;
+    bool passed = false;
+};
+
 Result fit(const QVector<pointcloud::Point3D> &points,
            const QVector<int> &seedIndices,
            const Options &options = {});
+
+ConsistencyResult validateConsistency(
+    const QVector<pointcloud::Point3D> &points,
+    const PlaneModel &referencePlane,
+    const QVector<int> &referenceIndices,
+    const QVector<int> &verificationIndices,
+    float angleToleranceDegrees = 1.0f,
+    float distanceToleranceMm = 0.4f);
 
 } // namespace pcv::planefitting

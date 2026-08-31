@@ -1,5 +1,7 @@
 #include "pointcloudprocessor.h"
 
+#include <pcv/planefitting/plane_fitting.h>
+
 #include <pcv/io/cloud_cache.h>
 #include <pcv/filtering/downsample.h>
 #include <pcv/filtering/statistical_filter.h>
@@ -3894,7 +3896,7 @@ ThreePointPlaneResult selectPlaneFromThreeSeeds(const QVector<Point3D> &points,
     return extractPlaneFromThreePoints(points, seedIndices, options);
 }
 
-PlaneConsistencyResult validatePlaneConsistency(
+static PlaneConsistencyResult validatePlaneConsistencyLegacy(
     const QVector<Point3D> &points, const PlaneModel &referencePlane,
     const QVector<int> &referenceIndices, const QVector<int> &verificationIndices,
     float angleToleranceDegrees, float distanceToleranceMm) {
@@ -3987,6 +3989,25 @@ PlaneConsistencyResult validatePlaneConsistency(
     }
     result.status = PlaneConsistencyStatus::Passed;
     result.passed = true;
+    return result;
+}
+
+PlaneConsistencyResult validatePlaneConsistency(
+    const QVector<Point3D> &points, const PlaneModel &referencePlane,
+    const QVector<int> &referenceIndices, const QVector<int> &verificationIndices,
+    float angleToleranceDegrees, float distanceToleranceMm) {
+    pcv::planefitting::PlaneModel model{referencePlane.a, referencePlane.b, referencePlane.c,
+                                        referencePlane.d, referencePlane.inlierCount,
+                                        referencePlane.meanDistance, referencePlane.maxDistance};
+    const auto checked = pcv::planefitting::validateConsistency(
+        points, model, referenceIndices, verificationIndices,
+        angleToleranceDegrees, distanceToleranceMm);
+    PlaneConsistencyResult result;
+    result.normalAngleDegrees = checked.normalAngleDegrees;
+    result.maximumDistanceMm = checked.maximumDistanceMm;
+    result.error = checked.error;
+    result.passed = checked.passed;
+    result.status = static_cast<PlaneConsistencyStatus>(checked.status);
     return result;
 }
 
