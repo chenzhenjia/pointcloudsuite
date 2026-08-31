@@ -1,6 +1,6 @@
 # 20_pointcloudrender：点云渲染
 
-状态：部分实现。当前实现位于 `apps/pointcloudview`，目标为抽取 Qt/OpenGL 画布、VBO、真实点选、视角交互和异步结果发布。
+状态：迁移完成，真实桌面验收待完成。规范实现位于 `modules/20_pointcloudrender`，应用仅负责业务状态和 DTO 转换。
 
 依赖：可依赖 Qt Widgets/OpenGL 及 `10_pointcloudread`；算法线程不得访问 QWidget/OpenGL。
 
@@ -9,6 +9,10 @@
 ## 变更记录
 
 ### 2026-08-31
+
+- M5.3 收尾：`PointCloudCanvas` 全部构造、OpenGL、VBO/FBO、绘制、拾取、交互和资源释放方法已移入 `src/pointcloud_canvas.cpp`；公共头仅保留声明、信号回调和字段。
+- 验证：`pcv_m20_pointcloudrender`、`pointcloudview` Debug 构建通过；完整 Debug CTest 14/14 通过。
+- 未验证：Windows 桌面真实点选、矩形选区、旋转/平移/缩放和关闭生命周期。
 
 - M5.3：新增 `src/pointcloud_canvas.cpp` 作为渲染模块独立编译单元，`pcv_m20_pointcloudrender` 继续保持静态库和 Qt/OpenGL 依赖。
 - 当前 `PointCloudCanvas` 方法体仍以内联形式保留在公共头中，以维持现有调用方兼容；真实桌面点选、矩形选区和视角交互尚未完成发布验收。
