@@ -33,6 +33,7 @@ struct FrameTransformMetadata {
     QString sourceFile;
     QMatrix4x4 startBaseFromFlange;
     QMatrix4x4 endBaseFromFlange;
+    QMatrix4x4 flangeFromDepth;
     qsizetype declaredCount = 0;
     qsizetype convertedCount = 0;
     qsizetype rejectedInvalid = 0;

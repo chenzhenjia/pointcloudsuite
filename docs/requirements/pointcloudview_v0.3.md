@@ -105,6 +105,7 @@ v0.3 将当前 PointCloudSuite 统一为企业级模块化项目。源码、CMak
 - `20_pointcloudrender` DTO 契约新增坐标系与轮廓非有限值校验，画布入口在发布前 fail-closed；实体迁移和真实 GUI 验收仍未完成。
 - seam fusion 已修正未匹配点处理：融合带内未获得互相最近邻的点保留原始来源索引和 scan ratio，并在诊断中计数。
 - 应用 seam wrapper 已切换为共享 `SeamFusionOptions`、`SeamFusionResult`、`SeamFusionDiagnostic` 类型别名，减少跨模块结果模型漂移；旧包装函数仍保留兼容。
+- 应用拼接处理器头已移除重复 ICP/结果结构，直接复用 `pcv_m40_pointcloudregistration` 公共模型；`mergePlyCloudsInWorld()` 仍作为兼容入口保留。
 - `WorldCloudInput` 已下沉至 `pcv::stitching` 纯数据 DTO，应用保留 `pointcloud::WorldCloudInput` 兼容别名；配准结果结构仍待后续迁移。
 
 ### 2026-08-31（M5.3 画布实体迁移）
