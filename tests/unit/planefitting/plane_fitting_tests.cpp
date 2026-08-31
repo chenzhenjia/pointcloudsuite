@@ -11,6 +11,10 @@ bool require(bool value, const char *message) { if (!value) std::cerr << message
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
+    const pcv::planefitting::Options defaults;
+    if (defaults.ransacIterations != 300 || defaults.pcaRefinementIterations != 2
+        || defaults.randomSeed != 20260813u
+        || defaults.minimumDisconnectedComponentPoints != 30) return 1;
     QVector<pointcloud::Point3D> points;
     for (int y = 0; y < 4; ++y) for (int x = 0; x < 4; ++x)
         points.push_back({float(x), float(y), 0.01f * float((x + y) % 2)});

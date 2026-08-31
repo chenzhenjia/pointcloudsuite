@@ -18,9 +18,16 @@ struct PlaneModel {
 struct Options {
     float initialTolerance = 1.0f;
     float surfaceTolerance = 0.4f;
+    float connectivityRadius = 0.0f;
+    int ransacIterations = 300;
     int minInliers = 100;
+    unsigned int randomSeed = 20260813u;
+    bool keepSeedComponentOnly = true;
     bool useZAxisResidual = false;
     float maxNormalTiltDegrees = 45.0f;
+    int pcaRefinementIterations = 2;
+    int minimumDisconnectedComponentPoints = 30;
+    float minimumDisconnectedComponentRatio = 0.005f;
     bool deferFinalClassification = false;
 };
 
@@ -28,11 +35,15 @@ struct Result {
     PlaneModel model;
     QVector<int> candidateIndices;
     QVector<int> planeIndices;
+    QVector<int> disconnectedPlaneIndices;
     QVector<pointcloud::Point3D> controlPoints;
     QVector<pointcloud::Point3D> planePoints;
     float rmsError = 0.0f;
     float usedThreshold = 0.0f;
+    float planarity = 0.0f;
     int pcaRefinementCount = 0;
+    int connectedComponentCount = 0;
+    int significantComponentCount = 0;
     bool deferred = false;
     QString error;
     bool ok = false;
