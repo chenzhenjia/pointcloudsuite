@@ -74,3 +74,10 @@ v0.3 将当前 PointCloudSuite 统一为企业级模块化项目。源码、CMak
 - `30_pointcloudstitch`：stitching 接口迁移到 `modules/30_pointcloudstitch`。
 - 旧 `pcv_io`、`pcv_registration`、`pcv_interface`、`pcv_output` 保留为兼容聚合 target；旧公共头保留 forwarding header。
 - Debug 构建与 CTest `12/12` 通过。
+
+### 2026-08-31（M5.1 首轮）
+
+- 共享 seam fusion 增加公共类型头和 kernel 适配入口，应用层 `seamfusion.cpp` 改为转发到共享实现。
+- 共享实现支持真实投影重叠检查、接缝方向校验、融合带处理、候选最近邻插值及失败保护；新增真实重叠回归用例。
+- 当前仍保留应用级 `mergePlyCloudsInWorld()`/`registerPair()`，因此 M5.1 的“单一配准流水线”尚未完成；`60_planefitting` 与 `20_pointcloudrender` 尚未开始抽取。
+- 使用可写外部构建目录完成 `pointcloudview`、`pointcloudstitch` Debug 构建和 CTest `12/12`。
