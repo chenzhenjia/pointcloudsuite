@@ -10,3 +10,4 @@
 
 - 建立模块边界和 `pcv_m30_pointcloudstitch` 兼容入口；保留现有应用流程。
 - M3/M4：`stitching_interface` 已迁移到模块源码，target 负责流程编排并依赖配准、坐标转换和读写模块。
+- M5.1：应用 seam fusion 入口已增加 `ok/error/cancelled` 状态并在正式输出前 fail-closed；GUI 仍保留应用数据模型适配，待公共拼接类型完全收敛后删除适配层。

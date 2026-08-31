@@ -3,6 +3,8 @@ add_library(pcv_m40_pointcloudregistration STATIC
     src/seam_fusion.cpp
     include/pcv/registration/multiframe_registration.h
     include/pcv/registration/seam_fusion.h
+    include/pcv/registration/seam_fusion_types.h
+    include/pcv/registration/seam_fusion_kernel.h
 )
 target_include_directories(pcv_m40_pointcloudregistration PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

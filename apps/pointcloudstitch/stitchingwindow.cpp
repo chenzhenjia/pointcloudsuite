@@ -500,6 +500,17 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
     else {
         result.seamFusion.inputPoints = result.merge.points.size();
         result.seamFusion.outputPoints = result.merge.points.size();
+        result.seamFusion.ok = true;
+    }
+    if (!result.transformOnly && result.registrationAccepted
+        && !result.seamFusion.ok) {
+        result.error = result.seamFusion.error.isEmpty()
+            ? QObject::tr("接缝融合失败") : result.seamFusion.error;
+        return result;
+    }
+    if (result.seamFusion.cancelled) {
+        result.cancelled = true;
+        return result;
     }
     for(const SeamFusionDiagnostic &diagnostic:result.seamFusion.diagnostics)
         result.seamFusionApplied=result.seamFusionApplied||diagnostic.applied;

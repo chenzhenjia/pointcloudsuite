@@ -1,15 +1,18 @@
 #pragma once
 
-#include "pointcloudprocessor.h"
-
 #include <QVector>
 #include <QString>
 
+#include <functional>
+
+namespace pointcloud {
+
 struct SeamFusionOptions {
-    bool enabled = true;
+    bool enabled = false;
     float halfWidth = 8.0f;
     float mutualDistance = 0.6f;
     float decisionCellSize = 0.5f;
+    std::function<bool()> isCancelled;
 };
 
 struct SeamFusionDiagnostic {
@@ -45,7 +48,4 @@ struct SeamFusionResult {
     bool cancelled = false;
 };
 
-SeamFusionResult applyTrajectorySeamFusion(
-    pointcloud::WorldCloudMergeResult *merge,
-    const QVector<pointcloud::WorldCloudInput> &inputs,
-    const SeamFusionOptions &options);
+} // namespace pointcloud
