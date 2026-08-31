@@ -3,6 +3,7 @@
 #include "ui_mainwindow.h"
 #include <pcv/interface/temp_workpiece_interface.h>
 #include <pcv/output/plane_output.h>
+#include <pcv/render/pointcloud_canvas_contract.h>
 
 #include <QAction>
 #include <QApplication>
@@ -116,6 +117,8 @@ public:
         }
         m_points = std::move(points);
         m_pointStates.fill(NormalPoint, m_points.size());
+        ++m_renderRevision;
+        validateRenderSnapshot();
         m_planeResultIndices.clear();
         m_edgeResultIndices.clear();
         m_selectedIndices.clear();
@@ -184,6 +187,7 @@ public:
         }
         m_stateUploadPending = true;
         m_contourUploadPending = true;
+        validateRenderSnapshot();
         update();
     }
 
@@ -534,6 +538,25 @@ protected:
     }
 
 private:
+    void validateRenderSnapshot() {
+        pcv::render::RenderSnapshot snapshot;
+        snapshot.points = m_points;
+        snapshot.states.resize(m_pointStates.size());
+        for (int i = 0; i < m_pointStates.size(); ++i) {
+            snapshot.states[i] = m_pointStates[i] == PlanePoint
+                ? pcv::render::PointState::Plane
+                : (m_pointStates[i] == EdgePoint
+                    ? pcv::render::PointState::Edge
+                    : pcv::render::PointState::Normal);
+        }
+        snapshot.revision = m_renderRevision;
+        QString error;
+        if (!pcv::render::validateSnapshot(snapshot, &error)) {
+            m_uploadError = error;
+            qWarning() << "PointCloudCanvas render snapshot rejected:" << error;
+        }
+    }
+
     void updateBounds() {
         if (m_points.isEmpty()) {
             m_center = QVector3D();
@@ -991,6 +1014,7 @@ private:
     bool m_selectionMode = false;
     bool m_edgeSelectionMode = false;
     bool m_mouseMoved = false;
+    quint64 m_renderRevision = 0;
 };
 
 MainWindow::MainWindow(QWidget *parent) : MainWindow(pcv::config::PointCloudViewDefaults{}, parent) {}
