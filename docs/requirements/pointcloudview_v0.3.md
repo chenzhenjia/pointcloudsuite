@@ -150,3 +150,4 @@ v0.3 将当前 PointCloudSuite 统一为企业级模块化项目。源码、CMak
 - `20_pointcloudrender` 新增独立 `.cpp` 编译单元，但为保持源码兼容，画布方法体暂未全部移出头文件。
 - 兼容 target、forwarding header 和 `registration_diagnostic` 仍保留，待工具迁移及弃用周期完成后执行独立删除提交。
 - 应用层重复 ICP/配准流程及 `extractPlaneFromPointsLegacy()` 已删除，`registration_diagnostic` 已切换为 `pointcloudstitch` 兼容入口并链接模块 target；工具 Debug 构建通过。
+- Debug/Release 全量 CTest 均为 `14/14`；`POINTCLOUDVIEW_SELFTEST_CLOSE=1` 配合 `QT_QPA_PLATFORM=offscreen` 烟测超时，未计入通过项。
