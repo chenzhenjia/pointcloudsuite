@@ -107,6 +107,11 @@ v0.3 将当前 PointCloudSuite 统一为企业级模块化项目。源码、CMak
 - 应用 seam wrapper 已切换为共享 `SeamFusionOptions`、`SeamFusionResult`、`SeamFusionDiagnostic` 类型别名，减少跨模块结果模型漂移；旧包装函数仍保留兼容。
 - `WorldCloudInput` 已下沉至 `pcv::stitching` 纯数据 DTO，应用保留 `pointcloud::WorldCloudInput` 兼容别名；配准结果结构仍待后续迁移。
 
+### 2026-08-31（M5.3 画布实体迁移）
+
+- `PointCloudCanvas` 已移入 `modules/20_pointcloudrender`，应用源文件不再包含画布类实现；模块依赖方向保持为 `apps -> pcv_m20_pointcloudrender`。
+- 本阶段未改变 OpenGL 绘制、点选、FBO 或异步发布行为；真实 GUI 交互和关闭烟测仍是发布前置条件。
+
 ### 2026-08-31（M5.1 输入 DTO 下沉）
 
 - 拼接输入纯数据类型已归属 `pcv::stitching`，应用通过兼容别名接入；本阶段未改变 PLY、位姿或输出契约。
