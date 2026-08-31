@@ -365,6 +365,13 @@ Preset：
 4. 共享算法放在模块 `src/`，公共头放在模块 `include/`；应用只负责 UI 和流程编排。共享模块不得依赖应用或 Qt Widgets（`20_pointcloudrender` 除外）。
 5. 每次修改必须在对应 `docs/modules/<模块>.md` 追加日期、需求、文件、行为变化、验证结果和风险；未实现模块不得写入功能成功记录。
 
+### 2026-08-31 v0.3 收尾记录
+
+- `20_pointcloudrender` 的 `PointCloudCanvas` 实现已由模块 `.cpp` 提供，头文件只保留声明；不得在 `mainwindow.cpp` 恢复第二套实现。
+- `registration_diagnostic` 必须通过 `pcv::interface::stitchRawLineProfiles` 调用拼接流水线，不得直接编译应用 processor。
+- `pcv_io`、`pcv_registration`、`pcv_output` 及 forwarding header 在弃用周期结束前继续保留；删除必须单独提交并先通过 `rg`、Debug/Release、CTest 和 GUI/夹具验收。
+- `90_interferenceplane`、`100_qualityreport` 保持“未实现”，不创建空 target 或成功但无结果的实现。
+
 ### 标准流程
 
 需求登记 → 模块归属 → 接口设计 → 单模块实现 → 模块测试 → 依赖模块构建 → 全量验证 → 模块日志更新 → `git diff --check` 和 `git status --short`。涉及公共头、CMake、处理器或输出契约时必须完整重编译。

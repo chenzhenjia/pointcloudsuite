@@ -146,6 +146,12 @@ v0.3 将当前 PointCloudSuite 统一为企业级模块化项目。源码、CMak
 
 ### 2026-08-31（M5.4 代码清理）
 
+- M5.3 完成：`PointCloudCanvas` 实现已从公共头移至 `modules/20_pointcloudrender/src/pointcloud_canvas.cpp`，模块头仅保留接口声明；保持 UI 文件位于 `apps/*/ui/` 并可用 Qt Designer 编辑。
+- M5.4 工具迁移完成：`registration_diagnostic` 仅链接模块 target 并调用 `pcv::interface::stitchRawLineProfiles`，支持 `--input-dir`、`--calibration`、`--output-dir`，输出 no-seam 与 seam 诊断。
+- 验证：Debug CTest 14/14、Release CTest 14/14、工具 Debug 构建通过；`git diff --check` 待提交前执行。
+- 未验证：Windows 桌面 GUI 交互、真实生产拼接夹具逐字段一致性；兼容 target/forwarding header 尚未删除。
+- 发布状态：迁移完成、发布验收待完成；`90_interferenceplane`、`100_qualityreport` 仍为未实现。
+
 - 已删除应用层重复 ICP/配准流程和 `extractPlaneFromPointsLegacy()`；生产配准与平面算法分别唯一归属 `40_pointcloudregistration`、`60_planefitting`。
 - `20_pointcloudrender` 新增独立 `.cpp` 编译单元，但为保持源码兼容，画布方法体暂未全部移出头文件。
 - 兼容 target、forwarding header 和 `registration_diagnostic` 仍保留，待工具迁移及弃用周期完成后执行独立删除提交。

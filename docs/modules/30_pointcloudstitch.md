@@ -4,6 +4,9 @@
 
 ### 2026-08-31（M5.1 seam pipeline）
 
+- M5.4：`registration_diagnostic` 已改用 `pcv::interface::stitchRawLineProfiles`，工具不再编译应用 processor；固定四帧输入、no-seam/seam 两套输出均由同一接口流水线执行。
+- 验证：工具 Debug 构建通过；真实夹具运行和 GUI/接口逐字段比对待现场数据。
+
 - 移除 `seamEnabled` 的“暂时禁用”入口占位判断，使 `stitchRawLineProfiles` 可以调用共享 seam fusion。
 - 无真实投影重叠时允许 fail-closed 保留完整点云并返回诊断；真实重叠但无可用互相对应点时仍返回 `PCV_STITCH_001`，禁止生成正式输出。
 - 验证：接口错误安全测试覆盖启用 seam 时的非法 PLY 输入和正式输出不被替换。
