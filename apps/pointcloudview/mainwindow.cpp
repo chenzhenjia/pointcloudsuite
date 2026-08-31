@@ -203,6 +203,11 @@ public:
     void setPlaneResult(const QVector<int> &planeIndices, const QVector<int> &edgeIndices,
                         const QVector<pcv::render::Contour> &contours) {
         if (QThread::currentThread() != thread()) return;
+        QString renderError;
+        if (!pcv::render::validateContours(contours, &renderError)) {
+            qWarning() << "PointCloudCanvas rejected contour snapshot:" << renderError;
+            return;
+        }
         m_planeResultIndices = planeIndices;
         m_edgeResultIndices = edgeIndices;
         m_pointStates.fill(NormalPoint, m_points.size());
@@ -243,6 +248,11 @@ public:
 
     void setWorkpieceCoordinateSystem(const pcv::render::CoordinateFrame &frame) {
         if (QThread::currentThread() != thread()) return;
+        QString renderError;
+        if (!pcv::render::validateCoordinateFrame(frame, &renderError)) {
+            qWarning() << "PointCloudCanvas rejected coordinate frame:" << renderError;
+            return;
+        }
         m_workpieceCoordinate = frame;
         update();
     }

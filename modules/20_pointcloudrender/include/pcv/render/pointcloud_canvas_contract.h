@@ -39,5 +39,7 @@ struct RenderSnapshot {
 };
 
 bool validateSnapshot(const RenderSnapshot &snapshot, QString *error = nullptr);
+bool validateCoordinateFrame(const CoordinateFrame &frame, QString *error = nullptr);
+bool validateContours(const QVector<Contour> &contours, QString *error = nullptr);
 
 } // namespace pcv::render
