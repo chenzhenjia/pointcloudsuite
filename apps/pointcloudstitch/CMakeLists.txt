@@ -4,12 +4,14 @@ qt_add_executable(pointcloudstitch WIN32
     regressionrunner.h
     stitchingwindow.cpp
     stitchingwindow.h
-    stitchingwindow.ui
+    ui/stitchingwindow.ui
     seamfusion.cpp
     seamfusion.h
     pointcloudprocessor.cpp
     pointcloudprocessor.h
 )
+set_property(TARGET pointcloudstitch PROPERTY AUTOUIC_SEARCH_PATHS
+    "${CMAKE_CURRENT_SOURCE_DIR}/ui")
 
 # Do not rely solely on localized MSVC /showIncludes output for the shared PLY
 # reader contract; stale caller objects can otherwise corrupt return storage.

@@ -3,12 +3,14 @@ qt_add_executable(pointcloudview
     main.cpp
     mainwindow.cpp
     mainwindow.h
-    mainwindow.ui
+    ui/mainwindow.ui
     registrationdialog.cpp
     registrationdialog.h
     pointcloudprocessor.cpp
     pointcloudprocessor.h
 )
+set_property(TARGET pointcloudview PROPERTY AUTOUIC_SEARCH_PATHS
+    "${CMAKE_CURRENT_SOURCE_DIR}/ui")
 
 # Localized MSVC /showIncludes output can leave an empty dependency file with
 # this Qt Creator Makefile kit. Keep this ABI-critical dependency explicit.

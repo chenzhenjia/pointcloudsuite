@@ -113,6 +113,11 @@ v0.3 将当前 PointCloudSuite 统一为企业级模块化项目。源码、CMak
 - 本阶段未改变 OpenGL 绘制、点选、FBO 或异步发布行为；真实 GUI 交互和关闭烟测仍是发布前置条件。
 - 公共画布头迁移已完成 Debug/Release 双配置构建和 CTest 验证；GUI 真实交互验收仍未完成。
 
+### 2026-08-31（UI 目录分离）
+
+- `apps/pointcloudview/ui/mainwindow.ui` 和 `apps/pointcloudstitch/ui/stitchingwindow.ui` 作为独立 Qt Designer 文件保存。
+- CMake 已改为显式引用 `ui/*.ui`，保留 `ui_mainwindow.h`/`ui_stitchingwindow.h` 的 AUTOUIC 生成方式；UI 文件可直接用 Qt Designer 编辑。
+
 ### 2026-08-31（M5.1 输入 DTO 下沉）
 
 - 拼接输入纯数据类型已归属 `pcv::stitching`，应用通过兼容别名接入；本阶段未改变 PLY、位姿或输出契约。
