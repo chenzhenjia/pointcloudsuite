@@ -19,3 +19,10 @@
 - `PointCloudCanvas::setCloud()` 和 `setPlaneResult()` 接入 `RenderSnapshot` 校验，并在每次画布数据更新时递增渲染版本号。
 - 快照校验失败时拒绝发布点云或平面状态，保留当前画布内容并记录 `qWarning`；未改变 Qt/OpenGL 线程边界。
 - 验证：`pointcloud_canvas_contract_tests` 和完整 Debug CTest（14/14）通过。
+
+### 2026-08-31（M5.3 DTO 下沉）
+
+- 新增 `pcv::render::CoordinateFrame` 和 `pcv::render::Contour` 渲染 DTO。
+- `PointCloudCanvas` 不再直接接收 `WorkpieceCoordinateSystem`、`PlaneContour`；应用入口负责显式转换，渲染模块保持独立依赖方向。
+- OpenGL 实体仍暂留 `mainwindow.cpp`，后续可在不引入 processor 依赖的前提下迁移。
+- 验证：`pointcloudview` Debug 构建、完整 Debug CTest（14/14）通过。

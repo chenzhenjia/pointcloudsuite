@@ -69,6 +69,39 @@
 #include <functional>
 #include <memory>
 
+namespace {
+pcv::render::CoordinateFrame toRenderCoordinateFrame(
+    const pointcloud::WorkpieceCoordinateSystem &frame) {
+    pcv::render::CoordinateFrame result;
+    result.originInRobotBase = frame.originInRobotBase;
+    result.axisXInRobotBase = frame.axisXInRobotBase;
+    result.axisYInRobotBase = frame.axisYInRobotBase;
+    result.axisZInRobotBase = frame.axisZInRobotBase;
+    result.workpieceToRobotBase = frame.workpieceToRobotBase;
+    result.robotBaseToWorkpiece = frame.robotBaseToWorkpiece;
+    result.poseA = frame.poseA;
+    result.poseB = frame.poseB;
+    result.poseC = frame.poseC;
+    result.valid = frame.valid;
+    return result;
+}
+
+QVector<pcv::render::Contour> toRenderContours(
+    const QVector<pointcloud::PlaneContour> &contours) {
+    QVector<pcv::render::Contour> result;
+    result.reserve(contours.size());
+    for (const pointcloud::PlaneContour &contour : contours) {
+        pcv::render::Contour renderContour;
+        renderContour.hole = contour.hole;
+        renderContour.points.reserve(contour.points.size());
+        for (const pointcloud::Point3D &point : contour.points)
+            renderContour.points.push_back(QVector3D(point.x, point.y, point.z));
+        result.push_back(std::move(renderContour));
+    }
+    return result;
+}
+} // namespace
+
 class PointCloudCanvas final : public QOpenGLWidget,
                                protected QOpenGLFunctions_3_3_Core {
 public:
@@ -168,7 +201,7 @@ public:
     }
 
     void setPlaneResult(const QVector<int> &planeIndices, const QVector<int> &edgeIndices,
-                        const QVector<pointcloud::PlaneContour> &contours) {
+                        const QVector<pcv::render::Contour> &contours) {
         if (QThread::currentThread() != thread()) return;
         m_planeResultIndices = planeIndices;
         m_edgeResultIndices = edgeIndices;
@@ -179,10 +212,11 @@ public:
             if (index >= 0 && index < m_pointStates.size()) m_pointStates[index] = EdgePoint;
         m_contourVertices.clear();
         m_contourRanges.clear();
-        for (const pointcloud::PlaneContour &contour : contours) {
+        for (const pcv::render::Contour &contour : contours) {
             if (contour.points.size() < 2) continue;
             const int start = m_contourVertices.size();
-            m_contourVertices += contour.points;
+            for (const QVector3D &point : contour.points)
+                m_contourVertices.push_back({point.x(), point.y(), point.z()});
             m_contourRanges.push_back({start, int(contour.points.size())});
         }
         m_stateUploadPending = true;
@@ -207,7 +241,7 @@ public:
         update();
     }
 
-    void setWorkpieceCoordinateSystem(const pointcloud::WorkpieceCoordinateSystem &frame) {
+    void setWorkpieceCoordinateSystem(const pcv::render::CoordinateFrame &frame) {
         if (QThread::currentThread() != thread()) return;
         m_workpieceCoordinate = frame;
         update();
@@ -969,7 +1003,7 @@ private:
 
     QVector<pointcloud::Point3D> m_points;
     int m_coordinatePointIndex = -1;
-    pointcloud::WorkpieceCoordinateSystem m_workpieceCoordinate;
+    pcv::render::CoordinateFrame m_workpieceCoordinate;
     QVector<quint8> m_pointStates;
     QVector<int> m_selectedIndices;
     QVector<int> m_edgeIndices;
@@ -2426,7 +2460,7 @@ void MainWindow::confirmPlaneCandidate() {
     m_threePointSelectionActive = false;
     m_secondPlaneSelectionActive = false;
     m_canvas->setSelectionMode(false);
-    m_canvas->setWorkpieceCoordinateSystem(m_workpieceCoordinate);
+    m_canvas->setWorkpieceCoordinateSystem(toRenderCoordinateFrame(m_workpieceCoordinate));
     QVector<int> marked = m_selectedPointIndices;
     marked += m_secondPlanePointIndices;
     if (m_xAxisPointIndex >= 0 && !marked.contains(m_xAxisPointIndex))
@@ -2603,7 +2637,7 @@ void MainWindow::planeEdgeSegmentationFinished() {
     }
     m_planeEdgeResult = result;
     m_canvas->setPlaneResult(m_threePlaneResult.planeIndices,
-                             result.edgeIndices, result.contours);
+                             result.edgeIndices, toRenderContours(result.contours));
     const int holeCount = int(std::count_if(
         result.contours.cbegin(), result.contours.cend(),
         [](const pointcloud::PlaneContour &contour) { return contour.hole; }));
