@@ -1,4 +1,6 @@
 #include "pointcloudprocessor.h"
+
+#include <pcv/planefitting/plane_fitting.h>
 #include <pcv/io/cloud_cache.h>
 #include <pcv/filtering/downsample.h>
 #include <pcv/filtering/statistical_filter.h>
@@ -2858,7 +2860,7 @@ WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inpu
     return mergePlyCloudsInWorldImpl(inputs, icp);
 }
 
-ThreePointPlaneResult extractPlaneFromPoints(const QVector<Point3D> &points,
+static ThreePointPlaneResult extractPlaneFromPointsLegacy(const QVector<Point3D> &points,
                                              const QVector<int> &seedIndices,
                                              const ThreePointPlaneOptions &options) {
     ThreePointPlaneResult result;
@@ -3281,6 +3283,33 @@ ThreePointPlaneResult extractPlaneFromPoints(const QVector<Point3D> &points,
     result.model = {finalNormal.x(), finalNormal.y(), finalNormal.z(), finalD,
                     int(result.planeIndices.size()), result.rmsError, surfaceTolerance};
     result.ok = true;
+    return result;
+}
+
+ThreePointPlaneResult extractPlaneFromPoints(const QVector<Point3D> &points,
+                                             const QVector<int> &seedIndices,
+                                             const ThreePointPlaneOptions &options) {
+    pcv::planefitting::Options moduleOptions;
+    moduleOptions.initialTolerance = options.initialTolerance;
+    moduleOptions.surfaceTolerance = options.surfaceTolerance;
+    moduleOptions.minInliers = options.minInliers;
+    moduleOptions.useZAxisResidual = options.useZAxisResidual;
+    moduleOptions.maxNormalTiltDegrees = options.maxNormalTiltDegrees;
+    moduleOptions.deferFinalClassification = options.deferFinalClassification;
+    const auto moduleResult = pcv::planefitting::fit(points, seedIndices, moduleOptions);
+    ThreePointPlaneResult result;
+    result.candidateIndices = moduleResult.candidateIndices;
+    result.planeIndices = moduleResult.planeIndices;
+    result.controlPoints = moduleResult.controlPoints;
+    result.planePoints = moduleResult.planePoints;
+    result.rmsError = moduleResult.rmsError;
+    result.usedThreshold = moduleResult.usedThreshold;
+    result.deferred = moduleResult.deferred;
+    result.error = moduleResult.error;
+    result.ok = moduleResult.ok;
+    result.model = {moduleResult.model.a, moduleResult.model.b, moduleResult.model.c,
+                    moduleResult.model.d, moduleResult.model.inlierCount,
+                    moduleResult.model.meanDistance, moduleResult.model.maxDistance};
     return result;
 }
 

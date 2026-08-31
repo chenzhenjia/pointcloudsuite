@@ -73,6 +73,11 @@ target_link_libraries(multiframe_registration_tests PRIVATE Qt::Core Qt::Gui pcv
 add_test(NAME multiframe_registration_tests COMMAND multiframe_registration_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS multiframe_registration_tests)
 
+add_executable(plane_fitting_tests unit/planefitting/plane_fitting_tests.cpp)
+target_link_libraries(plane_fitting_tests PRIVATE Qt::Core Qt::Gui pcv_m60_planefitting)
+add_test(NAME plane_fitting_tests COMMAND plane_fitting_tests)
+list(APPEND PCV_APPLICATION_TEST_TARGETS plane_fitting_tests)
+
 if(WIN32 AND TARGET Qt6::Core AND PCV_APPLICATION_TEST_TARGETS)
     set(PCV_TEST_PATH "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}")
     set_tests_properties(${PCV_APPLICATION_TEST_TARGETS}

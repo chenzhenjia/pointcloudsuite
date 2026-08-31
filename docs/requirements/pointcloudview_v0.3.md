@@ -81,3 +81,9 @@ v0.3 将当前 PointCloudSuite 统一为企业级模块化项目。源码、CMak
 - 共享实现支持真实投影重叠检查、接缝方向校验、融合带处理、候选最近邻插值及失败保护；新增真实重叠回归用例。
 - 当前仍保留应用级 `mergePlyCloudsInWorld()`/`registerPair()`，因此 M5.1 的“单一配准流水线”尚未完成；`60_planefitting` 与 `20_pointcloudrender` 尚未开始抽取。
 - 使用可写外部构建目录完成 `pointcloudview`、`pointcloudstitch` Debug 构建和 CTest `12/12`。
+
+### 2026-08-31（M5.2 首轮）
+
+- 新增 `pcv_m60_planefitting` 静态库和 `pcv::planefitting::fit` 基础 API，覆盖控制点校验、初始平面、容差分类和结果诊断。
+- `pointcloudview` 的 `extractPlaneFromPoints` 已改为兼容包装；完整 RANSAC/PCA 细化、连通域和 ROI 映射仍保留在 processor，待后续迁移。
+- 新增独立 `plane_fitting_tests`，应用级几何回归继续保留用于兼容性验证。
