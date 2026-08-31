@@ -130,3 +130,9 @@ v0.3 将当前 PointCloudSuite 统一为企业级模块化项目。源码、CMak
 - `apps/pointcloudview/pointcloudprocessor.cpp` 的 `extractPlaneFromPoints` 仅执行 `ThreePointPlaneOptions -> pcv::planefitting::Options` 和结果字段映射；二维图像映射、ROI/Mask 和 UI 状态仍保留在应用侧。
 - 验证：Debug 构建 `pointcloudview`、`pointcloudstitch` 和 `plane_fitting_tests` 成功；完整 Debug CTest `14/14` 通过。
 - 风险：旧 `extractPlaneFromPointsLegacy` 函数仍在处理器源文件中保留，尚未删除；删除需单独提交并重新验证直接编译该处理器的工具和测试。
+
+### 2026-08-31（M5.1 拼接配准流水线收敛）
+
+- `apps/pointcloudstitch/pointcloudprocessor.cpp` 仍负责读取 PLY、手眼转换和来源索引生成；转换后的 `RobotBaseFrame` 统一交给 `registerRobotBaseFrames()` 执行 ICP、重叠诊断和结果拼装。
+- 应用层旧 `registerPair()` 及后续拼接代码保留在兼容源中但不再执行，待工具和回归夹具完成迁移后单独删除。
+- Debug 构建和完整 CTest `14/14` 通过；未执行真实 GUI/生产夹具验收。

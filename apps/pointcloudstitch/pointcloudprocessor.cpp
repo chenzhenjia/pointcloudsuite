@@ -1065,6 +1065,31 @@ WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inpu
         result.sourceFiles.push_back(inputs[index].filePath);
         clouds.push_back(std::move(converted));
     }
+
+    // Registration and overlap handling are owned by module 40.  Keep the
+    // conversion stage here because it reads application scan contracts;
+    // hand the resulting robot-base frames to the shared pipeline so GUI and
+    // interface callers cannot drift into a second ICP implementation.
+    QVector<pointcloud::RobotBaseFrame> moduleFrames;
+    moduleFrames.reserve(clouds.size());
+    for (int index = 0; index < clouds.size(); ++index) {
+        pointcloud::RobotBaseFrame frame;
+        frame.sourceFile = inputs[index].filePath;
+        frame.fullPoints = std::move(clouds[index].full);
+        frame.samplePoints = std::move(clouds[index].sample);
+        frame.sourceIndices = std::move(clouds[index].sourceIndices);
+        frame.scanRatios = std::move(clouds[index].scanRatios);
+        frame.startBaseFromFlange = inputs[index].startBaseFromFlange;
+        frame.endBaseFromFlange = inputs[index].endBaseFromFlange;
+        frame.declaredCount = clouds[index].declaredCount;
+        frame.rejectedInvalid = clouds[index].rejectedBasic;
+        frame.rejectedRange = clouds[index].rejectedRange;
+        frame.inputYMinimum = clouds[index].inputYMinimum;
+        frame.inputYMaximum = clouds[index].inputYMaximum;
+        moduleFrames.push_back(std::move(frame));
+    }
+    return pointcloud::registerRobotBaseFrames(std::move(moduleFrames), icp, progress);
+
     result.registrationCorrections.resize(inputs.size());
     result.planeIdentityTrackingValid=trackPlaneIdentity(clouds,icp,&result.trackedPlaneHeights,
         &result.planeIdentityConsensusHeight,&result.planeIdentityDiagnostics);
