@@ -25,6 +25,11 @@ int main(int argc, char **argv)
                  "plane fitting must reject fewer than three controls")) return 1;
     if (!require(!pcv::planefitting::fit(points, {0, 1, 1}, options).ok,
                  "plane fitting must reject duplicate controls")) return 1;
+    const auto center = pcv::planefitting::calculateBoundsCenter(points, {0, 3, 12});
+    if (!require(center.ok && center.center == QVector3D(1.5f, 1.5f, 0.005f),
+                 "bounds center should be calculated from finite indexed points")) return 1;
+    if (!require(!pcv::planefitting::calculateBoundsCenter(points, {99}).ok,
+                 "bounds center must reject out-of-range indices")) return 1;
     std::cout << "plane_fitting_tests: PASS\n";
     return 0;
 }

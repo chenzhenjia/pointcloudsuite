@@ -4,6 +4,7 @@
 
 #include <QString>
 #include <QVector>
+#include <QVector3D>
 
 namespace pcv::planefitting {
 
@@ -49,6 +50,12 @@ struct ConsistencyResult {
     bool passed = false;
 };
 
+struct BoundsCenterResult {
+    QVector3D center;
+    QString error;
+    bool ok = false;
+};
+
 Result fit(const QVector<pointcloud::Point3D> &points,
            const QVector<int> &seedIndices,
            const Options &options = {});
@@ -60,5 +67,9 @@ ConsistencyResult validateConsistency(
     const QVector<int> &verificationIndices,
     float angleToleranceDegrees = 1.0f,
     float distanceToleranceMm = 0.4f);
+
+BoundsCenterResult calculateBoundsCenter(
+    const QVector<pointcloud::Point3D> &points,
+    const QVector<int> &indices);
 
 } // namespace pcv::planefitting

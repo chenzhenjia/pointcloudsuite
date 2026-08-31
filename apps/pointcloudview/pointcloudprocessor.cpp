@@ -4011,7 +4011,7 @@ PlaneConsistencyResult validatePlaneConsistency(
     return result;
 }
 
-PlaneBoundsCenterResult calculatePlaneBoundsCenter(
+static PlaneBoundsCenterResult calculatePlaneBoundsCenterLegacy(
     const QVector<Point3D> &points, const QVector<int> &planeIndices) {
     PlaneBoundsCenterResult result;
     if (planeIndices.isEmpty()) {
@@ -4041,6 +4041,16 @@ PlaneBoundsCenterResult calculatePlaneBoundsCenter(
     }
     result.center = (minimum + maximum) * 0.5f;
     result.ok = true;
+    return result;
+}
+
+PlaneBoundsCenterResult calculatePlaneBoundsCenter(
+    const QVector<Point3D> &points, const QVector<int> &planeIndices) {
+    const auto moduleResult = pcv::planefitting::calculateBoundsCenter(points, planeIndices);
+    PlaneBoundsCenterResult result;
+    result.center = moduleResult.center;
+    result.error = moduleResult.error;
+    result.ok = moduleResult.ok;
     return result;
 }
 

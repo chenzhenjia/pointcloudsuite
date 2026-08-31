@@ -126,4 +126,18 @@ ConsistencyResult validateConsistency(const QVector<pointcloud::Point3D> &points
     result.status = ConsistencyStatus::Passed; result.passed = true; return result;
 }
 
+BoundsCenterResult calculateBoundsCenter(const QVector<pointcloud::Point3D> &points,
+                                         const QVector<int> &indices)
+{
+    BoundsCenterResult result;
+    if (indices.isEmpty()) { result.error = QStringLiteral("最终平面点为空"); return result; }
+    QVector3D minimum(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
+    QVector3D maximum(std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest());
+    for (int index : indices) {
+        if (index < 0 || index >= points.size() || !std::isfinite(points[index].x) || !std::isfinite(points[index].y) || !std::isfinite(points[index].z)) { result.error = QStringLiteral("最终平面索引越界或包含无效点"); return result; }
+        const auto &p = points[index]; minimum.setX(qMin(minimum.x(), p.x)); minimum.setY(qMin(minimum.y(), p.y)); minimum.setZ(qMin(minimum.z(), p.z)); maximum.setX(qMax(maximum.x(), p.x)); maximum.setY(qMax(maximum.y(), p.y)); maximum.setZ(qMax(maximum.z(), p.z));
+    }
+    result.center = (minimum + maximum) * 0.5f; result.ok = true; return result;
+}
+
 } // namespace pcv::planefitting
