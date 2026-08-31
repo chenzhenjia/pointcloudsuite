@@ -67,13 +67,20 @@ int main(int argc, char **argv)
                  "missing calibration must be rejected")) return 1;
     if (!require(isUnchanged(outputPly, oldOutput), "missing calibration replaced formal output")) return 1;
 
-    auto disabledSeam = validShape(temporary.path());
-    disabledSeam.seamEnabled = true;
-    const auto disabledSeamResult = pcv::interface::stitchRawLineProfiles(disabledSeam);
-    if (!require(!disabledSeamResult.success && !disabledSeamResult.cancelled
-                 && disabledSeamResult.errorCode == QStringLiteral("PCV_STITCH_001"),
-                 "temporarily disabled seam must be rejected")) return 1;
-    if (!require(isUnchanged(outputPly, oldOutput), "disabled seam replaced formal output")) return 1;
+    auto seamWithInvalidInput = validShape(temporary.path());
+    seamWithInvalidInput.seamEnabled = true;
+    if (!require(writeFile(QDir(temporary.path()).filePath(QStringLiteral("first.ply")),
+                           QByteArray("not a ply")),
+                 "invalid PLY creation failed")) return 1;
+    if (!require(writeFile(QDir(temporary.path()).filePath(QStringLiteral("second.ply")),
+                           QByteArray("not a ply")),
+                 "invalid PLY creation failed")) return 1;
+    const auto seamWithInvalidInputResult =
+        pcv::interface::stitchRawLineProfiles(seamWithInvalidInput);
+    if (!require(!seamWithInvalidInputResult.success && !seamWithInvalidInputResult.cancelled
+                 && seamWithInvalidInputResult.errorCode == QStringLiteral("PCV_INPUT_002"),
+                 "enabled seam must still reject invalid PLY input")) return 1;
+    if (!require(isUnchanged(outputPly, oldOutput), "seam input failure replaced formal output")) return 1;
 
     auto cancelled = validShape(temporary.path());
     cancelled.isCancelled = [] { return true; };
@@ -82,10 +89,6 @@ int main(int argc, char **argv)
                  "cancelled operation must return cancelled")) return 1;
     if (!require(isUnchanged(outputPly, oldOutput), "cancelled operation replaced formal output")) return 1;
 
-    if (!require(writeFile(QDir(temporary.path()).filePath(QStringLiteral("first.ply")), QByteArray("not a ply")),
-                 "invalid PLY creation failed")) return 1;
-    if (!require(writeFile(QDir(temporary.path()).filePath(QStringLiteral("second.ply")), QByteArray("not a ply")),
-                 "invalid PLY creation failed")) return 1;
     const auto invalidInput = pcv::interface::stitchRawLineProfiles(validShape(temporary.path()));
     if (!require(!invalidInput.success && !invalidInput.cancelled
                  && invalidInput.errorCode == QStringLiteral("PCV_INPUT_002"),

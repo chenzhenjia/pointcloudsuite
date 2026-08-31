@@ -2,6 +2,12 @@
 
 状态：部分实现。当前实现位于 `apps/pointcloudstitch`，负责多帧流程编排、结果管理和接缝融合调用；配准算法归属 `40_pointcloudregistration`。
 
+### 2026-08-31（M5.1 seam pipeline）
+
+- 移除 `seamEnabled` 的“暂时禁用”入口占位判断，使 `stitchRawLineProfiles` 可以调用共享 seam fusion。
+- 无真实投影重叠时允许 fail-closed 保留完整点云并返回诊断；真实重叠但无可用互相对应点时仍返回 `PCV_STITCH_001`，禁止生成正式输出。
+- 验证：接口错误安全测试覆盖启用 seam 时的非法 PLY 输入和正式输出不被替换。
+
 接口/测试：`stitching_interface`、`applyTrajectorySeamFusion`；`stitching_interface_tests`、`seam_fusion_tests`。
 
 ## 变更记录

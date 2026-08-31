@@ -78,8 +78,6 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         return failure(QStringLiteral("PCV_CONTRACT_001"), QStringLiteral("配准至少需要两个 PLY 文件"));
     if (options.sampleStride < 1 || options.sampleStride > 100)
         return failure(QStringLiteral("PCV_CONTRACT_001"), QStringLiteral("配准抽样步长必须在 1 到 100 之间"));
-    if (options.seamEnabled)
-        return failure(QStringLiteral("PCV_STITCH_001"), QStringLiteral("当前版本暂时禁用渐变接缝融合"));
     if (options.calibrationPath.trimmed().isEmpty() || !QFileInfo::exists(options.calibrationPath))
         return failure(QStringLiteral("PCV_INPUT_001"), QStringLiteral("手眼标定 XML 不存在"));
     if (options.outputDirectory.trimmed().isEmpty())
@@ -204,7 +202,11 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
             return result;
         }
         for (const pointcloud::SeamFusionDiagnostic &diagnostic : seam.diagnostics) {
-            if (!diagnostic.applied) {
+            // A pair with no real projected overlap is intentionally
+            // fail-closed: keep its points and report the diagnostic. A
+            // detected overlap that cannot produce a mutual blend remains a
+            // hard stitching failure.
+            if (!diagnostic.applied && diagnostic.actualOverlapValid) {
                 result.errorCode = QStringLiteral("PCV_STITCH_001");
                 result.message = QStringLiteral("接缝 %1-%2 未通过：%3")
                     .arg(diagnostic.cloudA + 1).arg(diagnostic.cloudB + 1).arg(diagnostic.reason);
