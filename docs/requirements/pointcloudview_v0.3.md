@@ -111,6 +111,7 @@ v0.3 将当前 PointCloudSuite 统一为企业级模块化项目。源码、CMak
 
 - `PointCloudCanvas` 已移入 `modules/20_pointcloudrender`，应用源文件不再包含画布类实现；模块依赖方向保持为 `apps -> pcv_m20_pointcloudrender`。
 - 本阶段未改变 OpenGL 绘制、点选、FBO 或异步发布行为；真实 GUI 交互和关闭烟测仍是发布前置条件。
+- 公共画布头迁移已完成 Debug/Release 双配置构建和 CTest 验证；GUI 真实交互验收仍未完成。
 
 ### 2026-08-31（M5.1 输入 DTO 下沉）
 
