@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pcv/core/point_types.h>
+#include <pcv/stitching/world_cloud_types.h>
 
 #include <QMatrix4x4>
 #include <QString>
@@ -12,12 +13,7 @@ namespace pointcloud {
 
 using ProgressCallback = std::function<void(float, const QString &)>;
 
-struct WorldCloudInput {
-    QString filePath;
-    QMatrix4x4 startBaseFromFlange;
-    QMatrix4x4 endBaseFromFlange;
-    QMatrix4x4 flangeFromDepth;
-};
+using WorldCloudInput = pcv::stitching::WorldCloudInput;
 
 struct FrameTransformMetadata {
     QString sourceFile;
