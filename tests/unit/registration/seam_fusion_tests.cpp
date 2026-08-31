@@ -80,11 +80,19 @@ int main(int argc, char **argv)
         valid.sourceIndices.push_back(i);
         valid.scanRatios.push_back(0.5f);
     }
+    // This point lies in the projected seam band but has no mutual neighbour;
+    // it must survive the fusion pass as an unmatched source point.
+    valid.points.push_back({7.0f, 2.0f, 100.0f});
+    valid.cloudIds.push_back(0);
+    valid.sourceIndices.push_back(700);
+    valid.scanRatios.push_back(0.5f);
     const auto fused = pointcloud::applyTrajectorySeamFusion(&valid, enabled);
     if (!require(fused.ok && fused.outputPoints > 0 && !fused.diagnostics.isEmpty()
                  && fused.diagnostics.first().actualOverlapValid
                  && fused.diagnostics.first().applied,
                  "valid overlapping frames must produce seam diagnostics and fused points")) return 1;
+    if (!require(fused.diagnostics.first().unmatchedPreserved > 0,
+                 "unmatched seam points must be preserved")) return 1;
 
     pointcloud::SeamFusionOptions cancelledOptions = enabled;
     cancelledOptions.isCancelled = [] { return true; };
