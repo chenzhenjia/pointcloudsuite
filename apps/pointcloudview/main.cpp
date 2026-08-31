@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include <pcv/infrastructure/application_config.h>
 #include <pcv/infrastructure/runtime_paths.h>
 
 #include <QApplication>
@@ -51,17 +52,24 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationName(QStringLiteral("PointCloudSuite"));
     QCoreApplication::setApplicationName(QStringLiteral("pointcloudview"));
     QApplication a(argc, argv);
+    const pcv::config::ApplicationConfig config =
+        pcv::config::loadApplicationConfig(a.arguments(), QCoreApplication::applicationDirPath());
+    pcv::runtime::configureDataDirectory(config.dataDirectory);
     // Install diagnostics only after the event loop is ready.  Qt may emit
     // startup/destruction messages while QApplication is still wiring its
     // internal event dispatchers; replacing that handler at that point can
     // trigger a Qt QObject sender assertion in debug builds.
     qInstallMessageHandler(startupMessageHandler);
+    qInfo() << "configuration:" << config.configFilePath
+            << "data directory:" << pcv::runtime::dataDirectory();
+    for (const QString &warning : config.warnings)
+        qWarning() << "configuration warning:" << warning;
     qInfo() << "startup: QApplication created";
     // Keep the window as an automatic object. It is constructed after
     // QApplication and is destroyed before QApplication tears down the
     // platform/OpenGL integration. Deleting a QOpenGLWidget from an
     // aboutToQuit callback can race native surface destruction on Windows.
-    MainWindow w;
+    MainWindow w(config.pointcloudview);
     qInfo() << "startup: MainWindow constructed";
     w.show();
     qInfo() << "startup: MainWindow shown";

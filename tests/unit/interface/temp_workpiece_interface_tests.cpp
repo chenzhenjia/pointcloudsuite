@@ -1,4 +1,5 @@
 #include <pcv/interface/temp_workpiece_interface.h>
+#include <pcv/io/ply_reader.h>
 
 #include <QBuffer>
 #include <QCoreApplication>
@@ -27,6 +28,21 @@ QByteArray readFile(const QString &path)
 {
     QFile file(path);
     return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+}
+
+void assertPureXyzPly(const QString &path, qsizetype pointCount)
+{
+    const QByteArray bytes = readFile(path);
+    const QByteArray marker = QByteArrayLiteral("end_header\n");
+    const int headerEnd = bytes.indexOf(marker);
+    assert(headerEnd >= 0);
+    const QByteArray header = bytes.left(headerEnd + marker.size());
+    assert(header.contains(QByteArrayLiteral("property float x\nproperty float y\nproperty float z\n")));
+    assert(!header.contains(QByteArrayLiteral("property float nx")));
+    assert(!header.contains(QByteArrayLiteral("property float ny")));
+    assert(!header.contains(QByteArrayLiteral("property float nz")));
+    assert(!header.contains(QByteArrayLiteral("source_index")));
+    assert(bytes.size() - (headerEnd + marker.size()) == pointCount * 3 * qsizetype(sizeof(float)));
 }
 
 bool writePly(const QString &path)
@@ -260,6 +276,15 @@ int main(int argc, char **argv)
     assert(QFileInfo::exists(generated.roiTemplateRobotBasePly));
     assert(QFileInfo::exists(generated.planeMaskPng));
     assert(QFileInfo::exists(generated.tempWorkpieceInfoPath));
+    assertPureXyzPly(generated.baselineRobotBasePly, prepared.robotBasePoints.size());
+    assertPureXyzPly(generated.roiTemplateRobotBasePly, finalize.roiIndices.size());
+    const auto baselineRead = pcv::detail::io::readPly(generated.baselineRobotBasePly);
+    const auto roiRead = pcv::detail::io::readPly(generated.roiTemplateRobotBasePly);
+    assert(baselineRead.ok && roiRead.ok);
+    assert(baselineRead.points.size() == prepared.robotBasePoints.size());
+    assert(roiRead.points.size() == finalize.roiIndices.size());
+    assert(std::abs(baselineRead.points.front().x - prepared.robotBasePoints.front().x) < 1.0e-5f);
+    assert(std::abs(roiRead.points.front().x - prepared.robotBasePoints[finalize.roiIndices.front()].x) < 1.0e-5f);
     const QImage writtenMask(generated.planeMaskPng);
     assert(writtenMask.format() == QImage::Format_Grayscale8);
     assert(writtenMask.constScanLine(3)[3] == 255);

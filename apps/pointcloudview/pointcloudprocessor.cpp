@@ -2838,42 +2838,60 @@ WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inpu
     return mergePlyCloudsInWorldImpl(inputs, icp);
 }
 
-ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points,
-                                                  const QVector<int> &seedIndices,
-                                                  const ThreePointPlaneOptions &options) {
+ThreePointPlaneResult extractPlaneFromPoints(const QVector<Point3D> &points,
+                                             const QVector<int> &seedIndices,
+                                             const ThreePointPlaneOptions &options) {
     ThreePointPlaneResult result;
-    if (seedIndices.size() != 3 || points.size() < 3) {
-        result.error = QStringLiteral("需要三个有效采样点");
+    if (seedIndices.size() < 3 || points.size() < 3) {
+        result.error = QStringLiteral("至少需要三个有效采样点");
         return result;
     }
     const auto finitePoint = [](const Point3D &point) {
         return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
     };
-    for (int seed : seedIndices) {
+    QVector3D initialOrigin;
+    for (int i = 0; i < seedIndices.size(); ++i) {
+        const int seed = seedIndices[i];
         if (seed < 0 || seed >= points.size() || !finitePoint(points[seed])) {
             result.error = QStringLiteral("采样点索引无效");
             return result;
         }
+        if (seedIndices.indexOf(seed) != i) {
+            result.error = QStringLiteral("采样点不能重复");
+            return result;
+        }
         result.controlPoints.push_back(points[seed]);
+        initialOrigin += QVector3D(points[seed].x, points[seed].y, points[seed].z);
     }
+    initialOrigin /= float(seedIndices.size());
 
     const auto vectorFor = [&points](int index) {
         const Point3D &p = points[index];
         return QVector3D(p.x, p.y, p.z);
     };
-    const QVector3D p1 = vectorFor(seedIndices[0]);
-    const QVector3D p2 = vectorFor(seedIndices[1]);
-    const QVector3D p3 = vectorFor(seedIndices[2]);
-    const float longestEdge = std::max({(p2 - p1).length(), (p3 - p1).length(),
-                                        (p3 - p2).length()});
-    if (longestEdge <= 1.0e-7f) {
-        result.error = QStringLiteral("三个采样点距离过近");
+
+    double covariance[3][3] = {};
+    for (int seed : seedIndices) {
+        const QVector3D delta = vectorFor(seed) - initialOrigin;
+        const double values[3] = {delta.x(), delta.y(), delta.z()};
+        for (int row = 0; row < 3; ++row)
+            for (int column = 0; column < 3; ++column)
+                covariance[row][column] += values[row] * values[column];
+    }
+    double initialEigenvalues[3] = {};
+    double initialEigenvectors[3][3] = {};
+    symmetricEigen3(covariance, initialEigenvalues, initialEigenvectors);
+    const double largestVariance = qMax(initialEigenvalues[0], 1.0e-20);
+    if (!std::isfinite(initialEigenvalues[0]) || !std::isfinite(initialEigenvalues[1])
+        || initialEigenvalues[1] <= largestVariance * 1.0e-6) {
+        result.error = QStringLiteral("采样点近似共线或距离过近");
         return result;
     }
-    QVector3D initialNormal = QVector3D::crossProduct(p2 - p1, p3 - p1);
-    if (initialNormal.lengthSquared() <= longestEdge * longestEdge * longestEdge
-            * longestEdge * 1.0e-6f) {
-        result.error = QStringLiteral("三个采样点共线或距离过近");
+    QVector3D initialNormal{float(initialEigenvectors[0][2]),
+                            float(initialEigenvectors[1][2]),
+                            float(initialEigenvectors[2][2])};
+    if (initialNormal.lengthSquared() <= 1.0e-14f) {
+        result.error = QStringLiteral("采样点无法确定初始平面");
         return result;
     }
     initialNormal.normalize();
@@ -2885,7 +2903,7 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points
         result.error = QStringLiteral("所选平面过于陡峭，不符合 2.5D 高度面约束");
         return result;
     }
-    const float initialD = -QVector3D::dotProduct(initialNormal, p1);
+    const float initialD = -QVector3D::dotProduct(initialNormal, initialOrigin);
     const float initialTolerance = qMax(1.0e-6f, options.initialTolerance);
     const float surfaceTolerance = qMax(1.0e-6f, options.surfaceTolerance);
     const auto residual = [&options](const QVector3D &normal, float d,
@@ -2919,12 +2937,21 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points
     QVector<int> bestModelInliers;
     QVector3D bestNormal = initialNormal;
     float bestD = initialD;
-    // Treat the user-defined plane as the baseline model. Random RANSAC
-    // samples may replace it only when they explain more nearby points.
-    for (int index : modelCandidates) {
-        const Point3D &p = points[index];
-        if (residual(initialNormal, initialD, p) <= surfaceTolerance) {
-            bestModelInliers.push_back(index);
+    // Treat the user-defined plane as the baseline model only when every
+    // selected control point remains within the final fitting tolerance.
+    bool initialContainsControls = true;
+    for (int seed : seedIndices) {
+        if (residual(initialNormal, initialD, points[seed]) > surfaceTolerance) {
+            initialContainsControls = false;
+            break;
+        }
+    }
+    if (initialContainsControls) {
+        for (int index : modelCandidates) {
+            const Point3D &p = points[index];
+            if (residual(initialNormal, initialD, p) <= surfaceTolerance) {
+                bestModelInliers.push_back(index);
+            }
         }
     }
     std::mt19937 rng(options.randomSeed);
@@ -3037,6 +3064,12 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points
     if (!fitPcaPlane(refinedInliers, finalNormal)) {
         result.error = QStringLiteral("最终最小二乘/PCA 平面拟合失败");
         return result;
+    }
+    for (int seed : seedIndices) {
+        if (residual(finalNormal, finalD, points[seed]) > surfaceTolerance) {
+            result.error = QStringLiteral("最终拟合平面未包含全部控制点");
+            return result;
+        }
     }
     result.planarity = float(1.0 - finalEigenvalues[2]
         / qMax(finalEigenvalues[1], 1.0e-20));
@@ -3184,7 +3217,7 @@ ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points
             }
             if (selectedComponent < 0) selectedComponent = component[local];
             else if (selectedComponent != component[local]) {
-                result.error = QStringLiteral("三个采样点不在同一连通区域");
+                result.error = QStringLiteral("采样点不在同一连通区域");
                 return result;
             }
         }
@@ -3794,8 +3827,7 @@ PlanePlyExportResult exportPlanePly(const QString &fileName,
            << frame.poseC << "\n"
            << "element vertex " << valid.size() << "\n"
            << "property float x\nproperty float y\nproperty float z\n"
-           << "property float nx\nproperty float ny\nproperty float nz\n"
-           << "property uint source_index\nend_header\n";
+           << "end_header\n";
     header.flush();
     if (header.status() != QTextStream::Ok) {
         result.error = QStringLiteral("写入 PLY 头失败");
@@ -3806,8 +3838,7 @@ PlanePlyExportResult exportPlanePly(const QString &fileName,
     data.setFloatingPointPrecision(QDataStream::SinglePrecision);
     for (const int index : valid) {
         const Point3D &p = points[index];
-        data << p.x << p.y << p.z << p.nx << p.ny << p.nz
-             << quint32(index);
+        data << p.x << p.y << p.z;
     }
     if (data.status() != QDataStream::Ok || !file.commit()) {
         result.error = file.errorString().isEmpty()
@@ -3817,6 +3848,17 @@ PlanePlyExportResult exportPlanePly(const QString &fileName,
     result.exportedPointCount = valid.size();
     result.ok = true;
     return result;
+}
+
+ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D> &points,
+                                                  const QVector<int> &seedIndices,
+                                                  const ThreePointPlaneOptions &options) {
+    if (seedIndices.size() != 3) {
+        ThreePointPlaneResult result;
+        result.error = QStringLiteral("需要恰好三个有效采样点");
+        return result;
+    }
+    return extractPlaneFromPoints(points, seedIndices, options);
 }
 
 ThreePointPlaneResult selectPlaneFromThreeSeeds(const QVector<Point3D> &points,
@@ -3835,7 +3877,7 @@ PlaneConsistencyResult validatePlaneConsistency(
         result.error = error;
         return result;
     };
-    if (referenceIndices.size() != 3 || verificationIndices.size() != 3
+    if (referenceIndices.size() < 3 || verificationIndices.size() != 3
         || !std::isfinite(angleToleranceDegrees) || angleToleranceDegrees < 0.0f
         || !std::isfinite(distanceToleranceMm) || distanceToleranceMm < 0.0f) {
         return fail(PlaneConsistencyStatus::InvalidInput,
@@ -3848,18 +3890,27 @@ PlaneConsistencyResult validatePlaneConsistency(
         return std::isfinite(point.x) && std::isfinite(point.y)
             && std::isfinite(point.z);
     };
-    for (int i = 0; i < 3; ++i) {
-        if (!validIndex(referenceIndices[i]) || !validIndex(verificationIndices[i])
-            || !finitePoint(points[referenceIndices[i]])
-            || !finitePoint(points[verificationIndices[i]])) {
+    for (int i = 0; i < referenceIndices.size(); ++i) {
+        if (!validIndex(referenceIndices[i]) || !finitePoint(points[referenceIndices[i]])) {
             return fail(PlaneConsistencyStatus::InvalidInput,
                         QStringLiteral("平面校验点索引越界或包含无效点"));
         }
-        for (int j = i + 1; j < 3; ++j) {
-            if (referenceIndices[i] == referenceIndices[j]
-                || verificationIndices[i] == verificationIndices[j]) {
+        for (int j = i + 1; j < referenceIndices.size(); ++j) {
+            if (referenceIndices[i] == referenceIndices[j]) {
                 return fail(PlaneConsistencyStatus::ReusedPoint,
-                            QStringLiteral("每组三点必须使用不同的点"));
+                            QStringLiteral("第一组采样点必须使用不同的点"));
+            }
+        }
+    }
+    for (int i = 0; i < verificationIndices.size(); ++i) {
+        if (!validIndex(verificationIndices[i]) || !finitePoint(points[verificationIndices[i]])) {
+            return fail(PlaneConsistencyStatus::InvalidInput,
+                        QStringLiteral("平面校验点索引越界或包含无效点"));
+        }
+        for (int j = i + 1; j < verificationIndices.size(); ++j) {
+            if (verificationIndices[i] == verificationIndices[j]) {
+                return fail(PlaneConsistencyStatus::ReusedPoint,
+                            QStringLiteral("第二组三点必须使用不同的点"));
             }
         }
         if (referenceIndices.contains(verificationIndices[i])) {

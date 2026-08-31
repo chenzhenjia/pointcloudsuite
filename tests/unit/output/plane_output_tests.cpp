@@ -1,4 +1,5 @@
 #include <pcv/output/plane_output.h>
+#include <pcv/io/ply_reader.h>
 
 #include <QDir>
 #include <QCoreApplication>
@@ -12,6 +13,27 @@
 #include <cassert>
 #include <cmath>
 #include <iostream>
+
+namespace {
+
+void assertPureXyzPly(const QString &path, qsizetype pointCount)
+{
+    QFile file(path);
+    assert(file.open(QIODevice::ReadOnly));
+    const QByteArray bytes = file.readAll();
+    const QByteArray marker = QByteArrayLiteral("end_header\n");
+    const int headerEnd = bytes.indexOf(marker);
+    assert(headerEnd >= 0);
+    const QByteArray header = bytes.left(headerEnd + marker.size());
+    assert(header.contains(QByteArrayLiteral("property float x\nproperty float y\nproperty float z\n")));
+    assert(!header.contains(QByteArrayLiteral("property float nx")));
+    assert(!header.contains(QByteArrayLiteral("property float ny")));
+    assert(!header.contains(QByteArrayLiteral("property float nz")));
+    assert(!header.contains(QByteArrayLiteral("source_index")));
+    assert(bytes.size() - (headerEnd + marker.size()) == pointCount * 3 * qsizetype(sizeof(float)));
+}
+
+} // namespace
 
 int main(int argc, char **argv)
 {
@@ -90,6 +112,10 @@ int main(int argc, char **argv)
     const QByteArray header = ply.read(512);
     assert(header.contains("format binary_little_endian 1.0"));
     assert(header.contains("comment target_frame robot_base"));
+    assertPureXyzPly(QDir(root).filePath(result.planeRobotBasePly), 3);
+    const auto planeRead = pcv::detail::io::readPly(QDir(root).filePath(result.planeRobotBasePly));
+    assert(planeRead.ok && planeRead.points.size() == 3);
+    assert(std::abs(planeRead.points[1].x - points[1].x) < 1.0e-5f);
 
     auto singularMetadata = metadata;
     singularMetadata.TBaseWorkpiece.fill(0.0f);

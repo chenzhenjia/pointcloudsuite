@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <limits>
 
 namespace {
 
@@ -132,7 +133,8 @@ bool validatesPlaneConsistency()
 {
     QVector<pointcloud::Point3D> points{
         {0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
-        {0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}};
+        {0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
+        {2.0f, 2.0f, 0.0f}};
     const QVector<int> reference{0, 1, 2};
     const QVector<int> verification{3, 4, 5};
     const pointcloud::PlaneModel plane{0.0f, 0.0f, 2.0f, 0.0f};
@@ -141,6 +143,13 @@ bool validatesPlaneConsistency()
     };
     if (!expect(validate(verification).status == pointcloud::PlaneConsistencyStatus::Passed,
                 "coplanar points should pass consistency validation")) return false;
+    const QVector<int> multiReference{0, 1, 2, 6};
+    if (!expect(pointcloud::validatePlaneConsistency(points, plane, multiReference, verification).status
+                    == pointcloud::PlaneConsistencyStatus::Passed,
+                "n-point reference selection should validate three verification points")) return false;
+    if (!expect(pointcloud::validatePlaneConsistency(points, plane, multiReference, {3, 4, 6}).status
+                    == pointcloud::PlaneConsistencyStatus::ReusedPoint,
+                "verification points must not reuse any n-point reference point")) return false;
 
     const QVector<int> reversed{3, 5, 4};
     if (!expect(validate(reversed).status == pointcloud::PlaneConsistencyStatus::Passed,
@@ -182,6 +191,47 @@ bool validatesPlaneConsistency()
     return expect(pointcloud::validatePlaneConsistency({}, plane, reference, verification).status
                       == pointcloud::PlaneConsistencyStatus::InvalidInput,
                   "empty input should fail");
+}
+
+bool fitsPlaneFromMultipleControlPoints()
+{
+    QVector<pointcloud::Point3D> points;
+    for (int y = 0; y < 8; ++y) {
+        for (int x = 0; x < 8; ++x)
+            points.push_back({float(x), float(y), 0.01f * float((x + 2 * y) % 3 - 1)});
+    }
+    pointcloud::ThreePointPlaneOptions options;
+    options.initialTolerance = 1.0f;
+    options.surfaceTolerance = 0.1f;
+    options.minInliers = 3;
+    options.ransacIterations = 100;
+    const QVector<int> controls{0, 7, 56, 63, 27};
+    const auto result = pointcloud::extractPlaneFromPoints(points, controls, options);
+    if (!expect(result.ok, "n-point controls should fit a plane")) return false;
+    if (!expect(result.controlPoints.size() == controls.size()
+                    && result.model.c > 0.99f,
+                "n-point fit should retain every control point and orient normal toward +Z")) return false;
+    if (!expect(pointcloud::extractPlaneFromThreePoints(points, {0, 7, 56}, options).ok,
+                "three-point compatibility entry point should remain available")) return false;
+
+    const auto tooFew = pointcloud::extractPlaneFromPoints(points, {0, 1}, options);
+    const auto duplicate = pointcloud::extractPlaneFromPoints(points, {0, 1, 1}, options);
+    const auto outOfRange = pointcloud::extractPlaneFromPoints(points, {0, 1, 64}, options);
+    const auto collinear = pointcloud::extractPlaneFromPoints(points, {0, 1, 2}, options);
+    if (!expect(!tooFew.ok && !duplicate.ok && !outOfRange.ok && !collinear.ok,
+                "invalid and collinear n-point controls should be rejected")) return false;
+
+    QVector<pointcloud::Point3D> invalidPoints = points;
+    invalidPoints[2].x = std::numeric_limits<float>::quiet_NaN();
+    const auto nonFinite = pointcloud::extractPlaneFromPoints(invalidPoints, {0, 1, 2}, options);
+    if (!expect(!nonFinite.ok, "non-finite n-point controls should be rejected")) return false;
+
+    QVector<pointcloud::Point3D> incompatible = points;
+    incompatible[63].z = 2.0f;
+    const auto outsideTolerance = pointcloud::extractPlaneFromPoints(
+        incompatible, {0, 7, 56, 63}, options);
+    return expect(!outsideTolerance.ok,
+                  "n-point controls outside the final tolerance should reject the model");
 }
 
 bool calculatesBoundsAndBuildsWorkpieceCoordinate()
@@ -323,7 +373,8 @@ int main()
 {
     const bool ok = rasterizesCompleteEdgeMask() && extractsRealPointOccupancy()
         && extractsAutomaticRectangularRoi()
-        && validatesPlaneConsistency() && calculatesBoundsAndBuildsWorkpieceCoordinate()
+        && validatesPlaneConsistency() && fitsPlaneFromMultipleControlPoints()
+        && calculatesBoundsAndBuildsWorkpieceCoordinate()
         && buildsRobotAxisWorkpieceCoordinate()
         && selectsAutomaticWorkpieceAxisPoints()
         && segmentsEdgesInWorkpieceFrame();

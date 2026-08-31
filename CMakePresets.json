@@ -3,23 +3,19 @@
   "configurePresets": [
     {
       "name": "windows-msvc-release",
-      "displayName": "Windows MSVC / Qt 6 Release (ASCII paths)",
-      "generator": "NMake Makefiles",
-      "binaryDir": "C:/qt-build-pointcloudsuite-release",
+      "displayName": "Windows Qt 6 Release",
+      "binaryDir": "${sourceDir}/../build-${presetName}",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_PREFIX_PATH": "C:/Qt/6.8.3/msvc2022_64",
         "PCV_BUILD_TESTS": "OFF"
       }
     },
     {
       "name": "windows-msvc-debug",
-      "displayName": "Windows MSVC / Qt 6 Debug with tests",
-      "generator": "NMake Makefiles",
-      "binaryDir": "C:/qt-build-pointcloudsuite-debug",
+      "displayName": "Windows Qt 6 Debug with tests",
+      "binaryDir": "${sourceDir}/../build-${presetName}",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_PREFIX_PATH": "C:/Qt/6.8.3/msvc2022_64",
         "PCV_BUILD_TESTS": "ON",
         "PCV_BUILD_TOOLS": "ON"
       }

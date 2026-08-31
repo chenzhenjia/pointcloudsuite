@@ -1,9 +1,12 @@
 #include <pcv/infrastructure/runtime_paths.h>
+#include <pcv/infrastructure/application_config.h>
 
 #include <QDir>
 #include <QStandardPaths>
 
 namespace {
+QString configuredDataDirectory;
+
 QString ensureDirectory(const QString &path) {
     if (!path.isEmpty())
         QDir().mkpath(path);
@@ -13,9 +16,18 @@ QString ensureDirectory(const QString &path) {
 
 namespace pcv::runtime {
 
+void configureDataDirectory(const QString &path) {
+    configuredDataDirectory = path.trimmed().isEmpty()
+        ? QString() : QDir::cleanPath(QDir::fromNativeSeparators(path));
+}
+
+QString dataDirectory() {
+    return configuredDataDirectory.isEmpty()
+        ? pcv::config::defaultDataDirectory() : configuredDataDirectory;
+}
+
 QString applicationDataDirectory() {
-    return ensureDirectory(
-        QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation));
+    return ensureDirectory(dataDirectory());
 }
 
 QString cacheDirectory() {

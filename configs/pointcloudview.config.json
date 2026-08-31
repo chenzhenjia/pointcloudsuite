@@ -1,0 +1,33 @@
+{
+    "schema_version": "pointcloudsuite-config-v1",
+    "data_directory": "D:/Scraping_Robot_Project",
+    "pointcloudview": {
+        "render": {
+            "point_size": 1,
+            "color_mode": 0,
+            "overlay": 1.0
+        },
+        "noise": {
+            "voxel_enabled": true,
+            "voxel_size_mm": 0.25,
+            "statistical_enabled": true,
+            "mean_k": 45,
+            "stddev_multiplier": 1.3
+        },
+        "edge": {
+            "grid_size_mm": 0.2,
+            "close_radius": 1,
+            "open_radius": 1
+        },
+        "plane_validation": {
+            "angle_tolerance_deg": 1.0,
+            "distance_tolerance_mm": 0.4
+        },
+        "plane_image": {
+            "pixel_size_mm": 0.05,
+            "margin_mm": 50.0,
+            "round_increment_mm": 10.0,
+            "maximum_image_pixels": 100000000
+        }
+    }
+}

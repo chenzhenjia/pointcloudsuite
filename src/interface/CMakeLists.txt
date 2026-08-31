@@ -1,6 +1,8 @@
 add_library(pcv_interface STATIC
     temp_workpiece_interface.cpp
+    stitching_interface.cpp
     ${PROJECT_SOURCE_DIR}/include/pcv/interface/temp_workpiece_interface.h
+    ${PROJECT_SOURCE_DIR}/include/pcv/interface/stitching_interface.h
 )
 target_include_directories(pcv_interface PUBLIC
     ${PROJECT_SOURCE_DIR}/include)

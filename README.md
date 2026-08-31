@@ -37,7 +37,7 @@ PointCloudSuite/
 
 - Windows 10/11
 - CMake 3.19 或更高版本
-- 支持 C++17 的 MSVC
+- 支持 C++17 的 MSVC x64
 - Qt 6.5 或更高版本，所需组件为 Core、Gui、Widgets、Concurrent、
   OpenGL 和 OpenGLWidgets
 
@@ -61,8 +61,9 @@ PointCloudSuite/
 .\scripts\run_tests.ps1
 ```
 
-也可以使用根目录的 `CMakePresets.json`。构建输出应放在源码目录之外，
-运行产生的缓存、日志和导出文件位于操作系统应用数据目录。
+也可以使用根目录的 `CMakePresets.json`。预设不保存本机 Qt、编译器或构建目录；
+Qt Creator 使用当前 Kit 提供 Qt 路径，命令行环境通过 `CMAKE_PREFIX_PATH`、`Qt6_DIR`
+或 `-QtDir` 提供 Qt 路径。构建输出默认放在源码目录同级。
 
 Debug 预设会启用测试和诊断工具：
 
@@ -86,6 +87,16 @@ ctest --preset test-debug --output-on-failure
 
 v0.2 仅删除未编译的历史代码和零引用符号，保持 v0.1 的活动功能、错误码和输出契约不变。
 构建工具若位于工作区外并被执行环境拦截，请在 Windows Developer PowerShell 或具备授权的本机环境执行构建。
+
+## 运行配置
+
+`pointcloudview` 使用外部标准 JSON 配置业务数据目录与界面默认参数。默认数据目录为
+`D:/Scraping_Robot_Project`，可通过 `--config <absolute path>`、环境变量
+`PCV_CONFIG_FILE`、程序旁 `config/pointcloudview.json` 或 Qt 用户配置目录中的配置文件修改。
+完整模板和字段说明见 [configs/README.md](configs/README.md)。首次启动会生成用户配置模板，
+字段错误只回退该字段的内置默认值并写入启动日志。
+
+完整依赖与 Qt Creator 配置说明见 [DEPENDENCIES.md](DEPENDENCIES.md)。
 
 ## 2026-08-24 实现同步
 

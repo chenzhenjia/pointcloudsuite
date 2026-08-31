@@ -76,8 +76,7 @@ bool writePly(const QString &path, const QVector<pointcloud::Point3D> &points,
            << "comment source_ply_encoding " << metadata.sourcePlyEncoding << "\n"
            << "element vertex " << valid.size() << "\n"
            << "property float x\nproperty float y\nproperty float z\n"
-           << "property float nx\nproperty float ny\nproperty float nz\n"
-           << "property uint source_index\nend_header\n";
+           << "end_header\n";
     header.flush();
     if (header.status() != QTextStream::Ok) {
         if (error) *error = QStringLiteral("写入 PLY Header 失败");
@@ -88,8 +87,7 @@ bool writePly(const QString &path, const QVector<pointcloud::Point3D> &points,
     data.setFloatingPointPrecision(QDataStream::SinglePrecision);
     for (int index : valid) {
         const auto &point = points[index];
-        data << point.x << point.y << point.z << point.nx << point.ny << point.nz
-             << quint32(index);
+        data << point.x << point.y << point.z;
     }
     if (data.status() != QDataStream::Ok || !file.commit()) {
         if (error) *error = file.errorString().isEmpty()

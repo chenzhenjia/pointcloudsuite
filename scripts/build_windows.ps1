@@ -1,6 +1,7 @@
 param(
-    [string]$QtDir = "C:\Qt\6.8.3\msvc2022_64",
-    [string]$BuildDir = "C:\qt-build-pointcloudsuite",
+    [string]$QtDir = "",
+    [string]$BuildDir = "",
+    [string]$CMakePath = "",
     [ValidateSet("Debug", "Release")]
     [string]$Config = "Release",
     [switch]$BuildTests
@@ -9,9 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 function Assert-Ascii([string]$Value, [string]$Name) {
-    if ($Value -match '[^\x00-\x7F]') {
-        throw "$Name contains non-ASCII characters: $Value"
-    }
+    if ($Value -match '[^\x00-\x7F]') { throw "$Name contains non-ASCII characters: $Value" }
 }
 
 function Get-ExecutablePath([string]$Name) {
@@ -28,54 +27,18 @@ function Get-VcVars64Path {
         (Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'),
         (Join-Path $env:ProgramFiles 'Microsoft Visual Studio\Installer\vswhere.exe')
     ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -Unique
-
-    $installationPath = $null
-    if ($vswhereCandidates) {
-        $vswherePath = $vswhereCandidates | Select-Object -First 1
-        $vswhereOutput = @(& $vswherePath -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null)
-        if ($LASTEXITCODE -eq 0) {
-            $installationPath = $vswhereOutput |
-                Where-Object { $_ -and $_.Trim() } |
-                Select-Object -First 1
-        }
+    foreach ($vswherePath in $vswhereCandidates) {
+        $installationPath = @(& $vswherePath -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null) |
+            Where-Object { $_ -and $_.Trim() } | Select-Object -First 1
+        $candidate = if ($installationPath) { Join-Path $installationPath 'VC\Auxiliary\Build\vcvars64.bat' }
+        if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) { return $candidate }
     }
-
-    $vcVarsCandidates = @()
-    if ($installationPath) {
-        $vcVarsCandidates += Join-Path $installationPath 'VC\Auxiliary\Build\vcvars64.bat'
-    }
-
-    $standardInstallations = @(
-        'C:\Program Files\Microsoft Visual Studio\2022\Community',
-        'C:\Program Files\Microsoft Visual Studio\2022\Professional',
-        'C:\Program Files\Microsoft Visual Studio\2022\Enterprise',
-        'C:\Program Files\Microsoft Visual Studio\2022\BuildTools',
-        'C:\Program Files\Microsoft Visual Studio\18\Community',
-        'C:\Program Files\Microsoft Visual Studio\18\Professional',
-        'C:\Program Files\Microsoft Visual Studio\18\Enterprise',
-        'C:\Program Files\Microsoft Visual Studio\18\BuildTools'
-    )
-    $vcVarsCandidates += $standardInstallations | ForEach-Object {
-        Join-Path $_ 'VC\Auxiliary\Build\vcvars64.bat'
-    }
-
-    $vcVarsPath = $vcVarsCandidates |
-        Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
-        Select-Object -First 1
-    if (-not $vcVarsPath) {
-        $searched = if ($vswhereCandidates) { 'vswhere.exe and standard Visual Studio installation paths' } else { 'standard Visual Studio installation paths; vswhere.exe was not found' }
-        throw "Visual Studio with the MSVC x64 workload was not found. Searched $searched. Expected VC\Auxiliary\Build\vcvars64.bat."
-    }
-    return $vcVarsPath
+    throw 'Visual Studio with the MSVC x64 workload was not found. Install it or run this script from a Developer PowerShell.'
 }
 
 function Import-VcVarsEnvironment([string]$VcVarsPath) {
-    $commandLine = '"{0}" && set' -f $VcVarsPath
-    $environmentLines = @(& cmd.exe /d /s /c $commandLine 2>&1)
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to initialize the MSVC environment with $VcVarsPath (cmd.exe exit code $LASTEXITCODE)."
-    }
-
+    $environmentLines = @(& cmd.exe /d /s /c ('"{0}" && set' -f $VcVarsPath) 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw "Failed to initialize MSVC with $VcVarsPath." }
     foreach ($line in $environmentLines) {
         $text = [string]$line
         if ($text -match '^(?<Name>[^=]+)=(?<Value>.*)$') {
@@ -84,58 +47,51 @@ function Import-VcVarsEnvironment([string]$VcVarsPath) {
     }
 }
 
+function Get-QtDirectory([string]$RequestedQtDir) {
+    $candidates = @($RequestedQtDir)
+    if ($env:Qt6_DIR) { $candidates += (Split-Path (Split-Path (Split-Path $env:Qt6_DIR -Parent) -Parent) -Parent) }
+    if ($env:CMAKE_PREFIX_PATH) { $candidates += $env:CMAKE_PREFIX_PATH -split ';' }
+    foreach ($tool in @('qtpaths6.exe', 'qtpaths.exe', 'qmake.exe')) {
+        $path = Get-ExecutablePath $tool
+        if (-not $path) { continue }
+        $query = if ($tool -eq 'qmake.exe') { @('-query', 'QT_INSTALL_PREFIX') } else { @('--query', 'QT_INSTALL_PREFIX') }
+        $prefix = @(& $path @query 2>$null) | Select-Object -First 1
+        if ($prefix) { $candidates += $prefix.Trim() }
+    }
+    foreach ($candidate in $candidates | Where-Object { $_ } | Select-Object -Unique) {
+        $config = Join-Path $candidate 'lib\cmake\Qt6\Qt6Config.cmake'
+        if (Test-Path -LiteralPath $config -PathType Leaf) { return (Resolve-Path -LiteralPath $candidate).Path }
+    }
+    throw 'Qt 6 was not found. Select a Qt Creator Kit, add qtpaths6/qmake to PATH, set CMAKE_PREFIX_PATH/Qt6_DIR, or pass -QtDir <Qt prefix>.'
+}
+
 $SourceDir = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+if ([string]::IsNullOrWhiteSpace($BuildDir)) {
+    $BuildDir = Join-Path (Split-Path $SourceDir -Parent) ("build-PointCloudSuite-{0}" -f $Config)
+}
 Assert-Ascii $SourceDir 'Source path'
 Assert-Ascii $BuildDir 'Build path'
+
+if (-not (Get-ExecutablePath 'cl.exe') -or -not (Get-ExecutablePath 'nmake.exe')) {
+    Import-VcVarsEnvironment (Get-VcVars64Path)
+}
+if (-not (Get-ExecutablePath 'cl.exe') -or -not (Get-ExecutablePath 'nmake.exe')) {
+    throw 'MSVC x64 tools were not initialized.'
+}
+
+$QtDir = Get-QtDirectory $QtDir
 Assert-Ascii $QtDir 'Qt path'
-
-$clPath = Get-ExecutablePath 'cl.exe'
-$nmakePath = Get-ExecutablePath 'nmake.exe'
-if (-not $clPath -or -not $nmakePath) {
-    Write-Host 'MSVC Developer Environment is incomplete. Initializing x64 tools...'
-    $vcVarsPath = Get-VcVars64Path
-    Write-Host "Using MSVC initialization script: $vcVarsPath"
-    Import-VcVarsEnvironment $vcVarsPath
-    $clPath = Get-ExecutablePath 'cl.exe'
-    $nmakePath = Get-ExecutablePath 'nmake.exe'
-}
-if (-not $clPath) { throw 'MSVC cl.exe was not found. Verify the Visual Studio C++ workload and vcvars64.bat.' }
-if (-not $nmakePath) { throw 'NMake nmake.exe was not found. Verify the Visual Studio C++ workload and vcvars64.bat.' }
-
-if (-not (Test-Path -LiteralPath $QtDir -PathType Container)) {
-    throw "Qt directory was not found: $QtDir"
-}
-$qtConfig = Join-Path $QtDir 'lib\cmake\Qt6\Qt6Config.cmake'
-if (-not (Test-Path -LiteralPath $qtConfig -PathType Leaf)) {
-    throw "Qt6 CMake package was not found under Qt directory: $qtConfig"
-}
-
-$cmakeCandidates = @(
-    (Get-ExecutablePath 'cmake.exe'),
-    'C:\Qt\Tools\CMake_64\bin\cmake.exe',
-    'C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe',
-    'C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe',
-    'C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe',
-    'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe',
-    'C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe',
-    'C:\Program Files\Microsoft Visual Studio\18\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe',
-    'C:\Program Files\Microsoft Visual Studio\18\Enterprise\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe',
-    'C:\Program Files\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
-)
-$CMakePath = $cmakeCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
-if (-not $CMakePath) { throw 'CMake cmake.exe was not found. Checked the current PATH, Qt Tools, and Visual Studio CMake locations.' }
-
-Write-Host "CMake: $CMakePath"
-Write-Host "MSVC: $clPath"
-Write-Host "NMake: $nmakePath"
-Write-Host "Qt: $QtDir"
+if ([string]::IsNullOrWhiteSpace($CMakePath)) { $CMakePath = Get-ExecutablePath 'cmake.exe' }
+if (-not $CMakePath) { throw 'cmake.exe was not found on PATH. Install CMake or start the script from the Qt Creator/Developer environment.' }
 
 $testOption = if ($BuildTests) { 'ON' } else { 'OFF' }
+Write-Host "CMake: $CMakePath"
+Write-Host "Qt: $QtDir"
+Write-Host "Build: $BuildDir"
 & $CMakePath -S $SourceDir -B $BuildDir -G 'NMake Makefiles' `
     ("-DCMAKE_PREFIX_PATH={0}" -f $QtDir) `
     ("-DCMAKE_BUILD_TYPE={0}" -f $Config) `
     ("-DPCV_BUILD_TESTS={0}" -f $testOption)
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
 & $CMakePath --build $BuildDir --parallel
 exit $LASTEXITCODE

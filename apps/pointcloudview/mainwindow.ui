@@ -74,6 +74,13 @@
         </property>
        </widget>
       </item>
+      <item>
+       <widget class="QPushButton" name="btn_multiframe_registration">
+        <property name="text">
+         <string>多帧配准...</string>
+        </property>
+       </widget>
+      </item>
      </layout>
     </item>
     <item>
@@ -505,7 +512,7 @@
                <bool>true</bool>
               </property>
               <property name="placeholderText">
-               <string>点击取点并在画布中指定三个点</string>
+               <string>点击取点并在画布中指定至少三个平面控制点</string>
               </property>
              </widget>
             </item>

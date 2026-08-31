@@ -1,5 +1,8 @@
 #include "pointcloudprocessor.h"
 #include <QCoreApplication>
+#include <QCommandLineParser>
+#include <QCommandLineOption>
+#include <QDir>
 #include <QFile>
 #include <QImage>
 #include <QTextStream>
@@ -52,7 +55,29 @@ static void reportCloudStats(const pointcloud::WorldCloudMergeResult &r, QTextSt
 
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
-    const QString dir = QStringLiteral("D:/workpiece/ply/MV-DP2240-01P(DB1723975) (1)/Point_Cloud_A");
+    QCommandLineParser parser;
+    parser.setApplicationDescription(QStringLiteral("PointCloudSuite registration diagnostic"));
+    parser.addHelpOption();
+    const QCommandLineOption inputDirectoryOption(
+        QStringList{QStringLiteral("input-dir")}, QStringLiteral("Directory containing Point_Cloud_A01.ply through Point_Cloud_A04.ply."), QStringLiteral("directory"));
+    const QCommandLineOption outputDirectoryOption(
+        QStringList{QStringLiteral("output-dir")}, QStringLiteral("Directory for diagnostic PNG output; defaults to the current directory."), QStringLiteral("directory"));
+    parser.addOption(inputDirectoryOption);
+    parser.addOption(outputDirectoryOption);
+    parser.process(app);
+    const QString dir = parser.isSet(inputDirectoryOption)
+        ? parser.value(inputDirectoryOption).trimmed()
+        : qEnvironmentVariable("PCV_REGISTRATION_DIAGNOSTIC_INPUT_DIR").trimmed();
+    if (dir.isEmpty()) {
+        QTextStream(stderr) << "Missing --input-dir. Set --input-dir <directory> or PCV_REGISTRATION_DIAGNOSTIC_INPUT_DIR.\n";
+        return 2;
+    }
+    const QString outputDirectory = parser.isSet(outputDirectoryOption)
+        ? parser.value(outputDirectoryOption).trimmed() : QDir::currentPath();
+    if (!QDir().mkpath(outputDirectory)) {
+        QTextStream(stderr) << "Could not create output directory: " << outputDirectory << '\n';
+        return 2;
+    }
     const QStringList names = {"Point_Cloud_A01.ply","Point_Cloud_A02.ply","Point_Cloud_A03.ply","Point_Cloud_A04.ply"};
     const double xs[] = {500,600,700,800}; QVector<pointcloud::WorldCloudInput> inputs;
     // RTmatDepth2robot / DepthInRobotPose from the supplied Eye-in-Hand XML.
@@ -70,14 +95,14 @@ int main(int argc, char **argv) {
     const auto result=pointcloud::mergePlyCloudsInWorld(inputs,noIcp);
     out << "NO_ICP ok=" << result.ok << " points=" << result.points.size() << " error=" << result.error << "\n";
     out << result.diagnostics << "\n"; reportCloudStats(result,out);
-    saveTopView(result.points,result.cloudIds,QStringLiteral("Point_Cloud_A_robot_world_top.png"));
+    saveTopView(result.points,result.cloudIds,QDir(outputDirectory).filePath(QStringLiteral("Point_Cloud_A_robot_world_top.png")));
     pointcloud::IcpOptions withIcp; withIcp.enabled=true; withIcp.maximumSamples=50000;
     withIcp.maximumCorrectionTranslation=10.0f; withIcp.maximumCorrectionAngleDegrees=2.0f;
     withIcp.rmseThreshold=5.0f; withIcp.fitnessThreshold=0.05f;
     const auto refined=pointcloud::mergePlyCloudsInWorld(inputs,withIcp);
     out << "WITH_ICP ok=" << refined.ok << " points=" << refined.points.size() << " error=" << refined.error << "\n";
     out << refined.diagnostics << "\n"; reportCloudStats(refined,out);
-    saveTopView(refined.points,refined.cloudIds,QStringLiteral("Point_Cloud_A_robot_world_icp_top.png"));
+    saveTopView(refined.points,refined.cloudIds,QDir(outputDirectory).filePath(QStringLiteral("Point_Cloud_A_robot_world_icp_top.png")));
     QVector<pointcloud::WorldCloudInput> fixedInputs = inputs;
     for (auto &in : fixedInputs) { const QMatrix4x4 mid = pose(xs[0],0,700,0,0,180); Q_UNUSED(mid); }
     for (int i=0;i<fixedInputs.size();++i) {
@@ -87,13 +112,13 @@ int main(int argc, char **argv) {
     const auto fixed = pointcloud::mergePlyCloudsInWorld(fixedInputs,noIcp);
     out << "FIXED_MIDPOINT ok=" << fixed.ok << " points=" << fixed.points.size() << " error=" << fixed.error << "\n";
     out << fixed.diagnostics << "\n"; reportCloudStats(fixed,out);
-    saveTopView(fixed.points,fixed.cloudIds,QStringLiteral("Point_Cloud_A_robot_world_fixed_mid_top.png"));
+    saveTopView(fixed.points,fixed.cloudIds,QDir(outputDirectory).filePath(QStringLiteral("Point_Cloud_A_robot_world_fixed_mid_top.png")));
     QVector<pointcloud::WorldCloudInput> swapped = inputs;
     for (auto &in : swapped) std::swap(in.startBaseFromFlange, in.endBaseFromFlange);
     const auto swappedResult = pointcloud::mergePlyCloudsInWorld(swapped,noIcp);
     out << "SWAPPED_START_END ok=" << swappedResult.ok << " points=" << swappedResult.points.size() << " error=" << swappedResult.error << "\n";
     out << swappedResult.diagnostics << "\n"; reportCloudStats(swappedResult,out);
-    saveTopView(swappedResult.points,swappedResult.cloudIds,QStringLiteral("Point_Cloud_A_robot_world_swapped_top.png"));
+    saveTopView(swappedResult.points,swappedResult.cloudIds,QDir(outputDirectory).filePath(QStringLiteral("Point_Cloud_A_robot_world_swapped_top.png")));
     return result.ok ? 0 : 2;
 }
 

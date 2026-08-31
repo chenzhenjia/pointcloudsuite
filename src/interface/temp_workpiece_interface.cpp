@@ -212,8 +212,7 @@ bool validIndices(const QVector<int> &indices, qsizetype pointCount, QString *er
     return true;
 }
 
-bool writePly(const QString &path, const QVector<pointcloud::Point3D> &points,
-              const QVector<qsizetype> &sourceIndices, const QVector3D &normal, QString *error)
+bool writePly(const QString &path, const QVector<pointcloud::Point3D> &points, QString *error)
 {
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly)) return fail(error, file.errorString());
@@ -222,8 +221,7 @@ bool writePly(const QString &path, const QVector<pointcloud::Point3D> &points,
     header << "ply\nformat binary_little_endian 1.0\ncomment source_frame robot_base\n"
            << "element vertex " << points.size() << "\n"
            << "property float x\nproperty float y\nproperty float z\n"
-           << "property float nx\nproperty float ny\nproperty float nz\n"
-           << "property uint source_index\nend_header\n";
+           << "end_header\n";
     header.flush();
     if (header.status() != QTextStream::Ok)
         return fail(error, QStringLiteral("failed to write PLY header"));
@@ -232,9 +230,7 @@ bool writePly(const QString &path, const QVector<pointcloud::Point3D> &points,
     data.setFloatingPointPrecision(QDataStream::SinglePrecision);
     for (qsizetype i = 0; i < points.size(); ++i) {
         const auto &point = points[i];
-        const quint32 source = i < sourceIndices.size()
-            ? quint32(qMax<qsizetype>(0, sourceIndices[i])) : quint32(i);
-        data << point.x << point.y << point.z << normal.x() << normal.y() << normal.z() << source;
+        data << point.x << point.y << point.z;
     }
     if (data.status() != QDataStream::Ok || !file.commit())
         return fail(error, file.errorString().isEmpty()
@@ -541,17 +537,14 @@ TempWorkpieceResult finalizeTempWorkpiece(const TempWorkpiecePreparation &prepar
     const QString finalRoi = QDir(outputDirectory).filePath(QStringLiteral("roi_template_robot_base.ply"));
     const QString finalMask = QDir(outputDirectory).filePath(QStringLiteral("plane_mask.png"));
     const QString finalJson = QDir(outputDirectory).filePath(QStringLiteral("temp_workpiece_info.json"));
-    const QVector3D normal = modelNormal.normalized();
-    if (!writePly(stagedBaseline, prepared.robotBasePoints, prepared.sourceIndices, normal, &detail))
+    if (!writePly(stagedBaseline, prepared.robotBasePoints, &detail))
         return failedResult(QString::fromLatin1(kErrorOutputIncomplete), detail, error);
     QVector<pointcloud::Point3D> roiPoints;
-    QVector<qsizetype> roiSources;
     for (const int index : options.roiIndices) {
         auto point = prepared.robotBasePoints[index];
-        point.nx = normal.x(); point.ny = normal.y(); point.nz = normal.z();
-        roiPoints.push_back(point); roiSources.push_back(prepared.sourceIndices[index]);
+        roiPoints.push_back(point);
     }
-    if (!writePly(stagedRoi, roiPoints, roiSources, normal, &detail)
+    if (!writePly(stagedRoi, roiPoints, &detail)
         || !writeMask(stagedMask, options.planeMask, &detail))
         return failedResult(QString::fromLatin1(kErrorOutputIncomplete), detail, error);
     if (prepared.createdAtIso8601.trimmed().isEmpty())

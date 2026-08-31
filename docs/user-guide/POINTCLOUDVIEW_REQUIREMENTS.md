@@ -41,34 +41,20 @@
 
 ## 启动
 
-在 Qt Creator 中打开：
-
-```text
-D:/workpiece/pointcloudview/pointcloudview/CMakeLists.txt
-```
-
-选择 `Desktop Qt 6.8.3 MSVC2022 64bit`，不要使用 MinGW。Windows 源码和构建
-路径只能包含 ASCII 字符。
+在 Qt Creator 中打开仓库根目录 `CMakeLists.txt`，选择本机 Qt 6.5+ Desktop MSVC x64
+Kit；不要使用 MinGW。Windows 源码和构建路径只能包含 ASCII 字符。
 
 命令行构建：
 
 ```powershell
-cmake -S D:/workpiece/pointcloudview/pointcloudview `
-      -B D:/workpiece/pointcloudview/pointcloudview/build-clean `
-      -DCMAKE_PREFIX_PATH=C:/Qt/6.8.3/msvc2022_64 `
-      -DPCV_BUILD_TESTS=ON
-
-cmake --build D:/workpiece/pointcloudview/pointcloudview/build-clean `
-      --config Debug --parallel 2
-
-ctest --test-dir D:/workpiece/pointcloudview/pointcloudview/build-clean `
-      -C Debug --output-on-failure
+.\scripts\build_windows.ps1 -Config Debug -BuildTests
+.\scripts\run_tests.ps1
 ```
 
 启动失败时检查：
 
 ```text
-%LOCALAPPDATA%/PointCloudSuite/pointcloudview/logs/startup.log
+D:/Scraping_Robot_Project/logs/startup.log
 ```
 
 程序启动时必须保留：
@@ -87,11 +73,12 @@ QApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
 2. 优先读取用户本地应用数据目录中有效的 `.pcvbin`；首次解析后建立二进制缓存。
 3. 将完整真实点发布到当前画布缓存并上传 OpenGL VBO。
 4. 可选执行体素预处理和统计离群值去除，处理结果替换当前缓存。
-5. 使用 Picking FBO 在画布选择 P1、P2、P3。
-6. 三点生成初始平面，使用 RANSAC 排除离群点，再用 PCA/最小二乘精拟合。
-7. 对最终平面做距离分类和连通域筛选，平面内点显示灰色。
-8. 对确认平面建立 UV 栅格、二值 Mask、形态学处理和连续边界。
-9. 在画布显示黄色边缘，并可输出纯黑背景二维图片。
+5. 使用 Picking FBO 在画布选择第一组平面控制点，至少 3 点，用户点击“确定平面”结束选择。
+6. 全部控制点生成初始 PCA/最小二乘平面，使用 RANSAC 排除离群点，再用 PCA/最小二乘精拟合。
+7. 使用第二组三点验证第一拟合平面；通过后不替换第一平面模型。
+8. 对最终平面做距离分类和连通域筛选，平面内点显示灰色。
+9. 对确认平面建立 UV 栅格、二值 Mask、形态学处理和连续边界。
+10. 在画布显示黄色边缘，并可输出纯黑背景二维图片。
 
 全部耗时算法通过 `QtConcurrent` 在后台运行。工作线程不得访问 QWidget、调用
 `update()`、`makeCurrent()` 或直接操作 OpenGL。异步结果必须校验
@@ -159,7 +146,7 @@ threshold = globalMean + stddevMultiplier * globalStddev
 当邻居不足时扩大搜索范围或降低实际 K。参数过严、有效邻域不足或结果为空时，
 保留处理前缓存并提示用户，不得删除全部点。
 
-## 三点平面提取
+## n 点平面提取
 
 界面操作只保留：
 
@@ -172,17 +159,17 @@ threshold = globalMean + stddevMultiplier * globalStddev
 取消确定平面
 ```
 
-Esc 取消当前选择，Backspace 撤销上一个点。三个点必须由当前画布 GPU Picking
-返回，空白位置不得选点。
+Esc 取消当前选择，Backspace 撤销最后一个控制点。第一组至少选择 3 个、可选择任意
+数量的点，并由当前画布 GPU Picking 返回；空白位置不得选点。达到 3 点后仍可继续
+取点，点击“确定平面”才结束第一组选择。第二组始终固定选择 3 点，仅用于验证。
 
 初始平面：
 
 ```cpp
-QVector3D a = p2 - p1;
-QVector3D b = p3 - p1;
-QVector3D normal = QVector3D::crossProduct(a, b);
-normal.normalize();
-float d = -QVector3D::dotProduct(normal, p1);
+// 对全部 n 个控制点计算质心和 3x3 协方差矩阵。
+// 最小特征值对应的特征向量为初始法向量。
+normal = pcaSmallestEigenvector(controlPoints);
+d = -QVector3D::dotProduct(normal, controlPointCentroid);
 ```
 
 平面方程：
@@ -191,12 +178,13 @@ float d = -QVector3D::dotProduct(normal, p1);
 normal.x*x + normal.y*y + normal.z*z + d = 0
 ```
 
-法向量阈值根据当前点云包围盒计算。三点过近或共线时拒绝生成平面。
+法向量阈值根据当前点云包围盒计算。少于 3 点、重复、越界、非有限、近似共线或不能
+同时满足最终距离容差的控制点均拒绝生成平面。
 
 最终算法：
 
 ```text
-三点初始平面
+全部控制点 PCA/最小二乘初始平面
 → 初始距离阈值候选点
 → RANSAC 内点筛选
 → PCA/最小二乘精拟合
@@ -204,8 +192,9 @@ normal.x*x + normal.y*y + normal.z*z + d = 0
 → UV/XY 连通域保留目标区域
 ```
 
-三点用于指定目标区域，RANSAC 用于抵抗离群点，PCA 最小特征值对应的特征向量
-作为精拟合法向量。结果输出平面方程、RMS 距离、候选点、平面点和连通域统计。
+全部控制点用于指定目标区域并提升初始拟合稳定性，RANSAC 用于抵抗离群点，PCA
+最小特征值对应的特征向量作为精拟合法向量。RANSAC 候选及最终保留连通域均必须
+包含所有控制点。结果输出平面方程、RMS 距离、候选点、平面点和连通域统计。
 
 ## GPU Picking 精度
 
@@ -481,7 +470,7 @@ D:/workpiece/pointcloudview/backups/pointcloudview_20260818_obstacle_warning_cle
 ### 2026-08-19：Todo 阶段二——提取平面机器人基坐标 PLY 输出
 
 - 保存 PNG 时同步输出同名基础文件名的 `_plane_robot_base.ply`，内容仅包含最终连通域过滤后的平面点，不包含平面外点、障碍点或原始缓存中的其他点。
-- PLY 使用 binary little-endian 格式，保存 `x/y/z`、可用 `nx/ny/nz` 和 `source_index`。点坐标保持机器人基坐标，避免将工件局部坐标误当作机器人坐标。
+- PLY 使用 binary little-endian 格式，顶点属性仅保存 `x/y/z`。点坐标保持机器人基坐标，避免将工件局部坐标误当作机器人坐标；来源索引和法向量仅在内部处理链中保留，不作为正式 PLY 顶点属性。
 - PLY header 写入 `source_frame`、`target_frame`、来源 PLY、平面方程、工件原点机器人基坐标和工件 A/B/C。完整逆变换矩阵仍由同名 JSON 保存。
 - PNG、平面 PLY 和 JSON 任何一个写入失败都不会报告为完整输出；JSON `output` 增加 PLY 文件名、点数和写入状态。
 - 阶段验收：Debug 构建成功，CTest `1/1 passed`；导出接口拒绝空索引、越界索引和无效点。
@@ -609,3 +598,11 @@ D:/workpiece/pointcloudview/backups/pointcloudview_20260818_obstacle_warning_cle
 - 临时工件 JSON 的 schema 为 `sr2026-temp-workpiece-info-mvp-2`；`plane.equation` 固定为控制器格式 `[X,Y,Z,A,B,C]`，`outputs` 写入规范化绝对路径。
 - 边缘 Mask 输出补齐原点、轴、物理栅格尺寸和图像方向，并复用统一 `pcv_output` writer。
 - 今天前三个源码提交已经纳入本文；当前工作区的“打开扫描 JSON”界面接入也已同步记录。完整 Debug 构建、CTest 和 GUI 人工点选仍需执行后再补充实测结果。
+
+### 2026-08-28：第一组 n 点拟合与第二组三点验证
+
+- 第一组平面选择由固定三点改为任意 `n >= 3` 个控制点；达到三个点后继续保持取点状态，用户点击“确定平面”结束选择。
+- 初始平面由全部控制点的质心和协方差矩阵进行 PCA/最小二乘计算，拒绝少于三点、重复、越界、非有限或近似共线的控制点。
+- RANSAC 候选模型和最终连通域均要求包含全部第一组控制点；拟合失败保留当前选择，可继续取点或撤销后重试。
+- 第二组继续固定选择三点，只比较其法向与第一拟合平面的夹角及到第一平面的最大距离；阈值为 `1.0°` 和 `0.4 mm`，通过后不替换第一平面模型。
+- WObj1、ROI、边缘 Mask 和临时工件四件套输出流程不因控制点数量变化而改变。

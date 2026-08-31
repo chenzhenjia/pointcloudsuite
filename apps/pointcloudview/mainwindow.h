@@ -1,5 +1,7 @@
 #pragma once
 
+#include <pcv/infrastructure/application_config.h>
+
 #include <QMainWindow>
 #include <QStringList>
 #include "pointcloudprocessor.h"
@@ -29,12 +31,15 @@ class MainWindow final : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget *parent = nullptr);
+    MainWindow(const pcv::config::PointCloudViewDefaults &defaults,
+               QWidget *parent = nullptr);
     ~MainWindow() override;
 
 private slots:
     void openPointCloud();
     void openPointCloudSource();
     void openTempScanningInfo();
+    void openMultiFrameRegistration();
     void loadSelectedSource();
     void loadFinished();
     void tempWorkpieceFinished();
@@ -79,6 +84,7 @@ private:
     void validateSecondPlaneSelection();
     void runPlaneExtraction(bool deferFinalClassification);
     bool pointTaskRunning() const;
+    void applyConfiguredDefaults();
     QListWidget *m_fileList = nullptr;
     QLabel *m_fileInfo = nullptr;
     QLabel *m_canvasInfo = nullptr;
@@ -168,5 +174,6 @@ private:
     QString m_tempWorkpieceCreatedAtIso8601;
     QVector<qsizetype> m_tempWorkpieceSourceIndices;
     bool m_closing = false;
+    pcv::config::PointCloudViewDefaults m_defaults;
     Ui::MainWindow *ui = nullptr;
 };

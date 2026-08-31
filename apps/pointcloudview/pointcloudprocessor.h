@@ -392,6 +392,10 @@ CircleInteriorCleanupResult cleanCircleInterior(const QVector<Point3D>&, const P
 SimilarCircleSearchResult findSimilarCirclesOnPlane(const QVector<Point3D>&, const PlaneModel&, const CircleDetectionResult&, const SimilarCircleSearchOptions& = {});
 PlaneSegmentationResult segmentPlanes(const QVector<Point3D>&, const PlaneSegmentationOptions& = {});
 EdgePipelineResult runEdgeAwarePipeline(const QVector<Point3D>&, const EdgePipelineOptions& = {});
+// Fits an initial plane from every selected control point.  The caller may
+// provide any number of unique, finite points as long as there are at least 3.
+ThreePointPlaneResult extractPlaneFromPoints(const QVector<Point3D>&, const QVector<int>&, const ThreePointPlaneOptions& = {});
+// Strict compatibility entry point for existing three-point callers.
 ThreePointPlaneResult extractPlaneFromThreePoints(const QVector<Point3D>&, const QVector<int>&, const ThreePointPlaneOptions& = {});
 ThreePointPlaneResult selectPlaneFromThreeSeeds(const QVector<Point3D>&, const QVector<int>&, const ThreePointPlaneOptions& = {});
 PlaneConsistencyResult validatePlaneConsistency(

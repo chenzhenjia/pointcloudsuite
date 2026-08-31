@@ -4,6 +4,8 @@ qt_add_executable(pointcloudview
     mainwindow.cpp
     mainwindow.h
     mainwindow.ui
+    registrationdialog.cpp
+    registrationdialog.h
     pointcloudprocessor.cpp
     pointcloudprocessor.h
 )

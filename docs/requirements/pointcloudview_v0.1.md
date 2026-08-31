@@ -92,7 +92,7 @@ PointCloudSuite 面向机器人/工业视觉点云数据的查看、平面提取
 
 - 二维 PNG：平面或边缘 Mask，左上角为像素原点，前景 `255`、背景 `0`。
 - JSON：统一 schema `sr2026-temp-workpiece-info-mvp-2`，只允许顶层字段 `schema_version`、`kind`、`created_at`、`plane`、`image`、`roi`、`outputs`。`plane` 只包含 `name`、`equation`，`image` 只包含名称、像素尺寸、物理尺寸和像素尺寸，`roi` 固定为字符串 `rectangle`，`outputs` 只包含三条规范化绝对路径；`plane.equation` 顺序为控制器格式 `[X, Y, Z, A, B, C]`，A=Rx、B=Ry、C=Rz，矩阵约定为 `Rz(C)×Ry(B)×Rx(A)`。临时工件 `created_at` 原样沿用扫描 JSON，普通平面输出使用生成时间。
-- `_plane_robot_base.ply`：最终连通域平面点，binary little-endian，坐标保持机器人基坐标，并记录来源和坐标系元数据。
+- `_plane_robot_base.ply`：最终连通域平面点，binary little-endian，顶点属性仅为 `float x/y/z`，坐标保持机器人基坐标；来源和坐标系元数据通过 PLY `comment` 与同名 JSON 保存。
 - 输出由 `pcv_output` 统一写出；PNG、PLY、JSON 先写临时目录后成套提交并支持回滚，任一文件失败均视为整体失败。
 - `cache/*.pcvbin`：运行缓存；`logs/startup.log`：启动诊断日志。
 
