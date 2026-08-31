@@ -88,17 +88,15 @@ int main(int argc, char **argv) {
     hand(0,3)=109.49121811215774f; hand(1,3)=-76.4519295996864f; hand(2,3)=253.3476715717871f;
     for (int i=0;i<4;++i) { pointcloud::WorldCloudInput in; in.filePath=dir+'/'+names[i];
         in.startBaseFromFlange=pose(xs[i],150,700,0,0,180); in.endBaseFromFlange=pose(xs[i],-150,700,0,0,180);
-        in.flangeFromDepth=hand; in.scanProgressSource=pointcloud::WorldCloudInput::ScanProgressSource::LocalY;
-        in.voxelDownsample=true; in.voxelSize=0.25f; in.applyRobotTransform=true; inputs.push_back(in); }
+        in.flangeFromDepth=hand; inputs.push_back(in); }
     QTextStream out(stdout);
     pointcloud::IcpOptions noIcp; noIcp.enabled=false;
     const auto result=pointcloud::mergePlyCloudsInWorld(inputs,noIcp);
     out << "NO_ICP ok=" << result.ok << " points=" << result.points.size() << " error=" << result.error << "\n";
     out << result.diagnostics << "\n"; reportCloudStats(result,out);
     saveTopView(result.points,result.cloudIds,QDir(outputDirectory).filePath(QStringLiteral("Point_Cloud_A_robot_world_top.png")));
-    pointcloud::IcpOptions withIcp; withIcp.enabled=true; withIcp.maximumSamples=50000;
+    pointcloud::IcpOptions withIcp; withIcp.enabled=true;
     withIcp.maximumCorrectionTranslation=10.0f; withIcp.maximumCorrectionAngleDegrees=2.0f;
-    withIcp.rmseThreshold=5.0f; withIcp.fitnessThreshold=0.05f;
     const auto refined=pointcloud::mergePlyCloudsInWorld(inputs,withIcp);
     out << "WITH_ICP ok=" << refined.ok << " points=" << refined.points.size() << " error=" << refined.error << "\n";
     out << refined.diagnostics << "\n"; reportCloudStats(refined,out);
