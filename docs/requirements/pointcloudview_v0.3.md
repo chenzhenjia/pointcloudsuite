@@ -87,3 +87,8 @@ v0.3 将当前 PointCloudSuite 统一为企业级模块化项目。源码、CMak
 - 新增 `pcv_m60_planefitting` 静态库和 `pcv::planefitting::fit` 基础 API，覆盖控制点校验、初始平面、容差分类和结果诊断。
 - `pcv::planefitting::fit` 已可独立构建和测试；`pointcloudview` 的 `extractPlaneFromPoints` 暂继续使用完整 legacy 算法，以保留 RANSAC/PCA 细化、连通域和诊断字段，待字段完整迁移后再切换。
 - 新增独立 `plane_fitting_tests`，应用级几何回归继续保留用于兼容性验证。
+
+### 2026-08-31（M5.3 首轮）
+
+- `pcv_m20_pointcloudrender` 已从 `INTERFACE` 改为静态库，新增 `RenderSnapshot`、版本号和点状态校验契约。
+- 新增 `pointcloud_canvas_contract_tests`；`PointCloudCanvas` 的 Qt/OpenGL 实现仍保留在 `mainwindow.cpp`，待完成 context、FBO 和异步生命周期抽取后再迁移。

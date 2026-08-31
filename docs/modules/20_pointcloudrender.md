@@ -11,3 +11,4 @@
 ### 2026-08-31
 
 - 建立模块边界和 `pcv_m20_pointcloudrender` 兼容入口；未移动应用代码。
+- M5.3 首轮：`pcv_m20_pointcloudrender` 已从 `INTERFACE` 改为静态库，新增渲染快照版本/点状态契约和独立测试；`PointCloudCanvas` 实现仍待从 `mainwindow.cpp` 抽取。

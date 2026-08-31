@@ -78,6 +78,11 @@ target_link_libraries(plane_fitting_tests PRIVATE Qt::Core Qt::Gui pcv_m60_plane
 add_test(NAME plane_fitting_tests COMMAND plane_fitting_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS plane_fitting_tests)
 
+add_executable(pointcloud_canvas_contract_tests unit/render/pointcloud_canvas_contract_tests.cpp)
+target_link_libraries(pointcloud_canvas_contract_tests PRIVATE Qt::Core Qt::Gui pcv_m20_pointcloudrender)
+add_test(NAME pointcloud_canvas_contract_tests COMMAND pointcloud_canvas_contract_tests)
+list(APPEND PCV_APPLICATION_TEST_TARGETS pointcloud_canvas_contract_tests)
+
 if(WIN32 AND TARGET Qt6::Core AND PCV_APPLICATION_TEST_TARGETS)
     set(PCV_TEST_PATH "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}")
     set_tests_properties(${PCV_APPLICATION_TEST_TARGETS}
