@@ -1,0 +1,2 @@
+add_library(pcv_m10_pointcloudread INTERFACE)
+target_link_libraries(pcv_m10_pointcloudread INTERFACE pcv_io)

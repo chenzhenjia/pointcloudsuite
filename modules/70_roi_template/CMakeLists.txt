@@ -1,0 +1,2 @@
+add_library(pcv_m70_roi_template INTERFACE)
+target_link_libraries(pcv_m70_roi_template INTERFACE pcv_interface pcv_output)

@@ -31,6 +31,7 @@ if(PCV_BUILD_TESTS)
 endif()
 
 add_subdirectory(src)
+add_subdirectory(modules)
 
 if(PCV_BUILD_POINTCLOUDVIEW)
     add_subdirectory(apps/pointcloudview)

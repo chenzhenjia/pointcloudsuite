@@ -1,0 +1,2 @@
+add_library(pcv_m50_coordinateconversion INTERFACE)
+target_link_libraries(pcv_m50_coordinateconversion INTERFACE pcv_registration)

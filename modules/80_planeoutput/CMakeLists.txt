@@ -1,0 +1,2 @@
+add_library(pcv_m80_planeoutput INTERFACE)
+target_link_libraries(pcv_m80_planeoutput INTERFACE pcv_output)

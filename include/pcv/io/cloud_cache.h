@@ -13,6 +13,15 @@ struct CachedCloudResult {
     bool usedCache = false;
     bool cancelled = false;
     bool ok = false;
+    PlyFormat format = PlyFormat::Ascii;
+    qsizetype declaredPointCount = 0;
+    pointcloud::Point3D minimum;
+    pointcloud::Point3D maximum;
+    bool hasBounds = false;
+    qint64 headerElapsedMs = 0;
+    qint64 boundaryScanElapsedMs = 0;
+    qint64 parseElapsedMs = 0;
+    qint64 totalElapsedMs = 0;
 };
 
 CachedCloudResult readPlyCached(const QString &sourceFile,

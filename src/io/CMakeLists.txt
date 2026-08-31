@@ -3,6 +3,8 @@ add_library(pcv_io STATIC
     ${PROJECT_SOURCE_DIR}/include/pcv/io/cloud_cache.h
     ply_reader.cpp
     ${PROJECT_SOURCE_DIR}/include/pcv/io/ply_reader.h
+    ply_writer.cpp
+    ${PROJECT_SOURCE_DIR}/include/pcv/io/ply_writer.h
 )
 target_include_directories(pcv_io PUBLIC
     ${PROJECT_SOURCE_DIR}/include)

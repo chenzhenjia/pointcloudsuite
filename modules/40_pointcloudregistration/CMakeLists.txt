@@ -1,0 +1,2 @@
+add_library(pcv_m40_pointcloudregistration INTERFACE)
+target_link_libraries(pcv_m40_pointcloudregistration INTERFACE pcv_registration)

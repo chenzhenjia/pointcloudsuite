@@ -1243,10 +1243,10 @@ NoiseResult removeNoise(const QVector<Point3D> &points, const NoiseOptions &opti
 
 LoadResult loadPlyResult(const QString &fileName) {
     LoadResult result;
-    pcv::detail::io::PlyReadResult parsed = pcv::detail::io::readPly(fileName);
+    const auto parsed = pcv::detail::io::readPlyCached(fileName);
     result.ok = parsed.ok;
-    result.error = std::move(parsed.error);
-    result.points = std::move(parsed.points);
+    result.error = parsed.error;
+    result.points = parsed.points;
     result.minimum = parsed.minimum;
     result.maximum = parsed.maximum;
     result.hasBounds = parsed.hasBounds;
@@ -1254,7 +1254,17 @@ LoadResult loadPlyResult(const QString &fileName) {
     result.boundaryScanElapsedMs = parsed.boundaryScanElapsedMs;
     result.parseElapsedMs = parsed.parseElapsedMs;
     result.totalElapsedMs = parsed.totalElapsedMs;
-    result.usedCache = false;
+    result.usedCache = parsed.usedCache;
+    if (result.ok && !result.hasBounds) {
+        for (const Point3D &point : result.points) {
+            if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) continue;
+            if (!result.hasBounds) { result.minimum = result.maximum = point; result.hasBounds = true; }
+            else {
+                result.minimum.x = std::min(result.minimum.x, point.x); result.minimum.y = std::min(result.minimum.y, point.y); result.minimum.z = std::min(result.minimum.z, point.z);
+                result.maximum.x = std::max(result.maximum.x, point.x); result.maximum.y = std::max(result.maximum.y, point.y); result.maximum.z = std::max(result.maximum.z, point.z);
+            }
+        }
+    }
     return result;
 }
 
@@ -1263,7 +1273,7 @@ LoadResult loadPlyResultWithProgress(const QString &fileName,
     LoadResult result;
     pcv::detail::io::PlyReadOptions options;
     options.progress = progress;
-    pcv::detail::io::PlyReadResult parsed = pcv::detail::io::readPly(fileName, options);
+    const auto parsed = pcv::detail::io::readPlyCached(fileName, {}, options);
     result.ok = parsed.ok;
     result.error = std::move(parsed.error);
     result.points = std::move(parsed.points);
@@ -1274,7 +1284,17 @@ LoadResult loadPlyResultWithProgress(const QString &fileName,
     result.boundaryScanElapsedMs = parsed.boundaryScanElapsedMs;
     result.parseElapsedMs = parsed.parseElapsedMs;
     result.totalElapsedMs = parsed.totalElapsedMs;
-    result.usedCache = false;
+    result.usedCache = parsed.usedCache;
+    if (result.ok && !result.hasBounds) {
+        for (const Point3D &point : result.points) {
+            if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) continue;
+            if (!result.hasBounds) { result.minimum = result.maximum = point; result.hasBounds = true; }
+            else {
+                result.minimum.x = std::min(result.minimum.x, point.x); result.minimum.y = std::min(result.minimum.y, point.y); result.minimum.z = std::min(result.minimum.z, point.z);
+                result.maximum.x = std::max(result.maximum.x, point.x); result.maximum.y = std::max(result.maximum.y, point.y); result.maximum.z = std::max(result.maximum.z, point.z);
+            }
+        }
+    }
     return result;
 }
 

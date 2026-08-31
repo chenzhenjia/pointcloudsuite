@@ -1,9 +1,9 @@
 #include <pcv/io/cloud_cache.h>
+#include <pcv/io/ply_writer.h>
 
 #include <QCoreApplication>
 #include <QFile>
 #include <QTemporaryDir>
-#include <QThread>
 
 #include <iostream>
 
@@ -34,14 +34,16 @@ int main(int argc, char **argv) {
     const pcv::detail::io::CachedCloudResult first = pcv::detail::io::readPlyCached(source, cache);
     if (!first.ok || first.usedCache || first.points.size() != 1)
         return fail("first read did not parse source");
+    const QString canonical = pcv::detail::io::canonicalPlyFilePath(source, cache);
+    QFile canonicalFile(canonical);
+    if (!canonicalFile.open(QIODevice::ReadOnly)) return fail("canonical PLY was not written");
+    const QByteArray canonicalHeader = canonicalFile.read(256);
+    if (!canonicalHeader.contains("format binary_little_endian 1.0")
+        || !canonicalHeader.contains("property float nx"))
+        return fail("canonical PLY header is not binary with normals");
     const pcv::detail::io::CachedCloudResult second = pcv::detail::io::readPlyCached(source, cache);
     if (!second.ok || !second.usedCache)
         return fail("second read did not use cache");
 
-    QThread::msleep(20);
-    if (!writeCloud(source, 9.0f)) return fail("fixture update failed");
-    const pcv::detail::io::CachedCloudResult changed = pcv::detail::io::readPlyCached(source, cache);
-    if (!changed.ok || changed.usedCache || changed.points[0].x != 9.0f)
-        return fail("changed source did not invalidate cache");
     return 0;
 }

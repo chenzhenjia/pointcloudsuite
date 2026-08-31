@@ -14,7 +14,7 @@
 - `stitchingwindow.ui`：Qt Designer 界面，包含任意多帧 PLY 输入、Start/End 位姿、XML 标定文件、ICP 参数、接缝参数、输出目录、进度条和实时日志。
 - `stitchingwindow.h/.cpp`：界面生命周期、空格/Tab/中英文逗号位姿解析、后台任务调度、进度显示、PLY/JSON 输出；标定和位姿矩阵统一调用手眼转换模块。
 - `include/pcv/registration/handeye_transform.h` + `src/registration/handeye_transform.cpp`：共享的 Eye-in-Hand 标定读取、刚体矩阵校验、机器人位姿矩阵、扫描位姿插值、单点及整幅线扫点云机器人基坐标转换。
-- `pointcloudprocessor.h/.cpp`：复用 `pcv_io` 的并行 ASCII PLY 读取、无效点过滤、调用手眼转换模块生成机器人基坐标全分辨率点云、任意数量相邻帧 Point-to-Plane ICP、修正范围检查和诊断数据。
+- `pointcloudprocessor.h/.cpp`：复用 `pcv_io` 的 PLY 读取与 canonical binary 缓存、无效点过滤、调用手眼转换模块生成机器人基坐标全分辨率点云、任意数量相邻帧 Point-to-Plane ICP、修正范围检查和诊断数据。
 - `seamfusion.h/.cpp`：ICP 后真实投影重叠区接缝计算、双侧接缝带检查、互为最近邻融合、二维决策块和无效接缝保护。
 - `CMakeLists.txt`：唯一可运行目标 `pointcloudstitch`，使用 Qt 6 Core/Gui/Widgets/Concurrent。
 - `build_release.bat`：MSVC2022 x64 Release 构建、链接和 Qt 运行库部署脚本。
@@ -23,7 +23,7 @@
 当前处理链为：
 
 ```text
-至少两个 ASCII PLY + 对应 Start/End + Eye-in-Hand XML
+至少两个 PLY（ASCII 输入自动 canonical 化为 binary）+ 对应 Start/End + Eye-in-Hand XML
 → 过滤非有限点、(0,0,0) 和行程范围外点
 → PLY.Y 作为扫描起点有符号行程
 → [X,0,Z] 经 RTmatDepth2robot 和逐点机器人位姿转换到基座标
@@ -55,7 +55,7 @@
 
 ## 2. 输入契约
 
-- 处理内核接受至少两个 ASCII PLY；顶点必须包含 `x/y/z`，其他标量属性可忽略。
+- 处理内核接受至少两个 PLY；顶点必须包含 `x/y/z`，其他标量属性可忽略，输入统一缓存为 canonical binary。
 - ASCII 输入通过与 `pointcloudview` 相同的 `pcv::detail::io::readPly()` 路径读取：优先内存映射，扫描换行边界后按原始顶点顺序分块，按文件规模自适应使用 1–4 个解析线程；映射失败时自动回退单线程。读取诊断记录工作线程数、边界扫描、解析和总耗时。
 - GUI、`--regression` 模式和处理内核的配准与融合均接受任意 `>=2` 个 PLY；仅手眼坐标转换模式接受任意 `>=1` 个 PLY。
 - 每帧包含 Start/End `X Y Z A B C`，其中 A=Rx、B=Ry、C=Rz；姿态单位为度，矩阵顺序为 `Rz(C) * Ry(B) * Rx(A)`。
@@ -156,7 +156,7 @@
 - 2026-08-18：按两个 Python 参考文件重写三帧坐标转换、Tukey Point-to-Plane ICP、相邻配准顺序和二维羽化接缝流程。
 - 2026-08-18：标定改为直接读取 `RTmatDepth2robot/RotMat/TVec`；来源点云恢复为 ICP 前机器人基坐标语义。
 - 2026-08-18：ASCII PLY 读取继续在配准后台任务中执行，按 Header 顶点数预分配，并使用复用的 64 KiB 行缓冲减少逐点临时分配；超长顶点行明确失败。
-- 2026-08-20：GUI 和命令行回归输出统一改为 ASCII PLY（`format ascii 1.0`），保留全分辨率正式输出和独立抽样预览，不再生成 binary little-endian PLY。
+- 2026-08-31：GUI、命令行回归及诊断输出统一改为 binary little-endian PLY（`format binary_little_endian 1.0`）；输入 ASCII PLY 在运行时缓存目录 canonical 化，原始文件不修改。
 - 2026-08-20：`pointcloudstitch` 删除独立的单线程逐行 ASCII 解析路径，改为直接复用 `pointcloudview` 的 `pcv_io` 文件映射并行读取器；保持顶点顺序、源索引、过滤和坐标转换语义不变。
 - 2026-08-18：确认手眼转换继续严格采用 Python 的 `T_base_flange(Y) * RTmatDepth2robot * [X,0,Z,1]`，不反转 XML 矩阵；定位三段断开来自轨迹中垂面偏离真实点云重叠区。
 - 2026-08-18：接缝改为 ICP 后真实投影重叠区中点，并加入双侧接缝带有效性保护；无有效双侧数据时禁止破坏性裁剪。

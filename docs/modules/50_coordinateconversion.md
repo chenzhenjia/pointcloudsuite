@@ -1,0 +1,13 @@
+# 50_coordinateconversion：坐标转换
+
+状态：已实现，迁移中。当前实现位于 `src/registration` 的手眼标定和线扫转换部分，模块 target 为 `pcv_m50_coordinateconversion`。
+
+契约：`camera -> robot_base`，位姿 `[X,Y,Z,A,B,C]`，旋转约定 `Rz(C)*Ry(B)*Rx(A)`；验证刚体矩阵、插值、取消和源索引。
+
+接口/测试：`loadHandEyeCalibration`、`transformLineScanToRobotBase`；`handeye_transform_tests`。
+
+## 变更记录
+
+### 2026-08-31
+
+- 建立独立模块映射和兼容入口；暂不移动共享实现。

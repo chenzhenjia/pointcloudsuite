@@ -24,10 +24,12 @@ target_link_libraries(pointcloudview
         Qt::OpenGLWidgets
         pcv_core
         pcv_infrastructure
-        pcv_io
+        pcv_m10_pointcloudread
+        pcv_m20_pointcloudrender
         pcv_filtering
-        pcv_output
-        pcv_interface
+        pcv_m60_planefitting
+        pcv_m70_roi_template
+        pcv_m80_planeoutput
 )
 
 if (WIN32)

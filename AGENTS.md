@@ -339,6 +339,36 @@ Preset：
 - test_pointcloud_a/、mid_gap/ 是实验/回归产物；提交前检查是否应忽略。
 - 任何操作前先执行 git status --short；不要使用 git reset --hard 或覆盖无关文件。
 
+## 10. v0.3 模块化治理
+
+当前活动需求文档为 `docs/requirements/pointcloudview_v0.3.md`。模块文档位于
+`docs/modules/`，代码迁移目录位于 `modules/`。模块编号和职责固定如下：
+
+| module | responsibility | current mapping |
+|---|---|---|
+| `10_pointcloudread` | PLY 读写、格式校验、缓存 | `src/io`、`include/pcv/io`、`pcv_io` |
+| `20_pointcloudrender` | Qt/OpenGL 画布、VBO、点选和异步发布 | `apps/pointcloudview` |
+| `30_pointcloudstitch` | 多帧流程、接缝融合和结果管理 | `apps/pointcloudstitch` |
+| `40_pointcloudregistration` | ICP、相邻帧配准和结构验收 | `src/registration` |
+| `50_coordinateconversion` | 手眼标定、位姿插值和坐标变换 | `src/registration` |
+| `60_planefitting` | 三点/n 点平面拟合和一致性校验 | `apps/pointcloudview/pointcloudprocessor.*` |
+| `70_roi_template` | 工件坐标系、ROI、模板和 Mask | `pcv_interface`、`apps/pointcloudview` |
+| `80_planeoutput` | PNG/PLY/JSON 成套输出和回滚 | `src/output`、`pcv_output` |
+| `90_interferenceplane` | 干涉平面检查 | 未实现 |
+| `100_qualityreport` | 质量报告 | 未实现 |
+
+### 单模块修改规则
+
+1. 每个需求必须指定一个主模块编号；默认只修改该模块目录和对应测试/文档。
+2. 修改公共头文件、CMake 或跨模块接口时，必须在提交说明和模块日志中列出受影响模块、依赖方向和回归测试。
+3. 模块 target 使用 `pcv_m<编号>_<名称>` 命名。迁移期间允许 `pcv_io`、`pcv_registration`、`pcv_output` 等兼容 target，但不得新增重复实现。
+4. 共享算法放在模块 `src/`，公共头放在模块 `include/`；应用只负责 UI 和流程编排。共享模块不得依赖应用或 Qt Widgets（`20_pointcloudrender` 除外）。
+5. 每次修改必须在对应 `docs/modules/<模块>.md` 追加日期、需求、文件、行为变化、验证结果和风险；未实现模块不得写入功能成功记录。
+
+### 标准流程
+
+需求登记 → 模块归属 → 接口设计 → 单模块实现 → 模块测试 → 依赖模块构建 → 全量验证 → 模块日志更新 → `git diff --check` 和 `git status --short`。涉及公共头、CMake、处理器或输出契约时必须完整重编译。
+
 汇报模板：
 
     做了什么：

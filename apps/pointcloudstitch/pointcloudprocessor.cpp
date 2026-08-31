@@ -1,4 +1,5 @@
 #include "pointcloudprocessor.h"
+#include <pcv/io/cloud_cache.h>
 #include <pcv/filtering/downsample.h>
 #include <pcv/io/ply_reader.h>
 #include "handeye_transform.h"
@@ -153,26 +154,19 @@ QString boundsText(const Bounds &bounds) {
         .arg(bounds.maximum.z(), 0, 'g', 8);
 }
 
-bool readAsciiPly(const QString &path, RawCloud *result, QString *error,
+bool readCanonicalPly(const QString &path, RawCloud *result, QString *error,
                   const std::function<bool()> &isCancelled) {
     pcv::detail::io::PlyReadOptions options;
     options.isCancelled = isCancelled;
-    pcv::detail::io::PlyReadResult read =
-        pcv::detail::io::readPly(path, options);
-    if (!read.ok) {
-        if (error) *error = read.error;
+    pcv::detail::io::CachedCloudResult cached =
+        pcv::detail::io::readPlyCached(path, {}, options);
+    if (!cached.ok) {
+        if (error) *error = cached.error;
         return false;
     }
-    if (read.format != pcv::detail::io::PlyFormat::Ascii) {
-        if (error) *error = QStringLiteral("参考流程要求包含 x/y/z 的 ASCII PLY");
-        return false;
-    }
-    result->points = std::move(read.points);
-    result->declaredCount = read.declaredPointCount;
-    result->boundaryScanElapsedMs = read.boundaryScanElapsedMs;
-    result->parseElapsedMs = read.parseElapsedMs;
-    result->totalElapsedMs = read.totalElapsedMs;
-    result->readerWorkerCount = read.asciiWorkerCount;
+    result->points = std::move(cached.points);
+    result->declaredCount = result->points.size();
+    result->readerWorkerCount = 0;
     return true;
 }
 
@@ -1017,7 +1011,7 @@ WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inpu
         update(conversionEnd*float(index)/float(inputs.size()),QStringLiteral("读取并转换点云 %1/%2：%3").arg(index+1).arg(inputs.size()).arg(QFileInfo(inputs[index].filePath).fileName()));
         RawCloud raw;
         QString readError;
-        if(!readAsciiPly(inputs[index].filePath,&raw,&readError,icp.isCancelled)){
+        if(!readCanonicalPly(inputs[index].filePath,&raw,&readError,icp.isCancelled)){
             result.cancelled=readError==QStringLiteral("已取消");
             result.error=QStringLiteral("%1：%2").arg(inputs[index].filePath,readError);
             return result;
@@ -1062,13 +1056,12 @@ WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inpu
         frame.signedTravel=transformed.signedTravel;
         frame.dominantTravelAxis=transformed.dominantTravelAxis;
         result.frameMetadata.push_back(frame);
-        result.diagnostics+=QStringLiteral("scan %1: kept=%2/%3, basic rejected=%4, range rejected=%5, sample=%6, PLY.Y=[%7,%8], base bounds=%9, ASCII reader=%10 workers, boundary=%11 ms, parse=%12 ms, total=%13 ms\n")
+        result.diagnostics+=QStringLiteral("scan %1: kept=%2/%3, basic rejected=%4, range rejected=%5, sample=%6, PLY.Y=[%7,%8], base bounds=%9, canonical binary reader\n")
             .arg(index+1).arg(converted.full.size()).arg(converted.declaredCount)
             .arg(converted.rejectedBasic).arg(converted.rejectedRange).arg(converted.sample.size())
             .arg(converted.inputYMinimum,0,'g',8).arg(converted.inputYMaximum,0,'g',8)
             .arg(boundsText(cloudBounds(converted.full)))
-            .arg(raw.readerWorkerCount).arg(raw.boundaryScanElapsedMs)
-            .arg(raw.parseElapsedMs).arg(raw.totalElapsedMs);
+            ;
         result.sourceFiles.push_back(inputs[index].filePath);
         clouds.push_back(std::move(converted));
     }
