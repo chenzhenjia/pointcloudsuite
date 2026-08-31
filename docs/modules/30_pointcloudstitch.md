@@ -9,3 +9,4 @@
 ### 2026-08-31
 
 - 建立模块边界和 `pcv_m30_pointcloudstitch` 兼容入口；保留现有应用流程。
+- M3/M4：`stitching_interface` 已迁移到模块源码，target 负责流程编排并依赖配准、坐标转换和读写模块。

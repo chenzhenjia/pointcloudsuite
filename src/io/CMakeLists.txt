@@ -1,11 +1,3 @@
-add_library(pcv_io STATIC
-    cloud_cache.cpp
-    ${PROJECT_SOURCE_DIR}/include/pcv/io/cloud_cache.h
-    ply_reader.cpp
-    ${PROJECT_SOURCE_DIR}/include/pcv/io/ply_reader.h
-    ply_writer.cpp
-    ${PROJECT_SOURCE_DIR}/include/pcv/io/ply_writer.h
-)
-target_include_directories(pcv_io PUBLIC
-    ${PROJECT_SOURCE_DIR}/include)
-target_link_libraries(pcv_io PUBLIC pcv_core pcv_infrastructure Qt::Core)
+# Compatibility target. The implementation now lives in modules/10_pointcloudread.
+add_library(pcv_io INTERFACE)
+target_link_libraries(pcv_io INTERFACE pcv_m10_pointcloudread)

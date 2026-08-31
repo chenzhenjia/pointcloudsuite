@@ -2,7 +2,7 @@
 #include <pcv/io/cloud_cache.h>
 #include <pcv/filtering/downsample.h>
 #include <pcv/io/ply_reader.h>
-#include "handeye_transform.h"
+#include <pcv/registration/handeye_transform.h>
 
 #include <QFileInfo>
 #include <QQuaternion>

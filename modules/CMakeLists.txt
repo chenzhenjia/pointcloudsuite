@@ -1,4 +1,4 @@
-# Transitional module targets. Implementations remain in src/ and apps/ until migration milestones complete.
+# v0.3 module targets. Compatibility aggregates remain under src/ during migration.
 add_subdirectory(10_pointcloudread)
 add_subdirectory(20_pointcloudrender)
 add_subdirectory(30_pointcloudstitch)

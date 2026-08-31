@@ -1,3 +1,3 @@
 # 40_pointcloudregistration
 
-ICP 和结构验收模块。当前代码由 `pcv_registration` 提供，后续迁移到本目录。
+ICP 和结构验收模块。规范实现位于本目录，兼容 target `pcv_registration` 仅用于旧调用方。

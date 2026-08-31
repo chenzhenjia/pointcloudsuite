@@ -1,6 +1,6 @@
 #pragma once
 
-#include "pointcloudprocessor.h"
+#include <pcv/core/point_types.h>
 
 #include <QMatrix4x4>
 #include <QString>

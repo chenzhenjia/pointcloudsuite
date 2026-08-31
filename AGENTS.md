@@ -346,14 +346,14 @@ Preset：
 
 | module | responsibility | current mapping |
 |---|---|---|
-| `10_pointcloudread` | PLY 读写、格式校验、缓存 | `src/io`、`include/pcv/io`、`pcv_io` |
+| `10_pointcloudread` | PLY 读写、格式校验、缓存 | `modules/10_pointcloudread`；兼容 `src/io`/`pcv_io` |
 | `20_pointcloudrender` | Qt/OpenGL 画布、VBO、点选和异步发布 | `apps/pointcloudview` |
-| `30_pointcloudstitch` | 多帧流程、接缝融合和结果管理 | `apps/pointcloudstitch` |
-| `40_pointcloudregistration` | ICP、相邻帧配准和结构验收 | `src/registration` |
-| `50_coordinateconversion` | 手眼标定、位姿插值和坐标变换 | `src/registration` |
+| `30_pointcloudstitch` | 多帧流程、接缝融合和结果管理 | `modules/30_pointcloudstitch` + `apps/pointcloudstitch` |
+| `40_pointcloudregistration` | ICP、相邻帧配准和结构验收 | `modules/40_pointcloudregistration` |
+| `50_coordinateconversion` | 手眼标定、位姿插值和坐标变换 | `modules/50_coordinateconversion` |
 | `60_planefitting` | 三点/n 点平面拟合和一致性校验 | `apps/pointcloudview/pointcloudprocessor.*` |
-| `70_roi_template` | 工件坐标系、ROI、模板和 Mask | `pcv_interface`、`apps/pointcloudview` |
-| `80_planeoutput` | PNG/PLY/JSON 成套输出和回滚 | `src/output`、`pcv_output` |
+| `70_roi_template` | 工件坐标系、ROI、模板和 Mask | `modules/70_roi_template` + `apps/pointcloudview` |
+| `80_planeoutput` | PNG/PLY/JSON 成套输出和回滚 | `modules/80_planeoutput`；兼容 `src/output`/`pcv_output` |
 | `90_interferenceplane` | 干涉平面检查 | 未实现 |
 | `100_qualityreport` | 质量报告 | 未实现 |
 

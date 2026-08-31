@@ -7,8 +7,6 @@ qt_add_executable(pointcloudstitch WIN32
     stitchingwindow.ui
     seamfusion.cpp
     seamfusion.h
-    handeye_transform.cpp
-    handeye_transform.h
     pointcloudprocessor.cpp
     pointcloudprocessor.h
 )

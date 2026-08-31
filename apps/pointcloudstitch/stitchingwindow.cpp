@@ -1,5 +1,5 @@
 #include "stitchingwindow.h"
-#include "handeye_transform.h"
+#include <pcv/registration/handeye_transform.h>
 #include "ui_stitchingwindow.h"
 #include <pcv/io/ply_writer.h>
 

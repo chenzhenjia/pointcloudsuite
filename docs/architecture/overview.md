@@ -21,6 +21,11 @@ tools -> shared libraries and diagnostic entry points
 现有 processor 源文件仍是应用边界，算法会逐步抽取。新的可复用代码放入 `src/`，
 项目头文件放入 `include/pcv/`，不得直接放入应用目录充当共享实现。
 
+v0.3 迁移后，`modules/10_pointcloudread`、`modules/30_pointcloudstitch`、
+`modules/40_pointcloudregistration`、`modules/50_coordinateconversion`、
+`modules/70_roi_template` 和 `modules/80_planeoutput` 已承载规范源码与独立
+`pcv_m<编号>_<名称>` target；原 `src/*` target 保留为兼容聚合入口，待调用方完全切换后清理。
+
 ## 依赖规则
 
 - 共享算法代码不得依赖 Qt Widgets。

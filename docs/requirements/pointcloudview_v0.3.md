@@ -45,12 +45,12 @@ v0.3 将当前 PointCloudSuite 统一为企业级模块化项目。源码、CMak
 
 ## 6. 开发路线
 
-1. M0：建立 v0.3、十个模块文档、`AGENTS.md` 规则和需求追踪。
-2. M1：建立 `modules/` 目录、统一 target 命名和现有实现映射。
-3. M2：迁移 `10`、`50`、`60`、`80` 的公共代码与测试，保留兼容入口。
-4. M3：拆分 `30` 拼接编排和 `40` 配准算法，切换应用入口。
-5. M4：抽取 `20` 渲染与 `70` ROI/模板，删除重复处理器实现。
-6. M5：删除兼容 target/forwarding header，完成全量构建和审计。
+1. M0：已完成，建立 v0.3、十个模块文档、`AGENTS.md` 规则和需求追踪。
+2. M1：已完成，建立 `modules/` 目录、统一 target 命名和现有实现映射。
+3. M2：已完成 `10`、`50`、`80` 的真实源码迁移；`60` 保留处理器兼容入口。
+4. M3：已完成 `30` 接口编排与 `40` 配准算法拆分，应用入口已切换模块 target。
+5. M4：已完成 `70` ROI/模板接口抽取；`20` 渲染仍保留在 Qt 应用边界，待独立渲染组件需求明确后迁移。
+6. M5：进行中。兼容 target/forwarding header 暂保留，待全部调用方切换到模块化头路径后清理。
 7. M6：根据实际业务需求启动 `90` 干涉平面检查和 `100` 质量报告。
 
 ## 7. 验收门槛
@@ -63,3 +63,14 @@ v0.3 将当前 PointCloudSuite 统一为企业级模块化项目。源码、CMak
 
 - 建立 v0.3 活动基线，固定十个模块编号、代码迁移策略、标准流程和验收门槛。
 - 建立模块文档与 `modules/` CMake 兼容入口；未移动现有用户修改。
+
+### 2026-08-31（M2-M4 迁移）
+
+- `10_pointcloudread`：PLY 读写、缓存和 writer 源码迁移到 `modules/10_pointcloudread`。
+- `40_pointcloudregistration`：多帧配准与接缝融合迁移到 `modules/40_pointcloudregistration`。
+- `50_coordinateconversion`：手眼标定和线扫坐标转换迁移到 `modules/50_coordinateconversion`。
+- `70_roi_template`：临时工件/ROI 接口迁移到 `modules/70_roi_template`。
+- `80_planeoutput`：平面输出契约迁移到 `modules/80_planeoutput`。
+- `30_pointcloudstitch`：stitching 接口迁移到 `modules/30_pointcloudstitch`。
+- 旧 `pcv_io`、`pcv_registration`、`pcv_interface`、`pcv_output` 保留为兼容聚合 target；旧公共头保留 forwarding header。
+- Debug 构建与 CTest `12/12` 通过。

@@ -29,6 +29,7 @@ target_link_libraries(pointcloudview
         pcv_filtering
         pcv_m60_planefitting
         pcv_m70_roi_template
+        pcv_m30_pointcloudstitch
         pcv_m80_planeoutput
 )
 
