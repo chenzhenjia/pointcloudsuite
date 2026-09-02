@@ -42,11 +42,18 @@ int main(int argc, char **argv)
         source.start();
         source.emitFrame(); // frame 2
         source.emitFrame(); // frame 3
+        if (!require(source.frameSlot().publishedCount() == 3
+                         && source.frameSlot().droppedCount() == 2,
+                     "frame slot statistics should count published and dropped frames")) return 1;
         auto frame = source.frameSlot().take();
         if (!require(frame != nullptr && frame->frameNumber == 3,
                      "frame slot must keep only the latest frame")) return 1;
         if (!require(source.frameSlot().take() == nullptr,
                      "take() must clear the slot")) return 1;
+        source.frameSlot().resetStatistics();
+        if (!require(source.frameSlot().publishedCount() == 0
+                         && source.frameSlot().droppedCount() == 0,
+                     "frame slot statistics should reset")) return 1;
         source.stop();
     }
 

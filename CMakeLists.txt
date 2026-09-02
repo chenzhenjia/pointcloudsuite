@@ -26,7 +26,7 @@ option(PCV_BUILD_POINTCLOUDSTITCH "Build the point cloud stitching application" 
 option(PCV_BUILD_TOOLS "Build diagnostic command-line tools" OFF)
 option(PCV_BUILD_TESTS "Build all automated tests" OFF)
 option(PCV_BUILD_EXPERIMENTAL_CAMERA
-    "Build experimental Hikvision camera acquisition and its UI/tests" OFF)
+    "Build Hikvision camera acquisition and its UI/tests" ON)
 
 if(MSVC)
     set(CMAKE_CXX_COMPILER_LAUNCHER

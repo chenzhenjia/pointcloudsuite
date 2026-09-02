@@ -67,7 +67,7 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 
 ### 2026-09（相机取流扩展，风险收敛）
 
-- 登记实验模块 `05_camerainput`（`pcv_m05_camerainput`）：通过 `PCV_BUILD_EXPERIMENTAL_CAMERA=ON` 显式构建，默认 v0.3 构建不包含相机扩展；
+- 登记实验模块 `05_camerainput`（`pcv_m05_camerainput`）：`PCV_BUILD_EXPERIMENTAL_CAMERA` 默认 `ON`，默认构建包含相机扩展，仍可显式关闭；SDK 存在时链接真实 `Mv3dLp`，否则保留 Mock 演示路径；
 - `20_pointcloudrender` 新增 `PointCloudCanvas::setCloudStreaming`（实时流式刷新，保留覆盖层）；
 - `apps/pointcloudview` 新增 `CameraDialog`（相机实时取流页面）与 `live_pipeline`（JSON pipeline 执行器，camera.nextFrame/filter.voxel/canvas.publish）；
 - 实时路径仍为实验链路；`live_pipeline` 尚未接入生产相机链；
@@ -78,7 +78,7 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 
 - `apps/pointcloudview` 使用 Qt Designer 增加顶部工具栏、中央画布工作区及采集、清理、平面、输出四步导航；既有算法和输出契约不变；
 - 实验相机对话框显示当前 `DeviceInfo` 字段和 Mock 源，未实现的相机参数以禁用控件显式提示，不纳入 v0.3 稳定能力；
-- 图标资源仅服务 UI，不引入共享模块依赖。相机扩展仍由 `PCV_BUILD_EXPERIMENTAL_CAMERA=ON` 显式启用。
+- 图标资源仅服务 UI，不引入共享模块依赖。相机 GUI 使用 SDK 回调取流，默认请求 `Range_Image=7`；实时帧仅预览，冻结有效帧后进入既有点云处理和输出流程。
 
 ### 2026-09（全界面浅色主题补强）
 

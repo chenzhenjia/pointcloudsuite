@@ -75,7 +75,7 @@ QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::su
         <item row="7" column="1"><widget class="QLabel" name="lbl_frame"><property name="text"><string>帧：-</string></property></widget></item>
         <item row="8" column="0"><widget class="QLabel" name="lbl_rate_title"><property name="text"><string>帧率</string></property></widget></item>
         <item row="8" column="1"><widget class="QLabel" name="lbl_rate"><property name="text"><string>帧率：-</string></property></widget></item>
-        <item row="9" column="0" colspan="2"><layout class="QHBoxLayout" name="actionLayout"><item><widget class="QPushButton" name="btn_connect"><property name="text"><string>连接</string></property></widget></item><item><widget class="QPushButton" name="btn_start"><property name="enabled"><bool>false</bool></property><property name="text"><string>开始取流</string></property></widget></item></layout></item>
+        <item row="9" column="0" colspan="2"><layout class="QHBoxLayout" name="actionLayout"><item><widget class="QPushButton" name="btn_connect"><property name="text"><string>连接</string></property></widget></item><item><widget class="QPushButton" name="btn_start"><property name="enabled"><bool>false</bool></property><property name="text"><string>开始取流</string></property></widget></item><item><widget class="QPushButton" name="btn_freeze"><property name="enabled"><bool>false</bool></property><property name="text"><string>冻结当前帧</string></property></widget></item></layout></item>
        </layout>
       </widget>
      </item>

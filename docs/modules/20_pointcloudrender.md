@@ -12,6 +12,14 @@
 
 ## 变更记录
 
+### 2026-09（实时预览 MVP）
+
+- `setCloudStreaming()` 的点云 VBO 改为 `StreamDraw` + 容量复用，避免每帧重新分配 GPU 缓冲；
+- 流式换帧继续清除点索引覆盖层、保留视角和世界坐标覆盖层；
+- 新增状态缓冲容量复用，上传失败时保持 fail-closed；
+- 与 `05_camerainput` 的实时链路保持 GUI 线程上传、后台线程转换的边界；
+- 未验证：真实 Windows 桌面交互和 DP2240 约 15 FPS 性能。
+
 ### 2026-08-31
 
 - M5.3 收尾：`PointCloudCanvas` 全部构造、OpenGL、VBO/FBO、绘制、拾取、交互和资源释放方法已移入 `src/pointcloud_canvas.cpp`；公共头仅保留声明、信号回调和字段。

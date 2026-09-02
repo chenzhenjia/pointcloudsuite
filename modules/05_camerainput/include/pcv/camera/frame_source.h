@@ -42,10 +42,18 @@ public:
     // Non-destructive peek of the current frame number.
     std::uint32_t latestFrameNumber() const;
 
+    // Acquisition diagnostics. Counters are monotonic for the lifetime of
+    // the slot and are safe to query from the consumer thread.
+    quint64 publishedCount() const;
+    quint64 droppedCount() const;
+    void resetStatistics();
+
 private:
     mutable std::mutex m_mutex;
     std::shared_ptr<const CameraFrame> m_latest;
     std::function<void()> m_onFramePublished;
+    quint64 m_publishedCount = 0;
+    quint64 m_droppedCount = 0;
 };
 
 // Abstract device-level acquisition interface shared by the real SDK wrapper

@@ -85,6 +85,9 @@ public:
         m_voxelSize = float(params.value(QStringLiteral("voxelSize")).toDouble(0.25));
         m_centroid = params.value(QStringLiteral("centroid")).toBool(false);
         m_enabled = params.value(QStringLiteral("enabled")).toBool(true);
+        m_maxPoints = qBound<qsizetype>(qsizetype(1),
+                                        qsizetype(params.value(QStringLiteral("maxPoints")).toInteger(300000)),
+                                        qsizetype(5000000));
     }
 
     QString type() const override { return QStringLiteral("filter.voxel"); }
@@ -92,13 +95,21 @@ public:
     LiveFrame run(const LiveFrame &input) override
     {
         LiveFrame out = input;
-        if (!out.ok || !m_enabled) return out;
+        if (!out.ok || (!m_enabled && input.points.size() <= m_maxPoints)) return out;
         const pcv::detail::filtering::VoxelDownsampleResult downsampled =
             pcv::detail::filtering::voxelDownsample(
                 input.points, m_voxelSize,
                 m_centroid ? pcv::detail::filtering::VoxelRepresentative::Centroid
                            : pcv::detail::filtering::VoxelRepresentative::FirstInputPoint);
         out.points = downsampled.points;
+        if (out.points.size() > m_maxPoints) {
+            QVector<pointcloud::Point3D> bounded;
+            bounded.reserve(int(m_maxPoints));
+            const qsizetype stride = qMax<qsizetype>(1, out.points.size() / m_maxPoints);
+            for (qsizetype i = 0; i < out.points.size() && bounded.size() < m_maxPoints; i += stride)
+                bounded.push_back(out.points.at(i));
+            out.points = std::move(bounded);
+        }
         return out;
     }
 
@@ -106,6 +117,7 @@ private:
     float m_voxelSize = 0.25f;
     bool m_centroid = false;
     bool m_enabled = true;
+    qsizetype m_maxPoints = 300000;
 };
 
 class CanvasPublishNode final : public PipelineNode {
@@ -189,7 +201,8 @@ QJsonObject PipelineNodeRegistry::defaultDocument()
                              {QStringLiteral("params"), QJsonObject{
                                  {QStringLiteral("enabled"), false},
                                  {QStringLiteral("voxelSize"), 0.25},
-                                 {QStringLiteral("centroid"), false}}}});
+                                 {QStringLiteral("centroid"), false},
+                                 {QStringLiteral("maxPoints"), 300000}}}});
     steps.append(QJsonObject{{QStringLiteral("id"), QStringLiteral("publish")},
                              {QStringLiteral("type"), QStringLiteral("canvas.publish")}});
     return QJsonObject{{QStringLiteral("schema_version"),
@@ -276,7 +289,7 @@ std::unique_ptr<PipelineRunner> PipelineRunner::fromJson(
             const QJsonObject params = paramsValue.toObject();
             for (const QString &key : params.keys()) {
                 if (key != QStringLiteral("enabled") && key != QStringLiteral("voxelSize")
-                    && key != QStringLiteral("centroid")) {
+                    && key != QStringLiteral("centroid") && key != QStringLiteral("maxPoints")) {
                     if (error) *error = QStringLiteral("unknown filter.voxel parameter: %1").arg(key);
                     return nullptr;
                 }
@@ -284,6 +297,11 @@ std::unique_ptr<PipelineRunner> PipelineRunner::fromJson(
             const double voxel = params.value(QStringLiteral("voxelSize")).toDouble(0.25);
             if (!std::isfinite(voxel) || voxel <= 0.0 || voxel > 1000.0) {
                 if (error) *error = QStringLiteral("filter.voxel voxelSize is out of range");
+                return nullptr;
+            }
+            const qint64 maxPoints = params.value(QStringLiteral("maxPoints")).toInteger(300000);
+            if (maxPoints < 1 || maxPoints > 5000000) {
+                if (error) *error = QStringLiteral("filter.voxel maxPoints is out of range");
                 return nullptr;
             }
         }

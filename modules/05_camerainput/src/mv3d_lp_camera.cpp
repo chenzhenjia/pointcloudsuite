@@ -171,6 +171,33 @@ struct Mv3dLpCamera::Impl {
     std::optional<ImageMode> activeMode;
     bool sdkLeaseHeld = false;
     CallbackContext callbackContext;
+
+    void waitForCallbacks()
+    {
+        callbackContext.accepting.store(false, std::memory_order_release);
+        std::unique_lock<std::mutex> lock(callbackContext.mutex);
+        callbackContext.condition.wait(lock, [this]() {
+            return callbackContext.inFlight.load(std::memory_order_acquire) == 0;
+        });
+    }
+
+    void shutdown()
+    {
+        waitForCallbacks();
+        if (running.load() && handle != nullptr) {
+            MV3D_LP_StopMeasure(handle);
+        }
+        running.store(false);
+        if (deviceOpen.load() || handle != nullptr) {
+            MV3D_LP_CloseDevice(&handle);
+            deviceOpen.store(false);
+            handle = nullptr;
+        }
+        if (sdkLeaseHeld) {
+            releaseSdk();
+            sdkLeaseHeld = false;
+        }
+    }
 };
 
 Mv3dLpCamera::Mv3dLpCamera(const QString &serialNumber, std::uint32_t ipTimeoutMs)
@@ -237,8 +264,7 @@ CameraError Mv3dLpCamera::start()
 
     const QByteArray sn = m_impl->serialNumber.toUtf8();
     if (MV3D_LP_OpenDeviceBySN(&m_impl->handle, sn.constData()) != MV3D_LP_OK) {
-        releaseSdk();
-        m_impl->sdkLeaseHeld = false;
+        m_impl->shutdown();
         return {QStringLiteral("MV3D_LP_OpenDeviceBySN failed for %1")
                     .arg(m_impl->serialNumber)};
     }
@@ -280,20 +306,13 @@ CameraError Mv3dLpCamera::start()
     const auto exceptionCallbackStatus = MV3D_LP_RegisterExceptionCallBack(
         m_impl->handle, exceptionCallback, &m_impl->callbackContext);
     if (imageCallbackStatus != MV3D_LP_OK || exceptionCallbackStatus != MV3D_LP_OK) {
-        m_impl->callbackContext.accepting.store(false, std::memory_order_release);
-        MV3D_LP_CloseDevice(&m_impl->handle);
-        m_impl->deviceOpen.store(false);
-        releaseSdk();
-        m_impl->sdkLeaseHeld = false;
+        m_impl->shutdown();
         return {QStringLiteral("Mv3dLp callback registration failed")};
     }
 
     const MV3D_LP_STATUS startStatus = MV3D_LP_StartMeasure(m_impl->handle);
     if (startStatus != MV3D_LP_OK) {
-        MV3D_LP_CloseDevice(&m_impl->handle);
-        m_impl->deviceOpen.store(false);
-        releaseSdk();
-        m_impl->sdkLeaseHeld = false;
+        m_impl->shutdown();
         return {QStringLiteral("MV3D_LP_StartMeasure failed: %1").arg(statusText(startStatus))};
     }
     m_impl->running.store(true);
@@ -304,26 +323,7 @@ void Mv3dLpCamera::stop()
 {
     // Synchronized with publish(), so teardown cannot queue a new UI call.
     m_impl->slot.clearFramePublishedCallback();
-    m_impl->callbackContext.accepting.store(false, std::memory_order_release);
-    {
-        std::unique_lock<std::mutex> lock(m_impl->callbackContext.mutex);
-        m_impl->callbackContext.condition.wait(lock, [this]() {
-            return m_impl->callbackContext.inFlight.load(std::memory_order_acquire) == 0;
-        });
-    }
-    if (m_impl->running.load()) {
-        MV3D_LP_StopMeasure(m_impl->handle);
-        m_impl->running.store(false);
-    }
-    if (m_impl->deviceOpen.load()) {
-        MV3D_LP_CloseDevice(&m_impl->handle);
-        m_impl->deviceOpen.store(false);
-        m_impl->handle = nullptr;
-    }
-    if (m_impl->sdkLeaseHeld) {
-        releaseSdk();
-        m_impl->sdkLeaseHeld = false;
-    }
+    m_impl->shutdown();
 }
 
 bool Mv3dLpCamera::isRunning() const
@@ -356,13 +356,8 @@ CameraError Mv3dLpCamera::softTrigger()
 CameraError Mv3dLpCamera::reconnectOnce()
 {
     // Stop whatever is still active, then reopen and restart streaming.
-    m_impl->callbackContext.accepting.store(false, std::memory_order_release);
-    {
-        std::unique_lock<std::mutex> lock(m_impl->callbackContext.mutex);
-        m_impl->callbackContext.condition.wait(lock, [this]() {
-            return m_impl->callbackContext.inFlight.load(std::memory_order_acquire) == 0;
-        });
-    }
+    m_impl->slot.clearFramePublishedCallback();
+    m_impl->waitForCallbacks();
     if (m_impl->running.load()) {
         MV3D_LP_StopMeasure(m_impl->handle);
         m_impl->running.store(false);
@@ -378,7 +373,7 @@ CameraError Mv3dLpCamera::reconnectOnce()
     m_impl->sdkLeaseHeld = true;
     const QByteArray sn = m_impl->serialNumber.toUtf8();
     if (MV3D_LP_OpenDeviceBySN(&m_impl->handle, sn.constData()) != MV3D_LP_OK) {
-        if (m_impl->sdkLeaseHeld) { releaseSdk(); m_impl->sdkLeaseHeld = false; }
+        m_impl->shutdown();
         return {QStringLiteral("MV3D_LP_OpenDeviceBySN failed during reconnect")};
     }
     m_impl->deviceOpen.store(true);
@@ -396,17 +391,12 @@ CameraError Mv3dLpCamera::reconnectOnce()
     const auto exceptionCallbackStatus = MV3D_LP_RegisterExceptionCallBack(
         m_impl->handle, exceptionCallback, &m_impl->callbackContext);
     if (imageCallbackStatus != MV3D_LP_OK || exceptionCallbackStatus != MV3D_LP_OK) {
-        m_impl->callbackContext.accepting.store(false, std::memory_order_release);
-        MV3D_LP_CloseDevice(&m_impl->handle);
-        m_impl->deviceOpen.store(false);
-        if (m_impl->sdkLeaseHeld) { releaseSdk(); m_impl->sdkLeaseHeld = false; }
+        m_impl->shutdown();
         return {QStringLiteral("Mv3dLp callback registration failed during reconnect")};
     }
     const MV3D_LP_STATUS startStatus = MV3D_LP_StartMeasure(m_impl->handle);
     if (startStatus != MV3D_LP_OK) {
-        MV3D_LP_CloseDevice(&m_impl->handle);
-        m_impl->deviceOpen.store(false);
-        if (m_impl->sdkLeaseHeld) { releaseSdk(); m_impl->sdkLeaseHeld = false; }
+        m_impl->shutdown();
         return {QStringLiteral("MV3D_LP_StartMeasure failed during reconnect: %1")
                     .arg(statusText(startStatus))};
     }

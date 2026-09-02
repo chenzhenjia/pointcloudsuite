@@ -164,4 +164,6 @@ private:
     bool m_edgeSelectionMode = false;
     bool m_mouseMoved = false;
     quint64 m_renderRevision = 0;
+    qsizetype m_vertexBufferCapacityBytes = 0;
+    qsizetype m_stateBufferCapacityBytes = 0;
 };

@@ -136,6 +136,25 @@ int main(int argc, char **argv)
         source.stop();
     }
 
+    // Display budget keeps the live preview bounded for oversized frames.
+    {
+        pointcloud::PipelineContext context;
+        auto runner = pointcloud::PipelineRunner::fromJson(
+            QJsonObject{{QStringLiteral("steps"), QJsonArray{
+                step(QStringLiteral("acquire"), QStringLiteral("camera.nextFrame")),
+                step(QStringLiteral("voxel"), QStringLiteral("filter.voxel"),
+                     QJsonObject{{QStringLiteral("enabled"), false},
+                                 {QStringLiteral("maxPoints"), 3}}),
+                step(QStringLiteral("publish"), QStringLiteral("canvas.publish"))}}}, context);
+        if (!require(runner != nullptr, "pipeline should accept maxPoints")) return 1;
+        pointcloud::LiveFrame input;
+        input.hasFrame = true;
+        input.points.resize(10);
+        const auto out = runner->run(input);
+        if (!require(out.ok && out.points.size() <= 3,
+                     "live display budget should cap oversized frames")) return 1;
+    }
+
     std::cout << "live_pipeline_tests: PASS\n";
     return 0;
 }

@@ -36,6 +36,7 @@ public:
 
     // The application binds this to PointCloudCanvas::setCloudStreaming.
     std::function<void(const QVector<pointcloud::Point3D> &)> cloudPublished;
+    std::function<void(const QVector<pointcloud::Point3D> &)> cloudFrozen;
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -45,6 +46,7 @@ private:
     void refreshDevices();
     void toggleConnection();
     void toggleStreaming();
+    void freezeCurrentFrame();
     void onFrameAvailable();
     void triggerFrame();
     void onException(const QString &description);
@@ -63,6 +65,7 @@ private:
     QPushButton *m_connect = nullptr;
     QPushButton *m_start = nullptr;
     QPushButton *m_triggerButton = nullptr;
+    QPushButton *m_freezeButton = nullptr;
     QPushButton *m_refresh = nullptr;
     QLabel *m_status = nullptr;
     QLabel *m_frameInfo = nullptr;
@@ -86,5 +89,6 @@ private:
     std::uint64_t m_streamGeneration = 0;
     std::uint64_t m_conversionGeneration = 0;
     std::uint32_t m_lastConvertedFrameNumber = 0;
+    QVector<pointcloud::Point3D> m_lastConvertedPoints;
     Ui::CameraDialog *ui = nullptr;
 };

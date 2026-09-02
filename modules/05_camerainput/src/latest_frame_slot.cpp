@@ -9,6 +9,8 @@ bool LatestFrameSlot::publish(std::shared_ptr<const CameraFrame> frame)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         dropped = static_cast<bool>(m_latest);
+        ++m_publishedCount;
+        if (dropped) ++m_droppedCount;
         m_latest = std::move(frame);
         notify = m_onFramePublished;
     }
@@ -38,6 +40,25 @@ std::uint32_t LatestFrameSlot::latestFrameNumber() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_latest ? m_latest->frameNumber : 0u;
+}
+
+quint64 LatestFrameSlot::publishedCount() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_publishedCount;
+}
+
+quint64 LatestFrameSlot::droppedCount() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_droppedCount;
+}
+
+void LatestFrameSlot::resetStatistics()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_publishedCount = 0;
+    m_droppedCount = 0;
 }
 
 } // namespace pcv::camera

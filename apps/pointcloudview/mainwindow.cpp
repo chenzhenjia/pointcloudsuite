@@ -373,6 +373,13 @@ void MainWindow::openCameraStream() {
                         tr("相机实时点云  %1 点").arg(QLocale().toString(points.size())));
                 }
             };
+        m_cameraDialog->cloudFrozen =
+            [this](const QVector<pointcloud::Point3D> &points) {
+                if (m_closing || points.isEmpty()) return;
+                m_rawPoints = points;
+                publishCanvasCache(points);
+                statusBar()->showMessage(tr("已冻结相机帧，可执行去噪和平面处理"));
+            };
     }
     m_cameraDialog->show();
     m_cameraDialog->raise();

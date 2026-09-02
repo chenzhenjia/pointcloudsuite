@@ -1,7 +1,7 @@
 # 05_camerainput：海康 Mv3dLp 点云取流模块
 
-状态：实验中（2026-09）；默认不构建，不纳入 v0.3 发布基线。
-需求登记：新增模块，只采集点云图（`ImageMode_PointCloud_Image`=4，帧类型 `ImageType_PointCloud`=ABC32f）。
+状态：实验中（2026-09）；默认构建，仍需实机验收后才能纳入 v0.3 发布基线。
+需求登记：启用 3DMVS 回调取流；默认请求 `Range_Image=7`，按实际帧类型转换为点云。
 
 ## 1. 职责
 
@@ -38,12 +38,12 @@ target：`pcv_m05_camerainput`（STATIC，依赖 `pcv_core` + `Qt::Core`；真�
 - 回调线程安全：`LatestFrameSlot::publish`、callback setter/clear 和 `take()` 均加锁；停止时先清 callback；SDK callback context 通过 `accepting` 与在途计数隔离关闭期回调；
 - 异常事件：`FrameKind::Exception` 帧携带 `exceptionDescription`，转换器拒绝该类事件并给出明确错误；
 - 重连：`reconnectOnce()` 单次重连尝试，由 UI 定时器按间隔驱动；
-- SDK 生命周期：模块内引用计数管理 `Initialize/Finalize`；每次成功 lease 只对应一次 `Finalize`，`stop()` 幂等，重连复用 lease；
+- SDK 生命周期：模块内引用计数管理 `Initialize/Finalize`；每次成功 lease 只对应一次 `Finalize`，`stop()` 幂等；启动或重连失败也会先停止回调、等待在途回调，再关闭设备并释放 lease；
 - 共享库不弹窗、不访问 QWidget；`Mv3dLpCamera` 不依赖 Qt Widgets/OpenGL。
 
 ## 4. CMake
 
-- 变量 `PCV_HIKSDK_ROOT`：默认 `C:/Program Files (x86)/3DMVS/Development`；
+- 变量 `PCV_HIKSDK_ROOT`：默认 `C:/Program Files (x86)/3DMVS/Development`；`PCV_BUILD_EXPERIMENTAL_CAMERA` 默认 `ON`，仍可显式关闭；
 - 找到 `Includes/Mv3dLpApi.h` 且 `Libraries/win64/Mv3dLp.lib` 时定义 `PCV_CAMERA_HAVE_HIKSDK=1` 并编译真机源；
 - 运行时 DLL：`Mv3dLp.dll` 位于 `C:/Program Files (x86)/Common Files/Mv3dLpSDK/Runtime/Win64_x64`，由应用 POST_BUILD 拷贝（见 `apps/pointcloudview/CMakeLists.txt`）。
 
@@ -57,6 +57,14 @@ target：`pcv_m05_camerainput`（STATIC，依赖 `pcv_core` + `Qt::Core`；真�
 未验证项：真实相机连接、坐标系方向（`SDKCoordinateType`）、软触发、重连、关闭时序和性能；`live_pipeline` 尚未接入生产相机链。
 
 ## 6. 变更记录
+
+### 2026-09（实时预览 MVP）
+
+- `LatestFrameSlot` 增加发布/丢帧统计和复位接口，保持 latest-frame-wins 与线程安全语义；
+- `CameraDialog` 增加“冻结当前帧”，冻结结果显式交给主窗口普通点云处理缓存，取流帧仍只用于预览；
+- 实时 pipeline 增加 `filter.voxel.maxPoints`（默认 300000）显示预算，超限时确定性截断；
+- 真实 C16 深度帧继续只允许 SDK `MV3D_LP_MapDepthToPointCloud` 转换，SDK 失败 fail-closed；
+- 未验证：真实 DP2240 坐标方向、软触发、重连和 15 FPS 性能。
 
 ### 2026-09（本模块创建）
 

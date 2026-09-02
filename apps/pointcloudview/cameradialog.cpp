@@ -34,6 +34,7 @@ CameraDialog::CameraDialog(QWidget *parent)
     m_connect = ui->btn_connect;
     m_start = ui->btn_start;
     m_triggerButton = ui->btn_trigger;
+    m_freezeButton = ui->btn_freeze;
     m_refresh = ui->btn_refresh;
     m_status = ui->lbl_status;
     m_frameInfo = ui->lbl_frame;
@@ -54,6 +55,7 @@ CameraDialog::CameraDialog(QWidget *parent)
     connect(m_connect, &QPushButton::clicked, this, &CameraDialog::toggleConnection);
     connect(m_start, &QPushButton::clicked, this, &CameraDialog::toggleStreaming);
     connect(m_triggerButton, &QPushButton::clicked, this, &CameraDialog::triggerFrame);
+    connect(m_freezeButton, &QPushButton::clicked, this, &CameraDialog::freezeCurrentFrame);
 
     m_convertWatcher = std::make_unique<QFutureWatcher<pcv::camera::PointCloudConvertResult>>(this);
     connect(m_convertWatcher.get(), &QFutureWatcher<pcv::camera::PointCloudConvertResult>::finished,
@@ -73,9 +75,16 @@ CameraDialog::CameraDialog(QWidget *parent)
             } else if (m_lastFrameNumber == 0) {
                 ++m_frameCount;
             }
+            if (m_source) {
+                m_rateInfo->setToolTip(tr("已发布 %1 帧，丢弃 %2 帧（最新帧优先）")
+                                           .arg(m_source->frameSlot().publishedCount())
+                                           .arg(m_source->frameSlot().droppedCount()));
+            }
             m_lastFrameNumber = frameNumber;
             m_lastPollMs = now;
             m_frameInfo->setText(tr("帧 #%1  点数 %2").arg(frameNumber).arg(converted.points.size()));
+            m_lastConvertedPoints = converted.points;
+            if (m_freezeButton) m_freezeButton->setEnabled(true);
             pointcloud::LiveFrame frame;
             frame.points = converted.points;
             frame.sourceMode = QStringLiteral("camera.lp");
@@ -177,6 +186,7 @@ void CameraDialog::toggleConnection()
         m_status->setText(tr("未连接"));
         m_frameInfo->setText(tr("帧：-"));
         m_rateInfo->setText(tr("帧率：-"));
+        if (m_freezeButton) m_freezeButton->setEnabled(false);
         return;
     }
 
@@ -226,6 +236,7 @@ void CameraDialog::toggleStreaming()
         return;
     }
     ++m_streamGeneration;
+    m_source->frameSlot().resetStatistics();
     pointcloud::PipelineContext context;
     context.frameSource = [this]() { return m_source.get(); };
     context.publish = [this](const pointcloud::LiveFrame &frame) {
@@ -253,6 +264,7 @@ void CameraDialog::toggleStreaming()
     m_lastPollMs = 0;
     m_frameCount = 0;
     m_start->setText(tr("停止取流"));
+    if (m_freezeButton) m_freezeButton->setEnabled(false);
     m_reconnectTimer->stop();
     m_status->setText(tr("取流中"));
 
@@ -283,6 +295,16 @@ void CameraDialog::onFrameAvailable()
         return;
     }
     launchConversion(std::move(frame));
+}
+
+void CameraDialog::freezeCurrentFrame()
+{
+    if (m_lastConvertedPoints.isEmpty() || !cloudFrozen) {
+        m_status->setText(tr("暂无可冻结的有效帧"));
+        return;
+    }
+    cloudFrozen(m_lastConvertedPoints);
+    m_status->setText(tr("已冻结帧 #%1，可停止取流后进行点云处理").arg(m_lastConvertedFrameNumber));
 }
 
 void CameraDialog::launchConversion(std::shared_ptr<const pcv::camera::CameraFrame> frame)

@@ -575,10 +575,16 @@ void PointCloudCanvas::uploadCloudIfNeeded() {
                 << "bytes=" << uploadBytes;
         m_vertexArray.bind();
         m_vertexBuffer.bind();
-        m_vertexBuffer.setUsagePattern(QOpenGLBuffer::StaticDraw);
+        m_vertexBuffer.setUsagePattern(QOpenGLBuffer::StreamDraw);
         while (glGetError() != GL_NO_ERROR) {}
-        m_vertexBuffer.allocate(m_points.constData(),
-                                int(m_points.size() * qsizetype(sizeof(pointcloud::Point3D))));
+        const qsizetype requiredBytes = m_points.size() * qsizetype(sizeof(pointcloud::Point3D));
+        if (requiredBytes > m_vertexBufferCapacityBytes) {
+            const qsizetype grown = qMax(requiredBytes, qMax<qsizetype>(4096, m_vertexBufferCapacityBytes * 2));
+            m_vertexBuffer.allocate(static_cast<int>(grown));
+            m_vertexBufferCapacityBytes = grown;
+        }
+        if (requiredBytes > 0)
+            m_vertexBuffer.write(0, m_points.constData(), int(requiredBytes));
         const GLenum uploadError = glGetError();
         if (uploadError != GL_NO_ERROR) {
             m_uploadError = uploadError == GL_OUT_OF_MEMORY
@@ -597,7 +603,14 @@ void PointCloudCanvas::uploadCloudIfNeeded() {
                                          sizeof(pointcloud::Point3D));
             m_stateBuffer.bind();
             m_stateBuffer.setUsagePattern(QOpenGLBuffer::DynamicDraw);
-            m_stateBuffer.allocate(m_pointStates.constData(), int(m_pointStates.size()));
+            const qsizetype stateBytes = m_pointStates.size();
+            if (stateBytes > m_stateBufferCapacityBytes) {
+                const qsizetype grown = qMax(stateBytes, qMax<qsizetype>(1024, m_stateBufferCapacityBytes * 2));
+                m_stateBuffer.allocate(static_cast<int>(grown));
+                m_stateBufferCapacityBytes = grown;
+            }
+            if (stateBytes > 0)
+                m_stateBuffer.write(0, m_pointStates.constData(), int(stateBytes));
             glEnableVertexAttribArray(2);
             glVertexAttribIPointer(2, 1, GL_UNSIGNED_BYTE, sizeof(quint8), nullptr);
             m_stateBuffer.release();
@@ -615,7 +628,14 @@ void PointCloudCanvas::uploadStatesIfNeeded() {
         if (!m_stateUploadPending || !m_stateBuffer.isCreated()) return;
         m_vertexArray.bind();
         m_stateBuffer.bind();
-        m_stateBuffer.allocate(m_pointStates.constData(), int(m_pointStates.size()));
+        const qsizetype stateBytes = m_pointStates.size();
+        if (stateBytes > m_stateBufferCapacityBytes) {
+            const qsizetype grown = qMax(stateBytes, qMax<qsizetype>(1024, m_stateBufferCapacityBytes * 2));
+            m_stateBuffer.allocate(static_cast<int>(grown));
+            m_stateBufferCapacityBytes = grown;
+        }
+        if (stateBytes > 0)
+            m_stateBuffer.write(0, m_pointStates.constData(), int(stateBytes));
         m_stateBuffer.release();
         m_vertexArray.release();
         m_stateUploadPending = false;
