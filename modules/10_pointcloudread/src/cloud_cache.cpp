@@ -17,14 +17,33 @@
 
 namespace {
 constexpr quint32 CacheMagic = 0x31564350; // PCV1
-constexpr quint32 CacheVersion = 2;
+constexpr quint32 CacheVersion = 3;
 
-QByteArray sourceFingerprint(const QString &sourceFile) {
+struct SourceIdentity {
+    QString absolutePath;
+    qint64 size = 0;
+    qint64 modifiedMs = 0;
+    QByteArray sha256;
+    bool valid = false;
+};
+
+SourceIdentity sourceIdentity(const QString &sourceFile) {
+    SourceIdentity identity;
+    const QFileInfo info(sourceFile);
+    identity.absolutePath = info.absoluteFilePath();
+    identity.size = info.size();
+    identity.modifiedMs = info.lastModified().toMSecsSinceEpoch();
     QFile file(sourceFile);
-    if (!file.open(QIODevice::ReadOnly)) return {};
+    if (!file.open(QIODevice::ReadOnly)) return identity;
     QCryptographicHash hash(QCryptographicHash::Sha256);
-    while (!file.atEnd()) hash.addData(file.read(1024 * 1024));
-    return hash.result();
+    while (!file.atEnd()) {
+        const QByteArray chunk = file.read(1024 * 1024);
+        if (chunk.isEmpty() && !file.atEnd()) return identity;
+        hash.addData(chunk);
+    }
+    identity.sha256 = hash.result();
+    identity.valid = true;
+    return identity;
 }
 
 QString resolvedCacheDirectory(const QString &requested) {
@@ -33,13 +52,26 @@ QString resolvedCacheDirectory(const QString &requested) {
     return QDir::cleanPath(path);
 }
 
-bool readCache(const QString &sourceFile, const QString &path,
+QString cacheFilePathForIdentity(const SourceIdentity &source,
+                                 const QString &sourceFile,
+                                 const QString &cacheDirectory)
+{
+    QString baseName = QFileInfo(sourceFile).completeBaseName();
+    baseName.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_.-]")),
+                     QStringLiteral("_"));
+    const QByteArray keyInput = source.absolutePath.toUtf8() + source.sha256;
+    const QString key = QString::fromLatin1(QCryptographicHash::hash(
+        keyInput, QCryptographicHash::Sha256).toHex().left(16));
+    return QDir(resolvedCacheDirectory(cacheDirectory)).filePath(
+        QStringLiteral("ply_%1_%2.pcvbin").arg(baseName, key));
+}
+
+bool readCache(const SourceIdentity &source, const QString &path,
                QVector<pointcloud::Point3D> *points) {
-    QFileInfo sourceInfo(sourceFile);
-    sourceInfo.refresh();
     QFile cache(path);
     if (!cache.open(QIODevice::ReadOnly) || cache.size() < 32) return false;
-    if (QFileInfo(path).lastModified() < sourceInfo.lastModified()) return false;
+    if (!source.valid || QFileInfo(path).lastModified().toMSecsSinceEpoch() < source.modifiedMs)
+        return false;
 
     QDataStream stream(&cache);
     stream.setByteOrder(QDataStream::LittleEndian);
@@ -50,9 +82,9 @@ bool readCache(const QString &sourceFile, const QString &path,
     stream >> magic >> version >> count >> sourceSize >> sourceStamp;
     stream >> fingerprint;
     if (stream.status() != QDataStream::Ok || magic != CacheMagic || version != CacheVersion
-        || sourceSize != quint64(sourceInfo.size())
-        || sourceStamp != sourceInfo.lastModified().toMSecsSinceEpoch()
-        || fingerprint != sourceFingerprint(sourceFile)
+        || sourceSize != quint64(source.size)
+        || sourceStamp != source.modifiedMs
+        || fingerprint != source.sha256
         || count > quint64(std::numeric_limits<qsizetype>::max())
         || count > quint64(std::numeric_limits<qint64>::max() / qint64(sizeof(pointcloud::Point3D))))
         return false;
@@ -66,9 +98,9 @@ bool readCache(const QString &sourceFile, const QString &path,
     return true;
 }
 
-bool writeCache(const QString &sourceFile, const QString &path,
+bool writeCache(const SourceIdentity &source, const QString &path,
                 const QVector<pointcloud::Point3D> &points) {
-    const QFileInfo sourceInfo(sourceFile);
+    if (!source.valid) return false;
     if (points.size() > qsizetype(std::numeric_limits<qint64>::max()
                                   / qint64(sizeof(pointcloud::Point3D)))) return false;
     QSaveFile cache(path);
@@ -76,8 +108,7 @@ bool writeCache(const QString &sourceFile, const QString &path,
     QDataStream stream(&cache);
     stream.setByteOrder(QDataStream::LittleEndian);
     stream << CacheMagic << CacheVersion << quint64(points.size())
-           << quint64(sourceInfo.size()) << sourceInfo.lastModified().toMSecsSinceEpoch()
-           << sourceFingerprint(sourceFile);
+           << quint64(source.size) << source.modifiedMs << source.sha256;
     const qint64 bytes = qint64(points.size()) * qint64(sizeof(pointcloud::Point3D));
     if (cache.write(reinterpret_cast<const char *>(points.constData()), bytes) != bytes
         || stream.status() != QDataStream::Ok) return false;
@@ -88,16 +119,8 @@ bool writeCache(const QString &sourceFile, const QString &path,
 namespace pcv::detail::io {
 
 QString cacheFilePath(const QString &sourceFile, const QString &cacheDirectory) {
-    QString baseName = QFileInfo(sourceFile).completeBaseName();
-    baseName.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_.-]")),
-                     QStringLiteral("_"));
-    const QByteArray absolutePath = QFileInfo(sourceFile).absoluteFilePath().toUtf8();
-    const QByteArray content = sourceFingerprint(sourceFile);
-    const QByteArray keyInput = absolutePath + content;
-    const QString key = QString::fromLatin1(QCryptographicHash::hash(
-        keyInput, QCryptographicHash::Sha256).toHex().left(16));
-    return QDir(resolvedCacheDirectory(cacheDirectory)).filePath(
-        QStringLiteral("ply_%1_%2.pcvbin").arg(baseName, key));
+    const SourceIdentity source = sourceIdentity(sourceFile);
+    return cacheFilePathForIdentity(source, sourceFile, cacheDirectory);
 }
 
 CachedCloudResult readPlyCached(const QString &sourceFile, const QString &cacheDirectory,
@@ -108,8 +131,13 @@ CachedCloudResult readPlyCached(const QString &sourceFile, const QString &cacheD
         result.error = QStringLiteral("PLY reading cancelled");
         return result;
     }
-    const QString path = cacheFilePath(sourceFile, cacheDirectory);
-    if (readCache(sourceFile, path, &result.points)) {
+    const SourceIdentity source = sourceIdentity(sourceFile);
+    if (!source.valid) {
+        result.error = QStringLiteral("无法读取 PLY 源文件指纹");
+        return result;
+    }
+    const QString path = cacheFilePathForIdentity(source, sourceFile, cacheDirectory);
+    if (readCache(source, path, &result.points)) {
         result.usedCache = true;
         result.ok = true;
         result.declaredPointCount = result.points.size();
@@ -132,7 +160,7 @@ CachedCloudResult readPlyCached(const QString &sourceFile, const QString &cacheD
     result.boundaryScanElapsedMs = parsed.boundaryScanElapsedMs;
     result.parseElapsedMs = parsed.parseElapsedMs;
     result.totalElapsedMs = parsed.totalElapsedMs;
-    if (!writeCache(sourceFile, path, result.points)) {
+    if (!writeCache(source, path, result.points)) {
         result.error = QStringLiteral("无法写入 PLY 点云缓存");
         result.points.clear();
         return result;
@@ -144,9 +172,12 @@ CachedCloudResult readPlyCached(const QString &sourceFile, const QString &cacheD
         .arg(parsed.format == PlyFormat::Ascii ? QStringLiteral("ascii")
              : parsed.format == PlyFormat::BinaryLittleEndian ? QStringLiteral("binary_little_endian")
              : QStringLiteral("binary_big_endian"));
-    if (!writeBinaryPly(canonical, result.points, &result.error, writeOptions)) {
-        result.points.clear();
-        return result;
+    // The canonical PLY is an audit artifact with no production consumer;
+    // a failure to write it must not discard the successfully read cloud.
+    QString canonicalError;
+    if (!writeBinaryPly(canonical, result.points, &canonicalError, writeOptions)) {
+        result.warnings.push_back(QStringLiteral("无法写入 canonical PLY: %1").arg(canonicalError));
+        qWarning() << "无法写入 canonical PLY:" << canonicalError;
     }
     result.ok = true;
     return result;

@@ -1,8 +1,8 @@
 # PointCloudSuite 点云处理项目需求文档
 
 版本：v0.3  
-最后核对日期：2026-08-31
-状态：迁移完成，发布验收待完成
+最后核对日期：2026-09-01
+状态：核心模块稳定，相机扩展实验中，发布验收待完成
 
 ## 1. 目标和事实来源
 
@@ -22,6 +22,7 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 | `60_planefitting` | 三点/n 点平面算法和诊断 | `pcv_m60_planefitting` | 已实现 |
 | `70_roi_template` | ROI、模板、临时工件接口 | `pcv_m70_roi_template` | 已实现，部分 UI 编排保留 |
 | `80_planeoutput` | PNG、PLY、JSON 成套输出 | `pcv_m80_planeoutput` | 已实现 |
+| `05_camerainput` | 海康相机取流（实验扩展） | `pcv_m05_camerainput` | 实验中，不纳入 v0.3 发布基线 |
 | `90_interferenceplane` | 干涉平面检查 | 无 | 未实现 |
 | `100_qualityreport` | 质量报告 | 无 | 未实现 |
 
@@ -63,6 +64,60 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 当前状态为“迁移完成，发布验收待完成”。未完成真实 GUI 验收和生产夹具逐字段比对前，不标记为 Release Candidate。
 
 ## 8. 变更记录
+
+### 2026-09（相机取流扩展，风险收敛）
+
+- 登记实验模块 `05_camerainput`（`pcv_m05_camerainput`）：通过 `PCV_BUILD_EXPERIMENTAL_CAMERA=ON` 显式构建，默认 v0.3 构建不包含相机扩展；
+- `20_pointcloudrender` 新增 `PointCloudCanvas::setCloudStreaming`（实时流式刷新，保留覆盖层）；
+- `apps/pointcloudview` 新增 `CameraDialog`（相机实时取流页面）与 `live_pipeline`（JSON pipeline 执行器，camera.nextFrame/filter.voxel/canvas.publish）；
+- 实时路径仍为实验链路；`live_pipeline` 尚未接入生产相机链；
+- 验证：实验开关 OFF 的 Debug CTest `13/13`，开关 ON 且 SDK 存在的 Debug CTest `17/17`；完整 SHA-256 缓存回归通过；
+- 未验证项：真实相机 GUI、`SDKCoordinateType` 坐标映射、实机软触发/重连、关闭时序和 130 万点性能，均为发布阻断项。
+
+### 2026-09-01（当前差异风险收敛）
+
+- P0：帧槽通知改为加锁 setter/clear；FrameSource 默认拒绝不支持能力；转换单飞、仅保留最新待处理帧，按 generation 丢弃旧结果；关闭先清通知并等待转换和 SDK callback；
+- P0：真实异常回调映射 `FrameKind::Exception`、异常类型和描述；callback 注册返回码检查；SDK lease 保证一次 Initialize 对应一次 Finalize；
+- P0：PLY 缓存恢复完整 SHA-256，缓存版本升至 3；同尺寸同时间戳的未采样区域修改必须 cache miss；
+- P0：移除 `CMAKE_DEPENDS_USE_COMPILER OFF`，统一 `VSLANG=1033` 并对 MSVC ABI/64 位探测失败硬失败；
+- P1：生产链统一 `PipelineRunner`、canonical warning 透传、PLY 完整回读、换帧清除点索引覆盖层；P2：DP2240 实测坐标/软触发/重连/性能后再定帧率目标。
+
+### 2026-09-01（P1 生产链与契约补强）
+
+- `CameraDialog` 的实时帧统一经 `PipelineRunner` 执行，内置链为 `camera.nextFrame → filter.voxel（可选） → canvas.publish`；生产链携带 `frameNumber`、时间戳和 stream generation，旧 generation 不得发布。
+- 外部 pipeline 使用 `pointcloudview-live-pipeline-v1`，支持命令行/`PCV_LIVE_PIPELINE_FILE`/应用目录配置文件；解析、顺序、重复 ID、节点类型和参数任一失败时回退内置链并记录 warning。
+- `CachedCloudResult`/`LoadResult` 增加 warnings；canonical PLY 写入失败保持主读取成功，但 warning 透传到日志和状态栏。
+- binary PLY writer 增加 `Point3D` 标准布局、可平凡复制、字段偏移和大小约束；非 little-endian 使用逐字段编码。
+- 新增 pipeline 严格校验、预转换帧透传、warning 及 binary writer 回读回归；实验相机 Debug CTest `17/17` 通过。
+
+## 9. 风险与验收门槛
+
+- 核心门槛：实验开关 OFF/ON 均可配置，Debug/Release 全量 CTest 通过；Windows 使用 `NMake Makefiles` 并验证公共头依赖，JOM/Ninja 不作为当前支持生成器；
+- 相机门槛：Mock 连接/首帧/停止/断开/重开、`POINTCLOUDVIEW_SELFTEST_CLOSE=1` smoke 及 DP2240 实机 GUI/坐标/重连证据；当前未完成；
+- 不将 `live_pipeline` 单测或 DLL 部署视为生产链路验收。
+
+### 2026-09-01（扫描 JSON 主线路崩溃修复：构建依赖跟踪）
+
+- 现象：`pointcloudview.exe` 打开扫描 JSON 时弹出 `Run-Time Check Failure #2 - Stack around the variable 'canonical' was corrupted`，主线路无法跑通；
+- 根因：Qt Creator 的 `NMake Makefiles JOM` 构建树未跟踪头文件依赖（全部 `*.obj.d` 为 0 字节），`modules/10_pointcloudread` 的 `ply_reader.h` 扩展了 `PlyReadOptions`/`PlyReadResult` 后，`cloud_cache.cpp.obj`、`ply_writer.cpp.obj` 未重新编译，与新编译的 `ply_reader.cpp.obj` 按不同结构体布局链接，`readPly()` 返回值写穿了 `readPlyCached` 的栈槽；
+- 影响面：扫描 JSON 线路（`prepareTempWorkpiece` → `readPlyCached`）、普通"打开点云"与 `pointcloudstitch` 的读取路径；单元测试因可执行文件在头文件变更之后重建而全部通过，无法暴露该问题；
+- 历史处置已被 2026-09-01 的 `VSLANG=1033` 策略替代；不再使用 `CMAKE_DEPENDS_USE_COMPILER OFF`，以恢复 ABI 探测并保持 `/showIncludes` 依赖解析；
+- 验证：新建 `NMake Makefiles` 构建目录 Debug 构建通过，`.obj.d` 记录 `ply_reader.h`，全量 CTest 13/13 通过；相机开关 ON 的独立构建和 CTest 17/17 通过。`NMake Makefiles JOM` 实测生成空 `.obj.d`，脚本现已拒绝该生成器；Ninja 在中文 MSVC 下依赖同样失效。
+- 未验证项：GUI 人工复测（打开扫描 JSON 与打开点云）需在重建后的可执行文件上执行；用户现有的 `build/Desktop_Qt_6_8_3_MSVC2022_64bit_Debug` 目录需重新配置并重新构建后才恢复正常。
+
+### 2026-09（对齐 3DMVS 取流方式）
+
+- 依据 3DMVS V3.1.4 实测日志与用户手册：真实相机 DP2240 取流 ImageMode=7（深度图）+ SDK 深度图转点云；虚拟相机走同一流程；缓存节点/重发包为 SDK 内部默认；
+- 实现：默认 ImageMode=7；事件驱动取帧（onFramePublished）；转换移出 GUI 线程（QtConcurrent）；异常事件（FrameKind::Exception）+ 自动重连；软触发（SoftTrigger）；虚拟相机识别；
+- 验证：frame_source_tests 增补通知/异常/深度分派用例，全量 17/17 PASS；应用构建通过；
+- 未验证项：真实相机软触发/重连/深度图实机复测待执行。
+
+### 2026-09（DP2240 实机取流修复）
+
+- 现象：DP2240（MV-DP2240-01P）接入取流返回"无效帧"；
+- 根因：SDK 日志确认设备为 HFR 线激光轮廓传感器，ImageMode=4（点云）下实际回传深度图帧（ImageType_Depth C16）；原转换器只接受 ABC32f；
+- 修复：转换器新增 C16/ABC16 分派；FrameSource::convertFrame 真机 SDK 权威转换（MapDepthToPointCloud/ImageConvert）回退手写公式；ImageMode 自适应（不强制）；对话框取流模式选项 + 帧类型诊断日志；
+- 验证：frame_converter_tests 增补 C16/ABC16 用例，全量 17/17 PASS；应用构建通过；实机 DP2240 复测待执行。
 
 ### 2026-08-31
 

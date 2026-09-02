@@ -389,7 +389,13 @@ bool loadPlyCached(const QString &fileName, QVector<Point3D> &points,
 
 LoadResult loadPlyCachedResult(const QString &fileName) {
     LoadResult result;
-    result.ok = loadPlyCached(fileName, result.points, &result.error, &result.usedCache);
+    const pcv::detail::io::CachedCloudResult cached =
+        pcv::detail::io::readPlyCached(fileName);
+    result.ok = cached.ok;
+    result.error = cached.error;
+    result.usedCache = cached.usedCache;
+    result.points = cached.points;
+    result.warnings = cached.warnings;
     return result;
 }
 
@@ -1258,6 +1264,7 @@ LoadResult loadPlyResult(const QString &fileName) {
     result.parseElapsedMs = parsed.parseElapsedMs;
     result.totalElapsedMs = parsed.totalElapsedMs;
     result.usedCache = parsed.usedCache;
+    result.warnings = parsed.warnings;
     if (result.ok && !result.hasBounds) {
         for (const Point3D &point : result.points) {
             if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) continue;
@@ -1288,6 +1295,7 @@ LoadResult loadPlyResultWithProgress(const QString &fileName,
     result.parseElapsedMs = parsed.parseElapsedMs;
     result.totalElapsedMs = parsed.totalElapsedMs;
     result.usedCache = parsed.usedCache;
+    result.warnings = parsed.warnings;
     if (result.ok && !result.hasBounds) {
         for (const Point3D &point : result.points) {
             if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) continue;

@@ -9,6 +9,14 @@ qt_add_executable(pointcloudview
     pointcloudprocessor.cpp
     pointcloudprocessor.h
 )
+if(PCV_BUILD_EXPERIMENTAL_CAMERA)
+    target_sources(pointcloudview PRIVATE
+        live_pipeline.cpp
+        live_pipeline.h
+        cameradialog.cpp
+        cameradialog.h
+    )
+endif()
 set_property(TARGET pointcloudview PROPERTY AUTOUIC_SEARCH_PATHS
     "${CMAKE_CURRENT_SOURCE_DIR}/ui")
 
@@ -34,6 +42,10 @@ target_link_libraries(pointcloudview
         pcv_m30_pointcloudstitch
         pcv_m80_planeoutput
 )
+if(PCV_BUILD_EXPERIMENTAL_CAMERA)
+    target_link_libraries(pointcloudview PRIVATE pcv_m05_camerainput)
+    target_compile_definitions(pointcloudview PRIVATE PCV_BUILD_EXPERIMENTAL_CAMERA=1)
+endif()
 
 if (WIN32)
     add_custom_command(TARGET pointcloudview POST_BUILD
@@ -45,6 +57,20 @@ if (WIN32)
         COMMENT "Deploying Qt runtime next to pointcloudview.exe"
         VERBATIM
     )
+    if(PCV_BUILD_EXPERIMENTAL_CAMERA)
+        # Deploy the Hikvision Mv3dLp runtime only for the experimental UI.
+        set(PCV_MV3D_RUNTIME_DIR
+            "C:/Program Files (x86)/Common Files/Mv3dLpSDK/Runtime/Win64_x64")
+        if(EXISTS "${PCV_MV3D_RUNTIME_DIR}/Mv3dLp.dll")
+            add_custom_command(TARGET pointcloudview POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_directory
+                    "${PCV_MV3D_RUNTIME_DIR}"
+                    "$<TARGET_FILE_DIR:pointcloudview>"
+                COMMENT "Deploying Mv3dLp SDK runtime next to pointcloudview.exe"
+                VERBATIM
+            )
+        endif()
+    endif()
 endif()
 
 install(TARGETS pointcloudview

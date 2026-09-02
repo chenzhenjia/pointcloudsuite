@@ -17,6 +17,7 @@ using LoadProgressCallback = std::function<void(qsizetype loaded, qsizetype tota
 struct LoadResult {
     QVector<Point3D> points;
     QString error;
+    QStringList warnings;
     bool ok = false;
     bool usedCache = false;
     Point3D minimum;

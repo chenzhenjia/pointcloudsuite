@@ -35,8 +35,13 @@ void PointCloudCanvas::setCloud(QVector<pointcloud::Point3D> points) {
                 Qt::QueuedConnection);
             return;
         }
-        m_points = std::move(points);
-        m_pointStates.fill(NormalPoint, m_points.size());
+          m_points = std::move(points);
+          m_pointStates.fill(NormalPoint, m_points.size());
+          // Point-index overlays refer to the previous frame and are invalid
+          // after a streaming replacement. World-coordinate overlays remain.
+          m_selectedIndices.clear();
+          m_selectedEdgeIndices.clear();
+          m_edgeIndices.clear();
         ++m_renderRevision;
         validateRenderSnapshot();
         m_planeResultIndices.clear();
@@ -51,6 +56,38 @@ void PointCloudCanvas::setCloud(QVector<pointcloud::Point3D> points) {
         m_uploadError.clear();
         m_uploadPending = true;
         qInfo() << "PointCloudCanvas cache published, points=" << m_points.size();
+        update();
+    }
+
+void PointCloudCanvas::setCloudStreaming(QVector<pointcloud::Point3D> points) {
+        if (QThread::currentThread() != thread()) {
+            qWarning() << "PointCloudCanvas::setCloudStreaming queued to GUI thread, points="
+                       << points.size();
+            QMetaObject::invokeMethod(
+                this,
+                [this, points = std::move(points)]() mutable {
+                    setCloudStreaming(std::move(points));
+                },
+                Qt::QueuedConnection);
+            return;
+        }
+        m_points = std::move(points);
+        m_pointStates.fill(NormalPoint, m_points.size());
+        ++m_renderRevision;
+        validateRenderSnapshot();
+        // Point-index overlays belong to the preceding frame. Keep only
+        // world-coordinate overlays, which remain meaningful across frames.
+        m_selectedIndices.clear();
+        m_selectedEdgeIndices.clear();
+        m_edgeIndices.clear();
+        m_planeResultIndices.clear();
+        m_edgeResultIndices.clear();
+        m_coordinatePointIndex = -1;
+        updateBounds();
+        m_uploadError.clear();
+        m_uploadPending = true;
+        m_stateUploadPending = true;
+        qInfo() << "PointCloudCanvas streaming cloud published, points=" << m_points.size();
         update();
     }
 

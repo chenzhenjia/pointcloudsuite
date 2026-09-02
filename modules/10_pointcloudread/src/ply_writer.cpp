@@ -10,6 +10,26 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QTextStream>
+#include <QSysInfo>
+#include <QDataStream>
+#include <cstddef>
+
+#include <limits>
+#include <type_traits>
+
+static_assert(sizeof(pointcloud::Point3D) == 6 * sizeof(float),
+              "Point3D binary PLY layout must contain six contiguous float32 values");
+static_assert(std::is_standard_layout_v<pointcloud::Point3D>,
+              "Point3D binary PLY layout must be standard-layout");
+static_assert(std::is_trivially_copyable_v<pointcloud::Point3D>,
+              "Point3D binary PLY layout must be trivially copyable");
+static_assert(offsetof(pointcloud::Point3D, x) == 0
+              && offsetof(pointcloud::Point3D, y) == sizeof(float)
+              && offsetof(pointcloud::Point3D, z) == 2 * sizeof(float)
+              && offsetof(pointcloud::Point3D, nx) == 3 * sizeof(float)
+              && offsetof(pointcloud::Point3D, ny) == 4 * sizeof(float)
+              && offsetof(pointcloud::Point3D, nz) == 5 * sizeof(float),
+              "Point3D fields must be contiguous float32 values");
 
 namespace {
 QString canonicalPath(const QString &sourceFile, const QString &cacheDirectory)
@@ -56,14 +76,56 @@ bool writeBinaryPly(const QString &fileName,
         if (error) *error = QStringLiteral("写入 PLY Header 失败");
         return false;
     }
-    QDataStream data(&file);
-    data.setByteOrder(QDataStream::LittleEndian);
-    data.setFloatingPointPrecision(QDataStream::SinglePrecision);
-    for (const auto &point : points) {
-        data << point.x << point.y << point.z;
-        if (options.includeNormals) data << point.nx << point.ny << point.nz;
+    // Bulk write: build the interleaved float payload once and write it in
+    // one shot instead of streaming per-point through QDataStream.
+    if (!points.isEmpty()) {
+        if (options.includeNormals && QSysInfo::ByteOrder == QSysInfo::LittleEndian) {
+            // pointcloud::Point3D layout is x,y,z,nx,ny,nz (6 native floats,
+            // little-endian on the supported targets) which matches the
+            // declared property order exactly.
+            const qsizetype bytes = points.size()
+                * qsizetype(sizeof(pointcloud::Point3D));
+            if (bytes > std::numeric_limits<qint64>::max()) {
+                if (error) *error = QStringLiteral("PLY 顶点数据大小溢出");
+                return false;
+            }
+            if (file.write(reinterpret_cast<const char *>(points.constData()),
+                           bytes) != bytes) {
+                if (error) *error = file.errorString().isEmpty()
+                    ? QStringLiteral("PLY 写入失败") : file.errorString();
+                return false;
+            }
+        } else {
+            const qsizetype fields = options.includeNormals ? 6 : 3;
+            if (points.size() > std::numeric_limits<qsizetype>::max()
+                    / (fields * qsizetype(sizeof(float)))
+                || points.size() * fields * qsizetype(sizeof(float))
+                    > std::numeric_limits<int>::max()) {
+                if (error) *error = QStringLiteral("PLY 顶点数据大小溢出");
+                return false;
+            }
+            const int byteCount = int(points.size() * fields * qsizetype(sizeof(float)));
+            QByteArray payload;
+            payload.reserve(byteCount);
+            QDataStream stream(&payload, QIODevice::WriteOnly);
+            stream.setByteOrder(QDataStream::LittleEndian);
+            stream.setFloatingPointPrecision(QDataStream::SinglePrecision);
+            for (const auto &point : points) {
+                stream << point.x << point.y << point.z;
+                if (options.includeNormals) stream << point.nx << point.ny << point.nz;
+            }
+            if (stream.status() != QDataStream::Ok) {
+                if (error) *error = QStringLiteral("PLY 顶点数据编码失败");
+                return false;
+            }
+            if (file.write(payload) != byteCount) {
+                if (error) *error = file.errorString().isEmpty()
+                    ? QStringLiteral("PLY 写入失败") : file.errorString();
+                return false;
+            }
+        }
     }
-    if (data.status() != QDataStream::Ok || !file.commit()) {
+    if (!file.commit()) {
         if (error) *error = file.errorString().isEmpty()
             ? QStringLiteral("PLY 写入失败") : file.errorString();
         return false;

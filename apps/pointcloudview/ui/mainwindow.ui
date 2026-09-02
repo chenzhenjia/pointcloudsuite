@@ -16,16 +16,87 @@
     <height>680</height>
    </size>
   </property>
-  <property name="windowTitle">
+ <property name="windowTitle">
    <string>点云预览工作台</string>
+  </property>
+  <property name="styleSheet">
+   <string notr="true">QMainWindow, QWidget#main_window, QWidget#wgt_central {
+    background-color: #1d2027;
+    color: #e7eaf0;
+    font-family: "Microsoft YaHei";
+    font-size: 10pt;
+}
+QMenuBar {
+    background-color: #17191e;
+    color: #d9dde7;
+    border-bottom: 1px solid #343944;
+    padding: 2px 8px;
+}
+QMenuBar::item { padding: 5px 12px; }
+QMenuBar::item:selected { background-color: #303641; }
+QPushButton {
+    background-color: #303641;
+    color: #e7eaf0;
+    border: 1px solid #474e5b;
+    border-radius: 4px;
+    padding: 6px 14px;
+    min-height: 28px;
+}
+QPushButton:hover { background-color: #3b4350; border-color: #5b8def; }
+QPushButton:pressed { background-color: #252b35; }
+QPushButton:disabled { color: #737a88; background-color: #252931; border-color: #343944; }
+QLineEdit, QPlainTextEdit, QListWidget, QComboBox, QSpinBox, QDoubleSpinBox {
+    background-color: #252931;
+    color: #e7eaf0;
+    border: 1px solid #3c4350;
+    border-radius: 4px;
+    padding: 4px 6px;
+    selection-background-color: #3d6fc4;
+}
+QListWidget { outline: none; }
+QListWidget::item { padding: 7px 8px; border-radius: 3px; }
+QListWidget::item:selected { background-color: #315b9d; color: white; }
+QTabWidget::pane { border: 1px solid #3c4350; background-color: #23262e; }
+QTabBar::tab { background-color: #292d35; color: #aeb5c2; padding: 8px 14px; border: 1px solid #3c4350; border-bottom: none; }
+QTabBar::tab:selected { color: white; background-color: #3d6fc4; }
+QGroupBox { border: 1px solid #3c4350; border-radius: 5px; margin-top: 10px; padding: 10px 8px 8px; }
+QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #9fbdf5; }
+QSplitter::handle { background-color: #343944; }
+QStatusBar { background-color: #17191e; color: #9ea6b5; border-top: 1px solid #343944; }
+QProgressBar { background-color: #292d35; border: none; height: 3px; }
+QProgressBar::chunk { background-color: #5b8def; }
+QLabel#lbl_main_title { color: #f1f3f7; font-size: 15pt; font-weight: 600; }
+QLabel#lbl_header_subtitle, QLabel#lbl_file_info, QLabel#lbl_canvas_info { color: #8e98a8; }
+QLabel#lbl_source_title, QLabel#lbl_render_title, QLabel#lbl_clean_title, QLabel#lbl_plane_title, QLabel#lbl_edge_title { color: #9fbdf5; font-size: 11pt; font-weight: 600; padding: 4px 0; }
+QPushButton#btn_open_point_cloud, QPushButton#btn_open_scanning_info { background-color: #d86d12; border-color: #ee8421; }
+QPushButton#btn_open_point_cloud:hover, QPushButton#btn_open_scanning_info:hover { background-color: #ee8421; }
+QLabel#lbl_device_empty { color: #7f8999; padding: 18px 8px; }
+QWidget#wgt_canvas_panel { background-color: #090a0d; border: 1px solid #343944; }
+QWidget#wgt_canvas_host { background-color: #000000; }
+</string>
   </property>
   <widget class="QWidget" name="wgt_central">
    <layout class="QVBoxLayout" name="rootLayout">
+    <property name="leftMargin">
+     <number>10</number>
+    </property>
+    <property name="topMargin">
+     <number>8</number>
+    </property>
+    <property name="rightMargin">
+     <number>10</number>
+    </property>
+    <property name="bottomMargin">
+     <number>6</number>
+    </property>
     <property name="spacing">
      <number>0</number>
     </property>
     <item>
      <layout class="QHBoxLayout" name="headerLayout">
+      <property name="spacing">
+       <number>8</number>
+      </property>
       <item>
        <layout class="QVBoxLayout" name="titleLayout">
         <property name="spacing">
@@ -39,7 +110,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QLabel" name="lbl_subtitle">
+         <widget class="QLabel" name="lbl_header_subtitle">
           <property name="text">
            <string>PLY  ·  3D VIEW</string>
           </property>
@@ -91,7 +162,7 @@
       <property name="childrenCollapsible">
        <bool>false</bool>
       </property>
-      <widget class="QWidget" name="wgt_source_panel">
+       <widget class="QWidget" name="wgt_source_panel">
        <property name="minimumSize">
         <size>
          <width>220</width>
@@ -105,13 +176,25 @@
         </size>
        </property>
        <layout class="QVBoxLayout" name="vbl_source">
+        <property name="leftMargin">
+         <number>10</number>
+        </property>
+        <property name="topMargin">
+         <number>8</number>
+        </property>
+        <property name="rightMargin">
+         <number>10</number>
+        </property>
+        <property name="bottomMargin">
+         <number>8</number>
+        </property>
         <property name="spacing">
-         <number>0</number>
+         <number>8</number>
         </property>
         <item>
          <widget class="QLabel" name="lbl_source_title">
           <property name="text">
-           <string>数据源</string>
+           <string>设备 / 数据源</string>
           </property>
          </widget>
         </item>
@@ -123,12 +206,25 @@
          </widget>
         </item>
         <item>
-         <widget class="QLabel" name="lbl_subtitle">
+         <widget class="QLabel" name="lbl_device_empty">
           <property name="text">
-           <string>尚未加载点云</string>
+           <string>暂无设备数据
+连接功能待接入
+
+尚未加载点云</string>
           </property>
           <property name="wordWrap">
            <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btn_device_placeholder">
+          <property name="enabled">
+           <bool>false</bool>
+          </property>
+          <property name="text">
+           <string>设备连接（待接入）</string>
           </property>
          </widget>
         </item>
@@ -136,6 +232,18 @@
       </widget>
       <widget class="QWidget" name="wgt_canvas_panel">
        <layout class="QVBoxLayout" name="vbl_canvas">
+        <property name="leftMargin">
+         <number>6</number>
+        </property>
+        <property name="topMargin">
+         <number>0</number>
+        </property>
+        <property name="rightMargin">
+         <number>6</number>
+        </property>
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
         <property name="spacing">
          <number>0</number>
         </property>
@@ -150,7 +258,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QLabel" name="lbl_subtitle">
+         <widget class="QLabel" name="lbl_canvas_info">
           <property name="text">
            <string>就绪</string>
           </property>
@@ -158,7 +266,7 @@
         </item>
        </layout>
       </widget>
-      <widget class="QWidget" name="wgt_source_panel">
+      <widget class="QWidget" name="wgt_control_panel">
        <property name="minimumSize">
         <size>
          <width>270</width>
@@ -172,6 +280,18 @@
         </size>
        </property>
        <layout class="QVBoxLayout" name="vbl_control">
+        <property name="leftMargin">
+         <number>8</number>
+        </property>
+        <property name="topMargin">
+         <number>8</number>
+        </property>
+        <property name="rightMargin">
+         <number>8</number>
+        </property>
+        <property name="bottomMargin">
+         <number>8</number>
+        </property>
         <item>
          <widget class="QTabWidget" name="tw_main">
           <property name="currentIndex">
@@ -213,7 +333,7 @@
              </widget>
             </item>
             <item row="2" column="0" colspan="2">
-             <widget class="QLabel" name="lbl_source_title">
+             <widget class="QLabel" name="lbl_render_title">
               <property name="text">
                <string>渲染效果</string>
               </property>
@@ -316,7 +436,7 @@
            </attribute>
            <layout class="QVBoxLayout" name="vbl_clean">
             <item>
-             <widget class="QLabel" name="lbl_source_title">
+             <widget class="QLabel" name="lbl_clean_title">
               <property name="text">
                <string>点云清理 · 后台处理</string>
               </property>
@@ -454,7 +574,7 @@
            </attribute>
            <layout class="QVBoxLayout" name="vbl_plane">
             <item>
-             <widget class="QLabel" name="lbl_source_title">
+             <widget class="QLabel" name="lbl_plane_title">
               <property name="text">
                <string>2.5D 平面提取</string>
               </property>
@@ -548,7 +668,7 @@
            </attribute>
            <layout class="QVBoxLayout" name="vbl_edge">
             <item>
-             <widget class="QLabel" name="lbl_source_title">
+             <widget class="QLabel" name="lbl_edge_title">
               <property name="text">
                <string>平面边缘分割</string>
               </property>

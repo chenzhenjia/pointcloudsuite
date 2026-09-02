@@ -18,6 +18,9 @@ class QDoubleSpinBox;
 class QCheckBox;
 class QPushButton;
 class QPlainTextEdit;
+#ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
+class CameraDialog;
+#endif
 class PointCloudCanvas;
 namespace Ui { class MainWindow; }
 namespace pointcloud { struct LoadResult; }
@@ -36,6 +39,9 @@ public:
     ~MainWindow() override;
 
 private slots:
+#ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
+    void openCameraStream();
+#endif
     void openPointCloud();
     void openPointCloudSource();
     void openTempScanningInfo();
@@ -123,6 +129,9 @@ private:
     QLabel *m_planeImagePreview = nullptr;
     QPlainTextEdit *m_edgeOutput = nullptr;
     PointCloudCanvas *m_canvas = nullptr;
+#ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
+    CameraDialog *m_cameraDialog = nullptr;
+#endif
     QVector<pointcloud::Point3D> m_rawPoints;
     QVector<pointcloud::Point3D> m_points;
     bool m_loading = false;

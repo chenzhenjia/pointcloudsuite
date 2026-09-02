@@ -46,6 +46,12 @@ public:
 
     void setCloud(QVector<pointcloud::Point3D> points);
 
+    // Lightweight streaming variant for live camera frames: replaces the
+    // cloud and refreshes bounds/depth colormap only. Keeps selection,
+    // coordinate frame and contour overlays untouched (the application decides
+    // when to clear them) and never resets the view.
+    void setCloudStreaming(QVector<pointcloud::Point3D> points);
+
     void setSelectionMode(bool enabled);
 
     void setEdgeSelectionMode(bool enabled, const QVector<int> &edgeIndices);

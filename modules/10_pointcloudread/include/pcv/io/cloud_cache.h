@@ -4,6 +4,7 @@
 
 #include <QString>
 #include <QVector>
+#include <QStringList>
 
 namespace pcv::detail::io {
 
@@ -13,6 +14,7 @@ struct CachedCloudResult {
     bool usedCache = false;
     bool cancelled = false;
     bool ok = false;
+    QStringList warnings;
     PlyFormat format = PlyFormat::Ascii;
     qsizetype declaredPointCount = 0;
     pointcloud::Point3D minimum;

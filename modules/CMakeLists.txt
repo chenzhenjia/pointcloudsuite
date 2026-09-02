@@ -1,4 +1,8 @@
-# v0.3 module targets. Compatibility aggregates remain under src/ during migration.
+# v0.3 module targets. 05_camerainput is explicitly experimental and is not
+# part of the v0.3 release baseline.
+if(PCV_BUILD_EXPERIMENTAL_CAMERA)
+    add_subdirectory(05_camerainput)
+endif()
 add_subdirectory(10_pointcloudread)
 add_subdirectory(20_pointcloudrender)
 add_subdirectory(30_pointcloudstitch)

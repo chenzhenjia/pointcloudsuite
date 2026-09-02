@@ -4,7 +4,18 @@ param(
     [string]$CMakePath = "",
     [ValidateSet("Debug", "Release")]
     [string]$Config = "Release",
-    [switch]$BuildTests
+    [switch]$BuildTests,
+    # Force a full rebuild (cmake --build --clean-first). Required after any
+    # change to a public header when the build tree does not track header
+    # dependencies; see docs/development/build-windows.md.
+    [switch]$Clean,
+    [switch]$ExperimentalCamera,
+    # "NMake Makefiles" (default) or "Ninja". Ninja relies on the MSVC
+    # /showIncludes prefix for header dependencies and silently loses them on
+    # a localized MSVC; the Makefile generators use CMake's own scanner, which
+    # this project forces on in CMakeLists.txt.
+    [ValidateSet("", "Ninja", "NMake Makefiles", "NMake Makefiles JOM")]
+    [string]$Generator = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,6 +45,23 @@ function Get-VcVars64Path {
         if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) { return $candidate }
     }
     throw 'Visual Studio with the MSVC x64 workload was not found. Install it or run this script from a Developer PowerShell.'
+}
+
+function Get-NinjaPath {
+    $candidates = @(
+        (Get-ExecutablePath 'ninja.exe'),
+        (Join-Path $env:SystemDrive 'Qt\Tools\Ninja\ninja.exe'),
+        'C:\Qt\Tools\Ninja\ninja.exe',
+        (Join-Path $env:SystemDrive 'Qt\Tools\QtCreator\bin\ninja.exe')
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
+    return $candidates
+}
+
+function Get-JomPath {
+    return @(
+        (Get-ExecutablePath 'jom.exe'),
+        (Join-Path $env:SystemDrive 'Qt\Tools\QtCreator\bin\jom\jom.exe')
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
 }
 
 function Import-VcVarsEnvironment([string]$VcVarsPath) {
@@ -72,11 +100,24 @@ if ([string]::IsNullOrWhiteSpace($BuildDir)) {
 Assert-Ascii $SourceDir 'Source path'
 Assert-Ascii $BuildDir 'Build path'
 
-if (-not (Get-ExecutablePath 'cl.exe') -or -not (Get-ExecutablePath 'nmake.exe')) {
+if (-not (Get-ExecutablePath 'cl.exe')) {
     Import-VcVarsEnvironment (Get-VcVars64Path)
 }
-if (-not (Get-ExecutablePath 'cl.exe') -or -not (Get-ExecutablePath 'nmake.exe')) {
+$env:VSLANG = '1033'
+if (-not (Get-ExecutablePath 'cl.exe')) {
     throw 'MSVC x64 tools were not initialized.'
+}
+
+$NinjaPath = Get-NinjaPath
+if ([string]::IsNullOrWhiteSpace($Generator)) { $Generator = 'NMake Makefiles' }
+if ($Generator -eq 'NMake Makefiles JOM') {
+    throw 'NMake Makefiles JOM does not emit usable MSVC header dependency files in this environment. Use -Generator "NMake Makefiles".'
+}
+if ($Generator -eq 'Ninja') {
+    if (-not $NinjaPath) { throw 'ninja.exe was not found. Install Ninja or pass -Generator "NMake Makefiles".' }
+    Write-Warning 'Ninja derives header dependencies from the MSVC /showIncludes prefix. On a localized MSVC that prefix does not match and header changes stop triggering rebuilds; the post-build check below will fail if that happens.'
+} else {
+    if (-not (Get-ExecutablePath 'nmake.exe')) { throw 'nmake.exe was not found in the MSVC environment.' }
 }
 
 $QtDir = Get-QtDirectory $QtDir
@@ -85,13 +126,57 @@ if ([string]::IsNullOrWhiteSpace($CMakePath)) { $CMakePath = Get-ExecutablePath 
 if (-not $CMakePath) { throw 'cmake.exe was not found on PATH. Install CMake or start the script from the Qt Creator/Developer environment.' }
 
 $testOption = if ($BuildTests) { 'ON' } else { 'OFF' }
+$cameraOption = if ($ExperimentalCamera) { 'ON' } else { 'OFF' }
 Write-Host "CMake: $CMakePath"
 Write-Host "Qt: $QtDir"
+Write-Host "Generator: $Generator"
 Write-Host "Build: $BuildDir"
-& $CMakePath -S $SourceDir -B $BuildDir -G 'NMake Makefiles' `
-    ("-DCMAKE_PREFIX_PATH={0}" -f $QtDir) `
-    ("-DCMAKE_BUILD_TYPE={0}" -f $Config) `
+
+$configureArguments = @(
+    '-S', $SourceDir, '-B', $BuildDir, '-G', $Generator,
+    ("-DCMAKE_PREFIX_PATH={0}" -f $QtDir),
+    ("-DCMAKE_BUILD_TYPE={0}" -f $Config),
     ("-DPCV_BUILD_TESTS={0}" -f $testOption)
+    ("-DPCV_BUILD_EXPERIMENTAL_CAMERA={0}" -f $cameraOption)
+)
+if ($Generator -eq 'Ninja') {
+    $configureArguments += ("-DCMAKE_MAKE_PROGRAM={0}" -f $NinjaPath)
+}
+if ($Generator -eq 'NMake Makefiles JOM') {
+    $jomPath = Get-JomPath
+    if (-not $jomPath) { throw 'jom.exe was not found. Install Qt Creator or pass -Generator "NMake Makefiles".' }
+    $configureArguments += ("-DCMAKE_MAKE_PROGRAM={0}" -f $jomPath)
+}
+& $CMakePath @configureArguments
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& $CMakePath --build $BuildDir --parallel
-exit $LASTEXITCODE
+
+$buildArguments = @('--build', $BuildDir, '--parallel')
+if ($Clean) { $buildArguments += '--clean-first' }
+& $CMakePath @buildArguments
+$buildExitCode = $LASTEXITCODE
+if ($buildExitCode -ne 0) { exit $buildExitCode }
+
+# Guard against the failure mode that produced a stale-object crash: when the
+# build tree records no header dependencies, a later header-only change is
+# silently ignored and objects built from different versions of the same
+# struct get linked together. A healthy dependency database names headers.
+$dependencyProblem = $null
+if ($Generator -eq 'Ninja') {
+    $ninjaDeps = Join-Path $BuildDir '.ninja_deps'
+    if (-not (Test-Path -LiteralPath $ninjaDeps -PathType Leaf)) {
+        $dependencyProblem = 'Ninja did not write .ninja_deps'
+    } elseif (-not ([System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($ninjaDeps)) -match '\.h(pp)?\b')) {
+        $dependencyProblem = '.ninja_deps records no header files (localized /showIncludes prefix)'
+    }
+} else {
+    $dependencyFiles = @(Get-ChildItem -Path $BuildDir -Recurse -File -Include 'compiler_depend.make', 'depend.make', '*.obj.d' -ErrorAction SilentlyContinue)
+    $withHeaders = $dependencyFiles | Where-Object { $_.Length -gt 0 -and (Select-String -LiteralPath $_.FullName -Pattern '\.h(pp)?$|\.h(pp)? ' -Quiet) }
+    if (-not $withHeaders) {
+        $dependencyProblem = 'no dependency file records a header'
+    }
+}
+if ($dependencyProblem) {
+    Write-Error ("Header dependency tracking is not working in {0} ({1}). A public header change will not rebuild its users, which links objects with mismatched struct layouts. Rebuild with -Clean and keep the Makefile generator so CMake's own scanner is used." -f $BuildDir, $dependencyProblem)
+    exit 1
+}
+exit 0

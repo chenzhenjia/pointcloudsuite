@@ -1,4 +1,7 @@
 #include "mainwindow.h"
+#ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
+#include "cameradialog.h"
+#endif
 #include "registrationdialog.h"
 #include "ui_mainwindow.h"
 #include <pcv/interface/temp_workpiece_interface.h>
@@ -136,6 +139,15 @@ MainWindow::~MainWindow() {
     if (m_planeImageWatcher && m_planeImageWatcher->isRunning()) {
         m_planeImageWatcher->waitForFinished();
     }
+#ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
+    if (m_cameraDialog) {
+        // Stop the SDK stream before the dialog is destroyed so the callback
+        // thread never touches a torn-down Qt object.
+        m_cameraDialog->close();
+        delete m_cameraDialog;
+        m_cameraDialog = nullptr;
+    }
+#endif
     if (m_canvas) {
         m_canvas->setUpdatesEnabled(false);
         m_canvas->hide();
@@ -147,8 +159,8 @@ void MainWindow::buildUi() {
     ui = new Ui::MainWindow;
     ui->setupUi(this);
     m_fileList = ui->lw_files;
-    m_fileInfo = ui->lbl_subtitle1;
-    m_canvasInfo = ui->lbl_subtitle2;
+    m_fileInfo = ui->lbl_device_empty;
+    m_canvasInfo = ui->lbl_canvas_info;
     m_progress = ui->pbar_progress;
     m_pointSize = ui->spb_point_size;
     m_colorMode = ui->cb_color_mode;
@@ -199,6 +211,18 @@ void MainWindow::buildUi() {
     canvasLayout->setContentsMargins(0, 0, 0, 0);
     canvasLayout->addWidget(m_canvas);
     connect(ui->act_open, &QAction::triggered, this, &MainWindow::openPointCloudSource);
+#ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
+    auto *cameraAction = new QAction(tr("相机实时取流（点云图）..."), this);
+    connect(cameraAction, &QAction::triggered, this, &MainWindow::openCameraStream);
+#endif
+    auto *fileMenu = menuBar()->addMenu(tr("文件"));
+    fileMenu->addAction(ui->act_open);
+    fileMenu->addSeparator();
+#ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
+    fileMenu->addAction(cameraAction);
+#endif
+    fileMenu->addSeparator();
+    fileMenu->addAction(ui->act_exit);
     connect(ui->act_exit, &QAction::triggered, qApp, &QApplication::quit);
     connect(ui->btn_open_point_cloud, &QPushButton::clicked, this, &MainWindow::openPointCloudSource);
     connect(ui->btn_open_scanning_info, &QPushButton::clicked,
@@ -247,7 +271,7 @@ void MainWindow::buildUi() {
     ui->splitter_main->setStretchFactor(0, 0);
     ui->splitter_main->setStretchFactor(1, 1);
     ui->splitter_main->setStretchFactor(2, 0);
-    ui->splitter_main->setSizes({245, 850, 290});
+    ui->splitter_main->setSizes({250, 860, 330});
     m_progress->setFixedHeight(3);
     m_progress->hide();
     m_canvas->pointPicked = [this](int index) {
@@ -283,6 +307,28 @@ void MainWindow::applyConfiguredDefaults() {
     m_edgeCloseRadius->setValue(m_defaults.edgeCloseRadius);
     m_edgeOpenRadius->setValue(m_defaults.edgeOpenRadius);
 }
+
+#ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
+void MainWindow::openCameraStream() {
+    if (!m_cameraDialog) {
+        m_cameraDialog = new CameraDialog(this);
+        m_cameraDialog->cloudPublished =
+            [this](const QVector<pointcloud::Point3D> &points) {
+                if (m_closing || !m_canvas) return;
+                // Pipeline canvas.publish reaches this callback; streaming
+                // frames bypass the display cache while world overlays remain.
+                m_canvas->setCloudStreaming(points);
+                if (m_canvasInfo) {
+                    m_canvasInfo->setText(
+                        tr("相机实时点云  %1 点").arg(QLocale().toString(points.size())));
+                }
+            };
+    }
+    m_cameraDialog->show();
+    m_cameraDialog->raise();
+    m_cameraDialog->activateWindow();
+}
+#endif
 
 void MainWindow::openPointCloudSource() {
     if (pointTaskRunning()) {
@@ -443,7 +489,11 @@ void MainWindow::loadFinished() {
     m_progress->setValue(100);
     m_progress->hide();
     m_loading = false;
-    statusBar()->showMessage(tr("加载完成"));
+    for (const QString &warning : result.warnings)
+        qWarning() << "PLY load warning:" << warning;
+    statusBar()->showMessage(result.warnings.isEmpty()
+        ? tr("加载完成")
+        : tr("加载完成（有 %1 条警告）").arg(result.warnings.size()));
 }
 
 void MainWindow::updateRenderSettings() {

@@ -1,5 +1,18 @@
 set(PCV_APPLICATION_TEST_TARGETS)
 
+if(PCV_BUILD_EXPERIMENTAL_CAMERA)
+    add_executable(frame_converter_tests unit/camera/frame_converter_tests.cpp)
+    target_link_libraries(frame_converter_tests PRIVATE Qt::Core pcv_m05_camerainput)
+    add_test(NAME frame_converter_tests COMMAND frame_converter_tests)
+
+    add_executable(frame_source_tests unit/camera/frame_source_tests.cpp)
+    target_link_libraries(frame_source_tests PRIVATE Qt::Core pcv_m05_camerainput)
+    add_test(NAME frame_source_tests COMMAND frame_source_tests)
+
+    list(APPEND PCV_APPLICATION_TEST_TARGETS frame_converter_tests)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS frame_source_tests)
+endif()
+
 add_executable(application_config_tests unit/infrastructure/application_config_tests.cpp)
 target_link_libraries(application_config_tests PRIVATE Qt::Core pcv_infrastructure)
 add_test(NAME application_config_tests COMMAND application_config_tests)
@@ -42,7 +55,21 @@ list(APPEND PCV_APPLICATION_TEST_TARGETS plane_output_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS temp_workpiece_interface_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS stitching_interface_tests)
 
-if(PCV_BUILD_POINTCLOUDVIEW)
+if(PCV_BUILD_POINTCLOUDVIEW AND PCV_BUILD_EXPERIMENTAL_CAMERA)
+    add_executable(live_pipeline_tests
+        unit/pointcloudview/live_pipeline_tests.cpp
+        ../apps/pointcloudview/live_pipeline.cpp
+        ../apps/pointcloudview/live_pipeline.h
+    )
+    target_include_directories(live_pipeline_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/pointcloudview
+    )
+    target_link_libraries(live_pipeline_tests PRIVATE
+        Qt::Core pcv_core pcv_m05_camerainput pcv_filtering)
+    add_test(NAME live_pipeline_tests COMMAND live_pipeline_tests)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS live_pipeline_tests)
+
     add_executable(pointcloudprocessor_obstacle_tests
         unit/pointcloudview/pointcloudprocessor_obstacle_tests.cpp
         ../apps/pointcloudview/pointcloudprocessor.cpp
