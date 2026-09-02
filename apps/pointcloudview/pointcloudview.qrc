@@ -1,0 +1,11 @@
+<RCC>
+ <qresource prefix="/pointcloudview">
+  <file alias="icons/device.svg">resources/icons/device.svg</file>
+  <file alias="icons/layout.svg">resources/icons/layout.svg</file>
+  <file alias="icons/transform.svg">resources/icons/transform.svg</file>
+  <file alias="icons/file.svg">resources/icons/file.svg</file>
+  <file alias="icons/save.svg">resources/icons/save.svg</file>
+  <file alias="icons/stream.svg">resources/icons/stream.svg</file>
+  <file alias="icons/reset.svg">resources/icons/reset.svg</file>
+ </qresource>
+</RCC>

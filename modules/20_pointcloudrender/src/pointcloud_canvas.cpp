@@ -242,7 +242,7 @@ void PointCloudCanvas::initializeGL()  {
             || rendererLower.contains(QStringLiteral("gdi generic"))) {
             qWarning().noquote() << "OpenGL software renderer detected:" << renderer;
         }
-        glClearColor(0.018f, 0.025f, 0.035f, 1.0f);
+        glClearColor(0.965f, 0.975f, 0.988f, 1.0f);
         glEnable(GL_DEPTH_TEST);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -688,7 +688,7 @@ int PointCloudCanvas::pickPoint(const QPointF &position) {
         glReadPixels(x, y, readWidth, readHeight, GL_DEPTH_COMPONENT, GL_FLOAT, depths);
         glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
         glViewport(0, 0, pixelSize.width(), pixelSize.height());
-        glClearColor(0.018f, 0.025f, 0.035f, 1.0f);
+        glClearColor(0.965f, 0.975f, 0.988f, 1.0f);
         glEnable(GL_DITHER);
         glEnable(GL_BLEND);
         doneCurrent();
@@ -805,7 +805,7 @@ void PointCloudCanvas::drawOverlay() {
             painter.setBrush(QColor(90, 210, 255, 35));
             painter.drawRect(QRectF(m_selectionOrigin, m_lastMousePosition).normalized());
         }
-        painter.setPen(QColor(231, 237, 246));
+        painter.setPen(QColor(23, 43, 77));
         QFont titleFont = painter.font();
         titleFont.setPointSize(11);
         titleFont.setBold(true);
@@ -813,7 +813,7 @@ void PointCloudCanvas::drawOverlay() {
         painter.drawText(18, 27, tr("3D 点云"));
 
         painter.setFont(QFont());
-        painter.setPen(QColor(150, 164, 184));
+        painter.setPen(QColor(71, 84, 103));
         const QString pointText = m_points.isEmpty()
             ? tr("未加载数据")
             : tr("工作点数  %1  |  全量绘制")
@@ -829,7 +829,7 @@ void PointCloudCanvas::drawOverlay() {
                 .arg(QString::number(m_spanX, 'f', 2))
                 .arg(QString::number(m_spanY, 'f', 2))
                 .arg(QString::number(m_spanZ, 'f', 2));
-            painter.setPen(QColor(196, 207, 222));
+            painter.setPen(QColor(52, 64, 84));
             const int right = width() - 18;
             int top = 27;
             if (m_coordinatePointIndex >= 0 && m_coordinatePointIndex < m_points.size()) {
@@ -854,7 +854,7 @@ void PointCloudCanvas::drawOverlay() {
                 } else {
                     attitudeText = tr("法向姿态  A --  B --  C --");
                 }
-                painter.setPen(QColor(239, 244, 250));
+                painter.setPen(QColor(31, 41, 55));
                 painter.drawText(right - painter.fontMetrics().horizontalAdvance(positionText),
                                  top, positionText);
                 painter.setPen(QColor(107, 205, 255));

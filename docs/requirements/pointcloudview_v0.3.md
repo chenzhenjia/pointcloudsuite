@@ -74,6 +74,12 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 - 验证：实验开关 OFF 的 Debug CTest `13/13`，开关 ON 且 SDK 存在的 Debug CTest `17/17`；完整 SHA-256 缓存回归通过；
 - 未验证项：真实相机 GUI、`SDKCoordinateType` 坐标映射、实机软触发/重连、关闭时序和 130 万点性能，均为发布阻断项。
 
+### 2026-09（采集工作台 Designer UI）
+
+- `apps/pointcloudview` 使用 Qt Designer 增加顶部工具栏、中央画布工作区及采集、清理、平面、输出四步导航；既有算法和输出契约不变；
+- 实验相机对话框显示当前 `DeviceInfo` 字段和 Mock 源，未实现的相机参数以禁用控件显式提示，不纳入 v0.3 稳定能力；
+- 图标资源仅服务 UI，不引入共享模块依赖。相机扩展仍由 `PCV_BUILD_EXPERIMENTAL_CAMERA=ON` 显式启用。
+
 ### 2026-09-01（当前差异风险收敛）
 
 - P0：帧槽通知改为加锁 setter/clear；FrameSource 默认拒绝不支持能力；转换单飞、仅保留最新待处理帧，按 generation 丢弃旧结果；关闭先清通知并等待转换和 SDK callback；

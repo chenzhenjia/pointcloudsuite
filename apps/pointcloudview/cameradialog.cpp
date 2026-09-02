@@ -1,4 +1,5 @@
 #include "cameradialog.h"
+#include "ui_cameradialog.h"
 
 #include <pcv/camera/frame_converter.h>
 #include <pcv/camera/mock_frame_source.h>
@@ -11,12 +12,10 @@
 #include <QDateTime>
 #include <QDebug>
 #include <QFutureWatcher>
-#include <QHBoxLayout>
 #include <QLabel>
 #include <QPointer>
 #include <QPushButton>
 #include <QTimer>
-#include <QVBoxLayout>
 #include <QShowEvent>
 
 #include <QtConcurrent/QtConcurrentRun>
@@ -27,67 +26,31 @@
 CameraDialog::CameraDialog(QWidget *parent)
     : QDialog(parent)
 {
-    setWindowTitle(tr("相机实时取流（点云图）"));
-    resize(560, 320);
-
-    auto *deviceRow = new QHBoxLayout;
-    m_deviceList = new QComboBox(this);
-    m_deviceList->setMinimumWidth(320);
-    m_refresh = new QPushButton(tr("刷新设备"), this);
-    deviceRow->addWidget(new QLabel(tr("设备："), this));
-    deviceRow->addWidget(m_deviceList, 1);
-    deviceRow->addWidget(m_refresh);
-
-    auto *modeRow = new QHBoxLayout;
-    m_modeList = new QComboBox(this);
-    m_modeList->addItem(tr("深度图 Range_Image（推荐）"), int(pcv::camera::ImageMode::RangeImage));
-    m_modeList->addItem(tr("点云图 PointCloud_Image"), int(pcv::camera::ImageMode::PointCloudImage));
-    m_modeList->addItem(tr("自动（按帧类型自适应）"), int(pcv::camera::ImageMode::PointCloudImage));
+    ui = new Ui::CameraDialog;
+    ui->setupUi(this);
+    m_deviceList = ui->cb_devices;
+    m_modeList = ui->cb_mode;
+    m_triggerList = ui->cb_trigger;
+    m_connect = ui->btn_connect;
+    m_start = ui->btn_start;
+    m_triggerButton = ui->btn_trigger;
+    m_refresh = ui->btn_refresh;
+    m_status = ui->lbl_status;
+    m_frameInfo = ui->lbl_frame;
+    m_rateInfo = ui->lbl_rate;
+    m_deviceModel = ui->lbl_device_model_value;
+    m_deviceSerial = ui->lbl_device_serial_value;
+    m_deviceIp = ui->lbl_device_ip_value;
+    m_deviceVirtual = ui->lbl_device_virtual_value;
     m_modeList->setCurrentIndex(0);
-    modeRow->addWidget(new QLabel(tr("取流模式："), this));
-    modeRow->addWidget(m_modeList);
-    modeRow->addStretch(1);
-
-    auto *triggerRow = new QHBoxLayout;
-    m_triggerList = new QComboBox(this);
-    m_triggerList->addItem(tr("连续取流"), 0);
-    m_triggerList->addItem(tr("软触发"), 1);
-    m_triggerButton = new QPushButton(tr("触发一帧"), this);
-    m_triggerButton->setEnabled(false);
-    triggerRow->addWidget(new QLabel(tr("触发："), this));
-    triggerRow->addWidget(m_triggerList);
-    triggerRow->addWidget(m_triggerButton);
-    triggerRow->addStretch(1);
-
-    auto *actionRow = new QHBoxLayout;
-    m_connect = new QPushButton(tr("连接"), this);
-    m_start = new QPushButton(tr("开始取流"), this);
-    m_start->setEnabled(false);
-    actionRow->addWidget(m_connect);
-    actionRow->addWidget(m_start);
-    actionRow->addStretch(1);
-
-    m_status = new QLabel(tr("未连接"), this);
-    m_frameInfo = new QLabel(tr("帧：-"), this);
-    m_rateInfo = new QLabel(tr("帧率：-"), this);
-
-    auto *infoRow = new QHBoxLayout;
-    infoRow->addWidget(m_status);
-    infoRow->addWidget(m_frameInfo);
-    infoRow->addWidget(m_rateInfo);
-
-    auto *layout = new QVBoxLayout(this);
-    layout->addLayout(deviceRow);
-    layout->addLayout(modeRow);
-    layout->addLayout(triggerRow);
-    layout->addLayout(actionRow);
-    layout->addLayout(infoRow);
 
     m_reconnectTimer = new QTimer(this);
     m_reconnectTimer->setInterval(2000);
     connect(m_reconnectTimer, &QTimer::timeout, this, &CameraDialog::attemptReconnect);
 
     connect(m_refresh, &QPushButton::clicked, this, &CameraDialog::refreshDevices);
+    connect(m_deviceList, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &CameraDialog::refreshDeviceDetails);
     connect(m_connect, &QPushButton::clicked, this, &CameraDialog::toggleConnection);
     connect(m_start, &QPushButton::clicked, this, &CameraDialog::toggleStreaming);
     connect(m_triggerButton, &QPushButton::clicked, this, &CameraDialog::triggerFrame);
@@ -140,10 +103,28 @@ CameraDialog::CameraDialog(QWidget *parent)
     refreshDevices();
 }
 
+void CameraDialog::refreshDeviceDetails(int index)
+{
+    if (!m_deviceModel) return;
+    if (index >= 0 && index < m_devices.size()) {
+        const auto &device = m_devices.at(index);
+        m_deviceModel->setText(device.modelName);
+        m_deviceSerial->setText(device.serialNumber);
+        m_deviceIp->setText(device.currentIp.isEmpty() ? tr("-") : device.currentIp);
+        m_deviceVirtual->setText(device.isVirtual ? tr("虚拟设备") : tr("真实设备"));
+    } else {
+        m_deviceModel->setText(tr("Mock 合成点云源"));
+        m_deviceSerial->setText(tr("调试源"));
+        m_deviceIp->setText(tr("-"));
+        m_deviceVirtual->setText(tr("Mock"));
+    }
+}
+
 CameraDialog::~CameraDialog()
 {
     stopSourceSafely();
     m_reconnectTimer->stop();
+    delete ui;
 }
 
 void CameraDialog::closeEvent(QCloseEvent *event)
@@ -182,6 +163,7 @@ void CameraDialog::refreshDevices()
     }
     // Always offer the mock source for camera-free verification.
     m_deviceList->addItem(tr("Mock 合成点云源（调试）"));
+    refreshDeviceDetails(m_deviceList->currentIndex());
 }
 
 void CameraDialog::toggleConnection()

@@ -48,6 +48,8 @@
 #include <QSplitter>
 #include <QStatusBar>
 #include <QStyle>
+#include <QToolButton>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QVBoxLayout>
 #include <QVector4D>
@@ -229,6 +231,53 @@ void MainWindow::buildUi() {
             this, &MainWindow::openTempScanningInfo);
     connect(ui->btn_multiframe_registration, &QPushButton::clicked,
             this, &MainWindow::openMultiFrameRegistration);
+#ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
+    connect(ui->btn_camera_device, &QPushButton::clicked,
+            this, &MainWindow::openCameraStream);
+    connect(ui->act_device_list, &QAction::triggered, this, &MainWindow::openCameraStream);
+    connect(ui->act_camera_stream, &QAction::triggered, this, &MainWindow::openCameraStream);
+#else
+    ui->btn_camera_device->setVisible(false);
+    ui->act_device_list->setEnabled(false);
+    ui->act_camera_stream->setEnabled(false);
+#endif
+    connect(ui->act_coordinate_transform, &QAction::triggered,
+            this, &MainWindow::openTempScanningInfo);
+    connect(ui->act_file_io, &QAction::triggered,
+            this, &MainWindow::openPointCloudSource);
+    connect(ui->act_canvas_reset, &QAction::triggered,
+            m_canvas, &PointCloudCanvas::resetView);
+    // The tab pages remain the existing implementation boundary; hide the
+    // tab bar and expose a Designer-authored step navigator instead.
+    ui->tw_main->tabBar()->hide();
+    const auto updateWorkflowStep = [this](int index) {
+        index = std::clamp(index, 0, ui->tw_main->count() - 1);
+        ui->tw_main->setCurrentIndex(index);
+        ui->btn_step_acquire->setChecked(index == 0);
+        ui->btn_step_clean->setChecked(index == 1);
+        ui->btn_step_plane->setChecked(index == 2);
+        ui->btn_step_output->setChecked(index == 3);
+        ui->btn_prev_step->setEnabled(index > 0);
+        ui->btn_next_step->setEnabled(index + 1 < ui->tw_main->count());
+        ui->lbl_step_status->setText(tr("步骤 %1/4：%2").arg(index + 1)
+            .arg(index == 0 ? tr("采集与数据源")
+                 : index == 1 ? tr("点云清理")
+                 : index == 2 ? tr("平面与工件坐标")
+                               : tr("边缘分割与输出")));
+    };
+    connect(ui->btn_step_acquire, &QToolButton::clicked, this,
+            [updateWorkflowStep]() { updateWorkflowStep(0); });
+    connect(ui->btn_step_clean, &QToolButton::clicked, this,
+            [updateWorkflowStep]() { updateWorkflowStep(1); });
+    connect(ui->btn_step_plane, &QToolButton::clicked, this,
+            [updateWorkflowStep]() { updateWorkflowStep(2); });
+    connect(ui->btn_step_output, &QToolButton::clicked, this,
+            [updateWorkflowStep]() { updateWorkflowStep(3); });
+    connect(ui->btn_prev_step, &QPushButton::clicked, this,
+            [this, updateWorkflowStep]() { updateWorkflowStep(ui->tw_main->currentIndex() - 1); });
+    connect(ui->btn_next_step, &QPushButton::clicked, this,
+            [this, updateWorkflowStep]() { updateWorkflowStep(ui->tw_main->currentIndex() + 1); });
+    connect(ui->tw_main, &QTabWidget::currentChanged, this, updateWorkflowStep);
     connect(m_fileList, &QListWidget::currentRowChanged, this, &MainWindow::loadSelectedSource);
     connect(m_pointSize, qOverload<int>(&QSpinBox::valueChanged), m_canvas, &PointCloudCanvas::setPointSize);
     connect(ui->btn_reset_view, &QPushButton::clicked, m_canvas, &PointCloudCanvas::resetView);
@@ -291,6 +340,7 @@ void MainWindow::buildUi() {
     };
     updatePlaneExtractionUi();
     updatePlaneEdgeUi();
+    updateWorkflowStep(0);
     statusBar()->showMessage(tr("就绪"));
 }
 

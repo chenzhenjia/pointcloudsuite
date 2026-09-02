@@ -8,6 +8,7 @@ qt_add_executable(pointcloudview
     registrationdialog.h
     pointcloudprocessor.cpp
     pointcloudprocessor.h
+    pointcloudview.qrc
 )
 if(PCV_BUILD_EXPERIMENTAL_CAMERA)
     target_sources(pointcloudview PRIVATE
@@ -15,6 +16,7 @@ if(PCV_BUILD_EXPERIMENTAL_CAMERA)
         live_pipeline.h
         cameradialog.cpp
         cameradialog.h
+        ui/cameradialog.ui
     )
 endif()
 set_property(TARGET pointcloudview PROPERTY AUTOUIC_SEARCH_PATHS
