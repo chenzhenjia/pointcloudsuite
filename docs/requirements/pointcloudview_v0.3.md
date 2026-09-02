@@ -80,6 +80,16 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 - 实验相机对话框显示当前 `DeviceInfo` 字段和 Mock 源，未实现的相机参数以禁用控件显式提示，不纳入 v0.3 稳定能力；
 - 图标资源仅服务 UI，不引入共享模块依赖。相机扩展仍由 `PCV_BUILD_EXPERIMENTAL_CAMERA=ON` 显式启用。
 
+### 2026-09（全界面浅色主题补强）
+
+- 主窗口与相机对话框补充嵌套面板、菜单、弹出列表、滚动条、SpinBox 和复选框的浅色样式，避免系统调色板导致深色残留；
+- OpenGL 画布继续使用浅灰白清屏色和深色叠加文字，不改变渲染公共接口。
+
+### 2026-09（浅色 UI + 深色 OpenGL 画布）
+
+- 主窗口、工具栏、面板和对话框保持浅色视觉基线；中央 OpenGL 画布采用深色背景，以提高彩色点云、边缘和坐标轴的识别度；
+- 画布叠加文字同步使用浅色高对比度，不改变渲染公共接口或数据契约。
+
 ### 2026-09-01（当前差异风险收敛）
 
 - P0：帧槽通知改为加锁 setter/clear；FrameSource 默认拒绝不支持能力；转换单飞、仅保留最新待处理帧，按 generation 丢弃旧结果；关闭先清通知并等待转换和 SDK callback；
@@ -97,6 +107,11 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 - 新增 pipeline 严格校验、预转换帧透传、warning 及 binary writer 回读回归；实验相机 Debug CTest `17/17` 通过。
 
 ## 9. 风险与验收门槛
+
+### 2026-09-02（registration_diagnostic 通用 CLI）
+
+- `registration_diagnostic` 保留 `pointcloudview` GUI，并支持通用 `--input`/`--input-dir` 多帧输入、`--pose-info` 位姿匹配及 `inspect` PLY header `format` 检查；底层仍统一调用 `pcv::interface::stitchRawLineProfiles`。
+- 验证：Windows Debug 工具构建通过；全量 CTest `13/13` 通过。真实 PLY/XML 拼接夹具和 GUI 点击验收未执行。
 
 - 核心门槛：实验开关 OFF/ON 均可配置，Debug/Release 全量 CTest 通过；Windows 使用 `NMake Makefiles` 并验证公共头依赖，JOM/Ninja 不作为当前支持生成器；
 - 相机门槛：Mock 连接/首帧/停止/断开/重开、`POINTCLOUDVIEW_SELFTEST_CLOSE=1` smoke 及 DP2240 实机 GUI/坐标/重连证据；当前未完成；

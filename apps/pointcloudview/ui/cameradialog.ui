@@ -10,17 +10,24 @@
   </property>
   <property name="windowTitle"><string>相机设备与实时取流</string></property>
   <property name="styleSheet">
-   <string notr="true">QDialog { background:#ffffff; color:#1f2937; font-family:"Microsoft YaHei"; font-size:10pt; }
+   <string notr="true">QDialog, QWidget, QFrame, QStackedWidget { background:#ffffff; color:#1f2937; font-family:"Microsoft YaHei"; font-size:10pt; }
 QGroupBox { border:1px solid #d9e0e8; border-radius:5px; margin-top:10px; padding:12px 10px 10px; }
 QGroupBox::title { subcontrol-origin:margin; left:10px; padding:0 5px; color:#1769aa; }
 QLabel { color:#475467; }
 QLabel#lbl_status { color:#16803c; font-weight:600; }
 QLabel#lbl_device_model_value, QLabel#lbl_device_serial_value, QLabel#lbl_device_ip_value, QLabel#lbl_device_virtual_value { color:#172b4d; font-weight:600; }
-QComboBox, QPushButton { min-height:28px; border:1px solid #cbd5e1; border-radius:4px; padding:4px 8px; background:#ffffff; color:#344054; }
+QComboBox, QPushButton, QLineEdit { min-height:28px; border:1px solid #cbd5e1; border-radius:4px; padding:4px 8px; background:#ffffff; color:#344054; }
 QComboBox:hover, QPushButton:hover { border-color:#5b9bd5; background:#edf5ff; }
 QPushButton:disabled { color:#98a2b3; background:#f5f7fa; border-color:#e3e8ef; }
 QPushButton#btn_connect, QPushButton#btn_start { background:#2f80c9; border-color:#2472b8; color:white; }
 QPlainTextEdit { background:#ffffff; color:#344054; border:1px solid #cbd5e1; border-radius:4px; }
+QMenu, QAbstractItemView { background:#ffffff; color:#1f2937; border:1px solid #d9e0e8; }
+QComboBox QAbstractItemView { selection-background-color:#dceeff; selection-color:#1769aa; }
+QComboBox::drop-down { background:#f5f7fa; border-left:1px solid #d9e0e8; width:22px; }
+QScrollBar:vertical { background:#f5f7fa; width:12px; }
+QScrollBar::handle:vertical { background:#cbd5e1; border-radius:5px; min-height:24px; }
+QScrollBar::handle:vertical:hover { background:#91caff; }
+QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page { background:none; border:none; }
 </string>
   </property>
   <layout class="QVBoxLayout" name="rootLayout">

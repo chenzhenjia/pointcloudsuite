@@ -20,20 +20,26 @@
    <string>点云预览工作台</string>
   </property>
   <property name="styleSheet">
-   <string notr="true">QMainWindow, QWidget#main_window, QWidget#wgt_central {
+   <string notr="true">QMainWindow, QWidget#main_window, QWidget#wgt_central,
+QWidget#wgt_source_panel, QWidget#wgt_render, QWidget#wgt_clean,
+QWidget#wgt_plane, QWidget#wgt_edge, QWidget#tw_main,
+QWidget#toolbar_workflow, QFrame, QStackedWidget {
     background-color: #ffffff;
     color: #1f2937;
     font-family: &quot;Microsoft YaHei&quot;;
     font-size: 10pt;
 }
-QMenuBar, QToolBar {
+QWidget { background-color: #ffffff; color: #344054; }
+QMenuBar, QToolBar, QMenu, QAbstractItemView {
     background-color: #ffffff;
     color: #1f2937;
     border-bottom: 1px solid #d9e0e8;
     padding: 2px 8px;
 }
 QMenuBar::item { padding: 5px 12px; }
-QMenuBar::item:selected, QToolButton:hover { background-color: #edf5ff; color: #1769aa; }
+QMenuBar::item:selected, QMenu::item:selected, QToolButton:hover { background-color: #edf5ff; color: #1769aa; }
+QMenu { border: 1px solid #d9e0e8; padding: 4px; }
+QMenu::item { padding: 6px 24px 6px 12px; }
 QToolButton { color: #344054; border: 1px solid transparent; border-radius: 4px; padding: 4px 8px; }
 QToolButton:checked { background-color: #e5f1ff; color: #1769aa; border-color: #91caff; }
 QPushButton {
@@ -47,7 +53,8 @@ QPushButton {
 QPushButton:hover { background-color: #edf5ff; border-color: #5b9bd5; color: #1769aa; }
 QPushButton:pressed { background-color: #dceeff; }
 QPushButton:disabled { color: #98a2b3; background-color: #f5f7fa; border-color: #e3e8ef; }
-QLineEdit, QPlainTextEdit, QListWidget, QComboBox, QSpinBox, QDoubleSpinBox {
+QLineEdit, QPlainTextEdit, QListWidget, QComboBox, QSpinBox, QDoubleSpinBox,
+QAbstractSpinBox, QScrollArea, QScrollBar {
     background-color: #ffffff;
     color: #1f2937;
     border: 1px solid #cbd5e1;
@@ -58,6 +65,21 @@ QLineEdit, QPlainTextEdit, QListWidget, QComboBox, QSpinBox, QDoubleSpinBox {
 QListWidget { outline: none; }
 QListWidget::item { padding: 7px 8px; border-radius: 3px; }
 QListWidget::item:selected { background-color: #dceeff; color: #1769aa; }
+QAbstractItemView { background-color: #ffffff; color: #1f2937; border: 1px solid #cbd5e1; selection-background-color: #dceeff; selection-color: #1769aa; }
+QComboBox QAbstractItemView { background-color: #ffffff; color: #1f2937; border: 1px solid #cbd5e1; padding: 2px; }
+QComboBox::drop-down { background-color: #f5f7fa; border-left: 1px solid #d9e0e8; width: 22px; }
+QComboBox::down-arrow { image: none; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid #667085; width: 0; height: 0; }
+QAbstractSpinBox::up-button, QAbstractSpinBox::down-button { background-color: #f5f7fa; border-left: 1px solid #d9e0e8; }
+QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover { background-color: #edf5ff; }
+QScrollBar:vertical { background: #f5f7fa; width: 12px; margin: 0; }
+QScrollBar:horizontal { background: #f5f7fa; height: 12px; margin: 0; }
+QScrollBar::handle:vertical, QScrollBar::handle:horizontal { background: #cbd5e1; border-radius: 5px; min-height: 24px; min-width: 24px; }
+QScrollBar::handle:hover { background: #91caff; }
+QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page { background: none; border: none; }
+QCheckBox { color: #344054; spacing: 6px; }
+QCheckBox::indicator { width: 15px; height: 15px; border: 1px solid #98a2b3; border-radius: 3px; background: #ffffff; }
+QCheckBox::indicator:checked { background: #2f80c9; border-color: #2472b8; }
+QCheckBox::indicator:disabled { background: #f5f7fa; border-color: #d9e0e8; }
 QTabWidget::pane { border: 1px solid #d9e0e8; background-color: #ffffff; }
 QTabBar::tab { background-color: #f5f7fa; color: #667085; padding: 8px 14px; border: 1px solid #d9e0e8; border-bottom: none; }
 QTabBar::tab:selected { color: #1769aa; background-color: #ffffff; }
@@ -68,6 +90,7 @@ QStatusBar { background-color: #f8fafc; color: #667085; border-top: 1px solid #d
 QProgressBar { background-color: #e7ecf2; border: none; height: 3px; }
 QProgressBar::chunk { background-color: #2f80c9; }
 QLabel#lbl_main_title { color: #172b4d; font-size: 15pt; font-weight: 600; }
+QLabel { color: #344054; }
 QLabel#lbl_header_subtitle, QLabel#lbl_file_info, QLabel#lbl_canvas_info { color: #667085; }
 QLabel#lbl_workflow_title, QLabel#lbl_source_title, QLabel#lbl_render_title, QLabel#lbl_clean_title, QLabel#lbl_plane_title, QLabel#lbl_edge_title { color: #1769aa; font-size: 11pt; font-weight: 600; padding: 4px 0; }
 QPushButton#btn_open_point_cloud, QPushButton#btn_open_scanning_info { background-color: #2f80c9; border-color: #2472b8; color: #ffffff; }
@@ -165,13 +188,18 @@ QWidget#wgt_canvas_host { background-color: #ffffff; }
     </item>
     <item>
      <widget class="QToolBar" name="toolbar_workflow">
+      <property name="movable">
+       <bool>false</bool>
+      </property>
       <property name="iconSize">
-       <size><width>22</width><height>22</height></size>
+       <size>
+        <width>22</width>
+        <height>22</height>
+       </size>
       </property>
       <property name="toolButtonStyle">
        <enum>Qt::ToolButtonStyle::ToolButtonTextUnderIcon</enum>
       </property>
-      <property name="movable"><bool>false</bool></property>
       <addaction name="act_device_list"/>
       <addaction name="act_layout_manage"/>
       <addaction name="act_coordinate_transform"/>
@@ -220,22 +248,81 @@ QWidget#wgt_canvas_host { background-color: #ffffff; }
         </property>
         <item>
          <widget class="QLabel" name="lbl_workflow_title">
-          <property name="text"><string>采集与处理总控中心</string></property>
+          <property name="text">
+           <string>采集与处理总控中心</string>
+          </property>
          </widget>
         </item>
         <item>
          <layout class="QHBoxLayout" name="workflowNavLayout">
-          <item><widget class="QToolButton" name="btn_step_acquire"><property name="text"><string>1 采集</string></property><property name="checkable"><bool>true</bool></property><property name="checked"><bool>true</bool></property></widget></item>
-          <item><widget class="QToolButton" name="btn_step_clean"><property name="text"><string>2 清理</string></property><property name="checkable"><bool>true</bool></property></widget></item>
-          <item><widget class="QToolButton" name="btn_step_plane"><property name="text"><string>3 平面</string></property><property name="checkable"><bool>true</bool></property></widget></item>
-          <item><widget class="QToolButton" name="btn_step_output"><property name="text"><string>4 输出</string></property><property name="checkable"><bool>true</bool></property></widget></item>
+          <item>
+           <widget class="QToolButton" name="btn_step_acquire">
+            <property name="text">
+             <string>1 采集</string>
+            </property>
+            <property name="checkable">
+             <bool>true</bool>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QToolButton" name="btn_step_clean">
+            <property name="text">
+             <string>2 清理</string>
+            </property>
+            <property name="checkable">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QToolButton" name="btn_step_plane">
+            <property name="text">
+             <string>3 平面</string>
+            </property>
+            <property name="checkable">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QToolButton" name="btn_step_output">
+            <property name="text">
+             <string>4 输出</string>
+            </property>
+            <property name="checkable">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
          </layout>
         </item>
         <item>
          <layout class="QHBoxLayout" name="workflowPagerLayout">
-          <item><widget class="QPushButton" name="btn_prev_step"><property name="text"><string>上一步</string></property></widget></item>
-          <item><widget class="QLabel" name="lbl_step_status"><property name="text"><string>步骤 1/4：采集与数据源</string></property></widget></item>
-          <item><widget class="QPushButton" name="btn_next_step"><property name="text"><string>下一步</string></property></widget></item>
+          <item>
+           <widget class="QPushButton" name="btn_prev_step">
+            <property name="text">
+             <string>上一步</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="lbl_step_status">
+            <property name="text">
+             <string> 采集与数据源</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="btn_next_step">
+            <property name="text">
+             <string>下一步</string>
+            </property>
+           </widget>
+          </item>
          </layout>
         </item>
         <item>
@@ -909,40 +996,91 @@ QWidget#wgt_canvas_host { background-color: #ffffff; }
   </widget>
   <widget class="QStatusBar" name="statusbar_main"/>
   <action name="act_device_list">
-   <property name="icon"><iconset resource="pointcloudview.qrc">:/pointcloudview/icons/device.svg</iconset></property>
-   <property name="text"><string>设备列表</string></property>
-   <property name="toolTip"><string>打开设备列表与实时取流</string></property>
+   <property name="icon">
+    <iconset resource="../pointcloudview.qrc">
+     <normaloff>:/pointcloudview/icons/device.svg</normaloff>:/pointcloudview/icons/device.svg</iconset>
+   </property>
+   <property name="text">
+    <string>设备列表</string>
+   </property>
+   <property name="toolTip">
+    <string>打开设备列表与实时取流</string>
+   </property>
   </action>
   <action name="act_layout_manage">
-   <property name="icon"><iconset resource="pointcloudview.qrc">:/pointcloudview/icons/layout.svg</iconset></property>
-   <property name="text"><string>布局管理</string></property>
-   <property name="enabled"><bool>false</bool></property>
-   <property name="toolTip"><string>布局管理（待接入）</string></property>
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="icon">
+    <iconset resource="../pointcloudview.qrc">
+     <normaloff>:/pointcloudview/icons/layout.svg</normaloff>:/pointcloudview/icons/layout.svg</iconset>
+   </property>
+   <property name="text">
+    <string>布局管理</string>
+   </property>
+   <property name="toolTip">
+    <string>布局管理（待接入）</string>
+   </property>
   </action>
   <action name="act_coordinate_transform">
-   <property name="icon"><iconset resource="pointcloudview.qrc">:/pointcloudview/icons/transform.svg</iconset></property>
-   <property name="text"><string>标定/坐标转换</string></property>
-   <property name="toolTip"><string>打开扫描 JSON 并执行 camera 到 robot_base 转换</string></property>
+   <property name="icon">
+    <iconset resource="../pointcloudview.qrc">
+     <normaloff>:/pointcloudview/icons/transform.svg</normaloff>:/pointcloudview/icons/transform.svg</iconset>
+   </property>
+   <property name="text">
+    <string>标定/坐标转换</string>
+   </property>
+   <property name="toolTip">
+    <string>打开扫描 JSON 并执行 camera 到 robot_base 转换</string>
+   </property>
   </action>
   <action name="act_file_io">
-   <property name="icon"><iconset resource="pointcloudview.qrc">:/pointcloudview/icons/file.svg</iconset></property>
-   <property name="text"><string>文件存取</string></property>
-   <property name="toolTip"><string>打开点云或扫描 JSON</string></property>
+   <property name="icon">
+    <iconset resource="../pointcloudview.qrc">
+     <normaloff>:/pointcloudview/icons/file.svg</normaloff>:/pointcloudview/icons/file.svg</iconset>
+   </property>
+   <property name="text">
+    <string>文件存取</string>
+   </property>
+   <property name="toolTip">
+    <string>打开点云或扫描 JSON</string>
+   </property>
   </action>
   <action name="act_property_save">
-   <property name="icon"><iconset resource="pointcloudview.qrc">:/pointcloudview/icons/save.svg</iconset></property>
-   <property name="text"><string>属性保存</string></property>
-   <property name="enabled"><bool>false</bool></property>
-   <property name="toolTip"><string>属性保存（待接入）</string></property>
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="icon">
+    <iconset resource="../pointcloudview.qrc">
+     <normaloff>:/pointcloudview/icons/save.svg</normaloff>:/pointcloudview/icons/save.svg</iconset>
+   </property>
+   <property name="text">
+    <string>属性保存</string>
+   </property>
+   <property name="toolTip">
+    <string>属性保存（待接入）</string>
+   </property>
   </action>
   <action name="act_camera_stream">
-   <property name="icon"><iconset resource="pointcloudview.qrc">:/pointcloudview/icons/stream.svg</iconset></property>
-   <property name="text"><string>取流</string></property>
-   <property name="toolTip"><string>打开相机取流</string></property>
+   <property name="icon">
+    <iconset resource="../pointcloudview.qrc">
+     <normaloff>:/pointcloudview/icons/stream.svg</normaloff>:/pointcloudview/icons/stream.svg</iconset>
+   </property>
+   <property name="text">
+    <string>取流</string>
+   </property>
+   <property name="toolTip">
+    <string>打开相机取流</string>
+   </property>
   </action>
   <action name="act_canvas_reset">
-   <property name="icon"><iconset resource="pointcloudview.qrc">:/pointcloudview/icons/reset.svg</iconset></property>
-   <property name="text"><string>重置视角</string></property>
+   <property name="icon">
+    <iconset resource="../pointcloudview.qrc">
+     <normaloff>:/pointcloudview/icons/reset.svg</normaloff>:/pointcloudview/icons/reset.svg</iconset>
+   </property>
+   <property name="text">
+    <string>重置视角</string>
+   </property>
   </action>
   <action name="act_open">
    <property name="text">
@@ -963,6 +1101,8 @@ QWidget#wgt_canvas_host { background-color: #ffffff; }
    </property>
   </action>
  </widget>
- <resources/>
+ <resources>
+  <include location="../pointcloudview.qrc"/>
+ </resources>
  <connections/>
 </ui>
