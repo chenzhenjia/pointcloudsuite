@@ -93,6 +93,11 @@ int main(int argc, char **argv)
         if (!require(sawPairMessage, "ICP pair progress message was not emitted")) return 1;
         if (!require(result.icpDiagnostics.size() >= 2,
                      "ICP registration must report the reference and pair diagnostics")) return 1;
+        if (!require(result.icpDiagnostics[1].attemptCount == 1,
+                     "successful pair should report one attempt")) return 1;
+        if (!require(result.icpDiagnostics[1].primaryAttemptReason
+                         == result.icpDiagnostics[1].reason,
+                     "primary attempt reason must match the final reason without retry")) return 1;
     }
 
     {
@@ -118,6 +123,22 @@ int main(int argc, char **argv)
             {validFrame(QStringLiteral("cancelled.ply"))}, options);
         if (!require(!result.ok && result.cancelled,
                      "cancelled registration must report cancellation")) return 1;
+    }
+
+    {
+        pointcloud::IcpOptions options = simpleIcpOptions();
+        options.enabled = false;
+        auto token = std::make_shared<std::atomic_bool>(false);
+        options.cancellation = token;
+        const auto clean = pointcloud::registerRobotBaseFrames(
+            {validFrame(QStringLiteral("token_clean.ply"))}, options);
+        if (!require(clean.ok && !clean.cancelled,
+                     "an unset token must not cancel registration")) return 1;
+        token->store(true);
+        const auto cancelledByToken = pointcloud::registerRobotBaseFrames(
+            {validFrame(QStringLiteral("token_cancelled.ply"))}, options);
+        if (!require(!cancelledByToken.ok && cancelledByToken.cancelled,
+                     "a raised token must cancel registration")) return 1;
     }
 
     std::cout << "Multiframe registration tests passed.\n";

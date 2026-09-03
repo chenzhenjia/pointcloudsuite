@@ -425,7 +425,8 @@ void runWideStructureDiagnostic(const QVector<Point3D> &source,
                                 const QVector<Point3D> &target,
                                 const PlaneDiagnostic &targetPlane,
                                 const IcpOptions &options,
-                                IcpDiagnostics *diagnostic) {
+                                IcpDiagnostics *diagnostic,
+                                QMatrix4x4 *candidateMatrix=nullptr) {
     diagnostic->wideStructureDiagnosticAttempted=true;
     QVector<Point3D> moving=voxelDownsample(source,4.0f),reference=voxelDownsample(target,4.0f);
     if(moving.size()<options.minimumStructuralPoints||reference.size()<options.minimumStructuralPoints||!targetPlane.valid){
@@ -464,7 +465,17 @@ void runWideStructureDiagnostic(const QVector<Point3D> &source,
     diagnostic->wideStructureCoverageBest=bestScore;
     diagnostic->wideStructureX=best.x();diagnostic->wideStructureY=best.y();diagnostic->wideStructureZ=best.z();
     diagnostic->wideStructureYawDegrees=bestYaw;
-    diagnostic->wideStructureDiagnosticReason=QStringLiteral("只读诊断：5 mm 双向覆盖率由 %1 提升至 %2，候选不应用")
+    if(candidateMatrix){
+        QMatrix4x4 translation;translation.setToIdentity();translation.translate(best);
+        QMatrix4x4 rotation;rotation.setToIdentity();
+        if(std::abs(bestYaw)>1.0e-6f){
+            rotation.translate(centroid+best);rotation.rotate(bestYaw,targetPlane.normal);rotation.translate(-(centroid+best));
+        }
+        *candidateMatrix=rotation*translation;
+    }
+    diagnostic->wideStructureDiagnosticReason=(options.applyWideStructureCandidate
+        ?QStringLiteral("大范围结构候选：5 mm 双向覆盖率由 %1 提升至 %2，作为 ICP 初值")
+        :QStringLiteral("只读诊断：5 mm 双向覆盖率由 %1 提升至 %2，候选不应用"))
         .arg(diagnostic->wideStructureCoverageBefore,0,'f',4).arg(bestScore,0,'f',4);
 }
 
@@ -637,6 +648,8 @@ void collectInitialPairDiagnostics(const QVector<Point3D> &sourceCrop,
     }
     const DistanceDiagnostic distances=nearestDistanceDiagnostic(sourceCrop,targetCrop);
     diagnostic->nearestDistanceP50=distances.p50;diagnostic->nearestDistanceP90=distances.p90;diagnostic->nearestDistanceP95=distances.p95;diagnostic->coverageWithin3mm=distances.within3;diagnostic->coverageWithin5mm=distances.within5;diagnostic->coverageWithin10mm=distances.within10;
+    // Use robust overlap statistics as the retry scale, never a single point or AABB edge.
+    diagnostic->initialTranslation=distances.p90;
     PlaneDiagnostic sourcePlane=planeIdentityTracked?pcaPlane(sourceCrop,preferredSourceHeight,&options):pcaPlane(sourceCrop,std::numeric_limits<float>::quiet_NaN(),&options);
     PlaneDiagnostic targetPlane=planeIdentityTracked?pcaPlane(targetCrop,preferredTargetHeight,&options)
         :(sourcePlane.valid?pcaPlane(targetCrop,sourcePlane.height,&options):pcaPlane(targetCrop,std::numeric_limits<float>::quiet_NaN(),&options));
@@ -644,7 +657,7 @@ void collectInitialPairDiagnostics(const QVector<Point3D> &sourceCrop,
     diagnostic->trackedSourcePlaneHeight=preferredSourceHeight;
     diagnostic->trackedTargetPlaneHeight=preferredTargetHeight;
     diagnostic->planeIdentityReason=planeIdentityTracked?QStringLiteral("使用跨帧一致主平面轨迹"):QStringLiteral("使用相邻帧局部主平面匹配");
-    if(sourcePlane.valid&&targetPlane.valid){if(QVector3D::dotProduct(sourcePlane.normal,targetPlane.normal)<0){targetPlane.normal=-targetPlane.normal;targetPlane.offset=-targetPlane.offset;}diagnostic->planeDiagnosticValid=true;diagnostic->planeNormalAngleDegrees=qRadiansToDegrees(std::acos(qBound(-1.0f,QVector3D::dotProduct(sourcePlane.normal,targetPlane.normal),1.0f)));diagnostic->sourcePlaneHeight=sourcePlane.height;diagnostic->targetPlaneHeight=targetPlane.height;diagnostic->planeOffsetDifference=sourcePlane.height-targetPlane.height;}
+    if(sourcePlane.valid&&targetPlane.valid){if(QVector3D::dotProduct(sourcePlane.normal,targetPlane.normal)<0){targetPlane.normal=-targetPlane.normal;targetPlane.offset=-targetPlane.offset;}diagnostic->planeDiagnosticValid=true;diagnostic->planeNormalAngleDegrees=qRadiansToDegrees(std::acos(qBound(-1.0f,QVector3D::dotProduct(sourcePlane.normal,targetPlane.normal),1.0f)));diagnostic->initialAngleDegrees=diagnostic->planeNormalAngleDegrees;diagnostic->sourcePlaneHeight=sourcePlane.height;diagnostic->targetPlaneHeight=targetPlane.height;diagnostic->planeOffsetDifference=sourcePlane.height-targetPlane.height;}
     if(sourcePlaneOutput)*sourcePlaneOutput=sourcePlane;
     if(targetPlaneOutput)*targetPlaneOutput=targetPlane;
 }
@@ -681,7 +694,7 @@ bool buildPlanePrealignment(const PlaneDiagnostic &sourcePlane,
     return true;
 }
 
-IcpDiagnostics registerPair(QVector<Point3D> *source,
+IcpDiagnostics registerPair(const QVector<Point3D> &source,
                             const QVector<Point3D> &target,
                             const IcpOptions &options,
                             int sourceIndex,
@@ -696,8 +709,17 @@ IcpDiagnostics registerPair(QVector<Point3D> *source,
     diagnostic.targetCloudIndex=sourceIndex-1;
     diagnostic.sourceCloudIndex=sourceIndex;
     diagnostic.filePath=QStringLiteral("scan %1").arg(sourceIndex+1);
+    // Hot-path cancellation: prefer the stable token pointer so the per-iteration
+    // ICP loop never touches a std::function when a token is provided. The token
+    // object is owned by options.cancellation and outlives this whole call.
+    const std::atomic_bool *cancelFlag = options.cancellation.get();
+    const auto cancelled = [&]() {
+        ++diagnostic.cancellationCheckCount;
+        if (cancelFlag) return cancelFlag->load(std::memory_order_relaxed);
+        return options.isCancelled && options.isCancelled();
+    };
     correction->setToIdentity();
-    const Bounds sourceBounds=cloudBounds(*source),targetBounds=cloudBounds(target);
+    const Bounds sourceBounds=cloudBounds(source),targetBounds=cloudBounds(target);
     const QVector3D low(qMax(sourceBounds.minimum.x(),targetBounds.minimum.x())-options.overlapMargin,
                         qMax(sourceBounds.minimum.y(),targetBounds.minimum.y())-options.overlapMargin,
                         qMax(sourceBounds.minimum.z(),targetBounds.minimum.z())-options.overlapMargin);
@@ -707,7 +729,7 @@ IcpDiagnostics registerPair(QVector<Point3D> *source,
     if(high.x()<=low.x()||high.y()<=low.y()||high.z()<=low.z()){
         diagnostic.reason=QStringLiteral("相邻点云包围盒不重叠");return diagnostic;
     }
-    const QVector<Point3D> sourceCrop=cropCloud(*source,low,high);
+    const QVector<Point3D> sourceCrop=cropCloud(source,low,high);
     const QVector<Point3D> targetCrop=cropCloud(target,low,high);
     PlaneDiagnostic sourcePlane,targetPlane;
     collectInitialPairDiagnostics(sourceCrop,targetCrop,stitchAxis,options,preferredSourcePlaneHeight,
@@ -731,7 +753,7 @@ IcpDiagnostics registerPair(QVector<Point3D> *source,
     const QMatrix4x4 overlapBaselineCorrection=*correction;
     QVector<Point3D> overlapAlignedSource=sourceCrop;
     applyTransform(&overlapAlignedSource,overlapBaselineCorrection);
-    QVector<Point3D> overlapAlignedFull=*source;
+    QVector<Point3D> overlapAlignedFull=source;
     applyTransform(&overlapAlignedFull,overlapBaselineCorrection);
     const Bounds alignedSourceBounds=cloudBounds(overlapAlignedFull);
     const Bounds alignedTargetBounds=cloudBounds(target);
@@ -774,9 +796,22 @@ IcpDiagnostics registerPair(QVector<Point3D> *source,
         PlaneDiagnostic alignedSourcePlane=sourcePlane;
         alignedSourcePlane.normal=(*correction).mapVector(sourcePlane.normal).normalized();
         alignedSourcePlane.offset=QVector3D::dotProduct(alignedSourcePlane.normal,(*correction).map(sourcePlane.centroid));
-        QVector<Point3D> wideSource=*source;applyTransform(&wideSource,*correction);
+        QVector<Point3D> wideSource=source;applyTransform(&wideSource,*correction);
+        QMatrix4x4 wideCandidate;
         runWideStructureDiagnostic(pureStructuralPoints(wideSource,alignedSourcePlane,options.structuralPlaneExclusionMm),
-            pureStructuralPoints(target,targetPlane,options.structuralPlaneExclusionMm),targetPlane,options,&diagnostic);
+            pureStructuralPoints(target,targetPlane,options.structuralPlaneExclusionMm),targetPlane,options,&diagnostic,&wideCandidate);
+        if(options.applyWideStructureCandidate&&diagnostic.wideStructureDiagnosticValid
+            &&diagnostic.wideStructureCoverageBest>diagnostic.wideStructureCoverageBefore+options.tangentCoarseMinimumCoverageGain){
+            const QMatrix4x4 candidateCorrection=wideCandidate*(*correction);
+            QVector<Point3D> candidateSource=sourceCrop;applyTransform(&candidateSource,candidateCorrection);
+            if(translationLength(candidateCorrection)<=options.maximumCorrectionTranslation
+                &&rotationAngle(candidateCorrection)<=options.maximumCorrectionAngleDegrees
+                &&countInsideBounds(candidateSource,actualOverlap)>=100){
+                *correction=candidateCorrection;
+            }else{
+                diagnostic.wideStructureDiagnosticReason=QStringLiteral("大范围结构候选超出修正预算或实际重叠点不足，未应用");
+            }
+        }
     }else diagnostic.wideStructureDiagnosticReason=options.wideStructureDiagnosticEnabled
         ?QStringLiteral("未检测到可用主平面，跳过大范围结构诊断"):QStringLiteral("大范围结构诊断已禁用");
     const int maximumIterations[3]{60,45,35};
@@ -811,7 +846,7 @@ IcpDiagnostics registerPair(QVector<Point3D> *source,
         std::array<double,6> lockedEigenvalues{};
         bool degeneracyBasisLocked=false;
         for(int iteration=0;iteration<maximumIterations[level];++iteration){
-            if(options.isCancelled&&options.isCancelled()){diagnostic.reason=QStringLiteral("已取消");return diagnostic;}
+            if(cancelled()){diagnostic.reason=QStringLiteral("已取消");return diagnostic;}
             last=estimateIncrement(moving,reference,index,distance,actualOverlap);
             if(!last.ok){diagnostic.reason=QStringLiteral("%1 mm 层有效对应少于 100").arg(voxel);return diagnostic;}
             if(!degeneracyBasisLocked){
@@ -891,14 +926,19 @@ IcpDiagnostics registerPair(QVector<Point3D> *source,
     diagnostic.correctionX=(*correction)(0,3);diagnostic.correctionY=(*correction)(1,3);diagnostic.correctionZ=(*correction)(2,3);
     diagnostic.overlapRatio=diagnostic.fitness;
     if(options.structuralValidationEnabled){
-        QVector<Point3D> sourceStructural=structuralPoints(sourceCrop,sourcePlane,
-            options.structuralPlaneExclusionMm,Bounds{sourceBounds.minimum,sourceBounds.maximum,true});
-        applyTransform(&sourceStructural,*correction);
-        sourceStructural=cropCloud(sourceStructural,actualOverlap.minimum,actualOverlap.maximum);
-        const QVector<Point3D> targetStructural=structuralPoints(targetCrop,targetPlane,
-            options.structuralPlaneExclusionMm,actualOverlap);
-        const DistanceDiagnostic sourceToTarget=nearestDistanceDiagnostic(sourceStructural,targetStructural);
-        const DistanceDiagnostic targetToSource=nearestDistanceDiagnostic(targetStructural,sourceStructural);
+        const auto validateStructural = [&](float exclusion,
+                                            QVector<Point3D> *sourceOutput,
+                                            QVector<Point3D> *targetOutput) {
+            *sourceOutput=structuralPoints(sourceCrop,sourcePlane,exclusion,
+                Bounds{sourceBounds.minimum,sourceBounds.maximum,true});
+            applyTransform(sourceOutput,*correction);
+            *sourceOutput=cropCloud(*sourceOutput,actualOverlap.minimum,actualOverlap.maximum);
+            *targetOutput=structuralPoints(targetCrop,targetPlane,exclusion,actualOverlap);
+        };
+        QVector<Point3D> sourceStructural,targetStructural;
+        validateStructural(options.structuralPlaneExclusionMm,&sourceStructural,&targetStructural);
+        DistanceDiagnostic sourceToTarget=nearestDistanceDiagnostic(sourceStructural,targetStructural);
+        DistanceDiagnostic targetToSource=nearestDistanceDiagnostic(targetStructural,sourceStructural);
         diagnostic.structuralSourcePoints=sourceToTarget.total;
         diagnostic.structuralTargetPoints=targetToSource.total;
         diagnostic.structuralSourceMatchedPoints=sourceToTarget.matched;
@@ -916,17 +956,50 @@ IcpDiagnostics registerPair(QVector<Point3D> *source,
         diagnostic.structuralTargetToSourceCoverage5mm=targetToSource.within5;
         diagnostic.structuralTargetToSourceCoverage10mm=targetToSource.within10;
         diagnostic.structuralBidirectionalCoverage3mm=qMin(sourceToTarget.within3,targetToSource.within3);
-        const bool enoughStructure=sourceToTarget.total>=options.minimumStructuralPoints
+        diagnostic.structuralBidirectionalCoverage5mm=qMin(sourceToTarget.within5,targetToSource.within5);
+        bool enoughStructure=sourceToTarget.total>=options.minimumStructuralPoints
             &&targetToSource.total>=options.minimumStructuralPoints;
-        const bool enoughCoverage=diagnostic.structuralBidirectionalCoverage3mm
-            >=options.minimumDegenerateStructuralCoverage3mm;
+        bool enoughCoverage=false;
+        if(enoughStructure){
+            const int minimumStructure=qMin(sourceToTarget.total,targetToSource.total);
+            if(options.relaxedStructuralValidation && minimumStructure<500){
+                enoughCoverage=diagnostic.structuralBidirectionalCoverage3mm>=options.minimumLowCountStructuralCoverage3mm
+                    &&diagnostic.structuralBidirectionalCoverage5mm>=options.minimumLowCountStructuralCoverage5mm;
+            }else{
+                enoughCoverage=diagnostic.structuralBidirectionalCoverage3mm>=options.minimumDegenerateStructuralCoverage3mm;
+            }
+        }else if(options.relaxedStructuralValidation){
+            // The relaxed pass may recover points hidden by the strict +/-3 mm plane band.
+            validateStructural(2.0f,&sourceStructural,&targetStructural);
+            const DistanceDiagnostic relaxedSourceToTarget=nearestDistanceDiagnostic(sourceStructural,targetStructural);
+            const DistanceDiagnostic relaxedTargetToSource=nearestDistanceDiagnostic(targetStructural,sourceStructural);
+            sourceToTarget=relaxedSourceToTarget;
+            targetToSource=relaxedTargetToSource;
+            diagnostic.structuralSourcePoints=relaxedSourceToTarget.total;
+            diagnostic.structuralTargetPoints=relaxedTargetToSource.total;
+            diagnostic.structuralSourceMatchedPoints=relaxedSourceToTarget.matched;
+            diagnostic.structuralTargetMatchedPoints=relaxedTargetToSource.matched;
+            diagnostic.structuralSourceToTargetCoverage3mm=relaxedSourceToTarget.within3;
+            diagnostic.structuralSourceToTargetCoverage5mm=relaxedSourceToTarget.within5;
+            diagnostic.structuralSourceToTargetCoverage10mm=relaxedSourceToTarget.within10;
+            diagnostic.structuralTargetToSourceCoverage3mm=relaxedTargetToSource.within3;
+            diagnostic.structuralTargetToSourceCoverage5mm=relaxedTargetToSource.within5;
+            diagnostic.structuralTargetToSourceCoverage10mm=relaxedTargetToSource.within10;
+            diagnostic.structuralBidirectionalCoverage3mm=qMin(relaxedSourceToTarget.within3,relaxedTargetToSource.within3);
+            diagnostic.structuralBidirectionalCoverage5mm=qMin(relaxedSourceToTarget.within5,relaxedTargetToSource.within5);
+            enoughStructure=diagnostic.structuralSourcePoints>=options.minimumStructuralPoints
+                &&diagnostic.structuralTargetPoints>=options.minimumStructuralPoints;
+            enoughCoverage=enoughStructure
+                &&diagnostic.structuralBidirectionalCoverage3mm>=options.minimumLowCountStructuralCoverage3mm
+                &&diagnostic.structuralBidirectionalCoverage5mm>=options.minimumLowCountStructuralCoverage5mm;
+        }
         if(!enoughStructure||!enoughCoverage){
             diagnostic.structuralValidationReason=!enoughStructure
                 ?QStringLiteral("重叠区结构点不足：%1/%2，最低各 %3")
                     .arg(sourceToTarget.total).arg(targetToSource.total).arg(options.minimumStructuralPoints)
-                :QStringLiteral("结构点双向 3 mm 覆盖率 %1 低于 %2")
+                :QStringLiteral("结构点覆盖率不足：双向 3 mm=%1，5 mm=%2")
                     .arg(diagnostic.structuralBidirectionalCoverage3mm,0,'f',4)
-                    .arg(options.minimumDegenerateStructuralCoverage3mm,0,'f',4);
+                    .arg(diagnostic.structuralBidirectionalCoverage5mm,0,'f',4);
             diagnostic.reason=diagnostic.structuralValidationReason;
             return diagnostic;
         }
@@ -939,6 +1012,52 @@ IcpDiagnostics registerPair(QVector<Point3D> *source,
     diagnostic.accepted=true;
     diagnostic.reason=QStringLiteral("通过修正范围和结构覆盖验收");
     return diagnostic;
+}
+
+bool eligibleForRelaxedRetry(const IcpDiagnostics &diagnostic) {
+    if (diagnostic.accepted || diagnostic.reason == QStringLiteral("已取消")) return false;
+    if (diagnostic.stoppedAtSafetyBoundary || diagnostic.safetyConstrainedStepReductions > 0) return true;
+    return diagnostic.reason.contains(QStringLiteral("安全范围"))
+        || diagnostic.reason.contains(QStringLiteral("主平面法向平移"))
+        || diagnostic.reason.contains(QStringLiteral("结构点"))
+        || diagnostic.reason.contains(QStringLiteral("覆盖率"));
+}
+
+QString classifyBlocking(const IcpDiagnostics &diagnostic)
+{
+    if (diagnostic.accepted) return QStringLiteral("accepted");
+    if (diagnostic.reason == QStringLiteral("已取消")) return QStringLiteral("cancelled");
+    if (diagnostic.stoppedAtSafetyBoundary || diagnostic.safetyConstrainedStepReductions > 0
+        || diagnostic.reason.contains(QStringLiteral("安全范围")))
+        return QStringLiteral("safety_boundary");
+    if (diagnostic.reason.contains(QStringLiteral("无实际三维重叠"))
+        || diagnostic.reason.contains(QStringLiteral("包围盒不重叠")))
+        return QStringLiteral("no_overlap");
+    if (diagnostic.overlapConstrainedStepReductions > 0
+        && diagnostic.reason.contains(QStringLiteral("滑出实际相邻帧重叠区")))
+        return QStringLiteral("overlap_boundary");
+    if (diagnostic.reason.contains(QStringLiteral("主平面预对齐"))
+        || diagnostic.reason.contains(QStringLiteral("主平面法向平移")))
+        return QStringLiteral("prealignment_boundary");
+    if (diagnostic.reason.contains(QStringLiteral("结构点"))
+        || diagnostic.reason.contains(QStringLiteral("覆盖率")))
+        return QStringLiteral("structural_validation");
+    if (diagnostic.completedLevels < 3 || diagnostic.reason.contains(QStringLiteral("ICP"))
+        || diagnostic.reason.contains(QStringLiteral("有效对应")))
+        return QStringLiteral("icp_not_converged");
+    return QStringLiteral("unknown");
+}
+
+IcpOptions relaxedOptions(const IcpOptions &strictOptions, const IcpDiagnostics &diagnostic) {
+    IcpOptions options = strictOptions;
+    options.relaxedStructuralValidation = true;
+    options.maximumCorrectionTranslation = qMin(50.0f,
+        qMax(10.0f, 3.0f * qMax(diagnostic.initialTranslation, diagnostic.correctionTranslation)));
+    options.maximumCorrectionAngleDegrees = qMin(3.0f,
+        qMax(1.0f, 3.0f * qMax(diagnostic.initialAngleDegrees, diagnostic.correctionAngleDegrees)));
+    options.maximumPlanePrealignmentTranslation = qMax(12.0f, strictOptions.maximumPlanePrealignmentTranslation);
+    options.applyWideStructureCandidate = true;
+    return options;
 }
 
 MultiFrameRegistrationResult::OverlapDiagnostic overlapDiagnostic(
@@ -977,7 +1096,7 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
     QVector<ConvertedCloud> clouds;
     clouds.reserve(inputs.size());
     for(int index=0;index<inputs.size();++index){
-        if(icp.isCancelled&&icp.isCancelled()){result.cancelled=true;result.error=QStringLiteral("已取消");return result;}
+        if(cancellationRequested(icp)){result.cancelled=true;result.error=QStringLiteral("已取消");return result;}
         update(0.15f*float(index)/float(inputs.size()),QStringLiteral("准备机器人基坐标点云 %1/%2：%3").arg(index+1).arg(inputs.size()).arg(inputs[index].sourceFile));
         if(inputs[index].fullPoints.isEmpty()||inputs[index].samplePoints.isEmpty()){
             result.error=QStringLiteral("第 %1 帧机器人基坐标点云为空").arg(index+1);return result;
@@ -1025,6 +1144,7 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
     for(QMatrix4x4 &matrix:result.registrationCorrections)matrix.setToIdentity();
     result.registrationCorrections[0].setToIdentity();
     IcpDiagnostics reference;reference.filePath=inputs[0].sourceFile;reference.sourceCloudIndex=0;reference.accepted=true;reference.reason=QString::fromUtf8("参考点云");
+    reference.blockingClass=QStringLiteral("accepted");
     result.icpDiagnostics.push_back(reference);
     result.diagnosticPreIcpFrames.reserve(clouds.size());
     for(const ConvertedCloud &cloud:clouds)
@@ -1037,6 +1157,7 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
             skipped.sourceCloudIndex=index;
             skipped.accepted=true;
             skipped.reason=QStringLiteral("仅手眼坐标转换，未执行 ICP");
+            skipped.blockingClass=QStringLiteral("accepted");
             result.icpDiagnostics.push_back(skipped);
         }
     }
@@ -1054,13 +1175,60 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
                                      (inputs[index-1].startBaseFromFlange(1,3)+inputs[index-1].endBaseFromFlange(1,3))*.5f,
                                      (inputs[index-1].startBaseFromFlange(2,3)+inputs[index-1].endBaseFromFlange(2,3))*.5f);
         QMatrix4x4 correction;
-        IcpDiagnostics diagnostic=registerPair(&clouds[index].sample,clouds[index-1].sample,icp,index,sourceCenter-targetCenter,
+        const QVector<Point3D> originalSample=clouds[index].sample;
+        IcpDiagnostics diagnostic=registerPair(originalSample,clouds[index-1].sample,icp,index,sourceCenter-targetCenter,
             result.trackedPlaneHeights.value(index),result.trackedPlaneHeights.value(index-1),
             result.planeIdentityTrackingValid,&correction,
             [&](float fraction,const QString &message){update(pairStart+fraction*pairSpan,message);});
         diagnostic.filePath=inputs[index].sourceFile;
-        result.icpDiagnostics.push_back(diagnostic);
         if(diagnostic.reason==QStringLiteral("已取消")){result.cancelled=true;result.error=diagnostic.reason;return result;}
+        diagnostic.attemptCount=1;
+        diagnostic.primaryAttemptReason=diagnostic.reason;
+        diagnostic.blockingClass=classifyBlocking(diagnostic);
+        if(eligibleForRelaxedRetry(diagnostic)){
+            if(cancellationRequested(icp)){result.cancelled=true;result.error=QStringLiteral("已取消");return result;}
+            diagnostic.relaxedRetryAttempted=true;
+            result.diagnostics+=QStringLiteral("scan %1 retry start: class=%2, reason=%3\n")
+                .arg(index+1).arg(diagnostic.blockingClass, diagnostic.reason);
+            const IcpOptions retryOptions=relaxedOptions(icp,diagnostic);
+            QMatrix4x4 retryCorrection;
+            IcpDiagnostics retry=registerPair(originalSample,clouds[index-1].sample,retryOptions,index,sourceCenter-targetCenter,
+                result.trackedPlaneHeights.value(index),result.trackedPlaneHeights.value(index-1),
+                result.planeIdentityTrackingValid,&retryCorrection,
+                [&](float fraction,const QString &message){update(pairStart+fraction*pairSpan,message+QStringLiteral("（放宽重试）"));});
+            diagnostic.attemptCount=2;
+            diagnostic.relaxedRetryReason=retry.reason;
+            retry.blockingClass=classifyBlocking(retry);
+            const bool retryCoverageImproved=retry.coverageWithin5mm>diagnostic.coverageWithin5mm+1.0e-4f
+                ||retry.structuralBidirectionalCoverage5mm>diagnostic.structuralBidirectionalCoverage5mm+1.0e-4f;
+            const bool retryGuard=retry.accepted&&retry.converged&&retry.completedLevels==3
+                &&retry.observableDof>=1&&!retry.stoppedAtSafetyBoundary
+                &&retry.actualOverlapSourceCount>=100&&retry.actualOverlapTargetCount>=100
+                &&retry.correctionTranslation<=retryOptions.maximumCorrectionTranslation
+                &&retry.correctionAngleDegrees<=retryOptions.maximumCorrectionAngleDegrees
+                &&retry.structuralValidationPassed&&retryCoverageImproved
+                &&(diagnostic.observableDof<1||retry.observableDof>=diagnostic.observableDof);
+            if(retryGuard){
+                retry.filePath=inputs[index].sourceFile;
+                retry.primaryAttemptReason=diagnostic.primaryAttemptReason;
+                retry.attemptCount=2;
+                retry.relaxedRetryAttempted=true;
+                retry.relaxedRetryAccepted=true;
+                retry.acceptedByRetry=true;
+                diagnostic=retry;
+                correction=retryCorrection;
+            }else{
+                diagnostic.relaxedRetryAccepted=false;
+                diagnostic.acceptedByRetry=false;
+            }
+            result.diagnostics+=QStringLiteral("scan %1 retry end: accepted=%2, class=%3, reason=%4\n")
+                .arg(index+1)
+                .arg(diagnostic.relaxedRetryAccepted ? QStringLiteral("true") : QStringLiteral("false"))
+                .arg(diagnostic.relaxedRetryAccepted ? QStringLiteral("accepted") : classifyBlocking(retry))
+                .arg(diagnostic.relaxedRetryReason);
+        }
+        diagnostic.blockingClass=classifyBlocking(diagnostic);
+        result.icpDiagnostics.push_back(diagnostic);
         if(diagnostic.accepted){
             const QMatrix4x4 globalCorrection=result.registrationCorrections[index-1]*correction;
             result.registrationCorrections[index]=globalCorrection;

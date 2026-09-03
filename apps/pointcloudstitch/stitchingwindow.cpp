@@ -148,7 +148,10 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
     registration.insert(QStringLiteral("structural_validation_enabled"), result.icpOptions.structuralValidationEnabled);
     registration.insert(QStringLiteral("structural_plane_exclusion_mm"), result.icpOptions.structuralPlaneExclusionMm);
     registration.insert(QStringLiteral("minimum_degenerate_structural_coverage_3mm"), result.icpOptions.minimumDegenerateStructuralCoverage3mm);
+    registration.insert(QStringLiteral("minimum_low_count_structural_coverage_3mm"), result.icpOptions.minimumLowCountStructuralCoverage3mm);
+    registration.insert(QStringLiteral("minimum_low_count_structural_coverage_5mm"), result.icpOptions.minimumLowCountStructuralCoverage5mm);
     registration.insert(QStringLiteral("minimum_structural_points"), result.icpOptions.minimumStructuralPoints);
+    registration.insert(QStringLiteral("relaxed_structural_validation"), result.icpOptions.relaxedStructuralValidation);
     registration.insert(QStringLiteral("structural_icp_enabled"), result.icpOptions.structuralIcpEnabled);
     registration.insert(QStringLiteral("support_plane_sample_stride"), result.icpOptions.supportPlaneSampleStride);
     registration.insert(QStringLiteral("tangent_coarse_alignment_enabled"), result.icpOptions.tangentCoarseAlignmentEnabled);
@@ -159,6 +162,7 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
     registration.insert(QStringLiteral("tangent_coarse_yaw_radius_deg"), result.icpOptions.tangentCoarseYawRadiusDegrees);
     registration.insert(QStringLiteral("tangent_coarse_yaw_step_deg"), result.icpOptions.tangentCoarseYawStepDegrees);
     registration.insert(QStringLiteral("wide_structure_diagnostic_enabled"), result.icpOptions.wideStructureDiagnosticEnabled);
+    registration.insert(QStringLiteral("apply_wide_structure_candidate"), result.icpOptions.applyWideStructureCandidate);
     registration.insert(QStringLiteral("wide_structure_search_radius_mm"), result.icpOptions.wideStructureSearchRadiusMm);
     registration.insert(QStringLiteral("wide_structure_search_step_mm"), result.icpOptions.wideStructureSearchStepMm);
     registration.insert(QStringLiteral("wide_structure_refine_step_mm"), result.icpOptions.wideStructureRefineStepMm);
@@ -289,6 +293,7 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
         item.insert(QStringLiteral("structural_target_to_source_coverage_5mm"), diagnostic.structuralTargetToSourceCoverage5mm);
         item.insert(QStringLiteral("structural_target_to_source_coverage_10mm"), diagnostic.structuralTargetToSourceCoverage10mm);
         item.insert(QStringLiteral("structural_bidirectional_coverage_3mm"), diagnostic.structuralBidirectionalCoverage3mm);
+        item.insert(QStringLiteral("structural_bidirectional_coverage_5mm"), diagnostic.structuralBidirectionalCoverage5mm);
         item.insert(QStringLiteral("structural_validation_passed"), diagnostic.structuralValidationPassed);
         item.insert(QStringLiteral("structural_validation_reason"), diagnostic.structuralValidationReason);
         item.insert(QStringLiteral("structural_icp_used"), diagnostic.structuralIcpUsed);
@@ -330,6 +335,16 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
         item.insert(QStringLiteral("z_rmse_mm"), diagnostic.zRmse);
         item.insert(QStringLiteral("correction_translation_mm"), diagnostic.correctionTranslation);
         item.insert(QStringLiteral("correction_angle_deg"), diagnostic.correctionAngleDegrees);
+        item.insert(QStringLiteral("attempt_count"), diagnostic.attemptCount);
+        item.insert(QStringLiteral("primary_attempt_reason"), diagnostic.primaryAttemptReason);
+        item.insert(QStringLiteral("relaxed_retry_attempted"), diagnostic.relaxedRetryAttempted);
+        item.insert(QStringLiteral("relaxed_retry_accepted"), diagnostic.relaxedRetryAccepted);
+        item.insert(QStringLiteral("accepted_by_retry"), diagnostic.acceptedByRetry);
+        item.insert(QStringLiteral("initial_translation_mm"), diagnostic.initialTranslation);
+        item.insert(QStringLiteral("initial_angle_deg"), diagnostic.initialAngleDegrees);
+        item.insert(QStringLiteral("relaxed_retry_reason"), diagnostic.relaxedRetryReason);
+        item.insert(QStringLiteral("blocking_class"), diagnostic.blockingClass);
+        item.insert(QStringLiteral("cancellation_check_count"), diagnostic.cancellationCheckCount);
         item.insert(QStringLiteral("reason"), diagnostic.reason);
         item.insert(QStringLiteral("correspondences"), diagnostic.correspondences);
         item.insert(QStringLiteral("unique_reference_ratio"), diagnostic.uniqueReferenceRatio);
@@ -409,6 +424,7 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
     result.icpOptions = icp;
     result.transformOnly = !icp.enabled;
     pointcloud::IcpOptions runtimeIcp = icp;
+    runtimeIcp.cancellation = cancelRequested;
     runtimeIcp.isCancelled = [cancelRequested]() {
         return cancelRequested && cancelRequested->load();
     };
@@ -628,6 +644,9 @@ StitchingWindow::StitchingWindow(QWidget *parent)
     : QMainWindow(parent), ui(new Ui::StitchingWindow)
 {
     ui->setupUi(this);
+    // Single cancellation token for the whole window lifetime: never replaced
+    // between runs so no queued worker copy can outlive the token object.
+    m_cancelRequested = std::make_shared<std::atomic_bool>(false);
     ui->tbl_scans->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     ui->tbl_scans->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     ui->tbl_scans->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
@@ -833,7 +852,7 @@ pointcloud::IcpOptions StitchingWindow::collectIcpOptions(QString *error) const
 
 void StitchingWindow::startStitching()
 {
-    if (m_watcher && m_watcher->isRunning()) return;
+    if (m_watcher) return;
     QString error;
     const QVector<pointcloud::WorldCloudInput> inputs = collectInputs(&error);
     if (!error.isEmpty()) {
@@ -851,7 +870,7 @@ void StitchingWindow::startStitching()
         return;
     }
 
-    m_cancelRequested = std::make_shared<std::atomic_bool>(false);
+    m_cancelRequested->store(false);
     m_watcher = new QFutureWatcher<StitchTaskResult>(this);
     connect(m_watcher, &QFutureWatcher<StitchTaskResult>::finished,
             this, &StitchingWindow::stitchingFinished);
@@ -867,6 +886,7 @@ void StitchingWindow::startStitching()
     seamOptions.halfWidth = float(ui->dsb_seam_half_width->value());
     seamOptions.mutualDistance = float(ui->dsb_mutual_distance->value());
     seamOptions.decisionCellSize = float(ui->dsb_decision_voxel->value());
+    seamOptions.cancellation = m_cancelRequested;
     const auto progress = [this](int value, const QString &message) {
         QMetaObject::invokeMethod(this, [this, value, message]() {
             ui->pbar_progress->setValue(value);
@@ -890,8 +910,11 @@ void StitchingWindow::cancelStitching()
 
 void StitchingWindow::stitchingFinished()
 {
-    const StitchTaskResult result = m_watcher->result();
-    m_watcher->deleteLater();
+    QFutureWatcher<StitchTaskResult> *watcher = m_watcher;
+    if (!watcher) return;
+    disconnect(watcher, nullptr, this, nullptr);
+    const StitchTaskResult result = watcher->result();
+    watcher->deleteLater();
     m_watcher = nullptr;
     setBusy(false);
     appendLog(result.merge.diagnostics);

@@ -11,8 +11,10 @@
 #include <QSet>
 #include <QTextStream>
 
+#include <atomic>
 #include <cmath>
 #include <exception>
+#include <memory>
 #include <new>
 
 namespace pcv::interface {
@@ -52,6 +54,17 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     const auto progress = [&options](float value, const QString &message) {
         if (options.progress) options.progress(qBound(0.0f, value, 1.0f), message);
     };
+    // Internal cancellation token: registration and seam hot loops read this
+    // stable atomic instead of the caller's std::function. The token is
+    // refreshed from the caller callback at stage boundaries and inside the
+    // registration progress callback.
+    auto cancellationToken = std::make_shared<std::atomic_bool>(false);
+    const auto syncCancellationToken = [&]() {
+        if (cancelled()) cancellationToken->store(true, std::memory_order_relaxed);
+    };
+    const auto tokenCancelled = [cancellationToken]() {
+        return cancellationToken->load(std::memory_order_relaxed);
+    };
     if (options.frames.size() < 2)
         return failure(QStringLiteral("PCV_CONTRACT_001"), QStringLiteral("配准至少需要两个 PLY 文件"));
     if (options.sampleStride < 1 || options.sampleStride > 100)
@@ -75,7 +88,8 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     QVector<pointcloud::RobotBaseFrame> frames;
     frames.reserve(options.frames.size());
     for (int index = 0; index < options.frames.size(); ++index) {
-        if (cancelled()) {
+        syncCancellationToken();
+        if (tokenCancelled()) {
             StitchingResult result = failure(QString(), QStringLiteral("已取消"));
             result.cancelled = true;
             return result;
@@ -135,9 +149,14 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
 
     pointcloud::IcpOptions registrationOptions;
     registrationOptions.sampleStride = options.sampleStride;
-    registrationOptions.isCancelled = cancelled;
+    registrationOptions.cancellation = cancellationToken;
+    registrationOptions.isCancelled = tokenCancelled;
     auto registration = pointcloud::registerRobotBaseFrames(std::move(frames), registrationOptions,
-        [&progress](float value, const QString &message) { progress(0.15f + value * 0.70f, message); });
+        [&](float value, const QString &message) {
+            syncCancellationToken();
+            if (tokenCancelled()) return;
+            progress(0.15f + value * 0.70f, message);
+        });
     StitchingResult result;
     result.icpDiagnostics = registration.icpDiagnostics;
     result.diagnostics = registration.diagnostics;
@@ -161,6 +180,7 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         pointcloud::SeamFusionOptions seamOptions;
         seamOptions.enabled = true;
         seamOptions.halfWidth = options.seamHalfWidthMm;
+        seamOptions.cancellation = cancellationToken;
         seamOptions.isCancelled = cancelled;
         const auto seam = pointcloud::applyTrajectorySeamFusion(&registration, seamOptions);
         result.seamDiagnostics = seam.diagnostics;

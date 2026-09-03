@@ -30,7 +30,7 @@ SeamFusionResult applyTrajectorySeamFusion(MultiFrameRegistrationResult *merge,
     if (!merge) { result.error = QStringLiteral("接缝输入为空"); return result; }
     result.inputPoints = merge->points.size(); result.outputPoints = result.inputPoints;
     const auto cancelled = [&]() {
-        if (options.isCancelled && options.isCancelled()) {
+        if (cancellationRequested(options)) {
             result.cancelled = true;
             result.error = QStringLiteral("已取消");
             return true;

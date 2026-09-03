@@ -23,10 +23,20 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(PCV_BUILD_POINTCLOUDVIEW "Build the point cloud viewer" ON)
 option(PCV_BUILD_POINTCLOUDSTITCH "Build the point cloud stitching application" ON)
+option(PCV_BUILD_CLI "Build the PointCloudSuite CLI" OFF)
 option(PCV_BUILD_TOOLS "Build diagnostic command-line tools" OFF)
 option(PCV_BUILD_TESTS "Build all automated tests" OFF)
 option(PCV_BUILD_EXPERIMENTAL_CAMERA
     "Build Hikvision camera acquisition and its UI/tests" ON)
+
+set(PCV_BUILD_SHARED_STACK OFF)
+if(PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_POINTCLOUDSTITCH OR PCV_BUILD_TOOLS)
+    set(PCV_BUILD_SHARED_STACK ON)
+elseif(PCV_BUILD_TESTS AND NOT PCV_BUILD_CLI)
+    # Preserve the existing tests-only configuration. A CLI-only test run uses
+    # the self-contained tests registered by apps/pointcloudcli instead.
+    set(PCV_BUILD_SHARED_STACK ON)
+endif()
 
 if(MSVC)
     set(CMAKE_CXX_COMPILER_LAUNCHER
@@ -38,16 +48,20 @@ if(MSVC)
     endif()
 endif()
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS
-    Core Gui Widgets Concurrent OpenGL OpenGLWidgets)
-qt_standard_project_setup()
+if(PCV_BUILD_SHARED_STACK)
+    find_package(Qt6 6.5 REQUIRED COMPONENTS
+        Core Gui Widgets Concurrent OpenGL OpenGLWidgets)
+    qt_standard_project_setup()
+endif()
 
 if(PCV_BUILD_TESTS)
     enable_testing()
 endif()
 
-add_subdirectory(src)
-add_subdirectory(modules)
+if(PCV_BUILD_SHARED_STACK)
+    add_subdirectory(src)
+    add_subdirectory(modules)
+endif()
 
 if(PCV_BUILD_POINTCLOUDVIEW)
     add_subdirectory(apps/pointcloudview)
@@ -58,6 +72,9 @@ endif()
 if(PCV_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
-if(PCV_BUILD_TESTS)
+if(PCV_BUILD_CLI)
+    add_subdirectory(apps/pointcloudcli)
+endif()
+if(PCV_BUILD_TESTS AND PCV_BUILD_SHARED_STACK)
     add_subdirectory(tests)
 endif()

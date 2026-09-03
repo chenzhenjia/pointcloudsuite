@@ -165,6 +165,16 @@ QJsonObject diagnosticJson(const pointcloud::IcpDiagnostics &diagnostic,
     item.insert(QStringLiteral("attempted"), diagnostic.attempted);
     item.insert(QStringLiteral("accepted"), diagnostic.accepted);
     item.insert(QStringLiteral("reason"), diagnostic.reason);
+    item.insert(QStringLiteral("attempt_count"), diagnostic.attemptCount);
+    item.insert(QStringLiteral("primary_attempt_reason"), diagnostic.primaryAttemptReason);
+    item.insert(QStringLiteral("relaxed_retry_attempted"), diagnostic.relaxedRetryAttempted);
+    item.insert(QStringLiteral("relaxed_retry_accepted"), diagnostic.relaxedRetryAccepted);
+    item.insert(QStringLiteral("accepted_by_retry"), diagnostic.acceptedByRetry);
+    item.insert(QStringLiteral("initial_translation_mm"), diagnostic.initialTranslation);
+    item.insert(QStringLiteral("initial_angle_deg"), diagnostic.initialAngleDegrees);
+    item.insert(QStringLiteral("relaxed_retry_reason"), diagnostic.relaxedRetryReason);
+    item.insert(QStringLiteral("blocking_class"), diagnostic.blockingClass);
+    item.insert(QStringLiteral("cancellation_check_count"), diagnostic.cancellationCheckCount);
     item.insert(QStringLiteral("source_crop_points"), diagnostic.sourceCropCount);
     item.insert(QStringLiteral("target_crop_points"), diagnostic.targetCropCount);
     item.insert(QStringLiteral("actual_overlap_source_points"), diagnostic.actualOverlapSourceCount);
@@ -207,6 +217,7 @@ QJsonObject diagnosticJson(const pointcloud::IcpDiagnostics &diagnostic,
     item.insert(QStringLiteral("structural_target_to_source_coverage_5mm"), diagnostic.structuralTargetToSourceCoverage5mm);
     item.insert(QStringLiteral("structural_target_to_source_coverage_10mm"), diagnostic.structuralTargetToSourceCoverage10mm);
     item.insert(QStringLiteral("structural_bidirectional_coverage_3mm"), diagnostic.structuralBidirectionalCoverage3mm);
+    item.insert(QStringLiteral("structural_bidirectional_coverage_5mm"), diagnostic.structuralBidirectionalCoverage5mm);
     item.insert(QStringLiteral("structural_validation_passed"), diagnostic.structuralValidationPassed);
     item.insert(QStringLiteral("structural_validation_reason"), diagnostic.structuralValidationReason);
     item.insert(QStringLiteral("structural_icp_used"), diagnostic.structuralIcpUsed);
@@ -393,7 +404,10 @@ int runRegression(const QStringList &arguments)
     parameterObject.insert(QStringLiteral("structural_validation_enabled"), options.structuralValidationEnabled);
     parameterObject.insert(QStringLiteral("structural_plane_exclusion_mm"), options.structuralPlaneExclusionMm);
     parameterObject.insert(QStringLiteral("minimum_degenerate_structural_coverage_3mm"), options.minimumDegenerateStructuralCoverage3mm);
+    parameterObject.insert(QStringLiteral("minimum_low_count_structural_coverage_3mm"), options.minimumLowCountStructuralCoverage3mm);
+    parameterObject.insert(QStringLiteral("minimum_low_count_structural_coverage_5mm"), options.minimumLowCountStructuralCoverage5mm);
     parameterObject.insert(QStringLiteral("minimum_structural_points"), options.minimumStructuralPoints);
+    parameterObject.insert(QStringLiteral("relaxed_structural_validation"), options.relaxedStructuralValidation);
     parameterObject.insert(QStringLiteral("structural_icp_enabled"), options.structuralIcpEnabled);
     parameterObject.insert(QStringLiteral("support_plane_sample_stride"), options.supportPlaneSampleStride);
     parameterObject.insert(QStringLiteral("tangent_coarse_alignment_enabled"), options.tangentCoarseAlignmentEnabled);
@@ -404,6 +418,7 @@ int runRegression(const QStringList &arguments)
     parameterObject.insert(QStringLiteral("tangent_coarse_yaw_radius_deg"), options.tangentCoarseYawRadiusDegrees);
     parameterObject.insert(QStringLiteral("tangent_coarse_yaw_step_deg"), options.tangentCoarseYawStepDegrees);
     parameterObject.insert(QStringLiteral("wide_structure_diagnostic_enabled"), options.wideStructureDiagnosticEnabled);
+    parameterObject.insert(QStringLiteral("apply_wide_structure_candidate"), options.applyWideStructureCandidate);
     parameterObject.insert(QStringLiteral("wide_structure_search_radius_mm"), options.wideStructureSearchRadiusMm);
     parameterObject.insert(QStringLiteral("wide_structure_search_step_mm"), options.wideStructureSearchStepMm);
     parameterObject.insert(QStringLiteral("wide_structure_refine_step_mm"), options.wideStructureRefineStepMm);

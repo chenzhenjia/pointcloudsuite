@@ -27,6 +27,22 @@ cmake --build --preset build-debug
 ctest --preset test-debug --output-on-failure
 ```
 
+## CLI 骨架构建
+
+`pointcloudcli` 默认关闭，打开 `PCV_BUILD_CLI` 后可在同一源码树中使用独立构建目录编译。关闭两个 GUI 应用的 CLI-only 组合不会配置 Qt、共享模块或 GUI 测试；CLI target 不链接 GUI 或 OpenGL target。当前仅实现 `--help`、`--version` 和参数错误契约。
+
+```powershell
+cmake -S . -B <CliBuildDir> `
+  -DPCV_BUILD_POINTCLOUDVIEW=OFF `
+  -DPCV_BUILD_POINTCLOUDSTITCH=OFF `
+  -DPCV_BUILD_CLI=ON `
+  -DPCV_BUILD_TESTS=ON
+cmake --build <CliBuildDir> --config Debug --target pointcloudcli
+ctest --test-dir <CliBuildDir> -C Debug -R "cli_" --output-on-failure
+```
+
+保持默认 `PCV_BUILD_CLI=OFF` 时，既有 GUI 构建及产物不变。
+
 脚本会检查 Qt、CMake 和 MSVC 环境。构建输出、缓存、日志和导出物应放在源码树之外。
 
 ## 生成器与头文件依赖跟踪

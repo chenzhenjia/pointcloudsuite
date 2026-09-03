@@ -65,6 +65,13 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 
 ## 8. 变更记录
 
+### 2026-09-03（CLI 构建路径骨架）
+
+- 新增 `PCV_BUILD_CLI`（默认 `OFF`）和独立 `pointcloudcli` target；开启后可在关闭 `pointcloudview`、`pointcloudstitch` 的配置中单独构建 CLI，CLI-only 路径不配置 Qt 或共享模块，既有 GUI target、UI 和默认构建行为不变；
+- CLI 首期仅提供 `--help`、`--version`、空参数及未知参数的稳定退出码契约，不接入点云读取、配准、拼接、临时工件、平面、文件输出或 Qt 事件循环；
+- `pointcloudcli` 不链接 `Qt::Widgets`、`Qt::OpenGL`、`PointCloudCanvas` 或 GUI application target；`PCV_BUILD_CLI=ON` 与 `PCV_BUILD_TESTS=ON` 时注册四项 CLI CTest；
+- 验收范围：独立 CLI target 构建与参数测试，及默认 GUI 配置回归。GUI 人工操作和真实生产夹具不属于本项自动化验收。
+
 ### 2026-09（相机取流扩展，风险收敛）
 
 - 登记实验模块 `05_camerainput`（`pcv_m05_camerainput`）：`PCV_BUILD_EXPERIMENTAL_CAMERA` 默认 `ON`，默认构建包含相机扩展，仍可显式关闭；SDK 存在时链接真实 `Mv3dLp`，否则保留 Mock 演示路径；

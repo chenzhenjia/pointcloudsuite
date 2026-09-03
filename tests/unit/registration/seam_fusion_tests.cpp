@@ -114,6 +114,13 @@ int main(int argc, char **argv)
                  && midCancelledInput.points.size() == beforeMidCancellation,
                  "mid-seam cancellation must preserve the input cloud")) return 1;
 
+    pointcloud::SeamFusionOptions tokenCancelledOptions = enabled;
+    auto token = std::make_shared<std::atomic_bool>(true);
+    tokenCancelledOptions.cancellation = token;
+    const auto tokenCancelled = pointcloud::applyTrajectorySeamFusion(&valid, tokenCancelledOptions);
+    if (!require(tokenCancelled.cancelled && !tokenCancelled.ok,
+                 "raised token must cancel seam fusion")) return 1;
+
     pointcloud::MultiFrameRegistrationResult missingMetadata = valid;
     missingMetadata.registrationCorrections.clear();
     const auto metadataFailure = pointcloud::applyTrajectorySeamFusion(

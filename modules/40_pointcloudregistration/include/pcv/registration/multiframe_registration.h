@@ -1,12 +1,15 @@
 #pragma once
 
 #include <pcv/core/point_types.h>
+#include <pcv/registration/seam_fusion_types.h>
 
 #include <QMatrix4x4>
 #include <QString>
 #include <QVector>
 
 #include <functional>
+#include <atomic>
+#include <memory>
 
 namespace pointcloud {
 
@@ -63,7 +66,10 @@ struct IcpOptions {
     bool structuralValidationEnabled = true;
     float structuralPlaneExclusionMm = 3.0f;
     float minimumDegenerateStructuralCoverage3mm = 0.65f;
+    float minimumLowCountStructuralCoverage3mm = 0.45f;
+    float minimumLowCountStructuralCoverage5mm = 0.80f;
     int minimumStructuralPoints = 100;
+    bool relaxedStructuralValidation = false;
     bool structuralIcpEnabled = true;
     int supportPlaneSampleStride = 16;
     bool tangentCoarseAlignmentEnabled = true;
@@ -74,14 +80,23 @@ struct IcpOptions {
     float tangentCoarseYawRadiusDegrees = 1.0f;
     float tangentCoarseYawStepDegrees = 0.25f;
     bool wideStructureDiagnosticEnabled = true;
+    bool applyWideStructureCandidate = false;
     float wideStructureSearchRadiusMm = 120.0f;
     float wideStructureSearchStepMm = 10.0f;
     float wideStructureRefineStepMm = 2.0f;
     float wideStructureYawRadiusDegrees = 3.0f;
     float wideStructureYawStepDegrees = 0.5f;
     float tangentCoarseMinimumCoverageGain = 0.05f;
+    CancellationToken cancellation;
     std::function<bool()> isCancelled;
 };
+
+inline bool cancellationRequested(const IcpOptions &options)
+{
+    if (options.cancellation && options.cancellation->load(std::memory_order_relaxed))
+        return true;
+    return options.isCancelled && options.isCancelled();
+}
 
 struct IcpDiagnostics {
     QString filePath;
@@ -193,6 +208,17 @@ struct IcpDiagnostics {
     QVector<float> levelRmse;
     QVector<int> levelCorrespondences;
     QString reason;
+    int attemptCount = 1;
+    QString primaryAttemptReason;
+    bool relaxedRetryAttempted = false;
+    bool relaxedRetryAccepted = false;
+    bool acceptedByRetry = false;
+    float initialTranslation = 0.0f;
+    float initialAngleDegrees = 0.0f;
+    QString relaxedRetryReason;
+    float structuralBidirectionalCoverage5mm = 0.0f;
+    QString blockingClass;
+    int cancellationCheckCount = 0;
 };
 
 struct MultiFrameRegistrationResult {
