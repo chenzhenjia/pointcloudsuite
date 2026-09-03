@@ -64,6 +64,15 @@ struct CameraFrame {
     std::int32_t yOffset = 0;
     std::int32_t zOffset = 0;
 
+    // Scan assembly diagnostics. A real DP-series device can deliver one
+    // complete scan in several profile batches; only complete scans are
+    // published to consumers.
+    std::uint32_t expectedScanRows = 0;
+    std::uint32_t accumulatedScanRows = 0;
+    std::uint32_t scanFragmentCount = 0;
+    std::uint32_t discardedScanCount = 0;
+    bool completeScan = true;
+
     // Expected point count for the raw data block.
     qsizetype dataPointCount() const
     {

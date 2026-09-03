@@ -6,6 +6,8 @@ if(PCV_BUILD_EXPERIMENTAL_CAMERA)
     add_test(NAME frame_converter_tests COMMAND frame_converter_tests)
 
     add_executable(frame_source_tests unit/camera/frame_source_tests.cpp)
+    target_include_directories(frame_source_tests PRIVATE
+        ${PROJECT_SOURCE_DIR}/modules/05_camerainput/src)
     target_link_libraries(frame_source_tests PRIVATE Qt::Core pcv_m05_camerainput)
     add_test(NAME frame_source_tests COMMAND frame_source_tests)
 

@@ -136,6 +136,7 @@ private:
     QVector<pointcloud::Point3D> m_points;
     bool m_loading = false;
     QString m_pendingPath;
+    QString m_pendingSourcePlyEncoding = QStringLiteral("unknown");
     QStringList m_sourceFiles;
     QString m_sourceDirectory;
     bool m_folderScanOnly = false;

@@ -47,8 +47,8 @@
 ## 3. 架构
 
 实时链路：
-Mv3dLp 回调线程：回调到点 → 拷贝 pData → 原子换帧（LatestFrameSlot，latest-frame-wins）
-GUI 线程：QTimer(33ms) → take() → 转换 ABC32f→Point3D → setCloudStreaming → 画布渲染 → 按 JSON pipeline 触发下游节点
+Mv3dLp 回调线程：回调到点 → 校验/必要的 SDK 权威转换 → 深拷贝 ABC32f → 完整扫描组帧 → LatestFrameSlot（latest-frame-wins）
+GUI 线程：LatestFrameSlot 发布通知（QueuedConnection）→ take() → QtConcurrent 转换 ABC32f→Point3D → setCloudStreaming → 画布渲染 → 按 JSON pipeline 触发下游节点
 
 - 新模块 05_camerainput（pcv_m05_camerainput）：Mv3dLpCamera（pimpl）+ LatestFrameSlot + convertPointCloudToPoints + MockFrameSource；
 - 20_pointcloudrender：新增 setCloudStreaming（仅刷新点云+深度色域，保留选区/坐标系/轮廓覆盖层，不 resetView）；
@@ -73,6 +73,13 @@ GUI 线程：QTimer(33ms) → take() → 转换 ABC32f→Point3D → setCloudStr
 - 用户手册：缓存设置（取流/存图缓存节点防丢帧）、重发包设置、触发模式（自由采集/软触发/行触发）；
 - 本实现对齐：默认 ImageMode=7；事件驱动取帧 + 转换线程化；异常事件 + 自动重连；软触发；虚拟相机识别；
 - 限制：Mv3dLpApi.h 未公开 SetResend/SetImageNodeNum 接口（SDK 内部默认处理），重发包/缓存节点依赖 Mv3dLpCfg.ini 与 SDK 默认行为，未重复调用。
+- 触发：连续模式写入并回读 `TriggerMode=0`；软触发写入并回读 `TriggerMode=1`、`TriggerSource=7 (Software)`，设备不支持时启动失败并保持 fail-closed。
+
+### 6.1 DP2240 完整扫描组帧
+
+- DP2240/HFR 设备可能把一次 `Height` 扫描拆成多个 `nHeight` 分片；`nFrameNum` 是设备运行中的轮廓序号，应用开始取流时不保证从 0 开始。
+- 首个分片作为序号锚点，后续要求 `nFrameNum == previous.nFrameNum + previous.nHeight`；累计行数达到设备 `Height` 后才发布 ABC32f 扫描。
+- 跳行、重复、倒序、宽度变化、累计越界、非法长度或内存上限均丢弃当前扫描；实时画布和冻结流程不接收残缺分片。
 
 ## 7. 实机诊断记录（2026-09：DP2240 无效帧）
 

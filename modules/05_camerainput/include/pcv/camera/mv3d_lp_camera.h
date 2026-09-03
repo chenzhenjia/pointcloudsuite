@@ -14,9 +14,11 @@ namespace pcv::camera {
 
 // RAII wrapper around the Hikvision Mv3dLp SDK. Owns the device handle and
 // the SDK image-data callback. The callback thread publishes owned frame
-// copies into the internal LatestFrameSlot; the GUI thread polls it.
+// copies into the internal LatestFrameSlot; the GUI receives a queued
+// notification and takes the latest frame.
 //
-// Only point-cloud mode (ImageMode_PointCloud_Image, ABC32f) is supported.
+// Range_Image is the default for DP-series devices. Callback data is
+// normalized to owned ABC32f complete scans before consumers receive it.
 // The SDK types are confined to the .cpp translation unit (pimpl) so this
 // public header has no dependency on the vendor SDK headers.
 class Mv3dLpCamera final : public FrameSource {
@@ -47,10 +49,13 @@ public:
     bool supportsReconnect() const override { return true; }
     CameraError reconnectOnce() override;
 
-    // Optional explicit image mode. Defaults to RangeImage (depth image),
-    // matching the 3DMVS client workflow for DP-series sensors; the converter
-    // still adapts to the actual enImageType of every frame.
+    // Optional explicit image mode. Defaults to RangeImage; PointCloudImage
+    // remains an explicit profile-batch diagnostic path.
     void requestImageMode(ImageMode mode);
+    // Selects the device trigger mode before the next start(). Continuous
+    // acquisition is the default; software trigger uses TriggerMode=On and
+    // TriggerSource=Software.
+    void requestSoftwareTrigger(bool enabled);
     std::optional<ImageMode> activeImageMode() const;
 
     // Triggers one frame in software-trigger mode (MV3D_LP_SoftTrigger).

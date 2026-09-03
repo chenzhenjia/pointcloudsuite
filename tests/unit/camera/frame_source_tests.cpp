@@ -1,10 +1,28 @@
 #include <pcv/camera/frame_source.h>
 #include <pcv/camera/mock_frame_source.h>
 
+#include "live_frame_policy.h"
+#include "scan_frame_assembler.h"
+
 #include <QCoreApplication>
 
 #include <iostream>
 #include <memory>
+
+namespace {
+std::shared_ptr<pcv::camera::CameraFrame> makeScanChunk(
+    std::uint32_t width, std::uint32_t height, std::uint32_t firstRow)
+{
+    auto frame = std::make_shared<pcv::camera::CameraFrame>();
+    frame->frameType = pcv::camera::FrameType::PointCloudABC32f;
+    frame->width = width;
+    frame->height = height;
+    frame->frameNumber = firstRow;
+    frame->valid = true;
+    frame->data = QByteArray(qsizetype(width) * qsizetype(height) * 12, '\0');
+    return frame;
+}
+} // namespace
 
 namespace {
 bool require(bool value, const char *message)
@@ -34,6 +52,69 @@ int main(int argc, char **argv)
                      "mock frame should be a 64x48 point cloud")) return 1;
         source.stop();
         if (!require(!source.isRunning(), "mock source should stop")) return 1;
+    }
+
+    // DP-series HFR callbacks may split one configured Height into multiple
+    // profile batches. nFrameNum is a running sequence and need not begin at
+    // zero when the application starts. Only a complete, contiguous scan is
+    // publishable.
+    {
+        pcv::camera::detail::ScanFrameAssembler assembler(4);
+        auto first = assembler.append(makeScanChunk(2, 3, 100));
+        if (!require(first.outcome == pcv::camera::detail::ScanAssemblyOutcome::Pending
+                         && assembler.accumulatedRows() == 3
+                         && assembler.fragmentCount() == 1,
+                     "first partial scan batch should remain pending")) return 1;
+        auto complete = assembler.append(makeScanChunk(2, 1, 103));
+        if (!require(complete.outcome == pcv::camera::detail::ScanAssemblyOutcome::Complete
+                         && complete.frame != nullptr
+                         && complete.frame->width == 2 && complete.frame->height == 4
+                         && complete.frame->data.size() == 2 * 4 * 12
+                         && complete.frame->scanFragmentCount == 2
+                         && complete.frame->completeScan,
+                     "contiguous final batch should publish one complete scan")) return 1;
+    }
+
+    // A single Range_Image callback matching Height is already a complete scan.
+    {
+        pcv::camera::detail::ScanFrameAssembler assembler(3);
+        auto complete = assembler.append(makeScanChunk(2, 3, 0));
+        if (!require(complete.outcome == pcv::camera::detail::ScanAssemblyOutcome::Complete
+                         && complete.frame->scanFragmentCount == 1
+                         && complete.frame->accumulatedScanRows == 3,
+                     "full Range_Image raster should bypass partial assembly")) return 1;
+    }
+
+    // Gaps, duplicates, reverse rows, and width changes must clear the
+    // partial scan. A later sequence value can then anchor a new acquisition.
+    {
+        pcv::camera::detail::ScanFrameAssembler assembler(4);
+        assembler.append(makeScanChunk(2, 1, 0));
+        auto gap = assembler.append(makeScanChunk(2, 1, 2));
+        if (!require(gap.outcome == pcv::camera::detail::ScanAssemblyOutcome::Rejected
+                         && assembler.accumulatedRows() == 0,
+                     "missing profile rows must reject the partial scan")) return 1;
+        assembler.append(makeScanChunk(2, 1, 0));
+        assembler.append(makeScanChunk(2, 1, 1));
+        auto duplicate = assembler.append(makeScanChunk(2, 1, 1));
+        if (!require(duplicate.outcome == pcv::camera::detail::ScanAssemblyOutcome::Rejected,
+                     "duplicate profile rows must reject the partial scan")) return 1;
+        assembler.append(makeScanChunk(2, 1, 0));
+        auto widthChange = assembler.append(makeScanChunk(3, 1, 1));
+        if (!require(widthChange.outcome == pcv::camera::detail::ScanAssemblyOutcome::Rejected,
+                     "width changes must reject the partial scan")) return 1;
+        auto next = assembler.append(makeScanChunk(2, 4, 100));
+        if (!require(next.outcome == pcv::camera::detail::ScanAssemblyOutcome::Complete
+                         && next.frame->discardedScanCount >= 3,
+                     "a later full scan must recover after rejected batches")) return 1;
+    }
+
+    // The assembler rejects payloads that would exceed its bounded buffer.
+    {
+        pcv::camera::detail::ScanFrameAssembler assembler(4, 24);
+        auto oversized = assembler.append(makeScanChunk(2, 4, 0));
+        if (!require(oversized.outcome == pcv::camera::detail::ScanAssemblyOutcome::Rejected,
+                     "assembly memory limit must reject oversized complete scans")) return 1;
     }
 
     // Latest-frame-wins: publishing several frames keeps only the newest.
@@ -132,6 +213,40 @@ int main(int argc, char **argv)
                      "mock convertFrame should convert a depth frame")) return 1;
         if (!require(result.points[1].z == 20.0f,
                      "depth z should use zScale")) return 1;
+    }
+
+    // PointCloud_Image is fail-closed: a real SDK C16/Profile callback does
+    // not match the requested ABC32f path and must never use approximation.
+    {
+        using pcv::camera::FrameType;
+        using pcv::camera::ImageMode;
+        using pcv::camera::detail::CallbackFrameAction;
+        using pcv::camera::detail::callbackFrameAction;
+        using pcv::camera::detail::imageModeFrameTypeError;
+        if (!require(callbackFrameAction(FrameType::PointCloudABC32f)
+                         == CallbackFrameAction::CopyPointCloud,
+                     "ABC32f callback frames must be copied directly")) return 1;
+        if (!require(callbackFrameAction(FrameType::ProfileABC16)
+                         == CallbackFrameAction::ConvertProfileToPointCloud,
+                     "ABC16 callback frames must use raw SDK image conversion")) return 1;
+        if (!require(callbackFrameAction(FrameType::DepthC16)
+                         == CallbackFrameAction::ConvertDepthToPointCloud,
+                     "C16 callback frames must use raw SDK depth conversion")) return 1;
+        if (!require(callbackFrameAction(FrameType::Mono8) == CallbackFrameAction::Reject,
+                     "unsupported callback frame types must be rejected")) return 1;
+        if (!require(imageModeFrameTypeError(ImageMode::PointCloudImage,
+                                             ImageMode::PointCloudImage,
+                                             FrameType::PointCloudABC32f).isEmpty(),
+                     "PointCloudImage must accept ABC32f")) return 1;
+        const QString depthError = imageModeFrameTypeError(ImageMode::PointCloudImage,
+                                                            ImageMode::PointCloudImage,
+                                                            FrameType::DepthC16);
+        if (!require(depthError.contains(QStringLiteral("does not match requested PointCloudImage")),
+                     "PointCloudImage must reject C16 with an explicit mode error")) return 1;
+        if (!require(!imageModeFrameTypeError(ImageMode::PointCloudImage,
+                                              ImageMode::PointCloudImage,
+                                              FrameType::ProfileABC16).isEmpty(),
+                     "PointCloudImage must reject profile output")) return 1;
     }
 
     std::cout << "frame_source_tests: PASS\n";

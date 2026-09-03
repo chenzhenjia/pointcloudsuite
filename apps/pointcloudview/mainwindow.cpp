@@ -514,6 +514,7 @@ void MainWindow::loadFinished() {
             << "boundary_scan_ms=" << result.boundaryScanElapsedMs
             << "parse_ms=" << result.parseElapsedMs
             << "reader_total_ms=" << result.totalElapsedMs;
+    m_pendingSourcePlyEncoding = result.sourcePlyEncoding;
     m_rawPoints = std::move(result.points);
     const QFileInfo fileInfo(m_pendingPath);
     const bool keepFolderSources = m_folderScanOnly && m_sourceFiles.size() > 1
@@ -1908,7 +1909,7 @@ void MainWindow::savePlaneImage() {
         context.destinationDirectory = QFileInfo(path).absolutePath();
         pcv::output::PlaneOutputMetadata metadata;
         metadata.sourcePointCloud = QFileInfo(m_pendingPath).absoluteFilePath();
-        metadata.sourcePlyEncoding = QStringLiteral("ascii_or_binary");
+        metadata.sourcePlyEncoding = m_pendingSourcePlyEncoding;
         metadata.originInRobotBase = m_workpieceCoordinate.originInRobotBase;
         metadata.axisXInRobotBase = m_workpieceCoordinate.axisXInRobotBase;
         metadata.axisYInRobotBase = m_workpieceCoordinate.axisYInRobotBase;

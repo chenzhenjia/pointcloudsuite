@@ -82,9 +82,18 @@ CameraDialog::CameraDialog(QWidget *parent)
             }
             m_lastFrameNumber = frameNumber;
             m_lastPollMs = now;
-            m_frameInfo->setText(tr("帧 #%1  点数 %2").arg(frameNumber).arg(converted.points.size()));
+            if (m_lastConvertedExpectedRows > 0) {
+                m_frameInfo->setText(
+                    tr("完整扫描 #%1  点数 %2  行 %3/%3  分片 %4")
+                        .arg(frameNumber)
+                        .arg(converted.points.size())
+                        .arg(m_lastConvertedExpectedRows)
+                        .arg(m_lastConvertedFragments));
+            } else {
+                m_frameInfo->setText(tr("帧 #%1  点数 %2").arg(frameNumber).arg(converted.points.size()));
+            }
             m_lastConvertedPoints = converted.points;
-            if (m_freezeButton) m_freezeButton->setEnabled(true);
+            if (m_freezeButton) m_freezeButton->setEnabled(m_lastConvertedComplete);
             pointcloud::LiveFrame frame;
             frame.points = converted.points;
             frame.sourceMode = QStringLiteral("camera.lp");
@@ -202,8 +211,7 @@ void CameraDialog::toggleConnection()
         m_source = std::make_unique<pcv::camera::Mv3dLpCamera>(
             m_devices[index].serialNumber);
         const int modeIndex = m_modeList->currentIndex();
-        // index 0 = Range_Image (default, 3DMVS-compatible); 1 = PointCloud;
-        // 2 = adaptive (no explicit request).
+        // index 0 = Range_Image (3DMVS default); 1 = PointCloud_Image diagnostics.
         if (modeIndex == 0) {
             static_cast<pcv::camera::Mv3dLpCamera *>(m_source.get())
                 ->requestImageMode(pcv::camera::ImageMode::RangeImage);
@@ -211,6 +219,8 @@ void CameraDialog::toggleConnection()
             static_cast<pcv::camera::Mv3dLpCamera *>(m_source.get())
                 ->requestImageMode(pcv::camera::ImageMode::PointCloudImage);
         }
+        static_cast<pcv::camera::Mv3dLpCamera *>(m_source.get())
+            ->requestSoftwareTrigger(m_triggerList->currentIndex() == 1);
 #else
         m_source = std::make_unique<pcv::camera::MockFrameSource>(640, 480);
         m_status->setText(tr("SDK 未启用，回退 Mock 源"));
@@ -237,6 +247,11 @@ void CameraDialog::toggleStreaming()
     }
     ++m_streamGeneration;
     m_source->frameSlot().resetStatistics();
+    m_lastConvertedPoints.clear();
+    m_lastConvertedFrameNumber = 0;
+    m_lastConvertedExpectedRows = 0;
+    m_lastConvertedFragments = 0;
+    m_lastConvertedComplete = false;
     pointcloud::PipelineContext context;
     context.frameSource = [this]() { return m_source.get(); };
     context.publish = [this](const pointcloud::LiveFrame &frame) {
@@ -250,9 +265,7 @@ void CameraDialog::toggleStreaming()
         appendLog(warning);
         m_status->setText(tr("Pipeline 警告：%1").arg(warning));
     }
-    m_source->frameSlot().setFramePublishedCallback([this]() {
-        QMetaObject::invokeMethod(this, &CameraDialog::onFrameAvailable, Qt::QueuedConnection);
-    });
+    installFrameNotification();
     const pcv::camera::CameraError error = m_source->start();
     if (!error.ok()) {
         m_source->frameSlot().clearFramePublishedCallback();
@@ -288,7 +301,10 @@ void CameraDialog::onFrameAvailable()
             << "valid=" << frame->valid
             << "size=" << frame->width << "x" << frame->height
             << "dataLen=" << frame->data.size()
-            << "frameNumber=" << frame->frameNumber;
+            << "frameNumber=" << frame->frameNumber
+            << "scanRows=" << frame->accumulatedScanRows << "/" << frame->expectedScanRows
+            << "scanFragments=" << frame->scanFragmentCount
+            << "discardedScans=" << frame->discardedScanCount;
 
     if (m_convertWatcher->isRunning()) {
         m_pendingFrame = std::move(frame);
@@ -299,8 +315,8 @@ void CameraDialog::onFrameAvailable()
 
 void CameraDialog::freezeCurrentFrame()
 {
-    if (m_lastConvertedPoints.isEmpty() || !cloudFrozen) {
-        m_status->setText(tr("暂无可冻结的有效帧"));
+    if (!m_lastConvertedComplete || m_lastConvertedPoints.isEmpty() || !cloudFrozen) {
+        m_status->setText(tr("暂无可冻结的完整扫描"));
         return;
     }
     cloudFrozen(m_lastConvertedPoints);
@@ -314,10 +330,21 @@ void CameraDialog::launchConversion(std::shared_ptr<const pcv::camera::CameraFra
     const auto generation = m_streamGeneration;
     m_conversionGeneration = generation;
     m_lastConvertedFrameNumber = frame->frameNumber;
+    m_lastConvertedExpectedRows = frame->expectedScanRows;
+    m_lastConvertedFragments = frame->scanFragmentCount;
+    m_lastConvertedComplete = frame->completeScan;
     m_convertWatcher->setFuture(QtConcurrent::run([source, frame, generation]() {
         Q_UNUSED(generation);
         return source->convertFrame(*frame);
     }));
+}
+
+void CameraDialog::installFrameNotification()
+{
+    if (!m_source) return;
+    m_source->frameSlot().setFramePublishedCallback([this]() {
+        QMetaObject::invokeMethod(this, &CameraDialog::onFrameAvailable, Qt::QueuedConnection);
+    });
 }
 
 void CameraDialog::stopSourceSafely()
@@ -367,6 +394,7 @@ void CameraDialog::attemptReconnect()
         return;
     }
     m_reconnectTimer->stop();
+    installFrameNotification();
     m_streaming = true;
     m_start->setText(tr("停止取流"));
     m_status->setText(tr("已重连，取流中"));

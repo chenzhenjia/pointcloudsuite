@@ -10,7 +10,7 @@ endif()
 if(CMAKE_GENERATOR MATCHES "NMake Makefiles JOM")
     message(
         "NMake Makefiles JOM is unsupported because it records localized MSVC /showIncludes output as dependency names. "
-        "Select the NMake Makefiles generator and configure a fresh ASCII build directory.")
+        "Select the NMake Makefiles generator and configure a fresh build directory.")
 endif()
 
 project(PointCloudSuite VERSION 1.0.0 LANGUAGES CXX)
@@ -35,16 +35,6 @@ if(MSVC)
         message(FATAL_ERROR
             "MSVC ABI detection failed. CMAKE_CXX_ABI_COMPILED=${CMAKE_CXX_ABI_COMPILED}, "
             "CMAKE_CXX_SIZEOF_DATA_PTR=${CMAKE_CXX_SIZEOF_DATA_PTR}. Configure with VSLANG=1033.")
-    endif()
-endif()
-
-if(WIN32)
-    string(REGEX MATCH "[^ -~]" PCV_SOURCE_PATH_NON_ASCII "${CMAKE_SOURCE_DIR}")
-    string(REGEX MATCH "[^ -~]" PCV_BINARY_PATH_NON_ASCII "${CMAKE_BINARY_DIR}")
-    if(PCV_SOURCE_PATH_NON_ASCII OR PCV_BINARY_PATH_NON_ASCII)
-        message(FATAL_ERROR
-            "Qt Windows builds require ASCII-only source and build paths.\n"
-            "Source: ${CMAKE_SOURCE_DIR}\nBuild: ${CMAKE_BINARY_DIR}")
     endif()
 endif()
 

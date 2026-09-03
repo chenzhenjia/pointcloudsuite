@@ -51,6 +51,7 @@ private:
     void triggerFrame();
     void onException(const QString &description);
     void attemptReconnect();
+    void installFrameNotification();
     void launchConversion(std::shared_ptr<const pcv::camera::CameraFrame> frame);
     void stopSourceSafely();
     void setBusy(bool busy);
@@ -89,6 +90,9 @@ private:
     std::uint64_t m_streamGeneration = 0;
     std::uint64_t m_conversionGeneration = 0;
     std::uint32_t m_lastConvertedFrameNumber = 0;
+    std::uint32_t m_lastConvertedExpectedRows = 0;
+    std::uint32_t m_lastConvertedFragments = 0;
+    bool m_lastConvertedComplete = false;
     QVector<pointcloud::Point3D> m_lastConvertedPoints;
     Ui::CameraDialog *ui = nullptr;
 };

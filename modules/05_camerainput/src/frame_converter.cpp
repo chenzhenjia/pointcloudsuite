@@ -49,6 +49,9 @@ PointCloudConvertResult convertPointCloudToPoints(
         result.error = QStringLiteral("point-cloud payload is empty");
         return result;
     }
+    if (!hasExpectedRasterSampleCount(frame, bytesPerPoint, &result.error)) {
+        return result;
+    }
     result.totalSamples = frame.data.size() / bytesPerPoint;
     result.points.reserve(result.totalSamples);
 

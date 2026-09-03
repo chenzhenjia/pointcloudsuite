@@ -21,8 +21,8 @@ pcv::camera::CameraFrame makePointCloudFrame(std::initializer_list<float> xyz,
 {
     pcv::camera::CameraFrame frame;
     frame.frameType = pcv::camera::FrameType::PointCloudABC32f;
-    frame.width = 2;
-    frame.height = 2;
+    frame.width = std::uint32_t(xyz.size() / 3);
+    frame.height = 1;
     frame.valid = valid;
     QByteArray payload;
     payload.resize(int(xyz.size()) * 4);
@@ -96,6 +96,14 @@ int main(int argc, char **argv)
         frame.data = frame.data.left(10); // not a multiple of 12
         const auto result = pcv::camera::convertPointCloudToPoints(frame);
         if (!require(!result.ok, "payload length not a multiple of 12 must be rejected")) return 1;
+    }
+
+    // ABC32f must also match the advertised raster dimensions.
+    {
+        auto frame = makePointCloudFrame({1.0f, 2.0f, 3.0f});
+        frame.width = 2;
+        if (!require(!pcv::camera::convertPointCloudToPoints(frame).ok,
+                     "point-cloud payload must match width x height")) return 1;
     }
 
 

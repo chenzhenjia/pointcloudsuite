@@ -14,8 +14,8 @@
 namespace pcv::camera {
 
 // A frame source publishes the latest point-cloud frame to a single consumer.
-// The producer side runs on the SDK callback thread; the consumer polls the
-// latest frame from the GUI thread. The slot keeps only the newest frame and
+// The producer side runs on the SDK callback thread; consumers are notified
+// and take the latest frame from their event handler. The slot keeps only the newest frame and
 // drops older ones (latest-frame-wins), bounding latency under load.
 class LatestFrameSlot {
 public:
