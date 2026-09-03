@@ -13,7 +13,7 @@
 - **事件驱动取帧**：帧槽通过加锁 `setFramePublishedCallback`/`clearFramePublishedCallback` 通知；转换在单个 QtConcurrent watcher 中单飞执行，GUI 零阻塞；
 - **异常事件与自动重连**：断线发布 `FrameKind::Exception` 事件，UI 触发自动重连（StopMeasure → CloseDevice → 重试 Open → 重新注册 → StartMeasure）；
 - **软触发**：`MV3D_LP_SoftTrigger` 支持软触发模式出图；
-- **触发参数门禁**：连续模式 `TriggerMode=0`；软触发模式 `TriggerMode=1`、`TriggerSource=7 (Software)`，启动时必须在设备支持枚举中找到目标值并 Set/Get 回读成功；
+- **触发参数兼容**：连续模式优先探测 `TriggerMode=0`；DP2240/部分固件对 `GetParam("TriggerMode")` 返回 `0x80060004 (MV3D_LP_E_PARAMETER)` 或 `MV3D_LP_E_SUPPORT` 时，按 3DMVS 回调示例保留 SDK 默认自由采集并继续启动，不把可选节点当作硬失败；若节点存在但设置 `0` 失败，仅记录兼容警告。软触发模式仍必须成功探测、设置并回读 `TriggerMode=1` 与设备支持的 `TriggerSource`，否则明确报告“不支持软触发”并拒绝启动；
 - **虚拟相机识别**：3DMVS 虚拟相机（SN 前缀 Vir）按真实设备流程取流，用于无实机验证；
 - 回调线程只做 SDK 原始帧的必要转换、结果深拷贝和完整扫描组帧，再发布到最新帧槽（latest-frame-wins）；不执行 QWidget 或项目点云算法；ABC32f 解析、无效点过滤、预览下采样和画布发布在后台/GUI 后续阶段完成；
 - 帧转换（含空点/非有限值过滤）为纯函数，单测可覆盖三类帧类型；

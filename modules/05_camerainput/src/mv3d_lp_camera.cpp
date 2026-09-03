@@ -5,6 +5,7 @@
 
 #include "live_frame_policy.h"
 #include "scan_frame_assembler.h"
+#include "trigger_mode_policy.h"
 
 #include <QDateTime>
 #include <QDebug>
@@ -428,6 +429,7 @@ struct Mv3dLpCamera::Impl {
     std::optional<ImageMode> requestedMode;
     std::optional<ImageMode> activeMode;
     bool softwareTriggerRequested = false;
+    bool softTriggerSupported = false;
     bool sdkLeaseHeld = false;
     CallbackContext callbackContext;
     std::mutex diagnosticsMutex;
@@ -503,6 +505,8 @@ struct Mv3dLpCamera::Impl {
 
     CameraError configureTriggerMode()
     {
+        softTriggerSupported = false;
+
         auto setEnum = [this](const char *key, std::uint32_t value,
                               const char *label) -> CameraError {
             MV3D_LP_PARAM param;
@@ -545,14 +549,67 @@ struct Mv3dLpCamera::Impl {
             return {};
         };
 
+        MV3D_LP_PARAM probe;
+        std::memset(&probe, 0, sizeof(probe));
+        probe.enParamType = ParamType_Enum;
+        const MV3D_LP_STATUS probeStatus = MV3D_LP_GetParam(
+            handle, MV3D_LP_ENUM_TRIGGERMODE, &probe);
+        qInfo() << "Mv3dLpCamera: TriggerMode probe status=" << statusText(probeStatus)
+                << "requested=" << (softwareTriggerRequested ? "software" : "continuous");
+
+        if (probeStatus != MV3D_LP_OK) {
+            if (!softwareTriggerRequested
+                && detail::isOptionalTriggerNodeStatus(std::uint32_t(probeStatus))) {
+                qWarning().noquote()
+                    << "Mv3dLpCamera: TriggerMode is unavailable; continuing with SDK default continuous acquisition"
+                    << statusText(probeStatus);
+                qInfo() << "Mv3dLpCamera: trigger configuration compatibility="
+                        << "ignored optional TriggerMode failure";
+                return {};
+            }
+            if (softwareTriggerRequested
+                && detail::isOptionalTriggerNodeStatus(std::uint32_t(probeStatus))) {
+                return {QStringLiteral("device does not support software trigger: TriggerMode probe failed: %1")
+                            .arg(statusText(probeStatus))};
+            }
+            return {QStringLiteral("MV3D_LP_GetParam(TriggerMode) failed: %1")
+                        .arg(statusText(probeStatus))};
+        }
+
+        const std::uint32_t requestedValue = softwareTriggerRequested ? 1u : 0u;
+        bool supported = false;
+        for (std::uint32_t i = 0; i < probe.ParamInfo.stEnumParam.nSupportedNum
+                                  && i < MV3D_LP_MAX_ENUM_COUNT; ++i) {
+            if (probe.ParamInfo.stEnumParam.nSupportValue[i] == requestedValue) {
+                supported = true;
+                break;
+            }
+        }
+        if (!supported) {
+            if (softwareTriggerRequested) {
+                return {QStringLiteral("device does not support software trigger: TriggerMode value %1 is unavailable")
+                            .arg(requestedValue)};
+            }
+            qWarning() << "Mv3dLpCamera: TriggerMode=0 is unavailable; continuing with SDK default";
+            return {};
+        }
+
         const CameraError modeError = setEnum(
-            MV3D_LP_ENUM_TRIGGERMODE, softwareTriggerRequested ? 1u : 0u,
-            "TriggerMode");
-        if (!modeError.ok()) return modeError;
+            MV3D_LP_ENUM_TRIGGERMODE, requestedValue, "TriggerMode");
+        if (!modeError.ok()) {
+            if (softwareTriggerRequested) return modeError;
+            qWarning().noquote() << "Mv3dLpCamera: optional continuous TriggerMode configuration failed;"
+                                 << modeError.message;
+            return {};
+        }
         if (softwareTriggerRequested) {
             const CameraError sourceError = setEnum(
                 MV3D_LP_ENUM_TRIGGERSOURCE, 7u, "TriggerSource(Software)");
-            if (!sourceError.ok()) return sourceError;
+            if (!sourceError.ok()) {
+                return {QStringLiteral("device does not support software trigger: %1")
+                            .arg(sourceError.message)};
+            }
+            softTriggerSupported = true;
         }
         qInfo() << "Mv3dLpCamera: trigger mode"
                 << (softwareTriggerRequested ? "software" : "continuous");
@@ -742,6 +799,9 @@ CameraError Mv3dLpCamera::start()
         m_impl->shutdown();
         return {QStringLiteral("MV3D_LP_StartMeasure failed: %1").arg(statusText(startStatus))};
     }
+    qInfo() << "Mv3dLpCamera: MV3D_LP_StartMeasure succeeded"
+            << "trigger=" << (m_impl->softwareTriggerRequested ? "software" : "continuous")
+            << "softTriggerSupported=" << m_impl->softTriggerSupported;
     m_impl->running.store(true);
     return {};
 }
@@ -758,6 +818,11 @@ bool Mv3dLpCamera::isRunning() const
     return m_impl->running.load();
 }
 
+bool Mv3dLpCamera::supportsSoftTrigger() const
+{
+    return m_impl->softTriggerSupported;
+}
+
 QString Mv3dLpCamera::deviceSummary() const
 {
     return QStringLiteral("Mv3dLp camera %1").arg(m_impl->serialNumber);
@@ -772,6 +837,9 @@ CameraError Mv3dLpCamera::softTrigger()
 {
     if (!m_impl->running.load()) {
         return {QStringLiteral("soft trigger requires streaming to be running")};
+    }
+    if (!m_impl->softTriggerSupported) {
+        return {QStringLiteral("device does not support software trigger")};
     }
     const MV3D_LP_STATUS status = MV3D_LP_SoftTrigger(m_impl->handle);
     if (status != MV3D_LP_OK) {

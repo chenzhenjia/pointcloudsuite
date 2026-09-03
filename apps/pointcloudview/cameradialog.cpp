@@ -48,6 +48,14 @@ CameraDialog::CameraDialog(QWidget *parent)
     m_reconnectTimer = new QTimer(this);
     m_reconnectTimer->setInterval(2000);
     connect(m_reconnectTimer, &QTimer::timeout, this, &CameraDialog::attemptReconnect);
+    m_frameWatchdogTimer = new QTimer(this);
+    m_frameWatchdogTimer->setSingleShot(true);
+    m_frameWatchdogTimer->setInterval(5000);
+    connect(m_frameWatchdogTimer, &QTimer::timeout, this, [this]() {
+        if (m_streaming && m_lastFrameNumber == 0) {
+            m_status->setText(tr("取流已启动但暂未收到完整扫描，设备可能仍处于硬件触发配置"));
+        }
+    });
 
     connect(m_refresh, &QPushButton::clicked, this, &CameraDialog::refreshDevices);
     connect(m_deviceList, qOverload<int>(&QComboBox::currentIndexChanged),
@@ -82,6 +90,7 @@ CameraDialog::CameraDialog(QWidget *parent)
             }
             m_lastFrameNumber = frameNumber;
             m_lastPollMs = now;
+            if (m_frameWatchdogTimer) m_frameWatchdogTimer->start();
             if (m_lastConvertedExpectedRows > 0) {
                 m_frameInfo->setText(
                     tr("完整扫描 #%1  点数 %2  行 %3/%3  分片 %4")
@@ -229,7 +238,7 @@ void CameraDialog::toggleConnection()
     m_connected = true;
     m_connect->setText(tr("断开"));
     m_start->setEnabled(true);
-    m_triggerButton->setEnabled(m_source->supportsSoftTrigger());
+    m_triggerButton->setEnabled(false);
     m_status->setText(useMock ? tr("已连接（Mock 源）") : tr("已连接"));
     setBusy(false);
 }
@@ -242,6 +251,8 @@ void CameraDialog::toggleStreaming()
         m_reconnectTimer->stop();
         m_streaming = false;
         m_start->setText(tr("开始取流"));
+        m_triggerButton->setEnabled(false);
+        if (m_frameWatchdogTimer) m_frameWatchdogTimer->stop();
         m_rateInfo->setText(tr("帧率：-"));
         return;
     }
@@ -269,6 +280,7 @@ void CameraDialog::toggleStreaming()
     const pcv::camera::CameraError error = m_source->start();
     if (!error.ok()) {
         m_source->frameSlot().clearFramePublishedCallback();
+        m_triggerButton->setEnabled(false);
         m_status->setText(tr("启动失败：%1").arg(error.message));
         return;
     }
@@ -277,6 +289,9 @@ void CameraDialog::toggleStreaming()
     m_lastPollMs = 0;
     m_frameCount = 0;
     m_start->setText(tr("停止取流"));
+    m_triggerButton->setEnabled(m_source->supportsSoftTrigger()
+                                && m_triggerList->currentIndex() == 1);
+    if (m_frameWatchdogTimer) m_frameWatchdogTimer->start();
     if (m_freezeButton) m_freezeButton->setEnabled(false);
     m_reconnectTimer->stop();
     m_status->setText(tr("取流中"));
@@ -355,6 +370,7 @@ void CameraDialog::stopSourceSafely()
     m_pendingFrame.reset();
     if (m_convertWatcher && m_convertWatcher->isRunning()) m_convertWatcher->waitForFinished();
     if (m_source) m_source->stop();
+    if (m_frameWatchdogTimer) m_frameWatchdogTimer->stop();
     m_pipeline.reset();
 }
 
@@ -397,6 +413,9 @@ void CameraDialog::attemptReconnect()
     installFrameNotification();
     m_streaming = true;
     m_start->setText(tr("停止取流"));
+    m_triggerButton->setEnabled(m_source->supportsSoftTrigger()
+                                && m_triggerList->currentIndex() == 1);
+    if (m_frameWatchdogTimer) m_frameWatchdogTimer->start();
     m_status->setText(tr("已重连，取流中"));
 #endif
 }

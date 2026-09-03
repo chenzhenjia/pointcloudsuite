@@ -3,6 +3,7 @@
 
 #include "live_frame_policy.h"
 #include "scan_frame_assembler.h"
+#include "trigger_mode_policy.h"
 
 #include <QCoreApplication>
 
@@ -247,6 +248,21 @@ int main(int argc, char **argv)
                                               ImageMode::PointCloudImage,
                                               FrameType::ProfileABC16).isEmpty(),
                      "PointCloudImage must reject profile output")) return 1;
+    }
+
+    // DP2240 may not expose optional trigger nodes. Continuous acquisition
+    // can use the SDK default, while software-trigger mode must reject it.
+    {
+        using pcv::camera::detail::continuousTriggerProbeMayContinue;
+        using pcv::camera::detail::softwareTriggerProbeMustReject;
+        if (!require(continuousTriggerProbeMayContinue(0x80060004u),
+                     "continuous mode must tolerate unsupported TriggerMode")) return 1;
+        if (!require(continuousTriggerProbeMayContinue(0x80060001u),
+                     "continuous mode must tolerate unsupported trigger node")) return 1;
+        if (!require(softwareTriggerProbeMustReject(0x80060004u),
+                     "software trigger must reject missing TriggerMode")) return 1;
+        if (!require(!continuousTriggerProbeMayContinue(0x80060003u),
+                     "call-order errors must not be ignored")) return 1;
     }
 
     std::cout << "frame_source_tests: PASS\n";

@@ -76,6 +76,7 @@ private:
     QLabel *m_deviceIp = nullptr;
     QLabel *m_deviceVirtual = nullptr;
     QTimer *m_reconnectTimer = nullptr;
+    QTimer *m_frameWatchdogTimer = nullptr;
     std::unique_ptr<pcv::camera::FrameSource> m_source;
     std::unique_ptr<QFutureWatcher<pcv::camera::PointCloudConvertResult>> m_convertWatcher;
     std::unique_ptr<pointcloud::PipelineRunner> m_pipeline;

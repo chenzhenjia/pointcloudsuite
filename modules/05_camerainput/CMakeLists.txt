@@ -30,6 +30,7 @@ add_library(pcv_m05_camerainput STATIC
     src/frame_converter.cpp
     src/latest_frame_slot.cpp
     src/mock_frame_source.cpp
+    src/trigger_mode_policy.h
     include/pcv/camera/frame_data.h
     include/pcv/camera/frame_converter.h
     include/pcv/camera/frame_source.h

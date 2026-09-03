@@ -44,7 +44,7 @@ public:
     PointCloudConvertResult convertFrame(
         const CameraFrame &frame,
         const PointCloudConvertOptions &options = {}) override;
-    bool supportsSoftTrigger() const override { return true; }
+    bool supportsSoftTrigger() const override;
     CameraError softTrigger() override;
     bool supportsReconnect() const override { return true; }
     CameraError reconnectOnce() override;
@@ -53,8 +53,9 @@ public:
     // remains an explicit profile-batch diagnostic path.
     void requestImageMode(ImageMode mode);
     // Selects the device trigger mode before the next start(). Continuous
-    // acquisition is the default; software trigger uses TriggerMode=On and
-    // TriggerSource=Software.
+    // acquisition uses the device default when its optional TriggerMode node
+    // is unavailable; software trigger requires verified TriggerMode and
+    // TriggerSource support.
     void requestSoftwareTrigger(bool enabled);
     std::optional<ImageMode> activeImageMode() const;
 

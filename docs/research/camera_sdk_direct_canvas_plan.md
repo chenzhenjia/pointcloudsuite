@@ -73,7 +73,7 @@ GUI 线程：LatestFrameSlot 发布通知（QueuedConnection）→ take() → Qt
 - 用户手册：缓存设置（取流/存图缓存节点防丢帧）、重发包设置、触发模式（自由采集/软触发/行触发）；
 - 本实现对齐：默认 ImageMode=7；事件驱动取帧 + 转换线程化；异常事件 + 自动重连；软触发；虚拟相机识别；
 - 限制：Mv3dLpApi.h 未公开 SetResend/SetImageNodeNum 接口（SDK 内部默认处理），重发包/缓存节点依赖 Mv3dLpCfg.ini 与 SDK 默认行为，未重复调用。
-- 触发：连续模式写入并回读 `TriggerMode=0`；软触发写入并回读 `TriggerMode=1`、`TriggerSource=7 (Software)`，设备不支持时启动失败并保持 fail-closed。
+- 触发兼容：连续模式对 `TriggerMode` 做可选探测；DP2240 返回 `0x80060004 (MV3D_LP_E_PARAMETER)`/`MV3D_LP_E_SUPPORT` 时沿 3DMVS `SimpleView_Callback` 默认自由采集路径继续 `StartMeasure`，不猜测 `TriggerSelector`。软触发仍要求 `TriggerMode=1` 和设备支持的 `TriggerSource` 成功 Set/Get 回读，否则 fail-closed。
 
 ### 6.1 DP2240 完整扫描组帧
 
