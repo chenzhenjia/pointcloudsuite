@@ -11,7 +11,7 @@ PointCloudSuite 是基于 Qt 6、C++17 和 CMake 的工业点云处理项目，�
 - `pointcloudview`：点云读取、渲染、点选、平面拟合、ROI/模板和输出。
 - `pointcloudstitch`：线扫点云坐标转换、多帧配准、接缝融合和结果编排。
 - `modules/10_pointcloudread` 至 `modules/80_planeoutput`：规范共享模块。
-- `registration_diagnostic`：通过 `pcv::interface::stitchRawLineProfiles` 执行统一拼接流水线的诊断工具。
+- `registration_diagnostic`：通过 `pcv::interface::stitchRawLineProfiles` 执行统一拼接流水线的诊断工具，支持通用多帧输入；`inspect` 子命令可检查 PLY header 的 `format` 行。
 - `tests/`：模块和接口回归测试。
 - `docs/`：需求、架构、契约、开发和用户文档。
 

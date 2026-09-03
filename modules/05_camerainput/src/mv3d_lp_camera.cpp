@@ -479,6 +479,11 @@ struct Mv3dLpCamera::Impl {
         return {};
     }
 
+    // The Height parameter is diagnostic only on DP-series HFR devices: it
+    // reports a transfer/window height (e.g. 1060) that is not the full-scan
+    // row count (e.g. 3000), which the SDK emits in one complete depth frame.
+    // The scan assembler therefore starts adaptive (expectedRows=0) and adopts
+    // the observed frame height on the first complete callback.
     CameraError configureExpectedScanHeight()
     {
         MV3D_LP_PARAM param;
@@ -486,25 +491,25 @@ struct Mv3dLpCamera::Impl {
         param.enParamType = ParamType_Int;
         const MV3D_LP_STATUS status = MV3D_LP_GetParam(
             handle, MV3D_LP_INT_HEIGHT, &param);
-        const qint64 currentHeight = qint64(param.ParamInfo.stIntParam.nCurValue);
-        const qint64 maximumHeight = qint64(param.ParamInfo.stIntParam.nMax);
-        const auto selection = detail::selectExpectedScanHeight(currentHeight, maximumHeight);
-        const qint64 height = qint64(selection.rows);
-        if (status != MV3D_LP_OK || height <= 0
-            || height > qint64(std::numeric_limits<std::uint32_t>::max())) {
-            return {QStringLiteral("MV3D_LP_GetParam(Height) failed: %1")
-                        .arg(statusText(status))};
+        if (status == MV3D_LP_OK) {
+            const qint64 currentHeight = qint64(param.ParamInfo.stIntParam.nCurValue);
+            const qint64 maximumHeight = qint64(param.ParamInfo.stIntParam.nMax);
+            const auto selection = detail::selectExpectedScanHeight(currentHeight, maximumHeight);
+            qInfo() << "Mv3dLpCamera: Height current=" << currentHeight
+                    << "max=" << maximumHeight
+                    << "min=" << param.ParamInfo.stIntParam.nMin
+                    << "increment=" << param.ParamInfo.stIntParam.nInc
+                    << "diagnostic scan Height=" << qint64(selection.rows)
+                    << "source=" << (selection.source == detail::ExpectedScanHeightSource::Maximum
+                                         ? "maximum" : "current")
+                    << "ImageMode=" << (callbackContext.activeImageMode
+                                             ? std::uint32_t(*callbackContext.activeImageMode) : 0u);
+        } else {
+            qWarning() << "Mv3dLpCamera: GetParam(Height) unavailable (diagnostic only):"
+                       << statusText(status);
         }
-        callbackContext.configureAssembly(std::uint32_t(height));
-        qInfo() << "Mv3dLpCamera: Height current=" << currentHeight
-                << "max=" << maximumHeight
-                << "min=" << param.ParamInfo.stIntParam.nMin
-                << "increment=" << param.ParamInfo.stIntParam.nInc
-                << "configured scan Height=" << height
-                << "source=" << (selection.source == detail::ExpectedScanHeightSource::Maximum
-                                     ? "maximum" : "current")
-                << "ImageMode=" << (callbackContext.activeImageMode
-                                         ? std::uint32_t(*callbackContext.activeImageMode) : 0u);
+        // Adaptive assembly: first complete callback anchors the row count.
+        callbackContext.configureAssembly(0);
         return {};
     }
 

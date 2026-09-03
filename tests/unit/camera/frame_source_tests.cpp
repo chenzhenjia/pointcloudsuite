@@ -101,14 +101,45 @@ int main(int argc, char **argv)
                      "full-height callback should publish one complete scan")) return 1;
     }
 
-    // A too-tall callback is rejected with both actual and configured heights.
+    // A single whole scan taller than the configured expectation is accepted
+    // directly: DP-series depth frames arrive as one complete raster while the
+    // Height parameter may report a smaller transfer window (e.g. 1060 vs the
+    // observed 3000 rows). The assembler adopts the observed height.
     {
         pcv::camera::detail::ScanFrameAssembler assembler(24);
-        const auto rejected = assembler.append(makeScanChunk(2, 3000, 0));
-        if (!require(rejected.outcome == pcv::camera::detail::ScanAssemblyOutcome::Rejected
-                         && rejected.error.contains(QStringLiteral("3000"))
-                         && rejected.error.contains(QStringLiteral("24")),
-                     "height mismatch should report actual and configured rows")) return 1;
+        auto complete = assembler.append(makeScanChunk(2, 3000, 0));
+        if (!require(complete.outcome == pcv::camera::detail::ScanAssemblyOutcome::Complete
+                         && complete.frame != nullptr
+                         && complete.frame->height == 3000
+                         && complete.frame->accumulatedScanRows == 3000
+                         && complete.frame->scanFragmentCount == 1
+                         && assembler.expectedRows() == 3000,
+                     "whole scan taller than configured Height should be adopted and published")) return 1;
+    }
+
+    // A chunk taller than the configured expectation while a partial scan is
+    // being accumulated cannot belong to that acquisition and is rejected.
+    {
+        pcv::camera::detail::ScanFrameAssembler assembler(3000);
+        const auto first = assembler.append(makeScanChunk(2, 100, 0));
+        if (!require(first.outcome == pcv::camera::detail::ScanAssemblyOutcome::Pending,
+                     "first partial batch should remain pending")) return 1;
+        const auto tooTall = assembler.append(makeScanChunk(2, 4000, 100));
+        if (!require(tooTall.outcome == pcv::camera::detail::ScanAssemblyOutcome::Rejected
+                         && tooTall.error.contains(QStringLiteral("4000"))
+                         && assembler.accumulatedRows() == 0,
+                     "too-tall chunk during an active partial scan must be rejected")) return 1;
+    }
+
+    // Adaptive assembly (expectedRows=0) publishes the first complete frame
+    // and adopts its height.
+    {
+        pcv::camera::detail::ScanFrameAssembler assembler(0);
+        auto complete = assembler.append(makeScanChunk(2, 3000, 0));
+        if (!require(complete.outcome == pcv::camera::detail::ScanAssemblyOutcome::Complete
+                         && complete.frame->height == 3000
+                         && assembler.expectedRows() == 3000,
+                     "adaptive assembler should adopt the first complete frame height")) return 1;
     }
 
     // A single Range_Image callback matching Height is already a complete scan.

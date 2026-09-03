@@ -13,6 +13,7 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 
+#include <cstring>
 #include <limits>
 
 namespace {
@@ -114,6 +115,22 @@ bool writeCache(const SourceIdentity &source, const QString &path,
         || stream.status() != QDataStream::Ok) return false;
     return cache.commit();
 }
+
+bool canonicalReady(const QString &path, const QVector<pointcloud::Point3D> &expectedPoints)
+{
+    const pcv::detail::io::PlyHeaderInfo header = pcv::detail::io::inspectPlyHeader(path);
+    if (!header.ok || header.format != pcv::detail::io::PlyFormat::BinaryLittleEndian
+        || header.version != QStringLiteral("1.0")
+        || header.declaredPointCount != expectedPoints.size()) {
+        return false;
+    }
+    const pcv::detail::io::PlyReadResult canonical = pcv::detail::io::readPly(path);
+    return canonical.ok && canonical.points.size() == expectedPoints.size()
+        && (canonical.points.isEmpty() || std::memcmp(canonical.points.constData(),
+                                                       expectedPoints.constData(),
+                                                       size_t(canonical.points.size())
+                                                           * sizeof(pointcloud::Point3D)) == 0);
+}
 }
 
 namespace pcv::detail::io {
@@ -136,11 +153,37 @@ CachedCloudResult readPlyCached(const QString &sourceFile, const QString &cacheD
         result.error = QStringLiteral("无法读取 PLY 源文件指纹");
         return result;
     }
+    const PlyHeaderInfo sourceHeader = inspectPlyHeader(sourceFile);
+    if (!sourceHeader.ok) {
+        result.error = sourceHeader.error;
+        return result;
+    }
+    result.sourceFormat = sourceHeader.format;
+    result.format = sourceHeader.format;
+    result.canonicalPlyPath = canonicalPlyFilePath(sourceFile, cacheDirectory);
     const QString path = cacheFilePathForIdentity(source, sourceFile, cacheDirectory);
     if (readCache(source, path, &result.points)) {
         result.usedCache = true;
         result.ok = true;
         result.declaredPointCount = result.points.size();
+        if (!canonicalReady(result.canonicalPlyPath, result.points)) {
+            BinaryPlyWriteOptions writeOptions;
+            writeOptions.includeNormals = true;
+            writeOptions.comment = QStringLiteral("canonical source_format %1")
+                .arg(result.sourceFormat == PlyFormat::Ascii ? QStringLiteral("ascii")
+                     : result.sourceFormat == PlyFormat::BinaryLittleEndian ? QStringLiteral("binary_little_endian")
+                     : QStringLiteral("binary_big_endian"));
+            QString canonicalError;
+            if (!writeBinaryPly(result.canonicalPlyPath, result.points, &canonicalError, writeOptions)
+                || !canonicalReady(result.canonicalPlyPath, result.points)) {
+                result.error = canonicalError.isEmpty()
+                    ? QStringLiteral("canonical Binary PLY 校验失败") : canonicalError;
+                result.points.clear();
+                result.ok = false;
+                return result;
+            }
+        }
+        result.canonicalReady = true;
         if (options.progress) options.progress(result.points.size(), result.points.size());
         return result;
     }
@@ -151,6 +194,7 @@ CachedCloudResult readPlyCached(const QString &sourceFile, const QString &cacheD
         return result;
     }
     result.points.swap(parsed.points);
+    result.sourceFormat = parsed.format;
     result.format = parsed.format;
     result.declaredPointCount = parsed.declaredPointCount;
     result.minimum = parsed.minimum;
@@ -165,20 +209,23 @@ CachedCloudResult readPlyCached(const QString &sourceFile, const QString &cacheD
         result.points.clear();
         return result;
     }
-    const QString canonical = canonicalPlyFilePath(sourceFile, cacheDirectory);
+    const QString canonical = result.canonicalPlyPath;
     BinaryPlyWriteOptions writeOptions;
     writeOptions.includeNormals = true;
     writeOptions.comment = QStringLiteral("canonical source_format %1")
         .arg(parsed.format == PlyFormat::Ascii ? QStringLiteral("ascii")
              : parsed.format == PlyFormat::BinaryLittleEndian ? QStringLiteral("binary_little_endian")
              : QStringLiteral("binary_big_endian"));
-    // The canonical PLY is an audit artifact with no production consumer;
-    // a failure to write it must not discard the successfully read cloud.
     QString canonicalError;
-    if (!writeBinaryPly(canonical, result.points, &canonicalError, writeOptions)) {
-        result.warnings.push_back(QStringLiteral("无法写入 canonical PLY: %1").arg(canonicalError));
-        qWarning() << "无法写入 canonical PLY:" << canonicalError;
+    if (!writeBinaryPly(canonical, result.points, &canonicalError, writeOptions)
+        || !canonicalReady(canonical, result.points)) {
+        result.error = canonicalError.isEmpty()
+            ? QStringLiteral("canonical Binary PLY 校验失败") : canonicalError;
+        result.points.clear();
+        result.ok = false;
+        return result;
     }
+    result.canonicalReady = true;
     result.ok = true;
     return result;
 }

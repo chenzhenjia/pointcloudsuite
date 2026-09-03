@@ -3,18 +3,18 @@
 状态：实验中（2026-09）；默认构建，仍需实机验收后才能纳入 v0.3 发布基线。
 需求登记：启用 3DMVS 回调取流；DP2240 默认请求 `Range_Image=7`，将 SDK 原始深度回调转换并组装为完整 ABC32f 扫描。
 
-### DP2240 Height 语义修正（2026-09-03）
+### DP2240 Height 语义修正（2026-09-03，终版：仅诊断 + 自适应组帧）
 
-- 完整扫描目标优先采用 `Height.ParamInfo.stIntParam.nMax`；部分 HFR 固件将 `nCurValue` 暴露为当前传输批次高度（如 24/30），仅在 `nMax` 不可用时回退有效 `nCurValue`。
-- 启动日志记录 `nCurValue`、`nMax`、`nMin`、`nInc`、`ImageMode`、最终 `expected scan rows` 及来源，不硬编码 3000。
-- 组帧仍严格要求完整帧高度或连续分片累计到目标行数；高度超限错误包含实际高度与配置高度。GUI 看门狗区分完全没有回调和已收到回调但未形成完整扫描。
+- 实机证据：DP2240（Range_Image=7）回调经 SDK 转换后为完整 2100x3000 扫描，而 `GetParam("Height")` 返回 current=max=1060——Height 是传输窗口高度，不是完整扫描行数（完整行数 3000 来自 SDK 内部 `max_scan_rows`）。
+- 终版行为：`configureExpectedScanHeight()` 仅读取并记录 `Height` 的 current/max/min/increment 用于诊断（不注入组帧器）；组帧器以 expectedRows=0 自适应启动，首个完整回调确定行数；无活动分片时整幅 chunk 直接发布并动态提升期望行数；仅活动分片期间的高度异常（超当前期望且非完整帧）才拒绝。
+- 启动日志记录 `Height` current/max/min/inc、`ImageMode` 与诊断扫描高度，不硬编码 3000；GUI 看门狗区分完全没有回调和已收到回调但未形成完整扫描。
 
 ## 1. 职责
 
 - 封装海康 3D 激光轮廓传感器 SDK（`Mv3dLpApi.h` / `Mv3dLpDefine.h` / `Mv3dLpImgProc.h`，链接 `Mv3dLp.lib`）；
 - 按开发指南 V1.3.2 **回调取图流程**取流：`Initialize → 枚举 → OpenDeviceBySN/IP → （可选参数）→ （可选异常回调）→ RegisterImageDataCallBack → StartMeasure → StopMeasure → CloseDevice → Finalize`；
-- **DP2240 默认 Range_Image=7**：启动和重连均必须 SetParam 成功且 GetParam 回读为 `7`，再读取设备 `Height` 作为完整扫描轮廓行数；C16 仅在原始 SDK 回调内调用 `MV3D_LP_MapDepthToPointCloud`，成功后深拷贝 ABC32f；
-- **完整扫描门禁**：回调完整帧直接发布；分片帧以首个 `nFrameNum` 锚定，并按连续轮廓序号组装至设备 `Height`。该字段是设备运行序号，不要求应用启动后从 0 开始。宽度变化、跳行、重复、倒序、越界或内存超过 256 MiB 时丢弃当前扫描，不发布残缺线轮廓；
+- **DP2240 默认 Range_Image=7**：启动和重连均必须 SetParam 成功且 GetParam 回读为 `7`；`Height` 仅作诊断读取（其值如 1060 不代表完整扫描行数），组帧器以自适应模式确定行数；C16 仅在原始 SDK 回调内调用 `MV3D_LP_MapDepthToPointCloud`，成功后深拷贝 ABC32f；
+- **完整扫描门禁**：回调完整帧直接发布（无活动分片时即使高度超过初始期望也按实际高度放行并提升期望）；分片帧以首个 `nFrameNum` 锚定并按连续轮廓序号组装至自适应目标行数。该字段是设备运行序号，不要求应用启动后从 0 开始。活动分片期间的宽度变化、跳行、重复、倒序、越界、超高或内存超过 256 MiB 时丢弃当前扫描，不发布残缺线轮廓；
 - **PointCloud_Image=4 仅用于显式诊断**：Profile 回调仍可在原始 SDK 回调内调用 `MV3D_LP_ImageConvert` 后交给同一组帧器。若实机确认跨批 Y 坐标不连续，保持明确诊断，不按帧号伪造毫米坐标；所有 SDK 转换均验证 ABC32f 类型、尺寸和长度，手写 scale/offset 只供 Mock/离线测试；
 - **事件驱动取帧**：帧槽通过加锁 `setFramePublishedCallback`/`clearFramePublishedCallback` 通知；转换在单个 QtConcurrent watcher 中单飞执行，GUI 零阻塞；
 - **异常事件与自动重连**：断线发布 `FrameKind::Exception` 事件，UI 触发自动重连（StopMeasure → CloseDevice → 重试 Open → 重新注册 → StartMeasure）；
@@ -59,11 +59,12 @@ target：`pcv_m05_camerainput`（STATIC，依赖 `pcv_core` + `Qt::Core`；真�
 ## 5. 测试
 
 - `tests/unit/camera/frame_converter_tests.cpp`：ABC32f→Point3D、C16 深度→Point3D（scale/offset）、ABC16 轮廓→Point3D、非有限值过滤、skipZero、bValid=false 拒绝、跨类型拒绝、长度校验；
-- `tests/unit/camera/frame_source_tests.cpp`：mock 启停、最新帧槽 latest-frame-wins、take 清槽、加锁 callback setter/clear 通知、异常事件（FrameKind/描述）、convertFrame 深度帧分派，以及完整帧/连续分片/末批/跳行/重复/宽度变化/重置/内存上限的组帧门禁；
+- `tests/unit/camera/frame_source_tests.cpp`：mock 启停、最新帧槽 latest-frame-wins、take 清槽、加锁 callback setter/clear 通知、异常事件（FrameKind/描述）、convertFrame 深度帧分派，以及完整帧/连续分片/末批/跳行/重复/宽度变化/重置/内存上限/整幅高于初始期望放行/自适应首帧的组帧门禁；
 - `tests/unit/pointcloudview/live_pipeline_tests.cpp`：JSON pipeline 全链（mock→voxel→publish）、未知节点拒绝、按需节点过滤。
 
 验证：实验开关 ON 的 Debug 构建、`Mv3dLp.dll` 部署和全量 CTest `17/17` 通过；实验开关 OFF 的核心 CTest `13/13` 通过。
-未验证项：真实相机连接、坐标系方向（`SDKCoordinateType`）、软触发、重连、关闭时序和性能；`live_pipeline` 尚未接入生产相机链。
+已验证（实机 DP2240，2026-09-03）：Range_Image=7 完整扫描组帧（3000/3000 行，2100x3000=630 万点）、Height 诊断适配、连续取流出帧。
+未验证项：坐标系方向（`SDKCoordinateType`）、软触发、重连、关闭时序、性能目标与画布完整点数渲染（当前预览 pipeline 默认 maxPoints=300000 截断到 30 万点显示）；`live_pipeline` 尚未接入生产相机链。
 
 ## 6. 变更记录
 
@@ -112,6 +113,18 @@ target：`pcv_m05_camerainput`（STATIC，依赖 `pcv_core` + `Qt::Core`；真�
 - 修复：转换器新增 C16/ABC16 路径；`FrameSource::convertFrame` 真机走 SDK 权威转换（MapDepthToPointCloud/ImageConvert）回退手写公式；ImageMode 自适应不强制；对话框加取流模式选项与帧类型诊断日志（startup.log）；
 - 验证：frame_converter_tests 增补 C16/ABC16 用例，全量 17/17 PASS，应用构建通过；
 - 风险：实机 DP2240 复测待执行；深度/轮廓手写公式为近似（SDK 转换优先）。
+
+### 2026-09（DP2240 实机 scan-height 无效帧修复）
+
+- 现象：DP2240（ImageMode=7 Range_Image）StartMeasure 成功后回调被装配器丢弃，UI 显示 帧：无效；
+- 日志：configured scan Height=1060（GetParam(Height) nMax=1060），回调经 MapDepthToPointCloud 输出完整 2100x3000 扫描（3000 行），装配器报 scan chunk height 3000 exceeds configured Height 1060；
+- 根因：DP 系列 HFR 的 Height 参数（1060）是传输窗口高，非完整扫描行数（3000，来自 SDK 内部 max_scan_rows）；深度图模式回调本就是整幅扫描，无需行拼接；
+- 修复：
+  - scan_frame_assembler.h：无活动分片时整幅 chunk（高度大于 configured）按实际高度直接发布并动态提升 expectedRows；仅活动分片期间的高度异常才拒绝；
+  - mv3d_lp_camera.cpp：configureExpectedScanHeight 改为仅诊断（Height 不注入装配器），装配器以 expectedRows=0 自适应，首帧确定行数；
+- 验证：frame_source_tests 更新整幅放行/活动分片拒绝/自适应用例，全量 17/17 PASS；应用构建通过；
+- 实机确认（startup.log 2026-09-03 11:40）：complete scan rows=3000/3000 fragments=1 discarded=0 size=2100x3000，不再出现 valid=false 空帧；完整扫描 2100x3000=630 万点进入后台转换；
+- 已知限制（预览显示预算）：实时 pipeline 的 filter.voxel 默认 maxPoints=300000，超限确定性截断到 30 万点显示；如需画布复现完整 630 万点，需提高/移除该上限并评估 OpenGL VBO 与渲染性能。
 
 ### 2026-09（对齐 3DMVS 取流方式）
 

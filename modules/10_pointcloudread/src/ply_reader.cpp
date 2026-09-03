@@ -300,6 +300,60 @@ double readBinaryScalar(const char *&cursor, const char *end,
 
 namespace pcv::detail::io {
 
+PlyHeaderInfo inspectPlyHeader(const QString &fileName)
+{
+    PlyHeaderInfo result;
+    QFile file(fileName);
+    if (!file.open(QIODevice::ReadOnly)) {
+        result.error = file.errorString();
+        return result;
+    }
+    if (file.readLine().trimmed() != "ply") {
+        result.error = QStringLiteral("不是 PLY 文件");
+        return result;
+    }
+    bool formatSeen = false;
+    bool headerEnded = false;
+    bool vertexSeen = false;
+    while (!file.atEnd()) {
+        const QByteArray raw = file.readLine();
+        const QStringList fields = QString::fromLatin1(raw).trimmed().split(
+            QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+        if (fields.isEmpty()) continue;
+        if (fields[0] == QStringLiteral("format")) {
+            if (formatSeen || fields.size() < 3) {
+                result.error = QStringLiteral("PLY 文件 format 行无效或重复");
+                return result;
+            }
+            formatSeen = true;
+            result.version = fields[2];
+            if (fields[1] == QStringLiteral("ascii")) result.format = PlyFormat::Ascii;
+            else if (fields[1] == QStringLiteral("binary_little_endian"))
+                result.format = PlyFormat::BinaryLittleEndian;
+            else if (fields[1] == QStringLiteral("binary_big_endian"))
+                result.format = PlyFormat::BinaryBigEndian;
+            else {
+                result.error = QStringLiteral("不支持的 PLY 格式：%1").arg(fields[1]);
+                return result;
+            }
+        } else if (fields[0] == QStringLiteral("element") && fields.size() >= 3
+                   && fields[1] == QStringLiteral("vertex")) {
+            bool ok = false;
+            result.declaredPointCount = fields[2].toLongLong(&ok);
+            vertexSeen = ok && result.declaredPointCount > 0;
+        } else if (fields[0] == QStringLiteral("end_header")) {
+            headerEnded = true;
+            result.headerBytes = file.pos();
+            break;
+        }
+    }
+    if (!formatSeen) result.error = QStringLiteral("PLY 文件缺少 format 行");
+    else if (!headerEnded) result.error = QStringLiteral("PLY 文件头不完整，缺少 end_header");
+    else if (!vertexSeen) result.error = QStringLiteral("PLY 文件缺少有效的 vertex 定义");
+    else result.ok = true;
+    return result;
+}
+
 PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options) {
     PlyReadResult result;
     QElapsedTimer totalTimer;

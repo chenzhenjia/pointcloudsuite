@@ -94,14 +94,25 @@ public:
             return reject(QStringLiteral("normalized scan chunk is not a valid ABC32f raster"));
         }
 
+        // A single callback may already carry the complete scan (DP-series
+        // depth frames are emitted whole). When no fragment is being
+        // accumulated, treat any self-contained chunk as complete and adopt
+        // its height when it exceeds the configured expectation (the Height
+        // parameter is not a hard upper bound on DP HFR devices).
         if (m_expectedRows == 0 || chunk->height == m_expectedRows) {
             if (m_active) discardActiveScan();
+            if (chunk->height > m_expectedRows) m_expectedRows = chunk->height;
             return completeDirect(chunk);
         }
         if (chunk->height > m_expectedRows) {
-            discardActiveScan();
-            return reject(QStringLiteral("scan chunk height %1 exceeds configured Height %2")
-                              .arg(chunk->height).arg(m_expectedRows));
+            if (m_active) {
+                discardActiveScan();
+                return reject(QStringLiteral("scan chunk height %1 exceeds configured Height %2")
+                                  .arg(chunk->height).arg(m_expectedRows));
+            }
+            // No fragment in flight: adopt the observed height and publish.
+            m_expectedRows = chunk->height;
+            return completeDirect(chunk);
         }
 
         if (!m_active) {

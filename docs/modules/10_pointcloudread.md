@@ -1,8 +1,10 @@
 # 10_pointcloudread：点云读写
 
+公共接口 `pcv::detail::io::inspectPlyHeader()` 仅读取 PLY header 至 `end_header`，返回格式、版本、vertex 数量和 header 错误，不解析点数据；供 CLI `registration_diagnostic inspect` 使用。
+
 状态：已实现。规范实现位于 `modules/10_pointcloudread/{include,src}`，模块 target 为 `pcv_m10_pointcloudread`；`pcv_io` 为迁移期兼容 target。
 
-职责：PLY ASCII/binary LE/BE 读取与写入、属性校验、缓存、取消、进度、点序和 bounds 保持。不得依赖应用或 Qt Widgets。
+职责：兼容读取 PLY ASCII/binary LE/BE，并在成功读取后强制生成 `binary_little_endian` canonical PLY；缓存、诊断和后续落盘 PLY 统一为 Binary LE。canonical 写入或回读校验失败时主流程失败。不得依赖应用或 Qt Widgets。
 
 接口/测试：`pcv::detail::io::readPly`、`readPlyCached`；`ply_reader_tests`、`cloud_cache_tests`。
 

@@ -28,6 +28,14 @@ int main(int argc, char **argv) {
     QTemporaryDir directory;
     if (!directory.isValid()) return fail("temporary directory creation failed");
 
+    const QString inspectPath = directory.filePath(QStringLiteral("inspect.ply"));
+    if (!writeFile(inspectPath, "ply\nformat binary_big_endian 1.0\nelement vertex 3\nend_header\n"))
+        return fail("inspect fixture write failed");
+    const auto inspect = pcv::detail::io::inspectPlyHeader(inspectPath);
+    if (!inspect.ok || inspect.format != pcv::detail::io::PlyFormat::BinaryBigEndian
+        || inspect.version != QStringLiteral("1.0") || inspect.declaredPointCount != 3)
+        return fail("PLY header inspect failed");
+
     const QString asciiPath = directory.filePath(QStringLiteral("ascii.ply"));
     const QByteArray ascii =
         "ply\nformat ascii 1.0\nelement vertex 2\n"

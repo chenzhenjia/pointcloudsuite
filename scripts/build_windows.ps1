@@ -20,10 +20,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-function Assert-Ascii([string]$Value, [string]$Name) {
-    if ($Value -match '[^\x00-\x7F]') { throw "$Name contains non-ASCII characters: $Value" }
-}
-
 function Get-ExecutablePath([string]$Name) {
     $command = Get-Command -Name $Name -CommandType Application -ErrorAction SilentlyContinue
     if ($command -and $command.Source -and (Test-Path -LiteralPath $command.Source -PathType Leaf)) {
@@ -97,9 +93,6 @@ $SourceDir = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if ([string]::IsNullOrWhiteSpace($BuildDir)) {
     $BuildDir = Join-Path (Split-Path $SourceDir -Parent) ("build-PointCloudSuite-{0}" -f $Config)
 }
-Assert-Ascii $SourceDir 'Source path'
-Assert-Ascii $BuildDir 'Build path'
-
 if (-not (Get-ExecutablePath 'cl.exe')) {
     Import-VcVarsEnvironment (Get-VcVars64Path)
 }
@@ -121,7 +114,6 @@ if ($Generator -eq 'Ninja') {
 }
 
 $QtDir = Get-QtDirectory $QtDir
-Assert-Ascii $QtDir 'Qt path'
 if ([string]::IsNullOrWhiteSpace($CMakePath)) { $CMakePath = Get-ExecutablePath 'cmake.exe' }
 if (-not $CMakePath) { throw 'cmake.exe was not found on PATH. Install CMake or start the script from the Qt Creator/Developer environment.' }
 

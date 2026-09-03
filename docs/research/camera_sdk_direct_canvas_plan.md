@@ -67,7 +67,15 @@ GUI 线程：LatestFrameSlot 发布通知（QueuedConnection）→ take() → Qt
 - 130 万点/帧性能目标 15–30 FPS + 丢帧策略实测；
 - 无相机环境测试仅覆盖 mock 路径。
 
-## 6. 对齐 3DMVS 取流方式（2026-09）
+## 6. DP2240 实机 scan-height 无效帧修复（2026-09）
+
+- 证据：startup.log configured Height=1060 vs 回调完整 3000 行深度帧；装配器丢弃导致 valid=false；
+- 根因：Height 参数非 DP HFR 完整扫描行数（真实行数 3000 来自 SDK max_scan_rows）；深度图模式回调本就是整幅扫描；
+- 修复：装配器无活动分片时整幅 chunk 按实际高度放行并动态提升 expectedRows；活动分片期间的高度异常仍拒绝；Height 参数改为仅诊断（configureAssembly(0) 首帧自适应）；
+- 验证：frame_source_tests 更新整幅放行/活动分片拒绝/自适应用例，全量 17/17 PASS；实机确认 complete scan rows=3000/3000 fragments=1 discarded=0 size=2100x3000（630 万点进入后台转换），无 valid=false 空帧；
+- 已知限制：实时预览 pipeline 默认 filter.voxel maxPoints=300000，完整点数在画布被截断到 30 万点显示，画布完整点数渲染待评估（VBO/性能）。
+
+## 7. 对齐 3DMVS 取流方式（2026-09）
 
 - 3DMVS V3.1.4 实测（Mv3dLpLog）：真实相机 DP2240 取流 ImageMode=7（Range_Image 深度图）；虚拟相机（Vir6663020）走同一流程；连接阶段 SDK 内部设置取流缓存节点 100、重发包（SetResend 1/10/50）；
 - 用户手册：缓存设置（取流/存图缓存节点防丢帧）、重发包设置、触发模式（自由采集/软触发/行触发）；

@@ -6,9 +6,9 @@
 #include <pcv/filtering/downsample.h>
 #include <pcv/filtering/statistical_filter.h>
 #include <pcv/io/ply_reader.h>
+#include <pcv/io/ply_writer.h>
 #include <pcv/infrastructure/runtime_paths.h>
 
-#include <array>
 #include <limits>
 #include <queue>
 #include <unordered_map>
@@ -18,17 +18,12 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
-#include <QSaveFile>
-#include <QTextStream>
-#include <QRegularExpression>
 #include <QCoreApplication>
 #include <algorithm>
 #include <numeric>
 #include <cmath>
-#include <cstdlib>
 #include <QFileInfo>
 #include <QDataStream>
-#include <QtEndian>
 #include <QLocale>
 #include <QVector2D>
 #include <QVector3D>
@@ -37,342 +32,15 @@
 #include <random>
 #include <thread>
 #include <future>
-#include <cstring>
 
 namespace pointcloud {
-namespace {
-
-struct Property { QByteArray type; QByteArray name; };
-
-int scalarBytes(const QByteArray &type) {
-    if (type == "char" || type == "int8" || type == "uchar" || type == "uint8") return 1;
-    if (type == "short" || type == "int16" || type == "ushort" || type == "uint16") return 2;
-    if (type == "int" || type == "int32" || type == "uint" || type == "uint32" || type == "float" || type == "float32") return 4;
-    if (type == "double" || type == "float64") return 8;
-    return 0;
-}
-
-bool parseAsciiPoint(const QByteArray &line, const int indices[6], Point3D &point) {
-    const int last = std::max({indices[0], indices[1], indices[2],
-                               indices[3], indices[4], indices[5]});
-    const char *cursor = line.constData();
-    const char *end = cursor + line.size();
-    float values[6] = {};
-    for (int column = 0; column <= last; ++column) {
-        while (cursor < end && (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n')) ++cursor;
-        if (cursor >= end) return false;
-        char *next = nullptr;
-        const float value = std::strtof(cursor, &next);
-        if (next == cursor) return false;
-        for (int component = 0; component < 6; ++component)
-            if (column == indices[component]) values[component] = value;
-        cursor = next;
-    }
-    point = {values[0], values[1], values[2], values[3], values[4], values[5]};
-    return true;
-}
-
 bool usablePoint(const Point3D &point) {
     return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z)
         && (std::abs(point.x) + std::abs(point.y) + std::abs(point.z) > 1.0e-8f);
 }
 
-double readScalar(QDataStream &stream, const QByteArray &type) {
-    if (type == "float" || type == "float32") {
-        stream.setFloatingPointPrecision(QDataStream::SinglePrecision);
-        float value = 0;
-        stream >> value;
-        return value;
-    }
-    if (type == "double" || type == "float64") {
-        stream.setFloatingPointPrecision(QDataStream::DoublePrecision);
-        double value = 0;
-        stream >> value;
-        return value;
-    }
-    if (type == "uchar" || type == "uint8") { quint8 value = 0; stream >> value; return value; }
-    if (type == "char" || type == "int8") { qint8 value = 0; stream >> value; return value; }
-    if (type == "ushort" || type == "uint16") { quint16 value = 0; stream >> value; return value; }
-    if (type == "short" || type == "int16") { qint16 value = 0; stream >> value; return value; }
-    if (type == "uint" || type == "uint32") { quint32 value = 0; stream >> value; return value; }
-    qint32 value = 0; stream >> value; return value;
-}
-
-double readBinaryScalar(const char *&cursor, const char *end,
-                        const QByteArray &type, bool bigEndian, bool *ok) {
-    const int bytes = scalarBytes(type);
-    if (bytes <= 0 || cursor + bytes > end) { if (ok) *ok = false; return 0.0; }
-    const uchar *data = reinterpret_cast<const uchar *>(cursor);
-    cursor += bytes;
-    if (type == "float" || type == "float32") {
-        const quint32 raw = bigEndian ? qFromBigEndian<quint32>(data) : qFromLittleEndian<quint32>(data);
-        float value; std::memcpy(&value, &raw, sizeof(value)); return value;
-    }
-    if (type == "double" || type == "float64") {
-        const quint64 raw = bigEndian ? qFromBigEndian<quint64>(data) : qFromLittleEndian<quint64>(data);
-        double value; std::memcpy(&value, &raw, sizeof(value)); return value;
-    }
-    if (type == "uchar" || type == "uint8") return data[0];
-    if (type == "char" || type == "int8") return qint8(data[0]);
-    if (type == "ushort" || type == "uint16") {
-        return bigEndian ? qFromBigEndian<quint16>(data) : qFromLittleEndian<quint16>(data);
-    }
-    if (type == "short" || type == "int16") {
-        const quint16 raw = bigEndian ? qFromBigEndian<quint16>(data) : qFromLittleEndian<quint16>(data);
-        return qint16(raw);
-    }
-    const quint32 raw = bigEndian ? qFromBigEndian<quint32>(data) : qFromLittleEndian<quint32>(data);
-    return type == "uint" || type == "uint32" ? raw : qint32(raw);
-}
-
-} // namespace
-
-bool loadPlyLegacy(const QString &fileName, QVector<Point3D> &points, QString *error,
-                   const LoadProgressCallback &progress) {
-    // 先解析 PLY 头部，记录顶点数量、存储格式以及 xyz/法向量所在列。
-    // 这样无论属性顺序如何变化，都能按名称读取，而不是依赖固定列号。
-    QFile file(fileName);
-    if (!file.open(QIODevice::ReadOnly)) {
-        if (error) *error = file.errorString();
-        return false;
-    }
-
-    QByteArray line;
-    QString format = QStringLiteral("ascii");
-    int vertexCount = 0;
-    bool inVertex = false;
-    bool headerEnded = false;
-    bool unsupportedVertexList = false;
-    QVector<Property> properties;
-    while (!(line = file.readLine()).isEmpty()) {
-        const QByteArray text = line.trimmed();
-        if (text == "end_header") {
-            headerEnded = true;
-            break;
-        }
-        const QStringList fields = QString::fromLatin1(text).split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
-        if (fields.isEmpty()) continue;
-        if (fields[0] == "format" && fields.size() > 1) format = fields[1];
-        else if (fields[0] == "element") {
-            inVertex = fields.size() > 1 && fields[1] == "vertex";
-            if (inVertex && fields.size() > 2) vertexCount = fields[2].toInt();
-        } else if (inVertex && fields[0] == "property" && fields.size() >= 3) {
-            if (fields[1] == "list") {
-                unsupportedVertexList = true;
-            } else {
-                Property property;
-                property.type = fields[1].toLatin1();
-                property.name = fields[2].toLatin1();
-                properties.push_back(property);
-            }
-        }
-    }
-
-    if (!headerEnded) {
-        if (error) *error = QStringLiteral("PLY 文件头不完整，缺少 end_header");
-        return false;
-    }
-    if (format != QStringLiteral("ascii")
-        && format != QStringLiteral("binary_little_endian")
-        && format != QStringLiteral("binary_big_endian")) {
-        if (error) *error = QStringLiteral("不支持的 PLY 格式：%1").arg(format);
-        return false;
-    }
-    if (unsupportedVertexList) {
-        if (error) *error = QStringLiteral("暂不支持 vertex 元素中的 list 属性");
-        return false;
-    }
-    for (const Property &property : properties) {
-        if (scalarBytes(property.type) == 0) {
-            if (error) *error = QStringLiteral("不支持的 PLY 属性类型：%1")
-                                    .arg(QString::fromLatin1(property.type));
-            return false;
-        }
-    }
-
-    int indices[6] = {-1, -1, -1, -1, -1, -1};
-    for (int i = 0; i < properties.size(); ++i) {
-        if (properties[i].name == "x") indices[0] = i;
-        if (properties[i].name == "y") indices[1] = i;
-        if (properties[i].name == "z") indices[2] = i;
-        if (properties[i].name == "nx") indices[3] = i;
-        if (properties[i].name == "ny") indices[4] = i;
-        if (properties[i].name == "nz") indices[5] = i;
-    }
-    if (vertexCount <= 0 || indices[0] < 0 || indices[1] < 0 || indices[2] < 0) {
-        if (error) *error = QStringLiteral("PLY 文件缺少有效的 vertex/x/y/z 定义");
-        return false;
-    }
-
-    // 头部校验通过后再分配输出，避免解析失败时覆盖调用方已有数据。
-    points.clear();
-    points.reserve(vertexCount);
-    const bool ascii = format == "ascii";
-    if (ascii) {
-        std::array<char, 64 * 1024> lineBuffer{};
-        for (int i = 0; i < vertexCount; ++i) {
-            const qint64 lineLength = file.readLine(lineBuffer.data(), lineBuffer.size());
-            if (lineLength <= 0) break;
-            if (lineLength == lineBuffer.size() - 1
-                && !file.atEnd()
-                && lineBuffer[lineLength - 1] != '\n') {
-                if (error) *error = QStringLiteral("第 %1 个顶点行超过 64 KiB").arg(i + 1);
-                return false;
-            }
-            const QByteArray vertexLine = QByteArray::fromRawData(lineBuffer.data(), int(lineLength));
-            Point3D point;
-            if (parseAsciiPoint(vertexLine, indices, point)) points.push_back(point);
-            if (progress && ((i % 10000) == 0 || i + 1 == vertexCount))
-                progress(i + 1, vertexCount);
-        }
-    } else {
-        const bool bigEndian = format.contains("big_endian");
-        const qsizetype bytesPerVertex = std::accumulate(properties.cbegin(), properties.cend(), qsizetype(0),
-            [](qsizetype total, const Property &property) { return total + scalarBytes(property.type); });
-        if (bytesPerVertex <= 0 || vertexCount > std::numeric_limits<qsizetype>::max() / bytesPerVertex) {
-            if (error) *error = QStringLiteral("PLY 二进制顶点数据大小溢出");
-            return false;
-        }
-        const qsizetype payloadBytes = bytesPerVertex * qsizetype(vertexCount);
-        QByteArray payload = file.read(payloadBytes);
-        const char *cursor = payload.constData();
-        const char *end = cursor + payload.size();
-        bool binaryOk = payload.size() == payloadBytes;
-        for (int i = 0; i < vertexCount && binaryOk; ++i) {
-            Point3D point;
-            for (int column = 0; column < properties.size(); ++column) {
-                const double value = readBinaryScalar(cursor, end, properties[column].type, bigEndian, &binaryOk);
-                if (column == indices[0]) point.x = float(value);
-                if (column == indices[1]) point.y = float(value);
-                if (column == indices[2]) point.z = float(value);
-                if (column == indices[3]) point.nx = float(value);
-                if (column == indices[4]) point.ny = float(value);
-                if (column == indices[5]) point.nz = float(value);
-            }
-            points.push_back(point);
-            if (progress && ((i % 10000) == 0 || i + 1 == vertexCount))
-                progress(i + 1, vertexCount);
-        }
-    }
-    if (points.size() != vertexCount) {
-        const qsizetype loadedCount = points.size();
-        points.clear();
-        if (error) *error = QStringLiteral("PLY 顶点数据不完整：声明 %1 点，实际读取 %2 点")
-                                .arg(vertexCount).arg(loadedCount);
-        return false;
-    }
-    return true;
-}
-
-bool loadPly(const QString &fileName, QVector<Point3D> &points, QString *error,
-             const LoadProgressCallback &progress) {
-    pcv::detail::io::PlyReadOptions options;
-    options.progress = progress;
-    pcv::detail::io::PlyReadResult result = pcv::detail::io::readPly(fileName, options);
-    if (!result.ok) {
-        if (error) *error = result.error;
-        return false;
-    }
-    points.swap(result.points);
-    return true;
-}
-
 QVector<Point3D> proportionalDownsample(const QVector<Point3D> &points, int denominator) {
     return pcv::detail::filtering::proportionalDownsample(points, denominator);
-}
-
-namespace {
-constexpr quint32 CacheMagic = 0x31564350; // PCV1
-constexpr quint32 CacheVersion = 1;
-
-QString intermediateDirectory() {
-    return pcv::runtime::cacheDirectory();
-}
-
-QString sourceCacheKey(const QString &fileName) {
-    const QByteArray absolutePath = QFileInfo(fileName).absoluteFilePath().toUtf8();
-    return QString::fromLatin1(QCryptographicHash::hash(absolutePath, QCryptographicHash::Sha256).toHex().left(16));
-}
-
-QString cachePathFor(const QString &fileName) {
-    QString baseName = QFileInfo(fileName).completeBaseName();
-    baseName.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_.-]")), QStringLiteral("_"));
-    return QDir(intermediateDirectory()).filePath(
-        QStringLiteral("ply_%1_%2.pcvbin").arg(baseName, sourceCacheKey(fileName)));
-}
-
-bool readCache(const QString &source, QVector<Point3D> &points) {
-    QFileInfo sourceInfo(source);
-    QFile cache(cachePathFor(source));
-    if (!cache.open(QIODevice::ReadOnly)) return false;
-    const QFileInfo cacheInfo(cachePathFor(source));
-    if (cache.size() < 32 || cacheInfo.lastModified() < sourceInfo.lastModified()) return false;
-    QDataStream stream(&cache);
-    stream.setByteOrder(QDataStream::LittleEndian);
-    stream.setFloatingPointPrecision(QDataStream::SinglePrecision);
-    quint32 magic = 0, version = 0;
-    quint64 count = 0, sourceSize = 0;
-    qint64 sourceStamp = 0;
-    stream >> magic >> version >> count >> sourceSize >> sourceStamp;
-    if (stream.status() != QDataStream::Ok || magic != CacheMagic || version != CacheVersion
-        || sourceSize != quint64(sourceInfo.size()) || sourceStamp != sourceInfo.lastModified().toMSecsSinceEpoch()
-        || count > quint64(std::numeric_limits<qsizetype>::max())) return false;
-    points.resize(qsizetype(count));
-    if (count > quint64(std::numeric_limits<qint64>::max() / qint64(sizeof(Point3D)))) return false;
-    const qint64 payloadBytes = qint64(count) * qint64(sizeof(Point3D));
-    if (cache.read(reinterpret_cast<char *>(points.data()), payloadBytes) != payloadBytes) {
-        points.clear();
-        return false;
-    }
-    return true;
-}
-
-bool writeCache(const QString &source, const QVector<Point3D> &points) {
-    const QFileInfo sourceInfo(source);
-    QFile cache(cachePathFor(source));
-    if (!cache.open(QIODevice::WriteOnly)) {
-        qWarning() << "Cannot create point cloud cache:" << cache.errorString();
-        return false;
-    }
-    QDataStream stream(&cache);
-    stream.setByteOrder(QDataStream::LittleEndian);
-    stream.setFloatingPointPrecision(QDataStream::SinglePrecision);
-    stream << CacheMagic << CacheVersion << quint64(points.size())
-           << quint64(sourceInfo.size()) << sourceInfo.lastModified().toMSecsSinceEpoch();
-    if (points.size() > qsizetype(std::numeric_limits<qint64>::max() / qint64(sizeof(Point3D)))) return false;
-    const qint64 payloadBytes = qint64(points.size()) * qint64(sizeof(Point3D));
-    if (cache.write(reinterpret_cast<const char *>(points.constData()), payloadBytes) != payloadBytes) {
-        qWarning() << "Cannot write point cloud cache payload:" << cache.errorString();
-        return false;
-    }
-    if (stream.status() != QDataStream::Ok) {
-        qWarning() << "Cannot write point cloud cache:" << stream.status();
-        return false;
-    }
-    if (!cache.flush()) {
-        qWarning() << "Cannot flush point cloud cache:" << cache.errorString();
-        return false;
-    }
-    cache.close();
-    return true;
-}
-}
-
-bool loadPlyCachedLegacy(const QString &fileName, QVector<Point3D> &points,
-                         QString *error, bool *usedCache) {
-    // 缓存文件带有源文件大小和修改时间校验；源文件变化时自动回退到完整解析。
-    if (usedCache) *usedCache = false;
-    QVector<Point3D> cached;
-    if (readCache(fileName, cached)) {
-        points.swap(cached);
-        if (usedCache) *usedCache = true;
-        return true;
-    }
-    QVector<Point3D> parsed;
-    if (!loadPly(fileName, parsed, error)) return false;
-    writeCache(fileName, parsed);
-    points.swap(parsed);
-    return true;
 }
 
 bool loadPlyCached(const QString &fileName, QVector<Point3D> &points,
@@ -396,6 +64,12 @@ LoadResult loadPlyCachedResult(const QString &fileName) {
     result.usedCache = cached.usedCache;
     result.points = cached.points;
     result.warnings = cached.warnings;
+    result.sourcePlyEncoding = cached.sourceFormat == pcv::detail::io::PlyFormat::Ascii
+        ? QStringLiteral("ascii")
+        : cached.sourceFormat == pcv::detail::io::PlyFormat::BinaryLittleEndian
+            ? QStringLiteral("binary_little_endian") : QStringLiteral("binary_big_endian");
+    result.canonicalPlyPath = cached.canonicalPlyPath;
+    result.canonicalReady = cached.canonicalReady;
     return result;
 }
 
@@ -492,6 +166,9 @@ VoxelRepresentatives voxelRepresentatives(const QVector<Point3D> &points, float 
 
 constexpr quint32 MergeCacheMagic = 0x314D4350; // PCM1
 constexpr quint32 MergeCacheVersion = 8;
+QString intermediateDirectory() {
+    return pcv::runtime::cacheDirectory();
+}
 QString progressSourceName(WorldCloudInput::ScanProgressSource source);
 QString mergeCachePath(const QVector<WorldCloudInput> &inputs) {
     if (inputs.isEmpty()) return {};
@@ -1265,6 +942,12 @@ LoadResult loadPlyResult(const QString &fileName) {
     result.totalElapsedMs = parsed.totalElapsedMs;
     result.usedCache = parsed.usedCache;
     result.warnings = parsed.warnings;
+    result.sourcePlyEncoding = parsed.sourceFormat == pcv::detail::io::PlyFormat::Ascii
+        ? QStringLiteral("ascii")
+        : parsed.sourceFormat == pcv::detail::io::PlyFormat::BinaryLittleEndian
+            ? QStringLiteral("binary_little_endian") : QStringLiteral("binary_big_endian");
+    result.canonicalPlyPath = parsed.canonicalPlyPath;
+    result.canonicalReady = parsed.canonicalReady;
     if (result.ok && !result.hasBounds) {
         for (const Point3D &point : result.points) {
             if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) continue;
@@ -1296,6 +979,12 @@ LoadResult loadPlyResultWithProgress(const QString &fileName,
     result.totalElapsedMs = parsed.totalElapsedMs;
     result.usedCache = parsed.usedCache;
     result.warnings = parsed.warnings;
+    result.sourcePlyEncoding = parsed.sourceFormat == pcv::detail::io::PlyFormat::Ascii
+        ? QStringLiteral("ascii")
+        : parsed.sourceFormat == pcv::detail::io::PlyFormat::BinaryLittleEndian
+            ? QStringLiteral("binary_little_endian") : QStringLiteral("binary_big_endian");
+    result.canonicalPlyPath = parsed.canonicalPlyPath;
+    result.canonicalReady = parsed.canonicalReady;
     if (result.ok && !result.hasBounds) {
         for (const Point3D &point : result.points) {
             if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) continue;
@@ -3448,44 +3137,25 @@ PlanePlyExportResult exportPlanePly(const QString &fileName,
         result.error = QStringLiteral("平面索引中没有有效点");
         return result;
     }
-    QSaveFile file(fileName);
-    if (!file.open(QIODevice::WriteOnly)) {
-        result.error = file.errorString();
-        return result;
-    }
-    const QVector3D n(model.a, model.b, model.c);
     const QString source = sourceFile.isEmpty() ? QStringLiteral("unknown") : sourceFile;
-    QTextStream header(&file);
-    header.setEncoding(QStringConverter::Utf8);
-    header << "ply\nformat binary_little_endian 1.0\n"
-           << "comment source_frame robot_base\n"
-           << "comment target_frame robot_base\n"
-           << "comment source_file " << source << "\n"
-           << "comment plane_equation " << model.a << " " << model.b << " "
-           << model.c << " " << model.d << "\n"
-           << "comment workpiece_origin_robot_base "
-           << frame.originInRobotBase.x() << " " << frame.originInRobotBase.y() << " "
-           << frame.originInRobotBase.z() << "\n"
-           << "comment workpiece_pose_abc " << frame.poseA << " " << frame.poseB << " "
-           << frame.poseC << "\n"
-           << "element vertex " << valid.size() << "\n"
-           << "property float x\nproperty float y\nproperty float z\n"
-           << "end_header\n";
-    header.flush();
-    if (header.status() != QTextStream::Ok) {
-        result.error = QStringLiteral("写入 PLY 头失败");
-        return result;
-    }
-    QDataStream data(&file);
-    data.setByteOrder(QDataStream::LittleEndian);
-    data.setFloatingPointPrecision(QDataStream::SinglePrecision);
-    for (const int index : valid) {
-        const Point3D &p = points[index];
-        data << p.x << p.y << p.z;
-    }
-    if (data.status() != QDataStream::Ok || !file.commit()) {
-        result.error = file.errorString().isEmpty()
-            ? QStringLiteral("写入 PLY 数据失败") : file.errorString();
+    QVector<Point3D> selected;
+    selected.reserve(valid.size());
+    for (const int index : valid) selected.push_back(points[index]);
+    pcv::detail::io::BinaryPlyWriteOptions writeOptions;
+    writeOptions.includeNormals = false;
+    writeOptions.comments = {
+        QStringLiteral("source_frame robot_base"),
+        QStringLiteral("target_frame robot_base"),
+        QStringLiteral("source_file %1").arg(source),
+        QStringLiteral("plane_equation %1 %2 %3 %4")
+            .arg(model.a).arg(model.b).arg(model.c).arg(model.d),
+        QStringLiteral("workpiece_origin_robot_base %1 %2 %3")
+            .arg(frame.originInRobotBase.x())
+            .arg(frame.originInRobotBase.y())
+            .arg(frame.originInRobotBase.z()),
+        QStringLiteral("workpiece_pose_abc %1 %2 %3")
+            .arg(frame.poseA).arg(frame.poseB).arg(frame.poseC)};
+    if (!pcv::detail::io::writeBinaryPly(fileName, selected, &result.error, writeOptions)) {
         return result;
     }
     result.exportedPointCount = valid.size();

@@ -1,6 +1,7 @@
 #include <pcv/output/plane_output.h>
 
 #include <pcv/infrastructure/runtime_paths.h>
+#include <pcv/io/ply_writer.h>
 
 #include <QDataStream>
 #include <QDateTime>
@@ -63,37 +64,15 @@ bool writePly(const QString &path, const QVector<pointcloud::Point3D> &points,
         if (error) *error = QStringLiteral("平面索引中没有有效点");
         return false;
     }
-    QSaveFile file(path);
-    if (!file.open(QIODevice::WriteOnly)) {
-        if (error) *error = file.errorString();
-        return false;
-    }
-    QTextStream header(&file);
-    header.setEncoding(QStringConverter::Utf8);
-    header << "ply\nformat binary_little_endian 1.0\n"
-           << "comment source_frame robot_base\n"
-           << "comment target_frame robot_base\n"
-           << "comment source_ply_encoding " << metadata.sourcePlyEncoding << "\n"
-           << "element vertex " << valid.size() << "\n"
-           << "property float x\nproperty float y\nproperty float z\n"
-           << "end_header\n";
-    header.flush();
-    if (header.status() != QTextStream::Ok) {
-        if (error) *error = QStringLiteral("写入 PLY Header 失败");
-        return false;
-    }
-    QDataStream data(&file);
-    data.setByteOrder(QDataStream::LittleEndian);
-    data.setFloatingPointPrecision(QDataStream::SinglePrecision);
-    for (int index : valid) {
-        const auto &point = points[index];
-        data << point.x << point.y << point.z;
-    }
-    if (data.status() != QDataStream::Ok || !file.commit()) {
-        if (error) *error = file.errorString().isEmpty()
-            ? QStringLiteral("PLY 写入失败") : file.errorString();
-        return false;
-    }
+    QVector<pointcloud::Point3D> selected;
+    selected.reserve(valid.size());
+    for (int index : valid) selected.push_back(points[index]);
+    pcv::detail::io::BinaryPlyWriteOptions writeOptions;
+    writeOptions.includeNormals = false;
+    writeOptions.comments = {QStringLiteral("source_frame robot_base"),
+                             QStringLiteral("target_frame robot_base"),
+                             QStringLiteral("source_format %1").arg(metadata.sourcePlyEncoding)};
+    if (!pcv::detail::io::writeBinaryPly(path, selected, error, writeOptions)) return false;
     if (count) *count = valid.size();
     return true;
 }

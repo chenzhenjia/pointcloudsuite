@@ -1,6 +1,7 @@
 #include <pcv/interface/stitching_interface.h>
 
 #include <pcv/io/cloud_cache.h>
+#include <pcv/io/ply_writer.h>
 
 #include <QDataStream>
 #include <QDebug>
@@ -34,34 +35,11 @@ bool finitePose(const pointcloud::RobotPose &pose)
 bool writeRobotBasePly(const QString &path, const QVector<pointcloud::Point3D> &points,
                        const std::function<bool()> &isCancelled, QString *error)
 {
-    QSaveFile file(path);
-    if (!file.open(QIODevice::WriteOnly)) {
-        if (error) *error = QStringLiteral("无法创建输出 PLY：%1").arg(path);
-        return false;
-    }
-    QTextStream header(&file);
-    header << "ply\nformat binary_little_endian 1.0\n"
-           << "comment coordinate_frame robot_base\n"
-           << "element vertex " << points.size() << "\n"
-           << "property float x\nproperty float y\nproperty float z\nend_header\n";
-    header.flush();
-    QDataStream data(&file);
-    data.setByteOrder(QDataStream::LittleEndian);
-    data.setFloatingPointPrecision(QDataStream::SinglePrecision);
-    for (qsizetype index = 0; index < points.size(); ++index) {
-        if ((index & 0x3fff) == 0 && isCancelled && isCancelled()) {
-            file.cancelWriting();
-            if (error) *error = QStringLiteral("已取消");
-            return false;
-        }
-        const pointcloud::Point3D &point = points[index];
-        data << point.x << point.y << point.z;
-    }
-    if (data.status() != QDataStream::Ok || !file.commit()) {
-        if (error) *error = QStringLiteral("无法提交输出 PLY：%1").arg(path);
-        return false;
-    }
-    return true;
+    pcv::detail::io::BinaryPlyWriteOptions options;
+    options.includeNormals = false;
+    options.comment = QStringLiteral("coordinate_frame robot_base");
+    options.isCancelled = isCancelled;
+    return pcv::detail::io::writeBinaryPly(path, points, error, options);
 }
 
 } // namespace

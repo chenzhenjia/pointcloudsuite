@@ -6,16 +6,16 @@
 - MSVC x64，支持 C++17；
 - CMake 3.19+；
 - Qt 6.5+，包含 Core、Gui、Widgets、Concurrent、OpenGL 和 OpenGLWidgets；
-- 源码和构建路径使用 ASCII。
+- 源码、构建、Qt、输入和输出路径支持 Unicode；推荐用含中文目录的构建目录执行一次验证。
 
 ## 推荐命令
 
 在 Developer PowerShell 中执行：
 
 ```powershell
-.\scripts\build_windows.ps1 -Config Debug -BuildTests -QtDir <QtDir> -BuildDir <DebugBuildDir> -CMakePath <cmake.exe>
+.\scripts\build_windows.ps1 -Config Debug -BuildTests -Generator Ninja -QtDir <QtDir> -BuildDir <DebugBuildDir> -CMakePath <cmake.exe>
 ctest --test-dir <DebugBuildDir> -C Debug --output-on-failure
-.\scripts\build_windows.ps1 -Config Release -BuildTests -QtDir <QtDir> -BuildDir <ReleaseBuildDir> -CMakePath <cmake.exe>
+.\scripts\build_windows.ps1 -Config Release -BuildTests -Generator Ninja -QtDir <QtDir> -BuildDir <ReleaseBuildDir> -CMakePath <cmake.exe>
 ctest --test-dir <ReleaseBuildDir> -C Release --output-on-failure
 ```
 
@@ -31,7 +31,7 @@ ctest --preset test-debug --output-on-failure
 
 ## 生成器与头文件依赖跟踪
 
-Windows 上使用 `NMake Makefiles`。当前 `CMake 3.30 + MSVC 19.51` 环境下，`NMake Makefiles JOM` 会生成空的 `.obj.d` 文件，即使编译成功也不能保证公共头依赖被跟踪；Qt Creator 的生成器必须从默认的 JOM 切换为 `NMake Makefiles`。
+Unicode 路径使用 `Ninja`。本机 `CMake 3.30 + MSVC 19.51` 的 `NMake Makefiles` 在 Unicode 构建目录链接 PDB 时会报 `LNK1201`；这属于生成器/工具链限制，不能通过恢复 ASCII 路径拒绝来规避。`NMake Makefiles JOM` 会生成空的 `.obj.d` 文件，即使编译成功也不能保证公共头依赖被跟踪。
 
 - 这些生成器默认让编译器产出依赖：编译时附加 `/showIncludes`，再按**配置阶段捕获的界面语言前缀**过滤编译器输出；
 - 在中文 MSVC 上该前缀被以错误编码保存，可在 `<BuildDir>/CMakeFiles/<ver>/CMakeCXXCompiler.cmake` 中看到乱码值（例如 `CMAKE_CXX_CL_SHOWINCLUDES_PREFIX "娉ㄦ剰: 鍖呭惈鏂囦欢:  "`），过滤永远不命中：所有 `*.obj.d` 为 **0 字节**，`compiler_depend.make` 中每个目标文件只依赖同名 `.cpp`；

@@ -3,6 +3,7 @@
 #include <pcv/infrastructure/runtime_paths.h>
 #include <pcv/io/cloud_cache.h>
 #include <pcv/io/ply_reader.h>
+#include <pcv/io/ply_writer.h>
 
 #include <QDataStream>
 #include <QDateTime>
@@ -214,28 +215,10 @@ bool validIndices(const QVector<int> &indices, qsizetype pointCount, QString *er
 
 bool writePly(const QString &path, const QVector<pointcloud::Point3D> &points, QString *error)
 {
-    QSaveFile file(path);
-    if (!file.open(QIODevice::WriteOnly)) return fail(error, file.errorString());
-    QTextStream header(&file);
-    header.setEncoding(QStringConverter::Utf8);
-    header << "ply\nformat binary_little_endian 1.0\ncomment source_frame robot_base\n"
-           << "element vertex " << points.size() << "\n"
-           << "property float x\nproperty float y\nproperty float z\n"
-           << "end_header\n";
-    header.flush();
-    if (header.status() != QTextStream::Ok)
-        return fail(error, QStringLiteral("failed to write PLY header"));
-    QDataStream data(&file);
-    data.setByteOrder(QDataStream::LittleEndian);
-    data.setFloatingPointPrecision(QDataStream::SinglePrecision);
-    for (qsizetype i = 0; i < points.size(); ++i) {
-        const auto &point = points[i];
-        data << point.x << point.y << point.z;
-    }
-    if (data.status() != QDataStream::Ok || !file.commit())
-        return fail(error, file.errorString().isEmpty()
-            ? QStringLiteral("failed to write PLY payload") : file.errorString());
-    return true;
+    pcv::detail::io::BinaryPlyWriteOptions options;
+    options.includeNormals = false;
+    options.comment = QStringLiteral("source_frame robot_base");
+    return pcv::detail::io::writeBinaryPly(path, points, error, options);
 }
 
 bool writeMask(const QString &path, const QImage &image, QString *error)

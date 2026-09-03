@@ -15,6 +15,15 @@ enum class PlyFormat {
     BinaryBigEndian
 };
 
+struct PlyHeaderInfo {
+    bool ok = false;
+    QString error;
+    QString version;
+    PlyFormat format = PlyFormat::Ascii;
+    qsizetype declaredPointCount = 0;
+    qint64 headerBytes = 0;
+};
+
 struct PlyReadOptions {
     std::function<void(qsizetype loaded, qsizetype total)> progress;
     std::function<bool()> isCancelled;
@@ -58,5 +67,8 @@ struct PlyReadResult {
 };
 
 PlyReadResult readPly(const QString &fileName, const PlyReadOptions &options = {});
+
+// Reads only the PLY header and stops at end_header; no vertex payload is parsed.
+PlyHeaderInfo inspectPlyHeader(const QString &fileName);
 
 } // namespace pcv::detail::io

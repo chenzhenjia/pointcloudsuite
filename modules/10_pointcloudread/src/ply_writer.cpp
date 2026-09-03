@@ -65,7 +65,11 @@ bool writeBinaryPly(const QString &fileName,
     QTextStream header(&file);
     header.setEncoding(QStringConverter::Utf8);
     header << "ply\nformat binary_little_endian 1.0\n";
+    header << "comment encoding binary_little_endian\n";
     if (!options.comment.isEmpty()) header << "comment " << options.comment << "\n";
+    for (const QString &comment : options.comments) {
+        if (!comment.isEmpty()) header << "comment " << comment << "\n";
+    }
     header << "element vertex " << points.size() << "\n"
            << "property float x\nproperty float y\nproperty float z\n";
     if (options.includeNormals)
@@ -79,7 +83,8 @@ bool writeBinaryPly(const QString &fileName,
     // Bulk write: build the interleaved float payload once and write it in
     // one shot instead of streaming per-point through QDataStream.
     if (!points.isEmpty()) {
-        if (options.includeNormals && QSysInfo::ByteOrder == QSysInfo::LittleEndian) {
+        if (options.includeNormals && !options.isCancelled
+            && QSysInfo::ByteOrder == QSysInfo::LittleEndian) {
             // pointcloud::Point3D layout is x,y,z,nx,ny,nz (6 native floats,
             // little-endian on the supported targets) which matches the
             // declared property order exactly.
@@ -110,7 +115,13 @@ bool writeBinaryPly(const QString &fileName,
             QDataStream stream(&payload, QIODevice::WriteOnly);
             stream.setByteOrder(QDataStream::LittleEndian);
             stream.setFloatingPointPrecision(QDataStream::SinglePrecision);
-            for (const auto &point : points) {
+            for (qsizetype index = 0; index < points.size(); ++index) {
+                if ((index & 0x3fff) == 0 && options.isCancelled && options.isCancelled()) {
+                    file.cancelWriting();
+                    if (error) *error = QStringLiteral("已取消");
+                    return false;
+                }
+                const auto &point = points[index];
                 stream << point.x << point.y << point.z;
                 if (options.includeNormals) stream << point.nx << point.ny << point.nz;
             }

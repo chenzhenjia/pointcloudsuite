@@ -18,6 +18,9 @@ struct LoadResult {
     QVector<Point3D> points;
     QString error;
     QStringList warnings;
+    QString sourcePlyEncoding = QStringLiteral("unknown");
+    QString canonicalPlyPath;
+    bool canonicalReady = false;
     bool ok = false;
     bool usedCache = false;
     Point3D minimum;
@@ -350,20 +353,12 @@ struct NoiseResult {
     bool ok = false;
 };
 
-// Loads ASCII PLY and binary little/big-endian PLY vertex xyz data.
-// RGB and other vertex properties are skipped safely.
-bool loadPly(const QString &fileName, QVector<Point3D> &points,
-             QString *error = nullptr,
-             const LoadProgressCallback &progress = {});
-
-// Loads a PLY through a validated binary cache next to the source file.
-// The cache is created after the first successful PLY parse.
+// Loads a PLY through a validated internal cache and Binary LE canonical PLY.
 bool loadPlyCached(const QString &fileName, QVector<Point3D> &points,
                    QString *error = nullptr, bool *usedCache = nullptr);
 
 LoadResult loadPlyCachedResult(const QString &fileName);
-// Direct asynchronous-load entry point.  It reads the source PLY without
-// creating or consulting an intermediate cache file.
+// Asynchronous-load entry points use the same cache and canonical PLY gate.
 LoadResult loadPlyResult(const QString &fileName);
 LoadResult loadPlyResultWithProgress(const QString &fileName,
                                      const LoadProgressCallback &progress);

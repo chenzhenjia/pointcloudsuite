@@ -15,6 +15,9 @@ struct CachedCloudResult {
     bool cancelled = false;
     bool ok = false;
     QStringList warnings;
+    QString canonicalPlyPath;
+    bool canonicalReady = false;
+    PlyFormat sourceFormat = PlyFormat::Ascii;
     PlyFormat format = PlyFormat::Ascii;
     qsizetype declaredPointCount = 0;
     pointcloud::Point3D minimum;
