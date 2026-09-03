@@ -1,0 +1,5 @@
+ M apps/pointcloudview/pointcloudprocessor.cpp
+ M apps/pointcloudview/pointcloudprocessor.h
+ M docs/development/build-windows.md
+ M docs/modules/10_pointcloudread.md
+ M docs/modules/30_pointcloudstitch.md
