@@ -16,6 +16,31 @@ enum class ScanAssemblyOutcome {
     Rejected
 };
 
+enum class ExpectedScanHeightSource {
+    Maximum,
+    Current
+};
+
+struct ExpectedScanHeightSelection {
+    std::uint32_t rows = 0;
+    ExpectedScanHeightSource source = ExpectedScanHeightSource::Current;
+};
+
+// 3DMVS exposes Height.nCurValue as the current transfer batch on some
+// HFR devices, while nMax is the sensor buffer/full-scan capacity. Prefer
+// the documented maximum and only fall back when it is unavailable.
+inline ExpectedScanHeightSelection selectExpectedScanHeight(qint64 current,
+                                                             qint64 maximum)
+{
+    const qint64 selected = maximum > 0 ? maximum : current;
+    const auto rows = selected > 0
+        && selected <= qint64(std::numeric_limits<std::uint32_t>::max())
+        ? std::uint32_t(selected)
+        : 0u;
+    return {rows, maximum > 0 ? ExpectedScanHeightSource::Maximum
+                              : ExpectedScanHeightSource::Current};
+}
+
 struct ScanAssemblyResult {
     ScanAssemblyOutcome outcome = ScanAssemblyOutcome::Pending;
     std::shared_ptr<CameraFrame> frame;
@@ -75,7 +100,8 @@ public:
         }
         if (chunk->height > m_expectedRows) {
             discardActiveScan();
-            return reject(QStringLiteral("scan chunk height exceeds configured Height"));
+            return reject(QStringLiteral("scan chunk height %1 exceeds configured Height %2")
+                              .arg(chunk->height).arg(m_expectedRows));
         }
 
         if (!m_active) {
@@ -92,7 +118,8 @@ public:
 
         if (m_accumulatedRows + chunk->height > m_expectedRows) {
             discardActiveScan();
-            return reject(QStringLiteral("scan chunk exceeds configured Height"));
+            return reject(QStringLiteral("scan accumulated rows %1 + chunk height %2 exceeds configured Height %3")
+                              .arg(m_accumulatedRows).arg(chunk->height).arg(m_expectedRows));
         }
         if (chunk->data.size() > m_maximumPayloadBytes - m_data.size()) {
             discardActiveScan();

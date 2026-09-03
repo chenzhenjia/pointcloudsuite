@@ -81,6 +81,10 @@ GUI 线程：LatestFrameSlot 发布通知（QueuedConnection）→ take() → Qt
 - 首个分片作为序号锚点，后续要求 `nFrameNum == previous.nFrameNum + previous.nHeight`；累计行数达到设备 `Height` 后才发布 ABC32f 扫描。
 - 跳行、重复、倒序、宽度变化、累计越界、非法长度或内存上限均丢弃当前扫描；实时画布和冻结流程不接收残缺分片。
 
+### 6.2 DP2240 Height 目标选择（2026-09-03）
+
+依据 3DMVS `BasicDemo_Callback`，`Height.nMax` 表示传感器图像缓冲区/完整扫描容量；HFR 设备的 `nCurValue` 可能只是当前传输批次高度。因此实现优先使用 `nMax`，仅在 `nMax <= 0` 时回退 `nCurValue`，并在日志中记录四项 Height 参数和选择来源。组帧器不根据回调高度动态猜测目标，任何高度不匹配都 fail-closed。
+
 ## 7. 实机诊断记录（2026-09：DP2240 无效帧）
 
 - 现象：DP2240（MV-DP2240-01P）取流时对话框报"帧：无效"；

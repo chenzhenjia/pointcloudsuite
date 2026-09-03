@@ -37,6 +37,20 @@ int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
 
+    // 3DMVS HFR devices may expose the current transfer batch in nCurValue
+    // (for example 24) while nMax is the complete scan capacity (for example
+    // 3000). The assembler must use nMax when it is available.
+    {
+        const auto selection = pcv::camera::detail::selectExpectedScanHeight(24, 3000);
+        if (!require(selection.rows == 3000
+                         && selection.source == pcv::camera::detail::ExpectedScanHeightSource::Maximum,
+                     "Height selection should prefer nMax over nCurValue")) return 1;
+        const auto fallback = pcv::camera::detail::selectExpectedScanHeight(24, 0);
+        if (!require(fallback.rows == 24
+                         && fallback.source == pcv::camera::detail::ExpectedScanHeightSource::Current,
+                     "Height selection should fall back to nCurValue when nMax is unavailable")) return 1;
+    }
+
     // Mock source starts and publishes a valid point-cloud frame.
     {
         pcv::camera::MockFrameSource source(64, 48);
@@ -74,6 +88,27 @@ int main(int argc, char **argv)
                          && complete.frame->scanFragmentCount == 2
                          && complete.frame->completeScan,
                      "contiguous final batch should publish one complete scan")) return 1;
+    }
+
+    // A callback with the configured full scan height is accepted directly.
+    {
+        pcv::camera::detail::ScanFrameAssembler assembler(3000);
+        auto complete = assembler.append(makeScanChunk(2, 3000, 17));
+        if (!require(complete.outcome == pcv::camera::detail::ScanAssemblyOutcome::Complete
+                         && complete.frame != nullptr
+                         && complete.frame->height == 3000
+                         && complete.frame->completeScan,
+                     "full-height callback should publish one complete scan")) return 1;
+    }
+
+    // A too-tall callback is rejected with both actual and configured heights.
+    {
+        pcv::camera::detail::ScanFrameAssembler assembler(24);
+        const auto rejected = assembler.append(makeScanChunk(2, 3000, 0));
+        if (!require(rejected.outcome == pcv::camera::detail::ScanAssemblyOutcome::Rejected
+                         && rejected.error.contains(QStringLiteral("3000"))
+                         && rejected.error.contains(QStringLiteral("24")),
+                     "height mismatch should report actual and configured rows")) return 1;
     }
 
     // A single Range_Image callback matching Height is already a complete scan.

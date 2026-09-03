@@ -3,6 +3,12 @@
 状态：实验中（2026-09）；默认构建，仍需实机验收后才能纳入 v0.3 发布基线。
 需求登记：启用 3DMVS 回调取流；DP2240 默认请求 `Range_Image=7`，将 SDK 原始深度回调转换并组装为完整 ABC32f 扫描。
 
+### DP2240 Height 语义修正（2026-09-03）
+
+- 完整扫描目标优先采用 `Height.ParamInfo.stIntParam.nMax`；部分 HFR 固件将 `nCurValue` 暴露为当前传输批次高度（如 24/30），仅在 `nMax` 不可用时回退有效 `nCurValue`。
+- 启动日志记录 `nCurValue`、`nMax`、`nMin`、`nInc`、`ImageMode`、最终 `expected scan rows` 及来源，不硬编码 3000。
+- 组帧仍严格要求完整帧高度或连续分片累计到目标行数；高度超限错误包含实际高度与配置高度。GUI 看门狗区分完全没有回调和已收到回调但未形成完整扫描。
+
 ## 1. 职责
 
 - 封装海康 3D 激光轮廓传感器 SDK（`Mv3dLpApi.h` / `Mv3dLpDefine.h` / `Mv3dLpImgProc.h`，链接 `Mv3dLp.lib`）；

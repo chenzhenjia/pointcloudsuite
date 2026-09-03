@@ -488,18 +488,23 @@ struct Mv3dLpCamera::Impl {
             handle, MV3D_LP_INT_HEIGHT, &param);
         const qint64 currentHeight = qint64(param.ParamInfo.stIntParam.nCurValue);
         const qint64 maximumHeight = qint64(param.ParamInfo.stIntParam.nMax);
-        const qint64 height = currentHeight > 0 ? currentHeight : maximumHeight;
+        const auto selection = detail::selectExpectedScanHeight(currentHeight, maximumHeight);
+        const qint64 height = qint64(selection.rows);
         if (status != MV3D_LP_OK || height <= 0
             || height > qint64(std::numeric_limits<std::uint32_t>::max())) {
             return {QStringLiteral("MV3D_LP_GetParam(Height) failed: %1")
                         .arg(statusText(status))};
         }
         callbackContext.configureAssembly(std::uint32_t(height));
-        qInfo() << "Mv3dLpCamera: configured scan Height =" << height
-                << "source=" << (currentHeight > 0 ? "current" : "maximum")
-                << "range=[" << param.ParamInfo.stIntParam.nMin << ","
-                << param.ParamInfo.stIntParam.nMax << "]"
-                << "increment=" << param.ParamInfo.stIntParam.nInc;
+        qInfo() << "Mv3dLpCamera: Height current=" << currentHeight
+                << "max=" << maximumHeight
+                << "min=" << param.ParamInfo.stIntParam.nMin
+                << "increment=" << param.ParamInfo.stIntParam.nInc
+                << "configured scan Height=" << height
+                << "source=" << (selection.source == detail::ExpectedScanHeightSource::Maximum
+                                     ? "maximum" : "current")
+                << "ImageMode=" << (callbackContext.activeImageMode
+                                         ? std::uint32_t(*callbackContext.activeImageMode) : 0u);
         return {};
     }
 

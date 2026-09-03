@@ -94,6 +94,7 @@ private:
     std::uint32_t m_lastConvertedExpectedRows = 0;
     std::uint32_t m_lastConvertedFragments = 0;
     bool m_lastConvertedComplete = false;
+    bool m_receivedFrameEvent = false;
     QVector<pointcloud::Point3D> m_lastConvertedPoints;
     Ui::CameraDialog *ui = nullptr;
 };

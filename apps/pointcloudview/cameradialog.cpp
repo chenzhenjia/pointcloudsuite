@@ -53,7 +53,11 @@ CameraDialog::CameraDialog(QWidget *parent)
     m_frameWatchdogTimer->setInterval(5000);
     connect(m_frameWatchdogTimer, &QTimer::timeout, this, [this]() {
         if (m_streaming && m_lastFrameNumber == 0) {
-            m_status->setText(tr("取流已启动但暂未收到完整扫描，设备可能仍处于硬件触发配置"));
+            if (m_receivedFrameEvent) {
+                m_status->setText(tr("已收到回调但尚未形成完整扫描，请检查 Height/分片配置"));
+            } else {
+                m_status->setText(tr("取流已启动但暂未收到回调，设备可能仍处于硬件触发配置"));
+            }
         }
     });
 
@@ -263,6 +267,7 @@ void CameraDialog::toggleStreaming()
     m_lastConvertedExpectedRows = 0;
     m_lastConvertedFragments = 0;
     m_lastConvertedComplete = false;
+    m_receivedFrameEvent = false;
     pointcloud::PipelineContext context;
     context.frameSource = [this]() { return m_source.get(); };
     context.publish = [this](const pointcloud::LiveFrame &frame) {
@@ -303,6 +308,7 @@ void CameraDialog::onFrameAvailable()
     if (!m_streaming || !m_source || m_closing) return;
     auto frame = m_source->frameSlot().take();
     if (!frame) return;
+    m_receivedFrameEvent = true;
 
     // Device events (disconnect) are handled separately.
     if (frame->kind == pcv::camera::FrameKind::Exception) {
