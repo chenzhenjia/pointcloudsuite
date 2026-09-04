@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>RenderDialog</class>
+ <widget class="QDialog" name="RenderDialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>340</width><height>560</height></rect></property>
+  <property name="minimumSize"><size><width>300</width><height>480</height></size></property>
+  <property name="windowTitle"><string>渲染设置</string></property>
+  <property name="styleSheet"><string notr="true">QDialog, QWidget { background:#ffffff; color:#1f2937; font-family:"Microsoft YaHei"; font-size:10pt; }
+QTabWidget::pane { border:1px solid #d9e0e8; background:#ffffff; }
+QTabBar::tab { background:#f5f7fa; color:#667085; min-width:92px; padding:8px 14px; border:1px solid #d9e0e8; border-bottom:none; }
+QTabBar::tab:selected { background:#ffffff; color:#f57c22; }
+QLabel { color:#475467; }
+QSpinBox, QDoubleSpinBox, QComboBox { min-height:28px; background:#ffffff; color:#344054; border:1px solid #cbd5e1; border-radius:4px; padding:3px 6px; }
+QSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::up-button, QDoubleSpinBox::down-button, QComboBox::drop-down { background:#f5f7fa; border-left:1px solid #d9e0e8; width:20px; }
+QCheckBox { color:#344054; spacing:8px; min-height:26px; }
+QCheckBox::indicator { width:16px; height:16px; border:1px solid #cbd5e1; border-radius:3px; background:#ffffff; }
+QCheckBox::indicator:checked { background:#ff8426; border-color:#eb741d; }
+QPushButton { min-height:30px; background:#ffffff; color:#344054; border:1px solid #cbd5e1; border-radius:4px; padding:5px 10px; }
+QPushButton:hover { background:#edf5ff; border-color:#5b9bd5; color:#1769aa; }
+QPlainTextEdit { background:#f8fafc; color:#344054; border:1px solid #d9e0e8; border-radius:4px; padding:8px; }
+</string></property>
+  <layout class="QVBoxLayout" name="rootLayout">
+   <property name="leftMargin"><number>10</number></property><property name="topMargin"><number>10</number></property><property name="rightMargin"><number>10</number></property><property name="bottomMargin"><number>10</number></property>
+   <item>
+    <widget class="QTabWidget" name="tw_render_settings">
+     <property name="currentIndex"><number>0</number></property>
+     <widget class="QWidget" name="tab_render">
+      <attribute name="title"><string>渲染</string></attribute>
+      <layout class="QFormLayout" name="form_render">
+       <property name="verticalSpacing"><number>9</number></property>
+       <item row="0" column="0"><widget class="QLabel" name="lbl_point_size"><property name="text"><string>点的尺寸</string></property></widget></item>
+       <item row="0" column="1"><widget class="QSpinBox" name="spb_point_size"><property name="minimum"><number>1</number></property><property name="maximum"><number>8</number></property><property name="value"><number>1</number></property></widget></item>
+       <item row="1" column="0"><widget class="QLabel" name="lbl_color_mode"><property name="text"><string>颜色样式</string></property></widget></item>
+       <item row="1" column="1"><widget class="QComboBox" name="cb_color_mode"><item><property name="text"><string>彩色高度</string></property></item><item><property name="text"><string>灰阶</string></property></item><item><property name="text"><string>法向量</string></property></item></widget></item>
+       <item row="2" column="0"><widget class="QLabel" name="lbl_overlay"><property name="text"><string>叠加比例</string></property></widget></item>
+       <item row="2" column="1"><widget class="QDoubleSpinBox" name="dsb_overlay"><property name="decimals"><number>3</number></property><property name="maximum"><double>1.000000000000000</double></property><property name="singleStep"><double>0.050000000000000</double></property><property name="value"><double>1.000000000000000</double></property></widget></item>
+       <item row="3" column="0"><widget class="QLabel" name="lbl_map_min"><property name="text"><string>映射最小值</string></property></widget></item>
+       <item row="3" column="1"><widget class="QDoubleSpinBox" name="dsb_map_min"><property name="decimals"><number>2</number></property><property name="minimum"><double>-1000000000.000000000000000</double></property><property name="maximum"><double>1000000000.000000000000000</double></property></widget></item>
+       <item row="4" column="0"><widget class="QLabel" name="lbl_map_max"><property name="text"><string>映射最大值</string></property></widget></item>
+       <item row="4" column="1"><widget class="QDoubleSpinBox" name="dsb_map_max"><property name="decimals"><number>2</number></property><property name="minimum"><double>-1000000000.000000000000000</double></property><property name="maximum"><double>1000000000.000000000000000</double></property></widget></item>
+       <item row="5" column="0" colspan="2"><widget class="QCheckBox" name="chk_show_axes"><property name="text"><string>显示三维坐标系</string></property><property name="checked"><bool>true</bool></property></widget></item>
+       <item row="6" column="0" colspan="2"><widget class="QCheckBox" name="chk_show_floor_grid"><property name="text"><string>显示坐标系地板</string></property><property name="checked"><bool>true</bool></property></widget></item>
+       <item row="7" column="0" colspan="2"><widget class="QCheckBox" name="chk_floor_z_up"><property name="text"><string>坐标系地板向上（Z）</string></property><property name="checked"><bool>true</bool></property></widget></item>
+       <item row="8" column="0" colspan="2"><widget class="QCheckBox" name="chk_show_axis_labels"><property name="text"><string>显示坐标系标签</string></property><property name="checked"><bool>true</bool></property></widget></item>
+       <item row="9" column="0" colspan="2"><widget class="QCheckBox" name="chk_show_normals"><property name="text"><string>显示法向量</string></property></widget></item>
+       <item row="10" column="0" colspan="2"><widget class="QCheckBox" name="chk_show_bbox"><property name="text"><string>显示包围盒</string></property><property name="checked"><bool>true</bool></property></widget></item>
+       <item row="11" column="0" colspan="2"><widget class="QCheckBox" name="chk_show_statistics"><property name="text"><string>显示统计信息</string></property><property name="checked"><bool>true</bool></property></widget></item>
+       <item row="12" column="0" colspan="2"><widget class="QPushButton" name="btn_reset_view"><property name="text"><string>重置视角</string></property></widget></item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="tab_content">
+      <attribute name="title"><string>内容</string></attribute>
+      <layout class="QVBoxLayout" name="contentLayout">
+       <item><widget class="QPlainTextEdit" name="pte_content"><property name="readOnly"><bool>true</bool></property><property name="plainText"><string>当前未加载点云</string></property></widget></item>
+      </layout>
+     </widget>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

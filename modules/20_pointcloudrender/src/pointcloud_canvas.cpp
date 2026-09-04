@@ -1,5 +1,7 @@
 #include <pcv/render/pointcloud_canvas.h>
 
+#include "overlay_geometry.h"
+
 PointCloudCanvas::PointCloudCanvas(QWidget *parent)
         : QOpenGLWidget(parent), m_vertexBuffer(QOpenGLBuffer::VertexBuffer),
           m_stateBuffer(QOpenGLBuffer::VertexBuffer),
@@ -201,7 +203,13 @@ void PointCloudCanvas::setDisplayOptions(int colorMode, double overlay, double m
         m_mapMin = float(mapMin);
         m_mapMax = float(mapMax);
         update();
-    }
+}
+
+void PointCloudCanvas::setOverlayOptions(const pcv::render::RenderOverlayOptions &options) {
+        if (QThread::currentThread() != thread()) return;
+        m_overlayOptions = options;
+        update();
+}
 
 void PointCloudCanvas::resetView() {
         if (QThread::currentThread() != thread()) return;
@@ -527,6 +535,10 @@ void PointCloudCanvas::updateBounds() {
         if (m_points.isEmpty()) {
             m_center = QVector3D();
             m_span = 1.0f;
+            m_minX = 0.0f;
+            m_maxX = 0.0f;
+            m_minY = 0.0f;
+            m_maxY = 0.0f;
             m_spanX = 0.0f;
             m_spanY = 0.0f;
             m_spanZ = 0.0f;
@@ -535,27 +547,27 @@ void PointCloudCanvas::updateBounds() {
             return;
         }
 
-        float minX = m_points.first().x;
-        float maxX = minX;
-        float minY = m_points.first().y;
-        float maxY = minY;
+        m_minX = m_points.first().x;
+        m_maxX = m_minX;
+        m_minY = m_points.first().y;
+        m_maxY = m_minY;
         m_minZ = m_points.first().z;
         m_maxZ = m_minZ;
         for (const pointcloud::Point3D &point : m_points) {
-            minX = std::min(minX, point.x);
-            maxX = std::max(maxX, point.x);
-            minY = std::min(minY, point.y);
-            maxY = std::max(maxY, point.y);
+            m_minX = std::min(m_minX, point.x);
+            m_maxX = std::max(m_maxX, point.x);
+            m_minY = std::min(m_minY, point.y);
+            m_maxY = std::max(m_maxY, point.y);
             m_minZ = std::min(m_minZ, point.z);
             m_maxZ = std::max(m_maxZ, point.z);
         }
-        m_center = QVector3D((minX + maxX) * 0.5f,
-                             (minY + maxY) * 0.5f,
+        m_center = QVector3D((m_minX + m_maxX) * 0.5f,
+                             (m_minY + m_maxY) * 0.5f,
                              (m_minZ + m_maxZ) * 0.5f);
-        m_spanX = maxX - minX;
-        m_spanY = maxY - minY;
+        m_spanX = m_maxX - m_minX;
+        m_spanY = m_maxY - m_minY;
         m_spanZ = m_maxZ - m_minZ;
-        m_span = std::max({maxX - minX, maxY - minY, m_maxZ - m_minZ, 0.000001f});
+        m_span = std::max({m_spanX, m_spanY, m_spanZ, 0.000001f});
     }
 
 void PointCloudCanvas::uploadCloudIfNeeded() {
@@ -820,6 +832,142 @@ QMatrix4x4 PointCloudCanvas::viewTransform() const {
 void PointCloudCanvas::drawOverlay() {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
+        const auto project = [this](const QVector3D &world) {
+            const QVector3D normalized = (world - m_center) * (2.0f / m_span);
+            QVector4D clip = viewTransform() * QVector4D(normalized, 1.0f);
+            clip.setX(clip.x() + float(m_pan.x()) * clip.w());
+            clip.setY(clip.y() + float(m_pan.y()) * clip.w());
+            if (std::abs(clip.w()) > 1.0e-9f) clip /= clip.w();
+            return QPointF((clip.x() * 0.5f + 0.5f) * width(),
+                           (0.5f - clip.y() * 0.5f) * height());
+        };
+        QVector<QRectF> axisLabelRects;
+        const auto drawAxisLabel = [&](const QPointF &anchor, const QString &text,
+                                       const QPointF &offset, const QColor &color) {
+            const QFontMetricsF metrics(painter.font());
+            QRectF labelRect(QPointF(), metrics.size(Qt::TextSingleLine, text));
+            labelRect.moveTopLeft(anchor + offset);
+            if (!rect().contains(labelRect.toAlignedRect())) return;
+            for (const QRectF &placed : axisLabelRects) {
+                if (placed.intersects(labelRect)) return;
+            }
+            axisLabelRects.push_back(labelRect);
+            painter.fillRect(labelRect.adjusted(-3.0, -2.0, 3.0, 2.0), QColor(8, 13, 20, 210));
+            painter.setPen(color);
+            painter.drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter, text);
+        };
+        if (!m_points.isEmpty() && m_span > 1.0e-9f) {
+            const pcv::render::internal::OverlayBounds bounds = {
+                m_minX, m_maxX, m_minY, m_maxY, m_minZ, m_maxZ};
+            const pcv::render::internal::OverlayGeometry geometry =
+                pcv::render::internal::makeOverlayGeometry(bounds);
+            const bool drawBoundingAxes = m_overlayOptions.showBoundingBox
+                && m_overlayOptions.showCoordinateAxes;
+            const bool drawXAxis = drawBoundingAxes && geometry.axes[0].valid;
+            if (m_overlayOptions.showFloorGrid) {
+                painter.setPen(QPen(QColor(110, 130, 155, 105), 1.0));
+                if (m_overlayOptions.floorZUp) {
+                    for (int i = 0; i <= pcv::render::internal::kOverlayGridDivisions; ++i) {
+                        const float t = float(i) / pcv::render::internal::kOverlayGridDivisions;
+                        painter.drawLine(project({bounds.minX + (bounds.maxX - bounds.minX) * t,
+                                                  bounds.minY, bounds.minZ}),
+                                         project({bounds.minX + (bounds.maxX - bounds.minX) * t,
+                                                  bounds.maxY, bounds.minZ}));
+                        // This lower horizontal line is the selected X-axis edge.
+                        // Leave it to the color pass so it is never a grey double line.
+                        if (!(drawXAxis && i == 0)) {
+                            painter.drawLine(project({bounds.minX,
+                                                      bounds.minY + (bounds.maxY - bounds.minY) * t,
+                                                      bounds.minZ}),
+                                             project({bounds.maxX,
+                                                      bounds.minY + (bounds.maxY - bounds.minY) * t,
+                                                      bounds.minZ}));
+                        }
+                    }
+                } else {
+                    for (int i = 0; i <= pcv::render::internal::kOverlayGridDivisions; ++i) {
+                        const float t = float(i) / pcv::render::internal::kOverlayGridDivisions;
+                        painter.drawLine(project({bounds.minX + (bounds.maxX - bounds.minX) * t,
+                                                  bounds.minY, bounds.minZ}),
+                                         project({bounds.minX + (bounds.maxX - bounds.minX) * t,
+                                                  bounds.minY, bounds.maxZ}));
+                        if (!(drawXAxis && i == 0)) {
+                            painter.drawLine(project({bounds.minX, bounds.minY,
+                                                      bounds.minZ + (bounds.maxZ - bounds.minZ) * t}),
+                                             project({bounds.maxX, bounds.minY,
+                                                      bounds.minZ + (bounds.maxZ - bounds.minZ) * t}));
+                        }
+                    }
+                }
+            }
+            if (m_overlayOptions.showBoundingBox) {
+                painter.setPen(QPen(QColor(175, 190, 210, 190), 1.2));
+                for (const pcv::render::internal::OverlaySegment &edge : geometry.boxEdges) {
+                    if (!edge.valid) continue;
+                    if (drawBoundingAxes && pcv::render::internal::isAxisSegment(edge, geometry))
+                        continue;
+                    painter.drawLine(project(edge.start), project(edge.end));
+                }
+
+                if (drawBoundingAxes) {
+                    static const std::array<QColor, 3> axisColors = {
+                        QColor(244, 92, 92), QColor(78, 218, 132), QColor(76, 156, 255)};
+                    static const std::array<QString, 3> axisNames = {
+                        QStringLiteral("X(mm)"), QStringLiteral("Y(mm)"), QStringLiteral("Z(mm)")};
+                    const std::array<std::pair<float, float>, 3> axisRanges = {{
+                        {bounds.minX, bounds.maxX}, {bounds.minY, bounds.maxY},
+                        {bounds.minZ, bounds.maxZ}}};
+                    QFont axisFont = painter.font();
+                    axisFont.setPointSize(12);
+                    axisFont.setBold(true);
+                    painter.setFont(axisFont);
+                    for (int axisIndex = 0; axisIndex < int(geometry.axes.size()); ++axisIndex) {
+                        const pcv::render::internal::OverlaySegment &axis = geometry.axes[axisIndex];
+                        if (!axis.valid) continue;
+                        const QPointF start = project(axis.start);
+                        const QPointF end = project(axis.end);
+                        painter.setPen(QPen(axisColors[axisIndex], 2.5));
+                        painter.drawLine(start, end);
+                        if (!m_overlayOptions.showAxisLabels) continue;
+
+                        const QPointF axisVector = end - start;
+                        const qreal projectedLength = std::hypot(axisVector.x(), axisVector.y());
+                        if (projectedLength < 8.0) continue;
+                        const QPointF normal(-axisVector.y() / projectedLength,
+                                             axisVector.x() / projectedLength);
+                        drawAxisLabel(end, axisNames[axisIndex], normal * -17.0 + QPointF(5.0, -4.0),
+                                      axisColors[axisIndex]);
+                        const QVector<pcv::render::internal::OverlayTick> ticks =
+                            pcv::render::internal::makeIntegerTicks(axisRanges[axisIndex].first,
+                                                                     axisRanges[axisIndex].second);
+                        painter.setPen(QPen(axisColors[axisIndex], 1.0));
+                        for (const pcv::render::internal::OverlayTick &tick : ticks) {
+                            const QVector3D world = axis.start + (axis.end - axis.start) * tick.normalized;
+                            const QPointF position = project(world);
+                            painter.drawLine(position - normal * 3.0, position + normal * 3.0);
+                            drawAxisLabel(position, QString::number(tick.roundedValue),
+                                          normal * 7.0 + QPointF(4.0, -4.0), axisColors[axisIndex]);
+                        }
+                    }
+                }
+            }
+            if (m_overlayOptions.showNormals) {
+                const qsizetype stride = qMax<qsizetype>(1, m_points.size() / 2000);
+                const float normalLength = qMax(0.001f, m_span * 0.018f);
+                painter.setPen(QPen(QColor(255, 205, 105, 190), 1.0));
+                for (qsizetype i = 0; i < m_points.size(); i += stride) {
+                    const pointcloud::Point3D &point = m_points[i];
+                    const float squared = point.nx * point.nx + point.ny * point.ny
+                        + point.nz * point.nz;
+                    if (!std::isfinite(squared) || squared < 1.0e-8f) continue;
+                    const float inverseLength = 1.0f / std::sqrt(squared);
+                    const QVector3D start(point.x, point.y, point.z);
+                    const QVector3D end = start + QVector3D(point.nx, point.ny, point.nz)
+                        * (inverseLength * normalLength);
+                    painter.drawLine(project(start), project(end));
+                }
+            }
+        }
         if (m_edgeSelectionMode && m_mouseMoved && m_pressedButton == Qt::LeftButton) {
             painter.setPen(QPen(QColor(90, 210, 255), 1.5, Qt::DashLine));
             painter.setBrush(QColor(90, 210, 255, 35));
@@ -832,15 +980,17 @@ void PointCloudCanvas::drawOverlay() {
         painter.setFont(titleFont);
         painter.drawText(18, 27, tr("3D 点云"));
 
-        painter.setFont(QFont());
-        painter.setPen(QColor(150, 164, 184));
-        const QString pointText = m_points.isEmpty()
-            ? tr("未加载数据")
-            : tr("工作点数  %1  |  全量绘制")
-                  .arg(QLocale().toString(m_points.size()));
-        painter.drawText(18, 49, pointText);
+        if (m_overlayOptions.showStatistics) {
+            painter.setFont(QFont());
+            painter.setPen(QColor(150, 164, 184));
+            const QString pointText = m_points.isEmpty()
+                ? tr("未加载数据")
+                : tr("工作点数  %1  |  全量绘制")
+                      .arg(QLocale().toString(m_points.size()));
+            painter.drawText(18, 49, pointText);
+        }
 
-        if (!m_points.isEmpty()) {
+        if (!m_points.isEmpty() && m_overlayOptions.showStatistics) {
             const QString centerText = tr("中心 (mm)  X %1  Y %2  Z %3")
                 .arg(QString::number(m_center.x(), 'f', 2))
                 .arg(QString::number(m_center.y(), 'f', 2))
@@ -890,16 +1040,8 @@ void PointCloudCanvas::drawOverlay() {
                              top + 22, extentText);
         }
 
-        if (m_workpieceCoordinate.valid && m_span > 1.0e-9f) {
-            const auto project = [this](const QVector3D &world) {
-                const QVector3D normalized = (world - m_center) * (2.0f / m_span);
-                QVector4D clip = viewTransform() * QVector4D(normalized, 1.0f);
-                clip.setX(clip.x() + float(m_pan.x()) * clip.w());
-                clip.setY(clip.y() + float(m_pan.y()) * clip.w());
-                if (std::abs(clip.w()) > 1.0e-9f) clip /= clip.w();
-                return QPointF((clip.x() * 0.5f + 0.5f) * width(),
-                               (0.5f - clip.y() * 0.5f) * height());
-            };
+        if (m_workpieceCoordinate.valid && m_span > 1.0e-9f
+            && m_overlayOptions.showCoordinateAxes) {
             const float axisLength = qMax(1.0f, m_span * 0.14f);
             const QPointF origin = project(m_workpieceCoordinate.originInRobotBase);
             const auto drawFrameAxis = [&](const QVector3D &axis, const QColor &color,
@@ -910,7 +1052,8 @@ void PointCloudCanvas::drawOverlay() {
                 painter.drawLine(origin, end);
                 painter.setBrush(color);
                 painter.drawEllipse(end, 3.0, 3.0);
-                painter.drawText(end + QPointF(5.0, -4.0), label);
+                if (m_overlayOptions.showAxisLabels)
+                    painter.drawText(end + QPointF(5.0, -4.0), label);
             };
             painter.setBrush(QColor(245, 245, 245));
             painter.setPen(Qt::NoPen);
@@ -937,18 +1080,4 @@ void PointCloudCanvas::drawOverlay() {
             painter.drawText(rect(), Qt::AlignCenter, tr("打开 PLY 文件开始预览"));
         }
 
-        const QMatrix4x4 rotation = rotationTransform();
-        const QPointF origin(58.0, height() - 52.0);
-        const float length = 34.0f;
-        const auto drawAxis = [&](const QVector4D &axis, const QColor &color, const QString &label) {
-            const QVector4D rotated = rotation * axis;
-            const QPointF end = origin + QPointF(rotated.x() * length, -rotated.y() * length);
-            QPen pen(color, 2.0);
-            painter.setPen(pen);
-            painter.drawLine(origin, end);
-            painter.drawText(end + QPointF(4.0, -2.0), label);
-        };
-        drawAxis(QVector4D(1, 0, 0, 0), QColor(244, 92, 92), QStringLiteral("X"));
-        drawAxis(QVector4D(0, 1, 0, 0), QColor(78, 218, 132), QStringLiteral("Y"));
-        drawAxis(QVector4D(0, 0, 1, 0), QColor(76, 156, 255), QStringLiteral("Z"));
     }

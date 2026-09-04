@@ -206,6 +206,7 @@ QWidget#wgt_canvas_host { background-color: #ffffff; }
       <addaction name="act_file_io"/>
       <addaction name="act_property_save"/>
       <addaction name="act_camera_stream"/>
+      <addaction name="act_render_settings"/>
       <addaction name="act_canvas_reset"/>
      </widget>
     </item>
@@ -1080,6 +1081,14 @@ QWidget#wgt_canvas_host { background-color: #ffffff; }
    </property>
    <property name="text">
     <string>重置视角</string>
+   </property>
+  </action>
+  <action name="act_render_settings">
+   <property name="text">
+    <string>渲染设置</string>
+   </property>
+   <property name="toolTip">
+    <string>打开点云渲染设置</string>
    </property>
   </action>
   <action name="act_open">

@@ -78,6 +78,8 @@ public:
     void setDisplayOptions(int colorMode, double overlay, double mapMin,
                            double mapMax);
 
+    void setOverlayOptions(const pcv::render::RenderOverlayOptions &options);
+
     void resetView();
 
 protected:
@@ -147,6 +149,10 @@ private:
     float m_spanX = 0.0f;
     float m_spanY = 0.0f;
     float m_spanZ = 0.0f;
+    float m_minX = 0.0f;
+    float m_maxX = 0.0f;
+    float m_minY = 0.0f;
+    float m_maxY = 0.0f;
     float m_minZ = 0.0f;
     float m_maxZ = 1.0f;
     float m_yaw = 38.0f;
@@ -157,6 +163,7 @@ private:
     float m_overlay = 1.0f;
     float m_mapMin = 0.0f;
     float m_mapMax = 1.0f;
+    pcv::render::RenderOverlayOptions m_overlayOptions;
     bool m_uploadPending = false;
     bool m_stateUploadPending = false;
     bool m_contourUploadPending = false;

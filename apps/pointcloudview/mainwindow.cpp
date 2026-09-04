@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "renderdialog.h"
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
 #include "cameradialog.h"
 #endif
@@ -247,6 +248,8 @@ void MainWindow::buildUi() {
             this, &MainWindow::openPointCloudSource);
     connect(ui->act_canvas_reset, &QAction::triggered,
             m_canvas, &PointCloudCanvas::resetView);
+    connect(ui->act_render_settings, &QAction::triggered,
+            this, &MainWindow::openRenderSettings);
     // The tab pages remain the existing implementation boundary; hide the
     // tab bar and expose a Designer-authored step navigator instead.
     ui->tw_main->tabBar()->hide();
@@ -280,6 +283,8 @@ void MainWindow::buildUi() {
     connect(ui->tw_main, &QTabWidget::currentChanged, this, updateWorkflowStep);
     connect(m_fileList, &QListWidget::currentRowChanged, this, &MainWindow::loadSelectedSource);
     connect(m_pointSize, qOverload<int>(&QSpinBox::valueChanged), m_canvas, &PointCloudCanvas::setPointSize);
+    connect(m_pointSize, qOverload<int>(&QSpinBox::valueChanged), this,
+            [this](int) { updateRenderSettings(); });
     connect(ui->btn_reset_view, &QPushButton::clicked, m_canvas, &PointCloudCanvas::resetView);
     connect(m_colorMode, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::updateRenderSettings);
     connect(m_overlay, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &MainWindow::updateRenderSettings);
@@ -368,10 +373,12 @@ void MainWindow::openCameraStream() {
                 // Pipeline canvas.publish reaches this callback; streaming
                 // frames bypass the display cache while world overlays remain.
                 m_canvas->setCloudStreaming(points);
+                m_livePreviewPointCount = points.size();
                 if (m_canvasInfo) {
                     m_canvasInfo->setText(
                         tr("相机实时点云  %1 点").arg(QLocale().toString(points.size())));
                 }
+                refreshRenderDialogContent();
             };
         m_cameraDialog->cloudFrozen =
             [this](const QVector<pointcloud::Point3D> &points) {
@@ -558,6 +565,102 @@ void MainWindow::updateRenderSettings() {
     if (!m_canvas) return;
     m_canvas->setDisplayOptions(m_colorMode->currentIndex(), m_overlay->value(),
                                 m_mapMin->value(), m_mapMax->value());
+    if (m_renderDialog) {
+        m_renderDialog->setDisplaySettings(m_pointSize->value(), m_colorMode->currentIndex(),
+                                           m_overlay->value(), m_mapMin->value(),
+                                           m_mapMax->value());
+        refreshRenderDialogContent();
+    }
+
+}
+
+void MainWindow::openRenderSettings()
+{
+    if (!m_renderDialog) {
+        m_renderDialog = new RenderDialog(this);
+        m_renderDialog->setDisplaySettings(m_pointSize->value(), m_colorMode->currentIndex(),
+                                           m_overlay->value(), m_mapMin->value(),
+                                           m_mapMax->value());
+        connect(m_renderDialog, &RenderDialog::settingsChanged,
+                this, &MainWindow::applyRenderDialogSettings);
+        connect(m_renderDialog, &RenderDialog::resetViewRequested,
+                m_canvas, &PointCloudCanvas::resetView);
+    }
+    refreshRenderDialogContent();
+    m_renderDialog->show();
+    m_renderDialog->raise();
+    m_renderDialog->activateWindow();
+}
+
+void MainWindow::applyRenderDialogSettings()
+{
+    if (!m_canvas || !m_renderDialog) return;
+    const QSignalBlocker pointSizeBlocker(m_pointSize);
+    const QSignalBlocker colorModeBlocker(m_colorMode);
+    const QSignalBlocker overlayBlocker(m_overlay);
+    const QSignalBlocker mapMinimumBlocker(m_mapMin);
+    const QSignalBlocker mapMaximumBlocker(m_mapMax);
+    m_pointSize->setValue(m_renderDialog->pointSize());
+    m_colorMode->setCurrentIndex(m_renderDialog->colorMode());
+    m_overlay->setValue(m_renderDialog->overlay());
+    m_mapMin->setValue(m_renderDialog->mapMinimum());
+    m_mapMax->setValue(m_renderDialog->mapMaximum());
+    m_canvas->setPointSize(m_pointSize->value());
+    m_canvas->setDisplayOptions(m_colorMode->currentIndex(), m_overlay->value(),
+                                m_mapMin->value(), m_mapMax->value());
+    m_canvas->setOverlayOptions(m_renderDialog->overlayOptions());
+    refreshRenderDialogContent();
+}
+
+void MainWindow::refreshRenderDialogContent()
+{
+    if (!m_renderDialog) return;
+    const QVector<pointcloud::Point3D> &points = m_points;
+    QString source = m_pendingPath.isEmpty() ? tr("未加载文件")
+                                             : QFileInfo(m_pendingPath).fileName();
+    const QString livePreview = m_livePreviewPointCount > 0
+        ? tr("\n实时预览点数：%1（未冻结）").arg(QLocale().toString(m_livePreviewPointCount))
+        : QString();
+    if (points.isEmpty()) {
+        m_renderDialog->setContentText(tr("当前数据源：%1\n\n当前未加载可处理点云。\n"
+                                          "相机实时帧仅预览时不会替换处理缓存。%2").arg(source, livePreview));
+        return;
+    }
+    float minX = points.first().x, maxX = minX;
+    float minY = points.first().y, maxY = minY;
+    float minZ = points.first().z, maxZ = minZ;
+    qsizetype validNormals = 0;
+    for (const pointcloud::Point3D &point : points) {
+        minX = qMin(minX, point.x); maxX = qMax(maxX, point.x);
+        minY = qMin(minY, point.y); maxY = qMax(maxY, point.y);
+        minZ = qMin(minZ, point.z); maxZ = qMax(maxZ, point.z);
+        const float normalLengthSquared = point.nx * point.nx + point.ny * point.ny
+            + point.nz * point.nz;
+        if (std::isfinite(normalLengthSquared) && normalLengthSquared > 1.0e-8f)
+            ++validNormals;
+    }
+    const QStringList colorModes = {tr("彩色高度"), tr("灰阶"), tr("法向量")};
+    const int colorIndex = qBound(0, m_colorMode->currentIndex(), colorModes.size() - 1);
+    const auto options = m_renderDialog->overlayOptions();
+    m_renderDialog->setContentText(
+        tr("当前数据源：%1\n点云点数：%2\n有效法向量：%3\n\n"
+           "X 范围：%4 ～ %5 mm\nY 范围：%6 ～ %7 mm\nZ 范围：%8 ～ %9 mm\n\n"
+           "颜色样式：%10\n工件坐标系：%11\n"
+           "坐标轴：%12  地板：%13  包围盒：%14\n"
+           "法向量：%15  统计信息：%16")
+            .arg(source)
+            .arg(QLocale().toString(points.size()))
+            .arg(QLocale().toString(validNormals))
+            .arg(minX, 0, 'f', 2).arg(maxX, 0, 'f', 2)
+            .arg(minY, 0, 'f', 2).arg(maxY, 0, 'f', 2)
+            .arg(minZ, 0, 'f', 2).arg(maxZ, 0, 'f', 2)
+            .arg(colorModes.at(colorIndex))
+            .arg(m_workpieceCoordinate.valid ? tr("已建立") : tr("未建立"))
+            .arg(options.showCoordinateAxes ? tr("显示") : tr("隐藏"))
+            .arg(options.showFloorGrid ? tr("显示") : tr("隐藏"))
+            .arg(options.showBoundingBox ? tr("显示") : tr("隐藏"))
+            .arg(options.showNormals ? tr("显示") : tr("隐藏"))
+            .arg(options.showStatistics ? tr("显示") : tr("隐藏")) + livePreview);
 }
 
 void MainWindow::applyDepthRenderRange(const QVector<pointcloud::Point3D> &points) {
@@ -602,6 +705,7 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points,
                    << incomingCount;
         return;
     }
+    m_livePreviewPointCount = 0;
 
     // The CPU display cache is the authoritative input for every downstream
     // operation. A temporarily unavailable OpenGL widget must never discard a
@@ -635,7 +739,7 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points,
     if (m_canvas) {
         m_canvas->setSelectionMode(false);
         // setCloud() clears every derived point-state layer. Do not call
-        m_canvas->setCloud(m_points);
+    m_canvas->setCloud(m_points);
     } else {
         qCritical() << "Main display cache is ready but PointCloudCanvas is null";
     }
@@ -648,6 +752,7 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points,
                                   .arg(QLocale().toString(m_points.size()))
                                   .arg(QLocale().toString(m_rawPoints.size())));
     }
+    refreshRenderDialogContent();
 }
 
 bool MainWindow::pointTaskRunning() const {

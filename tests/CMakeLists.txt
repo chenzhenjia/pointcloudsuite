@@ -109,6 +109,8 @@ list(APPEND PCV_APPLICATION_TEST_TARGETS plane_fitting_tests)
 
 add_executable(pointcloud_canvas_contract_tests unit/render/pointcloud_canvas_contract_tests.cpp)
 target_link_libraries(pointcloud_canvas_contract_tests PRIVATE Qt::Core Qt::Gui pcv_m20_pointcloudrender)
+target_include_directories(pointcloud_canvas_contract_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/modules/20_pointcloudrender/src)
 add_test(NAME pointcloud_canvas_contract_tests COMMAND pointcloud_canvas_contract_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS pointcloud_canvas_contract_tests)
 

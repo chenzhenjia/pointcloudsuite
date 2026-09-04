@@ -18,6 +18,7 @@ class QDoubleSpinBox;
 class QCheckBox;
 class QPushButton;
 class QPlainTextEdit;
+class RenderDialog;
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
 class CameraDialog;
 #endif
@@ -51,6 +52,7 @@ private slots:
     void tempWorkpieceFinished();
     void tempWorkpieceFinalizeFinished();
     void updateRenderSettings();
+    void openRenderSettings();
     void applyNoiseRemoval();
     void noiseFinished();
     void startPlanePointSelection();
@@ -91,6 +93,8 @@ private:
     void runPlaneExtraction(bool deferFinalClassification);
     bool pointTaskRunning() const;
     void applyConfiguredDefaults();
+    void applyRenderDialogSettings();
+    void refreshRenderDialogContent();
     QListWidget *m_fileList = nullptr;
     QLabel *m_fileInfo = nullptr;
     QLabel *m_canvasInfo = nullptr;
@@ -129,11 +133,13 @@ private:
     QLabel *m_planeImagePreview = nullptr;
     QPlainTextEdit *m_edgeOutput = nullptr;
     PointCloudCanvas *m_canvas = nullptr;
+    RenderDialog *m_renderDialog = nullptr;
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
     CameraDialog *m_cameraDialog = nullptr;
 #endif
     QVector<pointcloud::Point3D> m_rawPoints;
     QVector<pointcloud::Point3D> m_points;
+    qsizetype m_livePreviewPointCount = 0;
     bool m_loading = false;
     QString m_pendingPath;
     QString m_pendingSourcePlyEncoding = QStringLiteral("unknown");

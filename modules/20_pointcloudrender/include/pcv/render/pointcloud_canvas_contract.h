@@ -38,6 +38,16 @@ struct RenderSnapshot {
     quint64 revision = 0;
 };
 
+struct RenderOverlayOptions {
+    bool showCoordinateAxes = true;
+    bool showFloorGrid = true;
+    bool floorZUp = true;
+    bool showAxisLabels = true;
+    bool showNormals = false;
+    bool showBoundingBox = true;
+    bool showStatistics = true;
+};
+
 bool validateSnapshot(const RenderSnapshot &snapshot, QString *error = nullptr);
 bool validateCoordinateFrame(const CoordinateFrame &frame, QString *error = nullptr);
 bool validateContours(const QVector<Contour> &contours, QString *error = nullptr);
