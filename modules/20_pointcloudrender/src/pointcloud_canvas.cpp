@@ -938,8 +938,8 @@ void PointCloudCanvas::drawOverlay() {
                         drawAxisLabel(end, axisNames[axisIndex], normal * -17.0 + QPointF(5.0, -4.0),
                                       axisColors[axisIndex]);
                         const QVector<pcv::render::internal::OverlayTick> ticks =
-                            pcv::render::internal::makeIntegerTicks(axisRanges[axisIndex].first,
-                                                                     axisRanges[axisIndex].second);
+                            pcv::render::internal::makeAxisLabelTicks(
+                                axisRanges[axisIndex].first, axisRanges[axisIndex].second);
                         painter.setPen(QPen(axisColors[axisIndex], 1.0));
                         for (const pcv::render::internal::OverlayTick &tick : ticks) {
                             const QVector3D world = axis.start + (axis.end - axis.start) * tick.normalized;

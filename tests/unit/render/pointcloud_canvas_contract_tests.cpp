@@ -50,27 +50,26 @@ int main(int argc, char **argv)
     if (!geometry.axes[0].valid || !geometry.axes[1].valid || !geometry.axes[2].valid) return 1;
     if (geometry.axes[0].start.y() != bounds.minY || geometry.axes[0].start.z() != bounds.minZ
         || geometry.axes[0].end.x() != bounds.maxX) return 1;
-    if (geometry.axes[1].start.x() != bounds.minX || geometry.axes[1].start.z() != bounds.maxZ
-        || geometry.axes[1].start.y() != bounds.minY || geometry.axes[1].end.y() != bounds.maxY) return 1;
-    if (geometry.axes[2].start.x() != bounds.maxX || geometry.axes[2].start.y() != bounds.maxY
-        || geometry.axes[2].end.z() != bounds.maxZ) return 1;
-    for (int first = 0; first < 3; ++first) {
-        for (int second = first + 1; second < 3; ++second) {
-            if (geometry.axes[first].startCorner == geometry.axes[second].startCorner
-                || geometry.axes[first].startCorner == geometry.axes[second].endCorner
-                || geometry.axes[first].endCorner == geometry.axes[second].startCorner
-                || geometry.axes[first].endCorner == geometry.axes[second].endCorner) return 1;
-        }
+    if (geometry.axes[1].start.x() != bounds.minX || geometry.axes[1].start.y() != bounds.minY
+        || geometry.axes[1].start.z() != bounds.minZ || geometry.axes[1].end.y() != bounds.maxY) return 1;
+    if (geometry.axes[2].start.x() != bounds.minX || geometry.axes[2].start.y() != bounds.minY
+        || geometry.axes[2].start.z() != bounds.minZ || geometry.axes[2].end.z() != bounds.maxZ) return 1;
+    for (const pcv::render::internal::OverlaySegment &axis : geometry.axes) {
+        if (axis.startCorner != 0) return 1;
     }
     if (!pcv::render::internal::isAxisSegment(geometry.boxEdges[0], geometry)
-        || !pcv::render::internal::isAxisSegment(geometry.boxEdges[7], geometry)
-        || !pcv::render::internal::isAxisSegment(geometry.boxEdges[10], geometry)) return 1;
+        || !pcv::render::internal::isAxisSegment(geometry.boxEdges[3], geometry)
+        || !pcv::render::internal::isAxisSegment(geometry.boxEdges[8], geometry)) return 1;
 
     const QVector<pcv::render::internal::OverlayTick> ticks =
         pcv::render::internal::makeIntegerTicks(bounds.minX, bounds.maxX);
     if (pcv::render::internal::kOverlayGridDivisions != 10) return 1;
     if (ticks.size() < 2 || ticks.first().normalized != 0.0f || ticks.last().normalized != 1.0f
         || ticks.first().value != bounds.minX || ticks.last().value != bounds.maxX) return 1;
+    const QVector<pcv::render::internal::OverlayTick> labelTicks =
+        pcv::render::internal::makeAxisLabelTicks(bounds.minX, bounds.maxX);
+    if (labelTicks.isEmpty() || qFuzzyIsNull(labelTicks.first().normalized)
+        || labelTicks.last().normalized != 1.0f) return 1;
     qint64 previous = std::numeric_limits<qint64>::min();
     for (int index = 0; index < ticks.size(); ++index) {
         const pcv::render::internal::OverlayTick &tick = ticks[index];

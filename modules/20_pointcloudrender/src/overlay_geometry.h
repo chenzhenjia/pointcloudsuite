@@ -82,12 +82,12 @@ inline OverlayGeometry makeOverlayGeometry(const OverlayBounds &bounds)
         {bounds.minX, bounds.minY, bounds.maxZ}, {bounds.maxX, bounds.minY, bounds.maxZ},
         {bounds.maxX, bounds.maxY, bounds.maxZ}, {bounds.minX, bounds.maxY, bounds.maxZ}};
 
-    // X: y=min, z=min. Y: x=min, z=max. Z: x=max, y=max.
-    // Their endpoint sets {0,1}, {4,7}, and {2,6} are intentionally disjoint.
+    // All axes share the minimum corner as their origin and extend in their
+    // positive direction: X=0->1, Y=0->3, Z=0->4.
     constexpr std::array<std::array<int, 2>, 12> boxEdges = {{{0, 1}, {1, 2}, {2, 3}, {3, 0},
                                                                 {4, 5}, {5, 6}, {6, 7}, {7, 4},
                                                                 {0, 4}, {1, 5}, {2, 6}, {3, 7}}};
-    constexpr std::array<std::array<int, 2>, 3> axisEdges = {{{0, 1}, {4, 7}, {2, 6}}};
+    constexpr std::array<std::array<int, 2>, 3> axisEdges = {{{0, 1}, {0, 3}, {0, 4}}};
 
     for (int axis = 0; axis < int(axisEdges.size()); ++axis)
         geometry.axes[axis] = makeSegment(geometry.corners, axisEdges[axis][0], axisEdges[axis][1]);
@@ -129,6 +129,14 @@ inline QVector<OverlayTick> makeIntegerTicks(float minimum, float maximum,
         ticks.push_back({normalized, value, rounded});
         previous = rounded;
     }
+    return ticks;
+}
+
+inline QVector<OverlayTick> makeAxisLabelTicks(float minimum, float maximum,
+                                                int divisions = kOverlayGridDivisions)
+{
+    QVector<OverlayTick> ticks = makeIntegerTicks(minimum, maximum, divisions);
+    if (!ticks.isEmpty() && qFuzzyIsNull(ticks.first().normalized)) ticks.removeFirst();
     return ticks;
 }
 
