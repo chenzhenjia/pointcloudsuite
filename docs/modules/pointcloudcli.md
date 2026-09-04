@@ -25,3 +25,5 @@
 
 - 新增独立 `pointcloudcli` target 和 `PCV_BUILD_CLI` 开关；默认关闭，GUI target 和 UI 源码未修改。
 - 建立 `--help`、`--version`、空参数和未知参数的稳定命令行契约及 CTest 覆盖。
+
+最后核对日期：2026-09-04。

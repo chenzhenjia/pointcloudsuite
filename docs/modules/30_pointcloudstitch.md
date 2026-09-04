@@ -4,7 +4,7 @@
 
 接口：`pcv::interface::stitchRawLineProfiles`。测试：`stitching_interface_tests`。应用只负责输入组织、进度、窗口状态和结果展示。
 
-最后核对日期：2026-08-31。
+最后核对日期：2026-09-04。
 
 ### 2026-08-31（M5.1 seam pipeline）
 

@@ -57,7 +57,7 @@ GUI 线程：LatestFrameSlot 发布通知（QueuedConnection）→ take() → Qt
 ## 4. 实施与验证
 
 - 模块/画布/pipeline/应用全部实现并编译通过（Debug，MSVC x64）；
-- 单测：frame_converter_tests、frame_source_tests、live_pipeline_tests、pointcloud_canvas_contract_tests 全部 PASS；
+- 单测：frame_converter_tests、frame_source_tests、live_pipeline_tests、pointcloud_canvas_contract_tests 全部 通过；
 - Mv3dLp.dll 部署验证通过（POST_BUILD 拷贝到 exe 目录）。
 
 ## 5. 风险与待办
@@ -72,7 +72,7 @@ GUI 线程：LatestFrameSlot 发布通知（QueuedConnection）→ take() → Qt
 - 证据：startup.log configured Height=1060 vs 回调完整 3000 行深度帧；装配器丢弃导致 valid=false；
 - 根因：Height 参数非 DP HFR 完整扫描行数（真实行数 3000 来自 SDK max_scan_rows）；深度图模式回调本就是整幅扫描；
 - 修复：装配器无活动分片时整幅 chunk 按实际高度放行并动态提升 expectedRows；活动分片期间的高度异常仍拒绝；Height 参数改为仅诊断（configureAssembly(0) 首帧自适应）；
-- 验证：frame_source_tests 更新整幅放行/活动分片拒绝/自适应用例，全量 17/17 PASS；实机确认 complete scan rows=3000/3000 fragments=1 discarded=0 size=2100x3000（630 万点进入后台转换），无 valid=false 空帧；
+- 验证：frame_source_tests 更新整幅放行/活动分片拒绝/自适应用例，全量 17/17 通过；实机确认 complete scan rows=3000/3000 fragments=1 discarded=0 size=2100x3000（630 万点进入后台转换），无 valid=false 空帧；
 - 已知限制：实时预览 pipeline 默认 filter.voxel maxPoints=300000，完整点数在画布被截断到 30 万点显示，画布完整点数渲染待评估（VBO/性能）。
 
 ## 7. 对齐 3DMVS 取流方式（2026-09）

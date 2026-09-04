@@ -8,7 +8,7 @@
 
 接口/测试：`pcv::detail::io::readPly`、`readPlyCached`；`ply_reader_tests`、`cloud_cache_tests`。
 
-最后核对日期：2026-09-01。当前状态以源码、CMake 和测试为准。
+最后核对日期：2026-09-04。当前状态以源码、CMake 和测试为准。
 
 ## 变更记录
 

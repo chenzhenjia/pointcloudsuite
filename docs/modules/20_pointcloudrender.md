@@ -8,7 +8,7 @@
 
 接口/测试：`PointCloudCanvas`、`pointcloud_canvas_contract_tests`；真实 Windows 桌面交互和关闭生命周期需单独验收。
 
-最后核对日期：2026-08-31。实现位于 `modules/20_pointcloudrender/src/pointcloud_canvas.cpp`。
+最后核对日期：2026-09-04。实现位于 `modules/20_pointcloudrender/src/pointcloud_canvas.cpp`。
 
 ## 变更记录
 

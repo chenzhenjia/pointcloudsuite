@@ -7,7 +7,7 @@
 - `architecture/`：模块边界、依赖方向和代码构成。
 - `requirements/`：当前需求和历史版本需求。
 - `contracts/`：PNG、PLY、JSON 和位姿契约。
-- `modules/`：十个模块的状态、接口、测试和变更记录。
+- `modules/`：规范模块、实验相机、CLI 及未实现模块的状态、接口、测试和变更记录。
 - `development/`：Windows、Qt 和 CMake 构建说明。
 - `user-guide/`：应用操作和验收说明。
 - `research/`：历史调研和技术分析。
@@ -22,10 +22,10 @@
 - [60_planefitting](modules/60_planefitting.md)
 - [70_roi_template](modules/70_roi_template.md)
 - [80_planeoutput](modules/80_planeoutput.md)
-- [pointcloudcli](modules/pointcloudcli.md)：独立 CLI 构建与参数入口骨架
+- [pointcloudcli](modules/pointcloudcli.md)：独立 CLI 构建与参数入口骨架（当前不处理点云业务）
 - [90_interferenceplane](modules/90_interferenceplane.md)：未实现
 - [100_qualityreport](modules/100_qualityreport.md)：未实现
 
-模块文档采用追加式变更记录。当前状态以文档顶部和源码/CMake/测试为准。
+模块文档采用追加式变更记录。当前状态以文档顶部和源码、CMake、测试为准；文档中的历史测试数量仅用于追溯，不代表本次验证结果。
 
-最后核对日期：2026-08-31。
+最后核对日期：2026-09-04。

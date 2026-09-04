@@ -1,6 +1,6 @@
 # PointCloudSuite 点云查看与处理程序产品开发文档
 
-> 状态：历史归档。当前项目基线请参阅 `docs/requirements/pointcloudview_v0.3.md`。本文仅保留 v0.1 历史事实，不作为当前实现规范。最后核对日期：2026-08-31。
+> 状态：历史归档。当前项目基线请参阅 `docs/requirements/pointcloudview_v0.3.md`。本文仅保留 v0.1 历史事实，不作为当前实现规范。最后核对日期：2026-09-04。
 
 版本：v0.1（历史版本）
 日期：2026-08-24

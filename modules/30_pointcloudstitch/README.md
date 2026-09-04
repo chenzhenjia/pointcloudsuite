@@ -12,4 +12,4 @@
 
 统一接口为 `pcv::interface::stitchRawLineProfiles`。主要测试为 `stitching_interface_tests`。应用只负责 UI、输入组织、进度和结果展示。
 
-最后核对日期：2026-08-31。
+最后核对日期：2026-09-04。

@@ -4,7 +4,7 @@
 
 接口/测试：`extractPlaneImage`、`generateTempWorkpiece`；`temp_workpiece_interface_tests` 和几何回归测试。
 
-最后核对日期：2026-08-31。
+最后核对日期：2026-09-04。
 
 ## 变更记录
 

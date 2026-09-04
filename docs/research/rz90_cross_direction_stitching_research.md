@@ -1,11 +1,11 @@
 # 基于相机姿态旋转（RZ 90°）的多方向点云拼接方案调研报告
 
-> 状态：历史调研归档。本文仅记录当时的分析和验证，不代表当前实现或发布结论。当前项目基线请参阅 `docs/requirements/pointcloudview_v0.3.md`。最后核对日期：2026-08-31。
+> 状态：历史调研归档。本文仅记录当时的分析和验证，不代表当前实现或发布结论。当前项目基线请参阅 `docs/requirements/pointcloudview_v0.3.md`。最后核对日期：2026-09-04。
 
 > 范围：当前 pointcloudstitch 模块（含共享 pcv_registration）。仅调研与可行性分析，
 > 未修改任何现有模块、算法或核心处理流程。
 > 依据：源码事实（include/pcv/registration/*、src/registration/*、apps/pointcloudstitch/*、
-> docs/requirements/pointcloudstitch.md、apps/pointcloudstitch/README.md）+ 独立数值验证。
+> docs/modules/30_pointcloudstitch.md、apps/pointcloudstitch/README.md）+ 独立数值验证。
 
 ## 0. 结论摘要
 
@@ -33,7 +33,7 @@
 
 ## 1. 现状梳理（代码事实）
 
-处理链（docs/requirements/pointcloudstitch.md + 源码核实）：
+处理链（docs/modules/30_pointcloudstitch.md + 源码核实）：
 
 ```text
 ASCII PLY + Start/End 位姿 + Eye-in-Hand XML
@@ -61,7 +61,7 @@ ASCII PLY + Start/End 位姿 + Eye-in-Hand XML
 | 验收 | 修正 ≤ 10 mm/1 deg；结构点双向 3 mm 覆盖 ≥ 0.65；点数门槛 100 | multiframe_registration.h IcpOptions |
 | 接缝融合 | 应用侧 seamfusion.cpp：全局轴 = 首末帧中心连线，逐对法向 = 相邻中心连线，要求全部中心沿同一方向有序；真实投影重叠区中点定缝 | apps/pointcloudstitch/seamfusion.cpp:38-46 |
 | 共享接缝 | pcv_registration::applyTrajectorySeamFusion 当前 fail-closed 禁用 | src/registration/seam_fusion.cpp:46 |
-| 重叠建议 | 实际有效投影重合 ≥ 30~50 mm 或工件局部宽度 15%~25% | docs/requirements/pointcloudstitch.md §1.2 |
+| 重叠建议 | 实际有效投影重合 ≥ 30~50 mm 或工件局部宽度 15%~25% | docs/modules/30_pointcloudstitch.md |
 | 参考实现 | laser_profile_camera_transform_gui.py / point_cloud_stitching_gui.py | README |
 
 ## 2. 调研内容逐项结论
@@ -169,7 +169,7 @@ RZ=0 的 Y 行程扫描与 RZ=90° 的 X 行程扫描的 `*_robot_base.ply`，�
 | apps/pointcloudstitch/pointcloudprocessor.cpp（或 src/registration/multiframe_registration.cpp） | 配准拓扑：基准参考（星形）/两阶段；基准帧角色 |
 | apps/pointcloudstitch/seamfusion.cpp | 交叉接缝豁免或交叉接缝处理（当前单轴假设） |
 | apps/pointcloudstitch/stitchingwindow.cpp / regressionrunner.cpp | 输入增加“基准帧”标记；报告增加交叉补丁诊断字段 |
-| docs/requirements/pointcloudstitch.md / README.md | 输入契约（PLY.Y 语义在 X 行程下的确认）、编排说明 |
+| docs/modules/30_pointcloudstitch.md / README.md | 输入契约（PLY.Y 语义在 X 行程下的确认）、编排说明 |
 
 数据契约风险（最高优先级）：`PLY.Y` 在 X 行程下的编码语义必须与扫描软件确认
 （数值验证：错误语义 ≈ 150 mm 级误差）。

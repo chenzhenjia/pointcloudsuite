@@ -8,7 +8,9 @@ PointCloudSuite v0.3 是多应用 CMake 工作区。应用依赖共享模块，�
 apps/
   pointcloudview       Qt Widgets/OpenGL 查看与处理
   pointcloudstitch     Qt 多帧拼接界面
+  pointcloudcli        独立命令行参数入口骨架
 modules/
+  05_camerainput       海康 Mv3dLp 实验取流
   10_pointcloudread    PLY 读写与缓存
   20_pointcloudrender  Qt/OpenGL 点云画布
   30_pointcloudstitch  拼接流程编排
@@ -40,4 +42,6 @@ tools/                可选诊断工具
 
 `registration_diagnostic` 通过 `pcv::interface::stitchRawLineProfiles` 调用统一拼接接口。
 
-最后核对日期：2026-08-31。
+`pointcloudcli` 仅在 `PCV_BUILD_CLI=ON` 时生成，当前提供 `--help`、`--version` 及参数错误契约，不链接 Qt 或共享点云模块。
+
+最后核对日期：2026-09-04。

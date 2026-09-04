@@ -12,4 +12,4 @@
 
 详细参数、默认值和测试入口以 `src/filtering`、`include/pcv/filtering` 和 `tests/` 为准。
 
-最后核对日期：2026-08-31。
+最后核对日期：2026-09-04。

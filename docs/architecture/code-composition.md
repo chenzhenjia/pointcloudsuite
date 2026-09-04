@@ -15,15 +15,18 @@
 | `pcv_m70_roi_template` | 临时扫描、ROI、模板和 Mask | 10、50、80 |
 | `pcv_m80_planeoutput` | PNG、PLY、JSON 成套输出和回滚 | `pcv_core`、`pcv_infrastructure`、Qt Core/Gui |
 
+实验模块 `pcv_m05_camerainput` 由 `PCV_BUILD_EXPERIMENTAL_CAMERA` 控制，封装 Mv3dLp 回调取流、完整扫描组帧和 Mock 源；它不属于 v0.3 稳定发布基线。
+
 ## 应用和工具
 
 - `pointcloudview`：界面、异步读取、画布生命周期、业务状态和 DTO 转换。
 - `pointcloudstitch`：界面、输入组织、进度和结果展示。
 - `registration_diagnostic`：仅链接模块 target，调用 `stitchRawLineProfiles`。
+- `pointcloudcli`：独立 C++17 命令行入口，仅提供参数和版本输出。
 - `tests/`：注册模块单元测试、接口测试和必要的兼容入口测试。
 
 ## 兼容层
 
 `pcv_io`、`pcv_registration`、`pcv_interface`、`pcv_output` 和旧 forwarding header 在迁移期保留。删除前必须完成引用审计、全量构建、CTest、GUI 和真实夹具验收，并单独提交。
 
-最后核对日期：2026-08-31。
+最后核对日期：2026-09-04。

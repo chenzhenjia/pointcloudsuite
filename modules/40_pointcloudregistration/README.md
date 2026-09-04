@@ -12,4 +12,4 @@ ICP、相邻帧配准、结构点覆盖、配准诊断和 seam fusion。共享�
 
 不得依赖应用或 Qt Widgets。主要测试为 `multiframe_registration_tests` 和 `seam_fusion_tests`。
 
-最后核对日期：2026-08-31。
+最后核对日期：2026-09-04。

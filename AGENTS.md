@@ -9,7 +9,7 @@
 - 删除、覆盖、批量重命名、外部上传、账号或数据库操作前必须获得明确授权。
 - 禁止写入 password、secret、token、API key、private key。
 - 缓存、日志、导出物和运行数据不得写入源码树。
-- Windows 源码路径和构建路径使用 ASCII。
+- Windows 源码、构建、输入和输出路径支持 Unicode；构建目录仍应放在源码树之外。
 - 不把 build*/、test_pointcloud_a/、mid_gap/ 或实验报告当作稳定 API。
 - 不使用 `git reset --hard`、`git checkout --` 等破坏性命令回退用户修改。
 
@@ -20,8 +20,10 @@
 - 根选项：
   - `PCV_BUILD_POINTCLOUDVIEW`
   - `PCV_BUILD_POINTCLOUDSTITCH`
+  - `PCV_BUILD_CLI`（默认 `OFF`，生成独立的 `pointcloudcli` 参数入口）
   - `PCV_BUILD_TOOLS`
   - `PCV_BUILD_TESTS`
+  - `PCV_BUILD_EXPERIMENTAL_CAMERA`（CMake 默认 `ON`；构建脚本默认关闭）
 - 外部算法依赖：不依赖 Python、Open3D、PCL、VTK 或 CUDA。
 - 当前统筹需求文档：`docs/requirements/pointcloudview_v0.3.md`。
 - 模块详细记录：`docs/modules/<module>.md`。
@@ -55,6 +57,7 @@
 - `60_planefitting` 只负责纯几何拟合、RANSAC/PCA、连通域和一致性诊断；ROI/Mask、二维图像映射和 UI 状态归属其他模块或应用。
 - `20_pointcloudrender` 的 `PointCloudCanvas` 实现位于 `modules/20_pointcloudrender/src/pointcloud_canvas.cpp`；应用只负责业务状态、异步生命周期和渲染 DTO 转换。
 - Qt Designer 文件位于 `apps/pointcloudview/ui/` 和 `apps/pointcloudstitch/ui/`，不得把生成头文件提交为手工 UI 源。
+- `pointcloudcli` 仅提供 `--help`、`--version` 和参数错误契约，不接入点云业务或 Qt。
 - `registration_diagnostic` 仅通过 `pcv::interface::stitchRawLineProfiles` 调用统一拼接流水线。
 - 应用 wrapper 只能做参数转换和结果映射，不得保留第二套算法。
 
@@ -98,6 +101,8 @@ Windows + Qt/MSVC 推荐使用仓库脚本，并显式传入可写的 ASCII 路�
 .\scripts\build_windows.ps1 -Config Debug -BuildTests -QtDir <QtDir> -BuildDir <DebugBuildDir> -CMakePath <cmake.exe>
 .\scripts\build_windows.ps1 -Config Release -BuildTests -QtDir <QtDir> -BuildDir <ReleaseBuildDir> -CMakePath <cmake.exe>
 ```
+
+脚本默认使用 `NMake Makefiles` 并将 `PCV_BUILD_EXPERIMENTAL_CAMERA` 设为 `OFF`；需要实验相机时追加 `-ExperimentalCamera`。`NMake Makefiles JOM` 不支持头文件依赖跟踪。
 
 CTest 使用对应构建目录和配置运行：
 

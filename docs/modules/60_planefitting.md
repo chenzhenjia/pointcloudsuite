@@ -4,7 +4,7 @@
 
 接口/测试：`pcv::planefitting::fit`、一致性校验；`plane_fitting_tests`。ROI/Mask 测试归入对应接口和应用测试。
 
-最后核对日期：2026-08-31。纯算法实现不得依赖 `apps/` 或 Qt Widgets。
+最后核对日期：2026-09-04。纯算法实现不得依赖 `apps/` 或 Qt Widgets。
 
 ## 变更记录
 

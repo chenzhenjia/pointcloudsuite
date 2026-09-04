@@ -12,4 +12,4 @@
 
 主要接口为 `generateTempWorkpiece` 和临时工件相关接口。主要测试为 `temp_workpiece_interface_tests` 及几何回归测试。
 
-最后核对日期：2026-08-31。
+最后核对日期：2026-09-04。

@@ -1,6 +1,6 @@
 # 05_camerainput：海康 Mv3dLp 点云取流模块
 
-状态：实验中（2026-09）；默认构建，仍需实机验收后才能纳入 v0.3 发布基线。
+状态：实验中（2026-09）；根 CMake 默认构建，`scripts/build_windows.ps1` 默认关闭，仍需实机验收后才能纳入 v0.3 发布基线。
 需求登记：启用 3DMVS 回调取流；DP2240 默认请求 `Range_Image=7`，将 SDK 原始深度回调转换并组装为完整 ABC32f 扫描。
 
 ### DP2240 Height 语义修正（2026-09-03，终版：仅诊断 + 自适应组帧）
@@ -103,7 +103,7 @@ target：`pcv_m05_camerainput`（STATIC，依赖 `pcv_core` + `Qt::Core`；真�
 - 需求：相机点云图取流直连 OpenGL 画布，减少 PLY 落盘/磁盘缓存中间步骤，处理链以 JSON pipeline 编排；
 - 文件：本模块全部文件；`apps/pointcloudview`（cameradialog、live_pipeline、mainwindow 相机菜单）；`modules/20_pointcloudrender`（`setCloudStreaming`）；
 - 行为：回调帧 → 最新帧槽 → GUI 拉帧 → 后台转换 → `LiveFrame` → `PipelineRunner` → `setCloudStreaming` 渲染；
-- 验证：实验开关 ON 的 Debug 构建和 CTest `17/17` PASS；生产链使用 Mock 的回归已覆盖，真实 DP2240 仍未验证；
+- 验证：实验开关 ON 的 Debug 构建和 CTest `17/17` 通过；生产链使用 Mock 的回归已覆盖，真实 DP2240 仍未验证；
 - 风险：真实相机验收、坐标系映射、回调生命周期关闭时序待实机确认。
 
 ### 2026-09（DP2240 无效帧修复）
@@ -111,7 +111,7 @@ target：`pcv_m05_camerainput`（STATIC，依赖 `pcv_core` + `Qt::Core`；真�
 - 现象：DP2240（MV-DP2240-01P）接入后对话框显示"帧：无效"；
 - 诊断：SDK 日志（Mv3dLpLog）显示设备为 HFR 线激光轮廓传感器，`LSLRIOutImageType=2` 且 HFR 管线缓冲为深度图+亮度图——点云模式下实际回传深度图帧（ImageType_Depth C16），而转换器此前只接受 ABC32f；
 - 修复：转换器新增 C16/ABC16 路径；`FrameSource::convertFrame` 真机走 SDK 权威转换（MapDepthToPointCloud/ImageConvert）回退手写公式；ImageMode 自适应不强制；对话框加取流模式选项与帧类型诊断日志（startup.log）；
-- 验证：frame_converter_tests 增补 C16/ABC16 用例，全量 17/17 PASS，应用构建通过；
+- 验证：frame_converter_tests 增补 C16/ABC16 用例，全量 17/17 通过，应用构建通过；
 - 风险：实机 DP2240 复测待执行；深度/轮廓手写公式为近似（SDK 转换优先）。
 
 ### 2026-09（DP2240 实机 scan-height 无效帧修复）
@@ -122,7 +122,7 @@ target：`pcv_m05_camerainput`（STATIC，依赖 `pcv_core` + `Qt::Core`；真�
 - 修复：
   - scan_frame_assembler.h：无活动分片时整幅 chunk（高度大于 configured）按实际高度直接发布并动态提升 expectedRows；仅活动分片期间的高度异常才拒绝；
   - mv3d_lp_camera.cpp：configureExpectedScanHeight 改为仅诊断（Height 不注入装配器），装配器以 expectedRows=0 自适应，首帧确定行数；
-- 验证：frame_source_tests 更新整幅放行/活动分片拒绝/自适应用例，全量 17/17 PASS；应用构建通过；
+- 验证：frame_source_tests 更新整幅放行/活动分片拒绝/自适应用例，全量 17/17 通过；应用构建通过；
 - 实机确认（startup.log 2026-09-03 11:40）：complete scan rows=3000/3000 fragments=1 discarded=0 size=2100x3000，不再出现 valid=false 空帧；完整扫描 2100x3000=630 万点进入后台转换；
 - 已知限制（预览显示预算）：实时 pipeline 的 filter.voxel 默认 maxPoints=300000，超限确定性截断到 30 万点显示；如需画布复现完整 630 万点，需提高/移除该上限并评估 OpenGL VBO 与渲染性能。
 
@@ -130,7 +130,7 @@ target：`pcv_m05_camerainput`（STATIC，依赖 `pcv_core` + `Qt::Core`；真�
 
 - 依据：3DMVS V3.1.4 日志（Mv3dLpLog）确认真实相机取流 ImageMode=7（Range_Image）、虚拟相机（Vir 前缀）走同一流程；用户手册确认重发包/缓存节点/触发模式；
 - 行为：默认 ImageMode=7；事件驱动取帧（callback setter/clear）；转换移出 GUI 线程（QtConcurrent）；异常事件 + 自动重连（reconnectOnce + 2s 定时器）；软触发（SoftTrigger）；虚拟相机识别与标记；
-- 验证：frame_source_tests 增补通知/异常/深度分派用例，全量 17/17 PASS；应用构建通过；
+- 验证：frame_source_tests 增补通知/异常/深度分派用例，全量 17/17 通过；应用构建通过；
 - 未验证：真实相机软触发/重连/深度图取流实机复测待执行；重发包为 SDK 内部默认（Mv3dLpApi 未公开 SetResend 接口，已在文档记录）。
 
 ### 2026-09（DP2240 安全回归）

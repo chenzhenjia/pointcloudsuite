@@ -17,6 +17,8 @@
 
 也可以在 Qt Creator 中打开根目录 `CMakeLists.txt`，由 Kit 提供 Qt 路径。命令行环境可通过 `CMAKE_PREFIX_PATH`、`Qt6_DIR` 或 `-QtDir` 指定 Qt。
 
+`scripts/build_windows.ps1` 默认使用 `NMake Makefiles`；需要实验相机时追加 `-ExperimentalCamera`。根 CMake 的 `PCV_BUILD_EXPERIMENTAL_CAMERA` 默认值为 `ON`，脚本会显式传入 `OFF` 以保持普通构建稳定。`PCV_BUILD_CLI=ON` 可单独构建不依赖 Qt 的 `pointcloudcli`。
+
 ## 运行时部署
 
 Windows 构建会使用 Qt 的 `windeployqt` 部署运行库和插件。构建、缓存、日志、导出和运行数据应放在源码树之外。
@@ -25,4 +27,4 @@ Windows 构建会使用 Qt 的 `windeployqt` 部署运行库和插件。构建�
 
 项目不要求 Python、PCL、Open3D、VTK、CUDA、数据库或云服务。
 
-最后核对日期：2026-08-31。
+最后核对日期：2026-09-04。

@@ -20,4 +20,4 @@
 
 详细契约和验收条件见 `docs/requirements/pointcloudview_v0.3.md` 与 `docs/modules/30_pointcloudstitch.md`。
 
-最后核对日期：2026-08-31。
+最后核对日期：2026-09-04。

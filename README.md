@@ -11,15 +11,16 @@ PointCloudSuite 是基于 Qt 6、C++17 和 CMake 的工业点云处理项目，�
 - `pointcloudview`：点云读取、渲染、点选、平面拟合、ROI/模板和输出。
 - `pointcloudstitch`：线扫点云坐标转换、多帧配准、接缝融合和结果编排。
 - `pointcloudcli`：独立命令行入口骨架；当前只提供 `--help` 和 `--version`，不执行点云业务处理。
+- `modules/05_camerainput`：海康 Mv3dLp 实验取流模块；默认构建但仍需实机验收。
 - `modules/10_pointcloudread` 至 `modules/80_planeoutput`：规范共享模块。
-- `registration_diagnostic`：通过 `pcv::interface::stitchRawLineProfiles` 执行统一拼接流水线的诊断工具，支持通用多帧输入；`inspect` 子命令可检查 PLY header 的 `format` 行。
+- `registration_diagnostic`：通过 `pcv::interface::stitchRawLineProfiles` 执行统一拼接流水线的诊断工具，支持通用多帧输入、位姿匹配和 `inspect` PLY header 检查。
 - `tests/`：模块和接口回归测试。
 - `docs/`：需求、架构、契约、开发和用户文档。
 
 ## 目录结构
 
 ```text
-apps/          两个 Qt 桌面应用
+apps/          两个 Qt 桌面应用和 pointcloudcli
 modules/       v0.3 规范模块
 src/           迁移期基础实现和兼容聚合 target
 include/pcv/   公共头和 forwarding header
@@ -37,7 +38,7 @@ docs/           项目文档
 - MSVC x64，支持 C++17
 - CMake 3.19+
 - Qt 6.5+，包含 Core、Gui、Widgets、Concurrent、OpenGL 和 OpenGLWidgets
-- 源码和构建路径使用 ASCII
+- 源码、构建、输入和输出路径支持 Unicode；构建目录建议放在源码树之外
 
 项目不依赖 Python、Open3D、PCL、VTK、CUDA、数据库或云服务。
 
@@ -74,10 +75,12 @@ ctest --test-dir <CliBuildDir> -C Debug -R "cli_" --output-on-failure
 
 `PCV_BUILD_CLI=OFF` 是默认值，因此既有 GUI 构建和产物不变。
 
+根 CMake 默认启用 `PCV_BUILD_EXPERIMENTAL_CAMERA`；`scripts/build_windows.ps1` 默认将该开关传为 `OFF`，需要实验相机时请显式添加 `-ExperimentalCamera`。
+
 ## 代码边界
 
 共享算法位于模块 `src/`，公共头位于模块 `include/`。应用可以依赖共享模块，共享模块不得依赖应用。Qt Designer 文件位于 `apps/pointcloudview/ui/` 和 `apps/pointcloudstitch/ui/`。
 
 详细模块职责见 [v0.3 需求文档](docs/requirements/pointcloudview_v0.3.md) 和 [模块文档](docs/modules/)。
 
-最后核对日期：2026-08-31。
+最后核对日期：2026-09-04。

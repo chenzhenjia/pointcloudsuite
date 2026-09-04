@@ -12,4 +12,4 @@
 
 可依赖 Qt Widgets/OpenGL 和 `pcv_core`，不得依赖 `apps/` 或应用 processor。主要测试为 `pointcloud_canvas_contract_tests`。真实 Windows 桌面点选、矩形选区、旋转、平移、缩放和关闭验收需单独记录。
 
-最后核对日期：2026-08-31。
+最后核对日期：2026-09-04。
