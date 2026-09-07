@@ -25,6 +25,9 @@ struct StitchingOptions {
     int sampleStride = 8;
     bool seamEnabled = false;
     float seamHalfWidthMm = 8.0f;
+    // Compatible default: the registration result keeps the 2 mm pre/post ICP
+    // diagnostic frames. Standard output callers disable this to skip frames.
+    bool collectDiagnosticFrames = true;
     std::function<bool()> isCancelled;
     std::function<void(float, const QString &)> progress;
 };
@@ -39,6 +42,16 @@ struct StitchingResult {
     QVector<pointcloud::IcpDiagnostics> icpDiagnostics;
     QVector<pointcloud::SeamFusionDiagnostic> seamDiagnostics;
     QString diagnostics;
+    // Stage wall-clock timings (ms). readMs/transformMs/registrationMs are the
+    // durations of the conversion and registration calls; seamFusionMs comes
+    // from the shared seam fusion result; outputMs covers the formal PLY write.
+    // registration detail is reported in diagnostics via the module 40 result.
+    qint64 readMs = 0;
+    qint64 transformMs = 0;
+    qint64 registrationMs = 0;
+    qint64 seamFusionMs = 0;
+    qint64 outputMs = 0;
+    qint64 totalMs = 0;
 };
 
 StitchingResult stitchRawLineProfiles(const StitchingOptions &options);

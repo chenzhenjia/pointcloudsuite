@@ -30,6 +30,8 @@ struct StitchTaskResult {
     qsizetype previewCount = 0;
     qsizetype pointsBeforeOutputDownsample = 0;
     float outputDownsampleVoxelSize = 0.0f;
+    qint64 seamFusionMs = 0;
+    qint64 outputMs = 0;
     QString error;
     bool cancelled = false;
     bool registrationAccepted = false;

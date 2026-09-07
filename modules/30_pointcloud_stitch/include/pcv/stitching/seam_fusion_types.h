@@ -52,6 +52,9 @@ struct SeamFusionResult {
     QVector<SeamFusionDiagnostic> diagnostics;
     qsizetype inputPoints = 0;
     qsizetype outputPoints = 0;
+    qint64 seamFusionMs = 0;
+    // Wall-clock time spent building the per-cloud mutual-distance indexes.
+    qint64 seamIndexBuildMs = 0;
     QString error;
     bool ok = false;
     bool cancelled = false;

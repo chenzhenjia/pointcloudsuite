@@ -71,14 +71,25 @@ struct IcpOptions {
     bool relaxedStructuralValidation = false;
     bool structuralIcpEnabled = true;
     int supportPlaneSampleStride = 16;
-    bool tangentCoarseAlignmentEnabled = true;
+    // Balanced mode: the expensive in-plane coarse search is off by default.
+    // With tangentCoarseAlignmentAuto=true it still runs when the robot initial
+    // value, after plane pre-alignment, misses the accepted overlap/coverage
+    // conditions; diagnostic callers re-enable it explicitly.
+    bool tangentCoarseAlignmentEnabled = false;
+    bool tangentCoarseAlignmentAuto = true;
+    // When true (compatible default) the registration result carries the 2 mm
+    // pre/post ICP diagnostic frames; callers in standard output mode disable
+    // this to skip the unused diagnostic generation entirely.
+    bool collectDiagnosticFrames = true;
     float tangentCoarseSearchRadiusMm = 10.0f;
     float tangentCoarseStepMm = 1.0f;
     float tangentCoarseRefineStepMm = 0.25f;
     float tangentCoarseScoreDistanceMm = 5.0f;
     float tangentCoarseYawRadiusDegrees = 1.0f;
     float tangentCoarseYawStepDegrees = 0.25f;
-    bool wideStructureDiagnosticEnabled = true;
+    // Diagnostic-only by default (balanced mode): the wide structure search
+    // stays disabled unless a diagnostic configuration re-enables it.
+    bool wideStructureDiagnosticEnabled = false;
     bool applyWideStructureCandidate = false;
     float wideStructureSearchRadiusMm = 120.0f;
     float wideStructureSearchStepMm = 10.0f;
@@ -218,6 +229,26 @@ struct IcpDiagnostics {
     float structuralBidirectionalCoverage5mm = 0.0f;
     QString blockingClass;
     int cancellationCheckCount = 0;
+    // Per-attempt stage wall-clock timings (ms) of the attempt that produced
+    // this diagnostic (the relaxed-retry attempt when relaxedRetryAccepted is
+    // set). attemptTotalMs is the full registerPair duration of that attempt.
+    qint64 preprocessMs = 0;
+    qint64 coarseSearchMs = 0;
+    qint64 icpLevel1Ms = 0;
+    qint64 icpLevel2Ms = 0;
+    qint64 icpLevel3Ms = 0;
+    qint64 structuralValidationMs = 0;
+    qint64 attemptTotalMs = 0;
+    // Total duration (ms) of the first (strict) attempt when a relaxed retry
+    // replaced it; 0 otherwise.
+    qint64 strictAttemptTotalMs = 0;
+    // Sub-stage timings of the attempt that produced this diagnostic.
+    qint64 targetLevelCacheMs = 0;   // per-level target downsample+normals+index prep
+    qint64 correspondenceMs = 0;     // estimateIncrement calls
+    qint64 boundaryCheckMs = 0;      // step-factor overlap boundary trials
+    bool targetLevelCacheHit = false; // at least one level reused the cached target artifacts
+    // Accepted iterations per level of the final attempt; levelFitness.size().
+    QVector<int> levelIterations;
 };
 
 struct MultiFrameRegistrationResult {
@@ -250,6 +281,25 @@ struct MultiFrameRegistrationResult {
     qsizetype pointsBeforeCrossCloudFusion = 0;
     qsizetype crossCloudDuplicateCount = 0;
     float crossCloudFusionVoxelSize = 0.0f;
+    // Aggregated pipeline stage timings (ms). readMs/transformMs are filled by
+    // the caller that owns PLY reading and hand-eye conversion (application
+    // wrapper / stitching interface). All other fields are aggregated inside
+    // registerRobotBaseFrames over every pair attempt, strict and relaxed.
+    qint64 readMs = 0;
+    qint64 transformMs = 0;
+    qint64 preprocessMs = 0;
+    qint64 coarseSearchMs = 0;
+    qint64 icpLevel1Ms = 0;
+    qint64 icpLevel2Ms = 0;
+    qint64 icpLevel3Ms = 0;
+    qint64 structuralValidationMs = 0;
+    qint64 retryMs = 0;
+    qint64 registrationTotalMs = 0;
+    qint64 targetLevelCacheMs = 0;   // sum of per-level target prep over attempts
+    qint64 correspondenceMs = 0;     // sum of estimateIncrement time over attempts
+    qint64 boundaryCheckMs = 0;      // sum of step-factor trial time over attempts
+    qint64 diagnosticFrameMs = 0;    // pre/post ICP diagnostic frame generation
+    int registrationAttemptCount = 0;
     QString error;
     bool cancelled = false;
     bool ok = false;

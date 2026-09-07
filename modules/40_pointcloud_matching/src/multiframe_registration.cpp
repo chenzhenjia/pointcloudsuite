@@ -1,6 +1,7 @@
 #include <pcv/registration/multiframe_registration.h>
 #include <pcv/filtering/downsample.h>
 
+#include <QElapsedTimer>
 #include <QQuaternion>
 #include <QStringList>
 #include <QVector3D>
@@ -58,6 +59,41 @@ struct ConvertedCloud {
 struct SpatialIndex {
     float cellSize = 1.0f;
     std::unordered_map<GridKey, QVector<int>, GridHash> cells;
+};
+
+struct PairStageTimes {
+    qint64 preprocessMs = 0;
+    qint64 coarseSearchMs = 0;
+    qint64 levelMs[3] = {0, 0, 0};
+    qint64 structuralValidationMs = 0;
+    // Sub-stage accounting inside the level loop / attempt.
+    qint64 targetLevelCacheMs = 0;  // per-level target downsample+normals+index prep
+    qint64 correspondenceMs = 0;    // estimateIncrement calls
+    qint64 boundaryCheckMs = 0;     // step-factor overlap boundary trials
+};
+
+// Accumulates wall-clock time of the single currently active registration
+// stage into a PairStageTimes bucket. Region boundaries are marked with
+// start()/stop(); if the pair attempt returns while a region is still active,
+// the destructor still charges the elapsed time to that stage.
+class RegionTimer {
+    QElapsedTimer timer;
+    qint64 *target = nullptr;
+    bool active = false;
+public:
+    void start(qint64 *destination)
+    {
+        target = destination;
+        timer.restart();
+        active = true;
+    }
+    void stop()
+    {
+        if (active && target) *target += timer.elapsed();
+        active = false;
+        target = nullptr;
+    }
+    ~RegionTimer() { stop(); }
 };
 
 struct Increment {
@@ -239,27 +275,73 @@ void symmetricEigen6(const double input[6][6], double values[6], double vectors[
     for(int index=0;index<6;++index)values[index]=matrix[index][index];
 }
 
+struct CorrespondencePair { QVector3D source, target, normal; int targetIndex = -1; };
+
+// Fixed 27-cell neighbourhood offsets (z,y,x in {-1,0,1}) reused by every
+// correspondence and distance query instead of building triple loops.
+const std::array<GridKey, 27> &neighborOffsets27() {
+    static const std::array<GridKey, 27> offsets = [] {
+        std::array<GridKey, 27> table{};
+        int slot = 0;
+        for (qint64 z = -1; z <= 1; ++z)
+            for (qint64 y = -1; y <= 1; ++y)
+                for (qint64 x = -1; x <= 1; ++x)
+                    table[size_t(slot++)] = GridKey{x, y, z};
+        return table;
+    }();
+    return offsets;
+}
+
 Increment estimateIncrement(const QVector<Point3D> &source,
                             const QVector<Point3D> &target,
                             const SpatialIndex &targetIndex,
                             float maximumDistance,
-                            const Bounds &actualOverlap) {
-    struct Pair { QVector3D source,target,normal; int targetIndex=-1; };
-    QVector<Pair> pairs;
+                            const Bounds &actualOverlap,
+                            QVector<CorrespondencePair> *pairsScratch = nullptr,
+                            std::unordered_set<int> *uniqueScratch = nullptr) {
+    // The reference point set is always cropped to actualOverlap before it is
+    // downsampled and indexed, so every indexed candidate is already inside
+    // the overlap box and the per-candidate insideBounds() check is removed.
+    QVector<CorrespondencePair> localPairs;
+    QVector<CorrespondencePair> &pairs = pairsScratch ? *pairsScratch : localPairs;
+    pairs.clear();
     const float limitSquared=maximumDistance*maximumDistance;
-    for(const Point3D &point:source){if(!insideBounds(vectorOf(point),actualOverlap))continue;const GridKey key=gridKey(point,maximumDistance);float best=limitSquared;int selected=-1;for(qint64 z=-1;z<=1;++z)for(qint64 y=-1;y<=1;++y)for(qint64 x=-1;x<=1;++x){const auto found=targetIndex.cells.find({key.x+x,key.y+y,key.z+z});if(found==targetIndex.cells.end())continue;for(int candidate:found->second){if(!insideBounds(vectorOf(target[candidate]),actualOverlap))continue;const QVector3D difference=vectorOf(point)-vectorOf(target[candidate]);const float distance=difference.lengthSquared();if(distance<best){best=distance;selected=candidate;}}}if(selected>=0){const Point3D &reference=target[selected];const QVector3D normal(reference.nx,reference.ny,reference.nz);if(normal.lengthSquared()>1.0e-8f)pairs.push_back({vectorOf(point),vectorOf(reference),normal.normalized(),selected});}}
+    const std::array<GridKey, 27> &offsets = neighborOffsets27();
+    for(const Point3D &point:source){
+        if(!insideBounds(vectorOf(point),actualOverlap))continue;
+        const GridKey key=gridKey(point,maximumDistance);
+        float best=limitSquared;
+        int selected=-1;
+        for(const GridKey &offset:offsets){
+            const auto found=targetIndex.cells.find({key.x+offset.x,key.y+offset.y,key.z+offset.z});
+            if(found==targetIndex.cells.end())continue;
+            for(int candidate:found->second){
+                const QVector3D difference=vectorOf(point)-vectorOf(target[candidate]);
+                const float distance=difference.lengthSquared();
+                if(distance<best){best=distance;selected=candidate;}
+            }
+        }
+        if(selected>=0){
+            const Point3D &reference=target[selected];
+            const QVector3D normal(reference.nx,reference.ny,reference.nz);
+            if(normal.lengthSquared()>1.0e-8f)
+                pairs.push_back({vectorOf(point),vectorOf(reference),normal.normalized(),selected});
+        }
+    }
     Increment result;
     result.correspondences=pairs.size();
     if(pairs.size()<100)return result;
-    std::unordered_set<int> unique;
+    std::unordered_set<int> localUnique;
+    std::unordered_set<int> &unique = uniqueScratch ? *uniqueScratch : localUnique;
+    unique.clear();
     QVector3D sourceCentroid;
-    for(const Pair &pair:pairs)sourceCentroid+=pair.source;
+    for(const CorrespondencePair &pair:pairs)sourceCentroid+=pair.source;
     sourceCentroid/=float(pairs.size());
     double squaredRadius=0.0;
-    for(const Pair &pair:pairs)squaredRadius+=(pair.source-sourceCentroid).lengthSquared();
+    for(const CorrespondencePair &pair:pairs)squaredRadius+=(pair.source-sourceCentroid).lengthSquared();
     const double rotationScale=qMax(1.0,std::sqrt(squaredRadius/double(pairs.size())));
     double normalMatrix[6][6]{},rhs[6]{},weightSum=0.0;
-    for(const Pair &pair:pairs){unique.insert(pair.targetIndex);const double residual=QVector3D::dotProduct(pair.normal,pair.source-pair.target);const double normalized=std::abs(residual)/maximumDistance;if(normalized>=1.0)continue;const double weight=std::pow(1.0-normalized*normalized,2.0);const QVector3D rotation=QVector3D::crossProduct(pair.source-sourceCentroid,pair.normal)/float(rotationScale);const double jacobian[6]{rotation.x(),rotation.y(),rotation.z(),pair.normal.x(),pair.normal.y(),pair.normal.z()};for(int row=0;row<6;++row){rhs[row]-=weight*jacobian[row]*residual;for(int column=0;column<6;++column)normalMatrix[row][column]+=weight*jacobian[row]*jacobian[column];}weightSum+=weight;}
+    for(const CorrespondencePair &pair:pairs){unique.insert(pair.targetIndex);const double residual=QVector3D::dotProduct(pair.normal,pair.source-pair.target);const double normalized=std::abs(residual)/maximumDistance;if(normalized>=1.0)continue;const double weight=std::pow(1.0-normalized*normalized,2.0);const QVector3D rotation=QVector3D::crossProduct(pair.source-sourceCentroid,pair.normal)/float(rotationScale);const double jacobian[6]{rotation.x(),rotation.y(),rotation.z(),pair.normal.x(),pair.normal.y(),pair.normal.z()};for(int row=0;row<6;++row){rhs[row]-=weight*jacobian[row]*residual;for(int column=0;column<6;++column)normalMatrix[row][column]+=weight*jacobian[row]*jacobian[column];}weightSum+=weight;}
     if(weightSum<=1.0e-9)return result;
     double eigenvalues[6]{},eigenvectors[6][6]{};
     symmetricEigen6(normalMatrix,eigenvalues,eigenvectors);
@@ -291,7 +373,7 @@ Increment estimateIncrement(const QVector<Point3D> &source,
     result.matrix.translate(sourceCentroid);result.matrix.rotate(quaternion);result.matrix.translate(-sourceCentroid);
     result.matrix(0,3)+=float(solution[3]);result.matrix(1,3)+=float(solution[4]);result.matrix(2,3)+=float(solution[5]);
     double squared=0.0,xySquared=0.0,zSquared=0.0;
-    for(const Pair &pair:pairs){const QVector3D residual=result.matrix.map(pair.source)-pair.target;squared+=residual.lengthSquared();xySquared+=residual.x()*residual.x()+residual.y()*residual.y();zSquared+=residual.z()*residual.z();}
+    for(const CorrespondencePair &pair:pairs){const QVector3D residual=result.matrix.map(pair.source)-pair.target;squared+=residual.lengthSquared();xySquared+=residual.x()*residual.x()+residual.y()*residual.y();zSquared+=residual.z()*residual.z();}
     result.uniqueReferences=unique.size();
     result.rmse=float(std::sqrt(squared/pairs.size()));
     result.xyRmse=float(std::sqrt(xySquared/pairs.size()));
@@ -310,6 +392,51 @@ QMatrix4x4 scaledRigidIncrement(const QMatrix4x4 &matrix, float factor) {
 
 void applyTransform(QVector<Point3D> *points, const QMatrix4x4 &matrix) {
     for(Point3D &point:*points){const QVector3D transformed=matrix.map(vectorOf(point));point.x=transformed.x();point.y=transformed.y();point.z=transformed.z();if(point.nx!=0||point.ny!=0||point.nz!=0){const QVector3D normal=matrix.mapVector(QVector3D(point.nx,point.ny,point.nz));point.nx=normal.x();point.ny=normal.y();point.nz=normal.z();}}
+}
+
+void copyCloudPoints(QVector<Point3D> *destination, const QVector<Point3D> &source) {
+    destination->resize(source.size());
+    if (!source.isEmpty()) std::copy(source.cbegin(), source.cend(), destination->begin());
+}
+
+// Transforms the scratch buffer in place with `matrix`, counting how many
+// points land inside `bounds`. Scanning stops as soon as the count reaches
+// `minimum`: at that point the threshold is known to be met, so rejected
+// step factors only pay for the points actually examined.
+int countInsideBoundsAfterTransform(QVector<Point3D> *scratch,
+                                    const QMatrix4x4 &matrix,
+                                    const Bounds &bounds,
+                                    int minimum) {
+    int count = 0;
+    const int size = scratch->size();
+    for (int index = 0; index < size; ++index) {
+        Point3D &point = (*scratch)[index];
+        const QVector3D transformed = matrix.map(vectorOf(point));
+        point.x = transformed.x(); point.y = transformed.y(); point.z = transformed.z();
+        if (point.nx != 0 || point.ny != 0 || point.nz != 0) {
+            const QVector3D normal = matrix.mapVector(QVector3D(point.nx, point.ny, point.nz));
+            point.nx = normal.x(); point.ny = normal.y(); point.nz = normal.z();
+        }
+        if (insideBounds(transformed, bounds) && ++count >= minimum) break;
+    }
+    return count;
+}
+
+// XYZ-only variant for step-factor boundary trials: normals play no role in
+// the overlap-box count, so the scratch transform skips them entirely.
+int countInsideBoundsAfterTransformXyz(QVector<Point3D> *scratch,
+                                       const QMatrix4x4 &matrix,
+                                       const Bounds &bounds,
+                                       int minimum) {
+    int count = 0;
+    const int size = scratch->size();
+    for (int index = 0; index < size; ++index) {
+        Point3D &point = (*scratch)[index];
+        const QVector3D transformed = matrix.map(QVector3D(point.x, point.y, point.z));
+        point.x = transformed.x(); point.y = transformed.y(); point.z = transformed.z();
+        if (insideBounds(transformed, bounds) && ++count >= minimum) break;
+    }
+    return count;
 }
 
 float rotationAngle(const QMatrix4x4 &matrix) {
@@ -630,37 +757,91 @@ bool trackPlaneIdentity(const QVector<ConvertedCloud> &clouds,
     return true;
 }
 
-void collectInitialPairDiagnostics(const QVector<Point3D> &sourceCrop,
-                                   const QVector<Point3D> &targetCrop,
-                                   const QVector3D &stitchAxis,
-                                   const IcpOptions &options,
-                                   float preferredSourceHeight,
-                                   float preferredTargetHeight,
-                                   bool planeIdentityTracked,
-                                   IcpDiagnostics *diagnostic,
-                                   PlaneDiagnostic *sourcePlaneOutput,
-                                   PlaneDiagnostic *targetPlaneOutput) {
-    if(!diagnostic)return;
-    diagnostic->sourceCropCount=sourceCrop.size();diagnostic->targetCropCount=targetCrop.size();
+struct PairInitialData {
+    int sourceCropCount = 0;
+    int targetCropCount = 0;
+    float projectedOverlapWidth = 0.0f;
+    DistanceDiagnostic distances;
+    PlaneDiagnostic sourcePlane;
+    PlaneDiagnostic targetPlane;
+};
+
+PairInitialData computePairInitialData(const QVector<Point3D> &sourceCrop,
+                                       const QVector<Point3D> &targetCrop,
+                                       const QVector3D &stitchAxis,
+                                       const IcpOptions &options,
+                                       float preferredSourceHeight,
+                                       float preferredTargetHeight,
+                                       bool planeIdentityTracked) {
+    PairInitialData data;
+    data.sourceCropCount = int(sourceCrop.size());
+    data.targetCropCount = int(targetCrop.size());
     if(!sourceCrop.isEmpty()&&!targetCrop.isEmpty()&&stitchAxis.lengthSquared()>1.0e-8f){
         const QVector3D axis=stitchAxis.normalized();const auto a=projectionRange(sourceCrop,axis),b=projectionRange(targetCrop,axis);
-        diagnostic->projectedOverlapWidth=qMax(0.0f,qMin(a.second,b.second)-qMax(a.first,b.first));
+        data.projectedOverlapWidth=qMax(0.0f,qMin(a.second,b.second)-qMax(a.first,b.first));
     }
-    const DistanceDiagnostic distances=nearestDistanceDiagnostic(sourceCrop,targetCrop);
+    data.distances=nearestDistanceDiagnostic(sourceCrop,targetCrop);
+    data.sourcePlane=planeIdentityTracked?pcaPlane(sourceCrop,preferredSourceHeight,&options):pcaPlane(sourceCrop,std::numeric_limits<float>::quiet_NaN(),&options);
+    data.targetPlane=planeIdentityTracked?pcaPlane(targetCrop,preferredTargetHeight,&options)
+        :(data.sourcePlane.valid?pcaPlane(targetCrop,data.sourcePlane.height,&options):pcaPlane(targetCrop,std::numeric_limits<float>::quiet_NaN(),&options));
+    if(data.sourcePlane.valid&&data.targetPlane.valid&&QVector3D::dotProduct(data.sourcePlane.normal,data.targetPlane.normal)<0){
+        data.targetPlane.normal=-data.targetPlane.normal;data.targetPlane.offset=-data.targetPlane.offset;
+    }
+    return data;
+}
+
+void stampPairInitialData(IcpDiagnostics *diagnostic,
+                          const PairInitialData &data,
+                          bool planeIdentityTracked,
+                          float preferredSourceHeight,
+                          float preferredTargetHeight,
+                          const QString &planeIdentityReason) {
+    if(!diagnostic)return;
+    diagnostic->sourceCropCount=data.sourceCropCount;diagnostic->targetCropCount=data.targetCropCount;
+    diagnostic->projectedOverlapWidth=data.projectedOverlapWidth;
+    const DistanceDiagnostic &distances=data.distances;
     diagnostic->nearestDistanceP50=distances.p50;diagnostic->nearestDistanceP90=distances.p90;diagnostic->nearestDistanceP95=distances.p95;diagnostic->coverageWithin3mm=distances.within3;diagnostic->coverageWithin5mm=distances.within5;diagnostic->coverageWithin10mm=distances.within10;
     // Use robust overlap statistics as the retry scale, never a single point or AABB edge.
     diagnostic->initialTranslation=distances.p90;
-    PlaneDiagnostic sourcePlane=planeIdentityTracked?pcaPlane(sourceCrop,preferredSourceHeight,&options):pcaPlane(sourceCrop,std::numeric_limits<float>::quiet_NaN(),&options);
-    PlaneDiagnostic targetPlane=planeIdentityTracked?pcaPlane(targetCrop,preferredTargetHeight,&options)
-        :(sourcePlane.valid?pcaPlane(targetCrop,sourcePlane.height,&options):pcaPlane(targetCrop,std::numeric_limits<float>::quiet_NaN(),&options));
     diagnostic->planeIdentityTracked=planeIdentityTracked;
     diagnostic->trackedSourcePlaneHeight=preferredSourceHeight;
     diagnostic->trackedTargetPlaneHeight=preferredTargetHeight;
-    diagnostic->planeIdentityReason=planeIdentityTracked?QStringLiteral("使用跨帧一致主平面轨迹"):QStringLiteral("使用相邻帧局部主平面匹配");
-    if(sourcePlane.valid&&targetPlane.valid){if(QVector3D::dotProduct(sourcePlane.normal,targetPlane.normal)<0){targetPlane.normal=-targetPlane.normal;targetPlane.offset=-targetPlane.offset;}diagnostic->planeDiagnosticValid=true;diagnostic->planeNormalAngleDegrees=qRadiansToDegrees(std::acos(qBound(-1.0f,QVector3D::dotProduct(sourcePlane.normal,targetPlane.normal),1.0f)));diagnostic->initialAngleDegrees=diagnostic->planeNormalAngleDegrees;diagnostic->sourcePlaneHeight=sourcePlane.height;diagnostic->targetPlaneHeight=targetPlane.height;diagnostic->planeOffsetDifference=sourcePlane.height-targetPlane.height;}
-    if(sourcePlaneOutput)*sourcePlaneOutput=sourcePlane;
-    if(targetPlaneOutput)*targetPlaneOutput=targetPlane;
+    diagnostic->planeIdentityReason=planeIdentityReason;
+    if(data.sourcePlane.valid&&data.targetPlane.valid){
+        diagnostic->planeDiagnosticValid=true;
+        diagnostic->planeNormalAngleDegrees=qRadiansToDegrees(std::acos(qBound(-1.0f,QVector3D::dotProduct(data.sourcePlane.normal,data.targetPlane.normal),1.0f)));
+        diagnostic->initialAngleDegrees=diagnostic->planeNormalAngleDegrees;
+        diagnostic->sourcePlaneHeight=data.sourcePlane.height;
+        diagnostic->targetPlaneHeight=data.targetPlane.height;
+        diagnostic->planeOffsetDifference=data.sourcePlane.height-data.targetPlane.height;
+    }
 }
+
+// Attempt-invariant preprocessing shared between the strict attempt and its
+// relaxed retry: bounding boxes, overlap crops, plane fits, initial distance
+// statistics and the per-level source downsample base.
+struct PairPreprocessCache {
+    struct LevelTargetEntry {
+        bool valid = false;
+        bool structuralUsed = false;
+        QMatrix4x4 correctionKey;
+        QVector<Point3D> reference;   // after voxel/structural downsample AND normals
+        SpatialIndex index;
+    };
+    bool built = false;
+    Bounds sourceBounds;
+    Bounds targetBounds;
+    QVector3D low;
+    QVector3D high;
+    QVector<Point3D> sourceCrop;
+    QVector<Point3D> targetCrop;
+    PairInitialData initial;
+    QVector<Point3D> movingLevelBase[3];
+    // Per-level target artifacts (downsample -> normals -> index). Valid for a
+    // subsequent attempt only when its level-entry correction matches the key,
+    // which implies an identical overlap box and identical structural decision.
+    LevelTargetEntry levelTarget[3];
+};
 
 bool buildPlanePrealignment(const PlaneDiagnostic &sourcePlane,
                             const PlaneDiagnostic &targetPlane,
@@ -703,7 +884,9 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
                             float preferredTargetPlaneHeight,
                             bool planeIdentityTracked,
                             QMatrix4x4 *correction,
-                            const ProgressCallback &progress) {
+                            const ProgressCallback &progress,
+                            PairStageTimes *stageTimes = nullptr,
+                            PairPreprocessCache *cache = nullptr) {
     IcpDiagnostics diagnostic;
     diagnostic.attempted=true;
     diagnostic.targetCloudIndex=sourceIndex-1;
@@ -719,21 +902,57 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
         return options.isCancelled && options.isCancelled();
     };
     correction->setToIdentity();
-    const Bounds sourceBounds=cloudBounds(source),targetBounds=cloudBounds(target);
-    const QVector3D low(qMax(sourceBounds.minimum.x(),targetBounds.minimum.x())-options.overlapMargin,
-                        qMax(sourceBounds.minimum.y(),targetBounds.minimum.y())-options.overlapMargin,
-                        qMax(sourceBounds.minimum.z(),targetBounds.minimum.z())-options.overlapMargin);
-    const QVector3D high(qMin(sourceBounds.maximum.x(),targetBounds.maximum.x())+options.overlapMargin,
-                         qMin(sourceBounds.maximum.y(),targetBounds.maximum.y())+options.overlapMargin,
-                         qMin(sourceBounds.maximum.z(),targetBounds.maximum.z())+options.overlapMargin);
-    if(high.x()<=low.x()||high.y()<=low.y()||high.z()<=low.z()){
-        diagnostic.reason=QStringLiteral("相邻点云包围盒不重叠");return diagnostic;
+    RegionTimer stageClock;
+    if (stageTimes) stageClock.start(&stageTimes->preprocessMs);
+    const QString planeIdentityReason = planeIdentityTracked
+        ? QStringLiteral("使用跨帧一致主平面轨迹")
+        : QStringLiteral("使用相邻帧局部主平面匹配");
+    Bounds sourceBounds, targetBounds;
+    QVector3D low, high;
+    QVector<Point3D> sourceCrop, targetCrop;
+    PlaneDiagnostic sourcePlane, targetPlane;
+    if (cache && cache->built) {
+        // Relaxed retry: the attempt-invariant preprocessing (bounding boxes,
+        // overlap crops, plane fits, initial distance statistics) is reused.
+        sourceBounds = cache->sourceBounds;
+        targetBounds = cache->targetBounds;
+        low = cache->low;
+        high = cache->high;
+        sourceCrop = cache->sourceCrop;
+        targetCrop = cache->targetCrop;
+        stampPairInitialData(&diagnostic, cache->initial, planeIdentityTracked,
+            preferredSourcePlaneHeight, preferredTargetPlaneHeight, planeIdentityReason);
+    } else {
+        sourceBounds=cloudBounds(source);
+        targetBounds=cloudBounds(target);
+        low=QVector3D(qMax(sourceBounds.minimum.x(),targetBounds.minimum.x())-options.overlapMargin,
+                      qMax(sourceBounds.minimum.y(),targetBounds.minimum.y())-options.overlapMargin,
+                      qMax(sourceBounds.minimum.z(),targetBounds.minimum.z())-options.overlapMargin);
+        high=QVector3D(qMin(sourceBounds.maximum.x(),targetBounds.maximum.x())+options.overlapMargin,
+                       qMin(sourceBounds.maximum.y(),targetBounds.maximum.y())+options.overlapMargin,
+                       qMin(sourceBounds.maximum.z(),targetBounds.maximum.z())+options.overlapMargin);
+        if(high.x()<=low.x()||high.y()<=low.y()||high.z()<=low.z()){
+            diagnostic.reason=QStringLiteral("相邻点云包围盒不重叠");return diagnostic;
+        }
+        sourceCrop=cropCloud(source,low,high);
+        targetCrop=cropCloud(target,low,high);
+        const PairInitialData initialData=computePairInitialData(sourceCrop,targetCrop,stitchAxis,options,
+            preferredSourcePlaneHeight,preferredTargetPlaneHeight,planeIdentityTracked);
+        sourcePlane=initialData.sourcePlane;
+        targetPlane=initialData.targetPlane;
+        stampPairInitialData(&diagnostic, initialData, planeIdentityTracked,
+            preferredSourcePlaneHeight, preferredTargetPlaneHeight, planeIdentityReason);
+        if (cache) {
+            cache->built=true;
+            cache->sourceBounds=sourceBounds;
+            cache->targetBounds=targetBounds;
+            cache->low=low;
+            cache->high=high;
+            cache->sourceCrop=sourceCrop;
+            cache->targetCrop=targetCrop;
+            cache->initial=initialData;
+        }
     }
-    const QVector<Point3D> sourceCrop=cropCloud(source,low,high);
-    const QVector<Point3D> targetCrop=cropCloud(target,low,high);
-    PlaneDiagnostic sourcePlane,targetPlane;
-    collectInitialPairDiagnostics(sourceCrop,targetCrop,stitchAxis,options,preferredSourcePlaneHeight,
-        preferredTargetPlaneHeight,planeIdentityTracked,&diagnostic,&sourcePlane,&targetPlane);
     if(sourceCrop.size()<100||targetCrop.size()<100){diagnostic.reason=QStringLiteral("重叠区抽样点少于 100");return diagnostic;}
     if(options.planePrealignmentEnabled){
         QMatrix4x4 prealignment;
@@ -773,7 +992,25 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
     if(diagnostic.actualOverlapSourceCount<100||diagnostic.actualOverlapTargetCount<100){
         diagnostic.reason=QStringLiteral("实际相邻帧重叠区任一侧抽样点少于 100");return diagnostic;
     }
-    if(options.tangentCoarseAlignmentEnabled&&sourcePlane.valid&&targetPlane.valid){
+    bool runTangentCoarse = options.tangentCoarseAlignmentEnabled;
+    if (runTangentCoarse || (options.tangentCoarseAlignmentAuto && sourcePlane.valid && targetPlane.valid)) {
+        if (!runTangentCoarse) {
+            // Balanced mode trigger: the robot initial value (after plane
+            // pre-alignment) still misses the accepted overlap/coverage
+            // conditions of this pair.
+            const bool coverageKnown = diagnostic.coverageWithin3mmAfterPrealignment > 0.0f
+                || diagnostic.nearestDistanceP90AfterPrealignment > 0.0f;
+            if (coverageKnown
+                && (diagnostic.coverageWithin3mmAfterPrealignment + 1.0e-4f
+                        < options.minimumDegenerateStructuralCoverage3mm
+                    || diagnostic.nearestDistanceP90AfterPrealignment
+                        > options.maximumCorrectionTranslation)) {
+                runTangentCoarse = true;
+            }
+        }
+    }
+    if (stageTimes) { stageClock.stop(); stageClock.start(&stageTimes->coarseSearchMs); }
+    if(runTangentCoarse&&sourcePlane.valid&&targetPlane.valid){
         PlaneDiagnostic alignedSourcePlane=sourcePlane;
         alignedSourcePlane.normal=(*correction).mapVector(sourcePlane.normal).normalized();
         alignedSourcePlane.offset=QVector3D::dotProduct(alignedSourcePlane.normal,(*correction).map(sourcePlane.centroid));
@@ -791,7 +1028,10 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             }
         }
     }else diagnostic.tangentCoarseAlignmentReason=options.tangentCoarseAlignmentEnabled
-        ?QStringLiteral("未检测到可用主平面，跳过切向粗对齐"):QStringLiteral("切向粗对齐已禁用");
+        ?QStringLiteral("未检测到可用主平面，跳过切向粗对齐")
+        :(options.tangentCoarseAlignmentAuto
+            ?QStringLiteral("机器人初值已满足重叠/覆盖率条件，切向粗对齐保持关闭")
+            :QStringLiteral("切向粗对齐已禁用"));
     if(options.wideStructureDiagnosticEnabled&&sourcePlane.valid&&targetPlane.valid){
         PlaneDiagnostic alignedSourcePlane=sourcePlane;
         alignedSourcePlane.normal=(*correction).mapVector(sourcePlane.normal).normalized();
@@ -814,40 +1054,100 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
         }
     }else diagnostic.wideStructureDiagnosticReason=options.wideStructureDiagnosticEnabled
         ?QStringLiteral("未检测到可用主平面，跳过大范围结构诊断"):QStringLiteral("大范围结构诊断已禁用");
+    if (stageTimes) stageClock.stop();
     const int maximumIterations[3]{60,45,35};
+    int levelAcceptedIterations[3]{0,0,0};
     for(int level=0;level<3;++level){
+        if (stageTimes) stageClock.start(&stageTimes->levelMs[level]);
         float previousFitness=-1.0f;
         float previousRmse=std::numeric_limits<float>::max();
         const float voxel=options.voxelLevels[level];
         const float distance=options.correspondenceDistances[level];
-        QVector<Point3D> moving=voxelDownsample(sourceCrop,voxel);
-        QVector<Point3D> reference=voxelDownsample(cropCloud(targetCrop,actualOverlap.minimum,actualOverlap.maximum),voxel);
-        if(moving.size()<100||reference.size()<100){diagnostic.reason=QStringLiteral("%1 mm 层点数少于 100").arg(voxel);return diagnostic;}
-        applyTransform(&moving,*correction);
-        if(options.structuralIcpEnabled&&sourcePlane.valid&&targetPlane.valid){
-            PlaneDiagnostic alignedSourcePlane=sourcePlane;
-            alignedSourcePlane.normal=(*correction).mapVector(sourcePlane.normal).normalized();
-            alignedSourcePlane.offset=QVector3D::dotProduct(alignedSourcePlane.normal,(*correction).map(sourcePlane.centroid));
-            const QVector<Point3D> structuralMoving=structureWeightedPoints(moving,alignedSourcePlane,options.structuralPlaneExclusionMm,options.supportPlaneSampleStride);
-            const QVector<Point3D> structuralReference=structureWeightedPoints(reference,targetPlane,options.structuralPlaneExclusionMm,options.supportPlaneSampleStride);
-            if(structuralMoving.size()>=options.minimumStructuralPoints&&structuralReference.size()>=options.minimumStructuralPoints){
-                moving=voxelDownsample(structuralMoving,voxel);reference=voxelDownsample(structuralReference,voxel);
+        QVector<Point3D> moving;
+        if (cache && cache->built && !cache->movingLevelBase[level].isEmpty()) {
+            moving = cache->movingLevelBase[level];
+        } else {
+            moving = voxelDownsample(sourceCrop, voxel);
+            if (cache && cache->built && !moving.isEmpty())
+                cache->movingLevelBase[level] = moving;
+        }
+        PairPreprocessCache::LevelTargetEntry *levelCache =
+            (cache && cache->built) ? &cache->levelTarget[level] : nullptr;
+        const bool referenceCached = levelCache && levelCache->valid
+            && levelCache->correctionKey == *correction;
+        QVector<Point3D> reference;
+        SpatialIndex index;
+        bool structuralUsed = false;
+        int baselineInside = 0;
+        if (!referenceCached) {
+            RegionTimer targetPrepClock;
+            if (stageTimes) targetPrepClock.start(&stageTimes->targetLevelCacheMs);
+            reference=voxelDownsample(cropCloud(targetCrop,actualOverlap.minimum,actualOverlap.maximum),voxel);
+            if(moving.size()<100||reference.size()<100){diagnostic.reason=QStringLiteral("%1 mm 层点数少于 100").arg(voxel);return diagnostic;}
+            applyTransform(&moving,*correction);
+            if(options.structuralIcpEnabled&&sourcePlane.valid&&targetPlane.valid){
+                PlaneDiagnostic alignedSourcePlane=sourcePlane;
+                alignedSourcePlane.normal=(*correction).mapVector(sourcePlane.normal).normalized();
+                alignedSourcePlane.offset=QVector3D::dotProduct(alignedSourcePlane.normal,(*correction).map(sourcePlane.centroid));
+                const QVector<Point3D> structuralMoving=structureWeightedPoints(moving,alignedSourcePlane,options.structuralPlaneExclusionMm,options.supportPlaneSampleStride);
+                const QVector<Point3D> structuralReference=structureWeightedPoints(reference,targetPlane,options.structuralPlaneExclusionMm,options.supportPlaneSampleStride);
+                if(structuralMoving.size()>=options.minimumStructuralPoints&&structuralReference.size()>=options.minimumStructuralPoints){
+                    moving=voxelDownsample(structuralMoving,voxel);reference=voxelDownsample(structuralReference,voxel);
+                    structuralUsed=true;
+                    diagnostic.structuralIcpUsed=true;
+                    diagnostic.structuralIcpReason=QStringLiteral("ICP 保留全部结构点，主支撑平面每 %1 点保留 1 点").arg(options.supportPlaneSampleStride);
+                }else diagnostic.structuralIcpReason=QStringLiteral("结构点少于 %1，ICP 保留重叠点集").arg(options.minimumStructuralPoints);
+            }else diagnostic.structuralIcpReason=options.structuralIcpEnabled?QStringLiteral("未检测到可用主平面，ICP 保留重叠点集"):QStringLiteral("结构点 ICP 已禁用");
+            baselineInside=countInsideBounds(moving,actualOverlap);
+            if(baselineInside<100){diagnostic.reason=QStringLiteral("%1 mm 层实际重叠区源点少于 100").arg(voxel);return diagnostic;}
+            estimateNormals(&reference,qMax(voxel*4.0f,distance*1.5f));
+            index=buildIndex(reference,distance);
+            if (levelCache) {
+                levelCache->valid=true;
+                levelCache->structuralUsed=structuralUsed;
+                levelCache->correctionKey=*correction;
+                levelCache->reference=reference;
+                levelCache->index=index;
+            }
+            if (stageTimes) targetPrepClock.stop();
+        } else {
+            // Shared strict/retry target cache: downsample, normals and index
+            // of this level are reused; the source side is re-derived because
+            // moving is transformed per attempt.
+            reference = levelCache->reference;
+            index = levelCache->index;
+            structuralUsed = levelCache->structuralUsed;
+            diagnostic.targetLevelCacheHit = true;
+            applyTransform(&moving,*correction);
+            if (structuralUsed) {
+                PlaneDiagnostic alignedSourcePlane=sourcePlane;
+                alignedSourcePlane.normal=(*correction).mapVector(sourcePlane.normal).normalized();
+                alignedSourcePlane.offset=QVector3D::dotProduct(alignedSourcePlane.normal,(*correction).map(sourcePlane.centroid));
+                const QVector<Point3D> structuralMoving=structureWeightedPoints(moving,alignedSourcePlane,options.structuralPlaneExclusionMm,options.supportPlaneSampleStride);
+                moving=voxelDownsample(structuralMoving,voxel);
                 diagnostic.structuralIcpUsed=true;
                 diagnostic.structuralIcpReason=QStringLiteral("ICP 保留全部结构点，主支撑平面每 %1 点保留 1 点").arg(options.supportPlaneSampleStride);
-            }else diagnostic.structuralIcpReason=QStringLiteral("结构点少于 %1，ICP 保留重叠点集").arg(options.minimumStructuralPoints);
-        }else diagnostic.structuralIcpReason=options.structuralIcpEnabled?QStringLiteral("未检测到可用主平面，ICP 保留重叠点集"):QStringLiteral("结构点 ICP 已禁用");
-        const int baselineInside=countInsideBounds(moving,actualOverlap);
+            }else diagnostic.structuralIcpReason=options.structuralIcpEnabled?QStringLiteral("未检测到可用主平面，ICP 保留重叠点集"):QStringLiteral("结构点 ICP 已禁用");
+            baselineInside=countInsideBounds(moving,actualOverlap);
+            if(baselineInside<100){diagnostic.reason=QStringLiteral("%1 mm 层实际重叠区源点少于 100").arg(voxel);return diagnostic;}
+        }
         const int minimumInside=qMax(100,int(std::ceil(double(baselineInside)*diagnostic.minimumOverlapRetention)));
-        if(baselineInside<100){diagnostic.reason=QStringLiteral("%1 mm 层实际重叠区源点少于 100").arg(voxel);return diagnostic;}
-        estimateNormals(&reference,qMax(voxel*4.0f,distance*1.5f));
-        const SpatialIndex index=buildIndex(reference,distance);
         Increment last;
         std::array<std::array<double,6>,6> lockedEigenvectors{};
         std::array<double,6> lockedEigenvalues{};
         bool degeneracyBasisLocked=false;
+        QVector<Point3D> trialBuffer;
+        QVector<CorrespondencePair> correspondenceScratch;
+        std::unordered_set<int> uniqueReferenceScratch;
+        int stallIterations=0;
+        RegionTimer correspondenceClock;
+        RegionTimer boundaryClock;
         for(int iteration=0;iteration<maximumIterations[level];++iteration){
             if(cancelled()){diagnostic.reason=QStringLiteral("已取消");return diagnostic;}
-            last=estimateIncrement(moving,reference,index,distance,actualOverlap);
+            if (stageTimes) correspondenceClock.start(&stageTimes->correspondenceMs);
+            last=estimateIncrement(moving,reference,index,distance,actualOverlap,
+                &correspondenceScratch,&uniqueReferenceScratch);
+            if (stageTimes) correspondenceClock.stop();
             if(!last.ok){diagnostic.reason=QStringLiteral("%1 mm 层有效对应少于 100").arg(voxel);return diagnostic;}
             if(!degeneracyBasisLocked){
                 lockedEigenvectors=last.eigenvectors;lockedEigenvalues=last.eigenvalues;
@@ -876,10 +1176,11 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             bool overlapStepAccepted=false;
             bool overlapCandidateAvailable=false;
             const float stepFactors[4]{1.0f,0.5f,0.25f,0.125f};
+            if (stageTimes) boundaryClock.start(&stageTimes->boundaryCheckMs);
             for(float factor:stepFactors){
                 const QMatrix4x4 candidate=scaledRigidIncrement(last.matrix,factor);
-                QVector<Point3D> trial=moving;applyTransform(&trial,candidate);
-                if(countInsideBounds(trial,actualOverlap)>=minimumInside){
+                copyCloudPoints(&trialBuffer,moving);
+                if(countInsideBoundsAfterTransformXyz(&trialBuffer,candidate,actualOverlap,minimumInside)>=minimumInside){
                     overlapCandidateAvailable=true;
                     const QMatrix4x4 candidateCorrection=candidate*(*correction);
                     if(translationLength(candidateCorrection)>options.maximumCorrectionTranslation
@@ -891,6 +1192,7 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
                     break;
                 }
             }
+            if (stageTimes) boundaryClock.stop();
             if(!overlapStepAccepted){
                 if(overlapCandidateAvailable){diagnostic.stoppedAtSafetyBoundary=true;break;}
                 diagnostic.reason=QStringLiteral("ICP 增量会使源点滑出实际相邻帧重叠区");return diagnostic;
@@ -899,6 +1201,7 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             applyTransform(&moving,acceptedIncrement);
             *correction=acceptedIncrement*(*correction);
             ++diagnostic.iterations;
+            ++levelAcceptedIterations[level];
             const float translation=translationLength(*correction);
             const float angle=rotationAngle(*correction);
             if(translation>options.maximumCorrectionTranslation||angle>options.maximumCorrectionAngleDegrees){diagnostic.reason=QStringLiteral("内部错误：ICP 信赖域越过安全范围");return diagnostic;}
@@ -907,6 +1210,12 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             const float rmseChange=std::isfinite(previousRmse)?std::abs(last.rmse-previousRmse)/qMax(1.0e-12f,std::abs(previousRmse)):std::numeric_limits<float>::max();
             previousFitness=fitness;previousRmse=last.rmse;
             if(fitnessChange<=1.0e-7f&&rmseChange<=1.0e-7f){diagnostic.converged=true;break;}
+            // No-improvement termination: a level that only produces
+            // sub-micron accepted increments is effectively converged. The
+            // final safety and structural acceptance still gate the result.
+            if(translationLength(acceptedIncrement)<=0.005f&&rotationAngle(acceptedIncrement)<=0.0005f){
+                if(++stallIterations>=8){diagnostic.converged=true;break;}
+            }else stallIterations=0;
         }
         diagnostic.completedLevels=level+1;
         diagnostic.movingSampleCount=moving.size();
@@ -918,13 +1227,16 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
         diagnostic.levelFitness.push_back(diagnostic.fitness);
         diagnostic.levelRmse.push_back(last.rmse);
         diagnostic.levelCorrespondences.push_back(last.correspondences);
+        diagnostic.levelIterations.push_back(levelAcceptedIterations[level]);
         if(progress)progress(float(level+1)/3.0f,QStringLiteral("scan %1：%2 mm Point-to-Plane ICP").arg(sourceIndex+1).arg(voxel));
+        if (stageTimes) stageClock.stop();
     }
     diagnostic.converged=true;
     diagnostic.correctionTranslation=translationLength(*correction);
     diagnostic.correctionAngleDegrees=rotationAngle(*correction);
     diagnostic.correctionX=(*correction)(0,3);diagnostic.correctionY=(*correction)(1,3);diagnostic.correctionZ=(*correction)(2,3);
     diagnostic.overlapRatio=diagnostic.fitness;
+    if (stageTimes) stageClock.start(&stageTimes->structuralValidationMs);
     if(options.structuralValidationEnabled){
         const auto validateStructural = [&](float exclusion,
                                             QVector<Point3D> *sourceOutput,
@@ -1009,18 +1321,23 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
         diagnostic.structuralValidationPassed=true;
         diagnostic.structuralValidationReason=QStringLiteral("结构点验收已禁用");
     }
+    if (stageTimes) stageClock.stop();
     diagnostic.accepted=true;
     diagnostic.reason=QStringLiteral("通过修正范围和结构覆盖验收");
     return diagnostic;
 }
 
+QString classifyBlocking(const IcpDiagnostics &diagnostic);
+
 bool eligibleForRelaxedRetry(const IcpDiagnostics &diagnostic) {
     if (diagnostic.accepted || diagnostic.reason == QStringLiteral("已取消")) return false;
-    if (diagnostic.stoppedAtSafetyBoundary || diagnostic.safetyConstrainedStepReductions > 0) return true;
-    return diagnostic.reason.contains(QStringLiteral("安全范围"))
-        || diagnostic.reason.contains(QStringLiteral("主平面法向平移"))
-        || diagnostic.reason.contains(QStringLiteral("结构点"))
-        || diagnostic.reason.contains(QStringLiteral("覆盖率"));
+    // Retry only well-defined geometric recovery cases (safety boundary,
+    // pre-alignment boundary or structural validation). no_overlap, user
+    // cancellation and obvious input errors are never retried.
+    const QString blocking = classifyBlocking(diagnostic);
+    return blocking == QStringLiteral("safety_boundary")
+        || blocking == QStringLiteral("prealignment_boundary")
+        || blocking == QStringLiteral("structural_validation");
 }
 
 QString classifyBlocking(const IcpDiagnostics &diagnostic)
@@ -1147,9 +1464,14 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
     IcpDiagnostics reference;reference.filePath=inputs[0].sourceFile;reference.sourceCloudIndex=0;reference.accepted=true;reference.reason=QString::fromUtf8("参考点云");
     reference.blockingClass=QStringLiteral("accepted");
     result.icpDiagnostics.push_back(reference);
-    result.diagnosticPreIcpFrames.reserve(clouds.size());
-    for(const ConvertedCloud &cloud:clouds)
-        result.diagnosticPreIcpFrames.push_back(voxelDownsample(cloud.sample,2.0f));
+    if (icp.collectDiagnosticFrames) {
+        QElapsedTimer frameClock;
+        frameClock.start();
+        result.diagnosticPreIcpFrames.reserve(clouds.size());
+        for(const ConvertedCloud &cloud:clouds)
+            result.diagnosticPreIcpFrames.push_back(voxelDownsample(cloud.sample,2.0f));
+        result.diagnosticFrameMs += frameClock.elapsed();
+    }
     if(!icp.enabled){
         for(int index=1;index<inputs.size();++index){
             IcpDiagnostics skipped;
@@ -1177,10 +1499,44 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
                                      (inputs[index-1].startBaseFromFlange(2,3)+inputs[index-1].endBaseFromFlange(2,3))*.5f);
         QMatrix4x4 correction;
         const QVector<Point3D> originalSample=clouds[index].sample;
+        const auto accumulateStageTimes=[&](const PairStageTimes &times,qint64 totalMs){
+            result.preprocessMs+=times.preprocessMs;
+            result.coarseSearchMs+=times.coarseSearchMs;
+            result.icpLevel1Ms+=times.levelMs[0];
+            result.icpLevel2Ms+=times.levelMs[1];
+            result.icpLevel3Ms+=times.levelMs[2];
+            result.structuralValidationMs+=times.structuralValidationMs;
+            result.targetLevelCacheMs+=times.targetLevelCacheMs;
+            result.correspondenceMs+=times.correspondenceMs;
+            result.boundaryCheckMs+=times.boundaryCheckMs;
+            result.registrationTotalMs+=totalMs;
+            ++result.registrationAttemptCount;
+        };
+        const auto applyDiagnosticTimes=[&](IcpDiagnostics *target,const PairStageTimes &times,qint64 totalMs,qint64 strictMs){
+            target->preprocessMs=times.preprocessMs;
+            target->coarseSearchMs=times.coarseSearchMs;
+            target->icpLevel1Ms=times.levelMs[0];
+            target->icpLevel2Ms=times.levelMs[1];
+            target->icpLevel3Ms=times.levelMs[2];
+            target->structuralValidationMs=times.structuralValidationMs;
+            target->targetLevelCacheMs=times.targetLevelCacheMs;
+            target->correspondenceMs=times.correspondenceMs;
+            target->boundaryCheckMs=times.boundaryCheckMs;
+            target->attemptTotalMs=totalMs;
+            target->strictAttemptTotalMs=strictMs;
+        };
+        PairStageTimes strictTimes;
+        PairPreprocessCache pairCache;
+        QElapsedTimer attemptClock;
+        attemptClock.start();
         IcpDiagnostics diagnostic=registerPair(originalSample,clouds[index-1].sample,icp,index,sourceCenter-targetCenter,
             result.trackedPlaneHeights.value(index),result.trackedPlaneHeights.value(index-1),
             result.planeIdentityTrackingValid,&correction,
-            [&](float fraction,const QString &message){update(pairStart+fraction*pairSpan,message);});
+            [&](float fraction,const QString &message){update(pairStart+fraction*pairSpan,message);},
+            &strictTimes,&pairCache);
+        const qint64 strictTotalMs=attemptClock.elapsed();
+        accumulateStageTimes(strictTimes,strictTotalMs);
+        applyDiagnosticTimes(&diagnostic,strictTimes,strictTotalMs,0);
         diagnostic.filePath=inputs[index].sourceFile;
         if(diagnostic.reason==QStringLiteral("已取消")){result.cancelled=true;result.error=diagnostic.reason;return result;}
         diagnostic.attemptCount=1;
@@ -1192,11 +1548,18 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
             result.diagnostics+=QStringLiteral("scan %1 retry start: class=%2, reason=%3\n")
                 .arg(index+1).arg(diagnostic.blockingClass, diagnostic.reason);
             const IcpOptions retryOptions=relaxedOptions(icp,diagnostic);
+            PairStageTimes retryTimes;
             QMatrix4x4 retryCorrection;
+            attemptClock.start();
             IcpDiagnostics retry=registerPair(originalSample,clouds[index-1].sample,retryOptions,index,sourceCenter-targetCenter,
                 result.trackedPlaneHeights.value(index),result.trackedPlaneHeights.value(index-1),
                 result.planeIdentityTrackingValid,&retryCorrection,
-                [&](float fraction,const QString &message){update(pairStart+fraction*pairSpan,message+QStringLiteral("（放宽重试）"));});
+                [&](float fraction,const QString &message){update(pairStart+fraction*pairSpan,message+QStringLiteral("（放宽重试）"));},
+                &retryTimes,&pairCache);
+            const qint64 retryTotalMs=attemptClock.elapsed();
+            accumulateStageTimes(retryTimes,retryTotalMs);
+            result.retryMs+=retryTotalMs;
+            applyDiagnosticTimes(&retry,retryTimes,retryTotalMs,strictTotalMs);
             diagnostic.attemptCount=2;
             diagnostic.relaxedRetryReason=retry.reason;
             retry.blockingClass=classifyBlocking(retry);
@@ -1241,11 +1604,16 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
             continue;
         }
     }
-    result.diagnosticPostIcpFrames.reserve(clouds.size());
-    for(int index=0;index<clouds.size();++index){
-        QVector<Point3D> preview=voxelDownsample(clouds[index].sample,2.0f);
-        applyTransform(&preview,result.registrationCorrections[index]);
-        result.diagnosticPostIcpFrames.push_back(std::move(preview));
+    if (icp.collectDiagnosticFrames) {
+        QElapsedTimer frameClock;
+        frameClock.start();
+        result.diagnosticPostIcpFrames.reserve(clouds.size());
+        for(int index=0;index<clouds.size();++index){
+            QVector<Point3D> preview=voxelDownsample(clouds[index].sample,2.0f);
+            applyTransform(&preview,result.registrationCorrections[index]);
+            result.diagnosticPostIcpFrames.push_back(std::move(preview));
+        }
+        result.diagnosticFrameMs += frameClock.elapsed();
     }
     qsizetype total=0;for(const ConvertedCloud &cloud:clouds)total+=cloud.full.size();
     result.points.reserve(total);result.cloudIds.reserve(total);result.sourceIndices.reserve(total);result.scanRatios.reserve(total);

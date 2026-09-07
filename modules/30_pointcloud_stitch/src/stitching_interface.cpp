@@ -6,6 +6,7 @@
 #include <QDataStream>
 #include <QDebug>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QSaveFile>
 #include <QSet>
@@ -58,6 +59,8 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     // stable atomic instead of the caller's std::function. The token is
     // refreshed from the caller callback at stage boundaries and inside the
     // registration progress callback.
+    qint64 readMsAccumulator = 0;
+    qint64 transformMsAccumulator = 0;
     auto cancellationToken = std::make_shared<std::atomic_bool>(false);
     const auto syncCancellationToken = [&]() {
         if (cancelled()) cancellationToken->store(true, std::memory_order_relaxed);
@@ -108,9 +111,12 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         progress(0.15f * float(index) / float(options.frames.size()),
                  QStringLiteral("读取并转换点云 %1/%2：%3").arg(index + 1).arg(options.frames.size())
                      .arg(QFileInfo(sourcePath).fileName()));
+        QElapsedTimer stageClock;
         pcv::detail::io::PlyReadOptions readOptions;
         readOptions.isCancelled = cancelled;
+        stageClock.start();
         const auto cloud = pcv::detail::io::readPlyCached(sourcePath, {}, readOptions);
+        readMsAccumulator += stageClock.elapsed();
         if (!cloud.ok) {
             StitchingResult result = failure(cloud.cancelled ? QString() : QStringLiteral("PCV_INPUT_002"), cloud.error);
             result.cancelled = cloud.cancelled;
@@ -120,6 +126,7 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         transformOptions.layout = pointcloud::DepthPointLayout::LineProfileXz;
         transformOptions.sampleStride = options.sampleStride;
         transformOptions.isCancelled = cancelled;
+        stageClock.start();
         auto transformed = pointcloud::transformLineScanToRobotBase(
             cloud.points, calibration, input.startPose, input.endPose, transformOptions);
         if (!transformed.ok) {
@@ -127,6 +134,7 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
             result.cancelled = transformed.cancelled;
             return result;
         }
+        transformMsAccumulator += stageClock.elapsed();
         pointcloud::RobotBaseFrame frame;
         frame.sourceFile = sourcePath;
         frame.fullPoints = std::move(transformed.points);
@@ -150,15 +158,22 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
 
     pointcloud::IcpOptions registrationOptions;
     registrationOptions.sampleStride = options.sampleStride;
+    registrationOptions.collectDiagnosticFrames = options.collectDiagnosticFrames;
     registrationOptions.cancellation = cancellationToken;
     registrationOptions.isCancelled = tokenCancelled;
+    QElapsedTimer registrationClock;
+    registrationClock.start();
     auto registration = pointcloud::registerRobotBaseFrames(std::move(frames), registrationOptions,
         [&](float value, const QString &message) {
             syncCancellationToken();
             if (tokenCancelled()) return;
             progress(0.15f + value * 0.70f, message);
         });
+    const qint64 registrationMs = registrationClock.elapsed();
     StitchingResult result;
+    result.readMs = readMsAccumulator;
+    result.transformMs = transformMsAccumulator;
+    result.registrationMs = registrationMs;
     result.icpDiagnostics = registration.icpDiagnostics;
     result.diagnostics = registration.diagnostics;
     qInfo() << "Stitching ICP completed, ok=" << registration.ok
@@ -184,6 +199,7 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         seamOptions.cancellation = cancellationToken;
         seamOptions.isCancelled = cancelled;
         const auto seam = pointcloud::applyTrajectorySeamFusion(&registration, seamOptions);
+        result.seamFusionMs = seam.seamFusionMs;
         result.seamDiagnostics = seam.diagnostics;
         if (!seam.ok) {
             result.errorCode = QStringLiteral("PCV_STITCH_001");
@@ -222,7 +238,11 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     progress(0.90f, QStringLiteral("写入正式拼接点云"));
     const QString outputPath = QDir(QFileInfo(options.outputDirectory).absoluteFilePath())
         .filePath(QStringLiteral("stitched_robot_base.ply"));
-    if (!writeRobotBasePly(outputPath, registration.points, cancelled, &detail)) {
+    QElapsedTimer outputClock;
+    outputClock.start();
+    const bool outputWritten = writeRobotBasePly(outputPath, registration.points, cancelled, &detail);
+    result.outputMs = outputClock.elapsed();
+    if (!outputWritten) {
         result.cancelled = detail == QStringLiteral("已取消");
         result.errorCode = result.cancelled ? QString() : QStringLiteral("PCV_OUTPUT_002");
         result.message = detail;
@@ -232,6 +252,16 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     result.outputPly = outputPath;
     result.points = std::move(registration.points);
     result.diagnostics += QStringLiteral("formal_output=%1\n").arg(outputPath);
+    result.totalMs = result.readMs + result.transformMs + result.registrationMs
+        + result.seamFusionMs + result.outputMs;
+    result.diagnostics += QStringLiteral(
+        "timings_ms read=%1 transform=%2 registration=%3 pre=%4 coarse=%5 icp1=%6 icp2=%7 icp3=%8 structural=%9 retry=%10 attempts=%11 seam=%12 output=%13 total=%14\n")
+        .arg(result.readMs).arg(result.transformMs).arg(result.registrationMs)
+        .arg(registration.preprocessMs).arg(registration.coarseSearchMs)
+        .arg(registration.icpLevel1Ms).arg(registration.icpLevel2Ms).arg(registration.icpLevel3Ms)
+        .arg(registration.structuralValidationMs).arg(registration.retryMs)
+        .arg(registration.registrationAttemptCount)
+        .arg(result.seamFusionMs).arg(result.outputMs).arg(result.totalMs);
     progress(1.0f, QStringLiteral("点云配准完成"));
     return result;
 }

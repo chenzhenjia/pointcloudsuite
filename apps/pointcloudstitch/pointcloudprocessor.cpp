@@ -4,6 +4,7 @@
 #include <pcv/io/ply_reader.h>
 #include <pcv/registration/handeye_transform.h>
 
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QQuaternion>
 #include <QStringList>
@@ -125,6 +126,8 @@ WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inpu
                                              const IcpOptions &icp,
                                              const ProgressCallback &progress) {
     WorldCloudMergeResult result;
+    qint64 readTotalMs = 0;
+    qint64 transformTotalMs = 0;
     const auto update=[&](float value,const QString &message){if(progress)progress(qBound(0.0f,value,1.0f),message);};
     const int minimumInputs=icp.enabled?2:1;
     if(inputs.size()<minimumInputs){
@@ -143,11 +146,16 @@ WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inpu
         update(conversionEnd*float(index)/float(inputs.size()),QStringLiteral("读取并转换点云 %1/%2：%3").arg(index+1).arg(inputs.size()).arg(QFileInfo(inputs[index].filePath).fileName()));
         RawCloud raw;
         QString readError;
-        if(!readCanonicalPly(inputs[index].filePath,&raw,&readError,icp.isCancelled)){
+        QElapsedTimer conversionClock;
+        conversionClock.start();
+        const bool readOk=readCanonicalPly(inputs[index].filePath,&raw,&readError,icp.isCancelled);
+        readTotalMs += conversionClock.elapsed();
+        if(!readOk){
             result.cancelled=readError==QStringLiteral("已取消");
             result.error=QStringLiteral("%1：%2").arg(inputs[index].filePath,readError);
             return result;
         }
+        conversionClock.restart();
         HandEyeCalibration calibration;
         calibration.flangeFromDepth=inputs[index].flangeFromDepth;
         calibration.valid=true;
@@ -159,6 +167,7 @@ WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inpu
         RobotCloudResult transformed=transformLineScanToRobotBase(
             raw.points,calibration,inputs[index].startBaseFromFlange,
             inputs[index].endBaseFromFlange,transformOptions);
+        transformTotalMs += conversionClock.elapsed();
         if(!transformed.ok){
             result.cancelled=transformed.cancelled;
             result.error=QStringLiteral("第 %1 帧：%2").arg(index+1).arg(transformed.error);
@@ -225,7 +234,10 @@ WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inpu
         frame.dominantTravelAxis = clouds[index].dominantTravelAxis;
         moduleFrames.push_back(std::move(frame));
     }
-    return pointcloud::registerRobotBaseFrames(std::move(moduleFrames), icp, progress);
+    WorldCloudMergeResult merged = pointcloud::registerRobotBaseFrames(std::move(moduleFrames), icp, progress);
+    merged.readMs = readTotalMs;
+    merged.transformMs = transformTotalMs;
+    return merged;
 
 }
 

@@ -4,9 +4,9 @@
 #include <pcv/io/ply_writer.h>
 
 #include <QDateTime>
-#include <QTextStream>
 #include <QDir>
 #include <QDirIterator>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -154,6 +154,7 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
     registration.insert(QStringLiteral("relaxed_structural_validation"), result.icpOptions.relaxedStructuralValidation);
     registration.insert(QStringLiteral("structural_icp_enabled"), result.icpOptions.structuralIcpEnabled);
     registration.insert(QStringLiteral("support_plane_sample_stride"), result.icpOptions.supportPlaneSampleStride);
+    registration.insert(QStringLiteral("diagnostic_frames_collected"), result.icpOptions.collectDiagnosticFrames);
     registration.insert(QStringLiteral("tangent_coarse_alignment_enabled"), result.icpOptions.tangentCoarseAlignmentEnabled);
     registration.insert(QStringLiteral("tangent_coarse_search_radius_mm"), result.icpOptions.tangentCoarseSearchRadiusMm);
     registration.insert(QStringLiteral("tangent_coarse_step_mm"), result.icpOptions.tangentCoarseStepMm);
@@ -206,6 +207,32 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
     output.insert(QStringLiteral("diagnostic_pre_icp_frame_files"), preIcpFiles);
     output.insert(QStringLiteral("diagnostic_post_icp_frame_files"), postIcpFiles);
     root.insert(QStringLiteral("output"), output);
+
+    QJsonObject timings;
+    timings.insert(QStringLiteral("read_ms"), double(result.merge.readMs));
+    timings.insert(QStringLiteral("transform_ms"), double(result.merge.transformMs));
+    timings.insert(QStringLiteral("registration_preprocess_ms"), double(result.merge.preprocessMs));
+    timings.insert(QStringLiteral("coarse_search_ms"), double(result.merge.coarseSearchMs));
+    timings.insert(QStringLiteral("icp_level_1_ms"), double(result.merge.icpLevel1Ms));
+    timings.insert(QStringLiteral("icp_level_2_ms"), double(result.merge.icpLevel2Ms));
+    timings.insert(QStringLiteral("icp_level_3_ms"), double(result.merge.icpLevel3Ms));
+    timings.insert(QStringLiteral("structural_validation_ms"), double(result.merge.structuralValidationMs));
+    timings.insert(QStringLiteral("retry_ms"), double(result.merge.retryMs));
+    timings.insert(QStringLiteral("registration_attempt_count"), result.merge.registrationAttemptCount);
+    timings.insert(QStringLiteral("registration_total_ms"), double(result.merge.registrationTotalMs));
+    timings.insert(QStringLiteral("target_level_cache_ms"), double(result.merge.targetLevelCacheMs));
+    timings.insert(QStringLiteral("cache_build_ms"), double(result.merge.targetLevelCacheMs));
+    timings.insert(QStringLiteral("correspondence_ms"), double(result.merge.correspondenceMs));
+    timings.insert(QStringLiteral("boundary_check_ms"), double(result.merge.boundaryCheckMs));
+    timings.insert(QStringLiteral("diagnostic_frame_ms"), double(result.merge.diagnosticFrameMs));
+    timings.insert(QStringLiteral("seam_fusion_ms"), double(result.seamFusionMs));
+    timings.insert(QStringLiteral("seam_index_build_ms"), double(result.seamFusion.seamIndexBuildMs));
+    timings.insert(QStringLiteral("output_ms"), double(result.outputMs));
+    timings.insert(QStringLiteral("formal_output_write_ms"), double(result.outputMs));
+    const qint64 reportedTotalMs = result.merge.readMs + result.merge.transformMs
+        + result.merge.registrationTotalMs + result.seamFusionMs + result.outputMs;
+    timings.insert(QStringLiteral("total_ms"), double(reportedTotalMs));
+    root.insert(QStringLiteral("timings"), timings);
 
     QJsonArray frames;
     const auto matrixJson = [](const QMatrix4x4 &matrix) {
@@ -382,6 +409,18 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
         item.insert(QStringLiteral("relaxed_retry_reason"), diagnostic.relaxedRetryReason);
         item.insert(QStringLiteral("blocking_class"), diagnostic.blockingClass);
         item.insert(QStringLiteral("cancellation_check_count"), diagnostic.cancellationCheckCount);
+        item.insert(QStringLiteral("preprocess_ms"), double(diagnostic.preprocessMs));
+        item.insert(QStringLiteral("coarse_search_ms"), double(diagnostic.coarseSearchMs));
+        item.insert(QStringLiteral("icp_level_1_ms"), double(diagnostic.icpLevel1Ms));
+        item.insert(QStringLiteral("icp_level_2_ms"), double(diagnostic.icpLevel2Ms));
+        item.insert(QStringLiteral("icp_level_3_ms"), double(diagnostic.icpLevel3Ms));
+        item.insert(QStringLiteral("structural_validation_ms"), double(diagnostic.structuralValidationMs));
+        item.insert(QStringLiteral("target_level_cache_ms"), double(diagnostic.targetLevelCacheMs));
+        item.insert(QStringLiteral("target_level_cache_hit"), diagnostic.targetLevelCacheHit);
+        item.insert(QStringLiteral("correspondence_ms"), double(diagnostic.correspondenceMs));
+        item.insert(QStringLiteral("boundary_check_ms"), double(diagnostic.boundaryCheckMs));
+        item.insert(QStringLiteral("attempt_total_ms"), double(diagnostic.attemptTotalMs));
+        item.insert(QStringLiteral("strict_attempt_total_ms"), double(diagnostic.strictAttemptTotalMs));
         item.insert(QStringLiteral("reason"), diagnostic.reason);
         item.insert(QStringLiteral("correspondences"), diagnostic.correspondences);
         item.insert(QStringLiteral("unique_reference_ratio"), diagnostic.uniqueReferenceRatio);
@@ -397,6 +436,8 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
             levelItem.insert(QStringLiteral("inlier_rmse_mm"), diagnostic.levelRmse.value(level));
             levelItem.insert(QStringLiteral("correspondences"),
                              diagnostic.levelCorrespondences.value(level));
+            levelItem.insert(QStringLiteral("iterations"),
+                             diagnostic.levelIterations.value(level));
             levels.append(levelItem);
         }
         item.insert(QStringLiteral("levels"), levels);
@@ -407,6 +448,7 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
     QJsonObject seam;
     seam.insert(QStringLiteral("input_points"), double(result.seamFusion.inputPoints));
     seam.insert(QStringLiteral("output_points"), double(result.seamFusion.outputPoints));
+    seam.insert(QStringLiteral("index_build_ms"), double(result.seamFusion.seamIndexBuildMs));
     QJsonArray seamPairs;
     for (const SeamFusionDiagnostic &diagnostic : result.seamFusion.diagnostics) {
         QJsonObject item;
@@ -450,6 +492,7 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
                               const QString &outputDirectory,
                               double previewRatio,
                               bool writeSources,
+                              bool diagnosticOutput,
                               const std::shared_ptr<std::atomic_bool> &cancelRequested,
                               const std::function<void(int, const QString &)> &progress)
 {
@@ -506,7 +549,7 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
         QFile::remove(directory.filePath(QStringLiteral("stitched_robot_base_preview.ply")));
         QFile::remove(directory.filePath(QStringLiteral("stitched_robot_base.pcvmap")));
     }
-    if(!result.transformOnly){
+    if(!result.transformOnly&&diagnosticOutput){
         for(int index=0;index<result.merge.diagnosticPreIcpFrames.size();++index){
             const QString prePath=directory.filePath(QStringLiteral("diagnostic_pre_icp_frame_%1.ply").arg(index+1,2,10,QChar('0')));
             const QString postPath=directory.filePath(QStringLiteral("diagnostic_post_icp_frame_%1.ply").arg(index+1,2,10,QChar('0')));
@@ -517,29 +560,41 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
         }
     }
     if (writeSources) {
-        for (int cloudId = 0; cloudId < inputs.size(); ++cloudId) {
-            QVector<pointcloud::Point3D> sourcePoints;
-            bool correctionInvertible = false;
-            const QMatrix4x4 inverseCorrection = result.merge.registrationCorrections
-                .value(cloudId, QMatrix4x4()).inverted(&correctionInvertible);
-            if (!correctionInvertible) {
+        // Single pass over the merged cloud: bucket each point under its own
+        // cloud id instead of rescanning the whole merge per source frame.
+        bool correctionsInvertible = true;
+        QVector<QMatrix4x4> inverseCorrections(inputs.size());
+        for (int cloudId = 0; cloudId < inputs.size() && correctionsInvertible; ++cloudId) {
+            bool ok = false;
+            inverseCorrections[cloudId] = result.merge.registrationCorrections
+                .value(cloudId, QMatrix4x4()).inverted(&ok);
+            if (!ok) {
                 result.error = QObject::tr("第 %1 帧坐标修正矩阵不可逆").arg(cloudId + 1);
                 return result;
             }
-            for (qsizetype index = 0; index < result.merge.points.size(); ++index)
-                if (result.merge.cloudIds.value(index, -1) == cloudId) {
-                    pointcloud::Point3D point = result.merge.points[index];
-                    const QVector3D base = inverseCorrection.map(
-                        QVector3D(point.x, point.y, point.z));
-                    point.x = base.x(); point.y = base.y(); point.z = base.z();
-                    sourcePoints.push_back(point);
-                }
+        }
+        QVector<QVector<pointcloud::Point3D>> sourceBuckets(inputs.size());
+        qsizetype bucketBudget = 0;
+        for (const int id : result.merge.cloudIds)
+            if (id >= 0 && id < sourceBuckets.size()) ++bucketBudget;
+        for (QVector<pointcloud::Point3D> &bucket : sourceBuckets)
+            bucket.reserve(qMax<qsizetype>(1, bucketBudget / qMax(1, sourceBuckets.size())));
+        for (qsizetype index = 0; index < result.merge.points.size(); ++index) {
+            const int cloudId = result.merge.cloudIds.value(index, -1);
+            if (cloudId < 0 || cloudId >= sourceBuckets.size()) continue;
+            pointcloud::Point3D point = result.merge.points[index];
+            const QVector3D base = inverseCorrections[cloudId].map(
+                QVector3D(point.x, point.y, point.z));
+            point.x = base.x(); point.y = base.y(); point.z = base.z();
+            sourceBuckets[cloudId].push_back(point);
+        }
+        for (int cloudId = 0; cloudId < inputs.size(); ++cloudId) {
             const QString base = QFileInfo(inputs[cloudId].filePath).completeBaseName();
             const QString path = directory.filePath(QStringLiteral("%1_%2_robot_base.ply")
                                                         .arg(cloudId + 1).arg(base));
             reportProgress(79, QObject::tr("正在写入全分辨率来源点云 %1/%2")
                 .arg(cloudId + 1).arg(inputs.size()));
-            if (!writeBinaryPlyFile(path, sourcePoints, &result.error)) return result;
+            if (!writeBinaryPlyFile(path, sourceBuckets[cloudId], &result.error)) return result;
             result.retainedSourceFiles.push_back(path);
         }
     }
@@ -548,8 +603,12 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
         : (result.registrationAccepted
             ? QObject::tr("正在按真实重叠区执行接缝融合")
             : QObject::tr("配准失败，跳过正式接缝融合")));
-    if (!result.transformOnly && result.registrationAccepted)
+    if (!result.transformOnly && result.registrationAccepted) {
+        QElapsedTimer seamClock;
+        seamClock.start();
         result.seamFusion = applyTrajectorySeamFusion(&result.merge, inputs, seamOptions);
+        result.seamFusionMs = seamClock.elapsed();
+    }
     else {
         result.seamFusion.inputPoints = result.merge.points.size();
         result.seamFusion.outputPoints = result.merge.points.size();
@@ -590,6 +649,8 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
         .arg(result.merge.points.size());
 
     reportProgress(85, QObject::tr("正在准备输出目录"));
+    QElapsedTimer outputClock;
+    outputClock.start();
     result.mergedFile = directory.filePath(result.transformOnly
         ? QStringLiteral("transformed_robot_base.ply")
         : (result.registrationAccepted
@@ -600,12 +661,18 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
         : (result.registrationAccepted
             ? QObject::tr("正在写入机器人基坐标合并点云")
             : QObject::tr("配准未全部通过，正在写入诊断点云")));
-    if (!writeBinaryPlyFile(result.mergedFile, result.merge.points, &result.error)) return result;
+    if (!writeBinaryPlyFile(result.mergedFile, result.merge.points, &result.error)) {
+        result.outputMs = outputClock.elapsed();
+        return result;
+    }
 
     result.mappingFile = result.mergedFile;
     result.mappingFile.replace(QRegularExpression(QStringLiteral("\\.ply$")),
                                QStringLiteral(".pcvmap"));
-    if (!writePointMapping(result.mappingFile, result.merge, &result.error)) return result;
+    if (!writePointMapping(result.mappingFile, result.merge, &result.error)) {
+        result.outputMs = outputClock.elapsed();
+        return result;
+    }
 
     if (cancelRequested && cancelRequested->load()) {
         result.cancelled = true;
@@ -619,7 +686,10 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
             ?QStringLiteral("stitched_robot_base_preview.ply")
             :QStringLiteral("diagnostic_unregistered_robot_base_preview.ply")));
     reportProgress(92, QObject::tr("正在写入预览点云"));
-    if (!writeBinaryPlyFile(result.previewFile, preview, &result.error)) return result;
+    if (!writeBinaryPlyFile(result.previewFile, preview, &result.error)) {
+        result.outputMs = outputClock.elapsed();
+        return result;
+    }
 
     result.reportFile = directory.filePath(result.transformOnly
         ? QStringLiteral("coordinate_transform_report.json")
@@ -630,6 +700,7 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
         ? QObject::tr("正在写入坐标转换报告")
         : QObject::tr("正在写入配准报告"));
     if (!writeReport(result.reportFile, result, &result.error)) result.ok = false;
+    result.outputMs = outputClock.elapsed();
     if (result.transformOnly && result.ok) {
         reportProgress(100, QObject::tr("手眼坐标转换和全部输出完成"));
     } else if (result.registrationAccepted && result.ok) {
@@ -852,6 +923,7 @@ pointcloud::IcpOptions StitchingWindow::collectIcpOptions(QString *error) const
 {
     pointcloud::IcpOptions options;
     options.enabled = ui->cb_processing_mode->currentIndex() == 0;
+    options.collectDiagnosticFrames = ui->chk_diagnostic_output->isChecked();
     // Keep the high-precision runtime profile explicit here. This also makes
     // Qt Creator builds independent of compiler header-dependency locale.
     options.sampleStride = ui->sb_sample_stride->value();
@@ -884,6 +956,13 @@ pointcloud::IcpOptions StitchingWindow::collectIcpOptions(QString *error) const
     }
     options.maximumCorrectionTranslation = float(ui->dsb_max_translation->value());
     options.maximumCorrectionAngleDegrees = float(ui->dsb_max_rotation->value());
+    if (ui->chk_diagnostic_output->isChecked()) {
+        // Diagnostic mode re-enables the complete coarse search (in-plane
+        // tangent coarse alignment and the wide structure diagnostic).
+        options.tangentCoarseAlignmentEnabled = true;
+        options.tangentCoarseAlignmentAuto = false;
+        options.wideStructureDiagnosticEnabled = true;
+    }
     return options;
 }
 
@@ -917,7 +996,8 @@ void StitchingWindow::startStitching()
                   .arg(icp.enabled ? tr("配准与融合") : tr("仅手眼坐标转换"))
                   .arg(icp.enabled ? tr("开启") : tr("关闭")));
     const double previewRatio = ui->dsb_preview_ratio->value();
-    const bool writeSources = true;
+    const bool diagnosticOutput = ui->chk_diagnostic_output->isChecked();
+    const bool writeSources = diagnosticOutput;
     SeamFusionOptions seamOptions;
     seamOptions.enabled = icp.enabled && ui->chk_seam_fusion->isChecked();
     seamOptions.halfWidth = float(ui->dsb_seam_half_width->value());
@@ -933,8 +1013,9 @@ void StitchingWindow::startStitching()
         }, Qt::QueuedConnection);
     };
     m_watcher->setFuture(QtConcurrent::run([inputs, icp, seamOptions, output, previewRatio, writeSources,
-                                            cancel = m_cancelRequested, progress]() {
-        return runStitching(inputs, icp, seamOptions, output, previewRatio, writeSources, cancel, progress);
+                                            diagnosticOutput, cancel = m_cancelRequested, progress]() {
+        return runStitching(inputs, icp, seamOptions, output, previewRatio, writeSources,
+                            diagnosticOutput, cancel, progress);
     }));
 }
 
@@ -991,6 +1072,7 @@ void StitchingWindow::updateProcessingModeUi()
     ui->dsb_seam_half_width->setEnabled(registrationMode);
     ui->dsb_mutual_distance->setEnabled(registrationMode);
     ui->dsb_decision_voxel->setEnabled(registrationMode);
+    ui->chk_diagnostic_output->setEnabled(registrationMode);
     ui->btn_start->setText(registrationMode
         ? tr("开始世界坐标配准") : tr("开始手眼坐标转换"));
     ui->pte_log->setPlaceholderText(registrationMode
