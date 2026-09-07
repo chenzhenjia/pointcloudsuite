@@ -1,6 +1,8 @@
 # 05_camerainput：海康 Mv3dLp 点云取流模块
 
-状态：实验中（2026-09）；根 CMake 默认构建，`scripts/build_windows.ps1` 默认关闭，仍需实机验收后才能纳入 v0.3 发布基线。
+> 历史模块：2026-09-06 已并入 `10_pointcloud_read`（`modules/10_pointcloud_read`，target `pcv_m10_pointcloud_read`）。相机公共头 `pcv/camera/*`、帧转换、`LatestFrameSlot`、Mock 源、扫描组帧与可选 Mv3dLp 实现均随目录迁入；相机为 `PCV_BUILD_EXPERIMENTAL_CAMERA` 可选实验能力，无 SDK 仍可构建纯函数转换与 Mock 源，真实 Mv3dLp 编译需 SDK。旧 target `pcv_m05_camerainput` 保留为兼容 INTERFACE，转发到 `pcv_m10_pointcloud_read`。以下内容为并入前的历史记录，不再作为当前规范；正文中 `pcv_m05_camerainput`、独立模块目录等表述为当时名称，仅用于追溯。当前规范见 [10_pointcloud_read.md](10_pointcloud_read.md)。
+
+状态（并入前）：实验中（2026-09）；根 CMake 默认构建，`scripts/build_windows.ps1` 默认关闭，仍需实机验收后才能纳入 v0.3 发布基线。
 需求登记：启用 3DMVS 回调取流；DP2240 默认请求 `Range_Image=7`，将 SDK 原始深度回调转换并组装为完整 ABC32f 扫描。
 
 ### DP2240 Height 语义修正（2026-09-03，终版：仅诊断 + 自适应组帧）
@@ -36,7 +38,7 @@
 | `include/pcv/camera/mv3d_lp_camera.h` + `src/mv3d_lp_camera.cpp` | 真机封装（pimpl 隔离 SDK 类型）；回调内将 Profile/Depth 以 SDK 权威转换归一化为 ABC32f，并只发布完整扫描；后台只解析拥有式点云；仅 `PCV_CAMERA_HAVE_HIKSDK` 时编译 |
 | `CMakeLists.txt` | 探测 `PCV_HIKSDK_ROOT`，无 SDK 时跳过真机源、mock 单测仍可运行 |
 
-target：`pcv_m05_camerainput`（STATIC，依赖 `pcv_core` + `Qt::Core`；真机源额外链接 `Mv3dLp.lib`）。
+target（并入前）：`pcv_m05_camerainput` 曾为 STATIC（依赖 `pcv_core` + `Qt::Core`；真机源额外链接 `Mv3dLp.lib`）；2026-09-06 起该 target 保留为兼容 INTERFACE，转发到 `pcv_m10_pointcloud_read`。
 
 ## 3. 稳定契约
 
@@ -145,3 +147,9 @@ target：`pcv_m05_camerainput`（STATIC，依赖 `pcv_core` + `Qt::Core`；真�
 - 主窗口增加 Designer 工具栏和四步向导导航（采集、清理、平面、输出），工具栏仅转发到既有取流、扫描 JSON、文件输入与画布重置入口；
 - 激光器、ROI、采集帧率和灵敏度以置灰控件明确标记“SDK 参数接口待接入”，不保存本地假状态、不下发设备；
 - 未改变 `DeviceInfo`、`FrameSource`、转换器、实时 Pipeline 或共享模块 API；真实相机 GUI、软触发、重连和坐标仍须现场验收。
+
+### 2026-09-06（并入 10_pointcloud_read）
+
+- 2026-09-06 模块重命名：`05_camerainput` 并入 `10_pointcloud_read`（`modules/10_pointcloud_read`，target `pcv_m10_pointcloud_read`），本模块不再作为独立模块。
+- 相机公共头 `pcv/camera/*`、帧转换、`LatestFrameSlot`、Mock 源、扫描组帧与可选 Mv3dLp 实现迁入该模块；相机为 `PCV_BUILD_EXPERIMENTAL_CAMERA` 可选实验能力，无 SDK 仍可构建纯函数转换与 Mock 源，真实 Mv3dLp 编译需 SDK。
+- 旧 target `pcv_m05_camerainput` 保留为兼容 INTERFACE，转发到 `pcv_m10_pointcloud_read`。本文档转为历史记录，不再作为当前规范；既有验证结论与历史 CTest 计数仅用于追溯。

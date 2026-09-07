@@ -1,6 +1,6 @@
 #include "seamfusion.h"
 
-#include <pcv/registration/seam_fusion_kernel.h>
+#include <pcv/stitching/seam_fusion_kernel.h>
 
 SeamFusionResult applyTrajectorySeamFusion(
     pointcloud::WorldCloudMergeResult *merge,

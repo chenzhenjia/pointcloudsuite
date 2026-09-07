@@ -1,8 +1,8 @@
 # PointCloudSuite 点云处理项目需求文档
 
 版本：v0.3  
-最后核对日期：2026-09-04
-状态：核心模块稳定，相机扩展实验中，发布验收待完成
+最后核对日期：2026-09-07
+状态：核心模块稳定（模块重命名与 30/40 职责重划完成），相机扩展实验中，发布验收待完成
 
 ## 1. 目标和事实来源
 
@@ -14,25 +14,39 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 
 | 模块 | 职责 | 规范 target | 状态 |
 |---|---|---|---|
-| `10_pointcloudread` | PLY 读写、缓存、校验 | `pcv_m10_pointcloudread` | 已实现 |
-| `20_pointcloudrender` | Qt/OpenGL 画布、VBO、点选 | `pcv_m20_pointcloudrender` | 已实现，桌面验收待完成 |
-| `30_pointcloudstitch` | 拼接流程编排、结果管理 | `pcv_m30_pointcloudstitch` | 已实现 |
-| `40_pointcloudregistration` | ICP、结构校验、seam fusion | `pcv_m40_pointcloudregistration` | 已实现 |
-| `50_coordinateconversion` | 手眼标定、位姿插值、坐标转换 | `pcv_m50_coordinateconversion` | 已实现 |
-| `60_planefitting` | 三点/n 点平面算法和诊断 | `pcv_m60_planefitting` | 已实现 |
-| `70_roi_template` | ROI、模板、临时工件接口 | `pcv_m70_roi_template` | 已实现，部分 UI 编排保留 |
-| `80_planeoutput` | PNG、PLY、JSON 成套输出 | `pcv_m80_planeoutput` | 已实现 |
-| `05_camerainput` | 海康相机取流（实验扩展） | `pcv_m05_camerainput` | 实验中，不纳入 v0.3 发布基线 |
+| `10_pointcloud_read` | 点云输入（PLY 读写、缓存、校验）；相机帧采集与转换（原 05 已并入） | `pcv_m10_pointcloud_read` | 已实现；相机为可选实验能力 |
+| `20_pointcloud_render` | Qt/OpenGL 画布、VBO、点选 | `pcv_m20_pointcloud_render` | 已实现，桌面验收待完成 |
+| `30_pointcloud_stitch` | 多帧拼接唯一编排：读取、坐标转换/匹配调用、seam fusion、正式输出与回滚 | `pcv_m30_pointcloud_stitch` | 已实现 |
+| `40_pointcloud_matching` | 平面/ROI 点匹配、覆盖校验、`robot_base` 完整回传；保留 ICP/结构校验底层能力 | `pcv_m40_pointcloud_matching` | 已实现 |
+| `50_coordinate_conversion` | 手眼标定、位姿插值、坐标转换（唯一数学实现） | `pcv_m50_coordinate_conversion` | 已实现 |
+| `60_plane_fitting` | 三点/n 点平面算法和诊断 | `pcv_m60_plane_fitting` | 已实现 |
+| `70_roi_template` | ROI、模板、临时工件接口（ROI 匹配改调 40 统一接口） | `pcv_m70_roi_template` | 已实现，部分 UI 编排保留 |
+| `80_plane_output` | PNG、PLY、JSON 成套输出 | `pcv_m80_plane_output` | 已实现 |
+| 相机能力（原 `05_camerainput`） | 海康相机取流（实验扩展），已并入 `10_pointcloud_read` | 同 `pcv_m10_pointcloud_read` | 实验中，不纳入 v0.3 发布基线 |
 | `90_interferenceplane` | 干涉平面检查 | 无 | 未实现 |
 | `100_qualityreport` | 质量报告 | 无 | 未实现 |
 
-迁移期兼容 target：`pcv_io`、`pcv_registration`、`pcv_interface`、`pcv_output`。兼容层在所有调用方迁移并完成独立审计前保留。
+迁移期兼容 target：旧模块名 `pcv_m05_camerainput`、`pcv_m10_pointcloudread`、`pcv_m20_pointcloudrender`、`pcv_m30_pointcloudstitch`、`pcv_m40_pointcloudregistration`、`pcv_m50_coordinateconversion`、`pcv_m60_planefitting`、`pcv_m80_planeoutput`，以及 `pcv_io`、`pcv_registration`、`pcv_interface`、`pcv_output`（仅转发）。兼容层在所有调用方迁移并完成独立审计前保留。
 
 ## 3. 数据流程
 
-单帧流程：输入校验 → `10` 读取/缓存 → `20` 渲染和点选 → `50` 坐标转换 → `60` 平面拟合 → `70` ROI/模板 → `80` 成套输出。
+```text
+10 输入/相机采集
+    ↓
+20 渲染与交互
+    ↓
+60 平面拟合
+    ↓
+70 ROI 生成
+    ↓
+40 ROI 点匹配并完整回传 robot_base
+    ↓
+30 多帧拼接、seam fusion、正式输出
+```
 
-多帧流程：`30` 组织输入和输出，调用 `50` 转换、`40` 配准与 seam fusion，成功后提交正式 PLY。取消或失败时不得发布部分结果或复用旧正式输出。
+单帧处理：输入校验 → `10` 读取/缓存 → `20` 渲染和点选 → `60` 平面拟合 → `70` ROI/模板 → `40` ROI 匹配（`robot_base` 完整回传，fail-closed）→ `80` 成套输出。
+
+多帧处理：`30` 是唯一拼接编排：组织输入并读取 PLY，调用 `50` 转换与 `40` 多帧匹配，执行 seam fusion，成功后提交正式 PLY。取消或失败时不得发布部分结果或复用旧正式输出。
 
 ## 4. 稳定契约
 
@@ -42,7 +56,7 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 - 平面输出为 Grayscale8 PNG（背景 0、前景 255）、binary little-endian robot_base PLY 和 `sr2026-temp-workpiece-info-mvp-2` JSON。
 - PNG、PLY、JSON 先写入 staging 目录，全部成功后成套提交；任一失败必须回滚。
 - 共享库不弹窗、不访问 QWidget；应用负责提示和线程生命周期。
-- `PointCloudCanvas` 实现位于 `modules/20_pointcloudrender/src/pointcloud_canvas.cpp`。
+- `PointCloudCanvas` 实现位于 `modules/20_pointcloud_render/src/pointcloud_canvas.cpp`。
 - 诊断工具通过 `pcv::interface::stitchRawLineProfiles` 使用统一拼接接口。
 
 详细字段和错误码以模块公共头、模块文档和测试源码为准。
@@ -64,6 +78,20 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 当前状态为“迁移完成，发布验收待完成”。未完成真实 GUI 验收和生产夹具逐字段比对前，不标记为 Release Candidate。
 
 ## 8. 变更记录
+
+### 2026-09-07（ROI 匹配接口收敛）
+
+- `modules/70_roi_template/src/temp_workpiece_interface.cpp` 不再直接按索引复制 ROI 点，改为调用 `pcv::matching::matchRoiToRobotBase`；准备阶段已在 `robot_base` 的临时工件路径使用 identity transform 复用统一 fail-closed 校验，输出点数取匹配结果的 `matchedPointCount`。
+- `pcv_m40_pointcloud_matching` 的 `RoiMatchResult` 继续提供完整性统计、覆盖率、缺失/拒绝计数、取消状态和错误原因；`roi_matching_tests` 纳入 CTest，覆盖有效输入及失败关闭路径。
+- 本次仅同步源码事实和文档，未在当前会话重新执行构建或 CTest；GUI、真实相机和生产夹具验收仍未完成。
+
+### 2026-09-06（模块重命名、相机并入 10 与 30/40 职责重划）
+
+- 模块重命名：`05_camerainput` 并入 `10_pointcloud_read`；`10_pointcloudread`、`20_pointcloudrender`、`30_pointcloudstitch`、`40_pointcloudregistration`、`50_coordinateconversion`、`60_planefitting`、`80_planeoutput` 分别改为 `10_pointcloud_read`、`20_pointcloud_render`、`30_pointcloud_stitch`、`40_pointcloud_matching`、`50_coordinate_conversion`、`60_plane_fitting`、`80_plane_output`；旧 target 保留为迁移期兼容入口（仅转发）。
+- 相机输入并入 10：相机公共头、帧转换、`LatestFrameSlot`、Mock 源、扫描组帧与可选 `Mv3dLp` 实现位于 `modules/10_pointcloud_read`；`PCV_BUILD_EXPERIMENTAL_CAMERA` 仍为可选实验能力，无 SDK 时可构建纯函数转换与 Mock 路径。
+- 30/40 职责重划：`30_pointcloud_stitch` 收敛为唯一拼接编排模块（读取、坐标转换/多帧匹配调用、seam fusion、诊断、正式输出与失败回滚）；seam fusion 公共类型与实现迁入其 stitching 目录；`40_pointcloud_matching` 改为平面/ROI 点匹配与 `robot_base` 完整回传模块，新增 `pcv::matching::{RoiMatchInput,RoiMatchResult,matchRoiToRobotBase}`（fail-closed、覆盖率与取消诊断），保留 `registerRobotBaseFrames()` 等兼容包装；`70_roi_template` 的 ROI 匹配改调 40 统一接口；50 仍是坐标转换唯一数学实现。
+- 文档同步：docs 索引、架构概览、代码构成、模块文档与本文件同步新目录/target 名、相机并入说明、30/40 新职责、数据流与兼容层说明；历史研究文档仅修正仍被当作当前规范的引用并加“历史名称”说明。
+- 验证：Windows Debug 三种配置（相机 OFF、相机 ON 无 SDK、相机 ON 真实 SDK）配置、构建与全量 CTest 通过；Release（相机 OFF）构建与 CTest 待执行。GUI 人工验收、真实生产夹具与旧 target 外部使用情况仍待独立验收。
 
 ### 2026-09-04（拼接报告元数据真实化与方向自检）
 
@@ -91,7 +119,7 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 
 ### 2026-09（相机取流扩展，风险收敛）
 
-- 登记实验模块 `05_camerainput`（`pcv_m05_camerainput`）：`PCV_BUILD_EXPERIMENTAL_CAMERA` 默认 `ON`，默认构建包含相机扩展，仍可显式关闭；SDK 存在时链接真实 `Mv3dLp`，否则保留 Mock 演示路径；
+- 登记实验模块 `05_camerainput`（`pcv_m05_camerainput`，历史名称：2026-09-06 起并入 `10_pointcloud_read`，见本模块变更记录）：`PCV_BUILD_EXPERIMENTAL_CAMERA` 默认 `ON`，默认构建包含相机扩展，仍可显式关闭；SDK 存在时链接真实 `Mv3dLp`，否则保留 Mock 演示路径；
 - `20_pointcloudrender` 新增 `PointCloudCanvas::setCloudStreaming`（实时流式刷新，保留覆盖层）；
 - `apps/pointcloudview` 新增 `CameraDialog`（相机实时取流页面）与 `live_pipeline`（JSON pipeline 执行器，camera.nextFrame/filter.voxel/canvas.publish）；
 - 实时路径仍为实验链路；`live_pipeline` 尚未接入生产相机链；
@@ -154,7 +182,7 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 ### 2026-09-01（扫描 JSON 主线路崩溃修复：构建依赖跟踪）
 
 - 现象：`pointcloudview.exe` 打开扫描 JSON 时弹出 `Run-Time Check Failure #2 - Stack around the variable 'canonical' was corrupted`，主线路无法跑通；
-- 根因：Qt Creator 的 `NMake Makefiles JOM` 构建树未跟踪头文件依赖（全部 `*.obj.d` 为 0 字节），`modules/10_pointcloudread` 的 `ply_reader.h` 扩展了 `PlyReadOptions`/`PlyReadResult` 后，`cloud_cache.cpp.obj`、`ply_writer.cpp.obj` 未重新编译，与新编译的 `ply_reader.cpp.obj` 按不同结构体布局链接，`readPly()` 返回值写穿了 `readPlyCached` 的栈槽；
+- 根因：Qt Creator 的 `NMake Makefiles JOM` 构建树未跟踪头文件依赖（全部 `*.obj.d` 为 0 字节），`modules/10_pointcloudread`（历史目录名，2026-09-06 起为 `modules/10_pointcloud_read`）的 `ply_reader.h` 扩展了 `PlyReadOptions`/`PlyReadResult` 后，`cloud_cache.cpp.obj`、`ply_writer.cpp.obj` 未重新编译，与新编译的 `ply_reader.cpp.obj` 按不同结构体布局链接，`readPly()` 返回值写穿了 `readPlyCached` 的栈槽；
 - 影响面：扫描 JSON 线路（`prepareTempWorkpiece` → `readPlyCached`）、普通"打开点云"与 `pointcloudstitch` 的读取路径；单元测试因可执行文件在头文件变更之后重建而全部通过，无法暴露该问题；
 - 历史处置已被 2026-09-01 的 `VSLANG=1033` 策略替代；不再使用 `CMAKE_DEPENDS_USE_COMPILER OFF`，以恢复 ABI 探测并保持 `/showIncludes` 依赖解析；
 - 验证：新建 `NMake Makefiles` 构建目录 Debug 构建通过，`.obj.d` 记录 `ply_reader.h`，全量 CTest 13/13 通过；相机开关 ON 的独立构建和 CTest 17/17 通过。`NMake Makefiles JOM` 实测生成空 `.obj.d`，脚本现已拒绝该生成器；Ninja 在中文 MSVC 下依赖同样失效。

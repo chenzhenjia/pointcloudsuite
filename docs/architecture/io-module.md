@@ -1,6 +1,6 @@
 # 点云读写模块
 
-规范实现位于 `modules/10_pointcloudread`，target 为 `pcv_m10_pointcloudread`；`pcv_io` 仅为迁移期兼容 target。
+规范实现位于 `modules/10_pointcloud_read`，target 为 `pcv_m10_pointcloud_read`；`pcv_io` 仅为迁移期兼容 target。
 
 ## 支持格式
 
@@ -18,4 +18,4 @@
 
 共享读取器不访问 QWidget/OpenGL。具体字段、计时和并行解析约束见 v0.3 需求文档与公共头文件。
 
-最后核对日期：2026-09-04。
+最后核对日期：2026-09-07。

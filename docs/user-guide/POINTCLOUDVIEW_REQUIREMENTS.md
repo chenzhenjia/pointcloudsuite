@@ -11,7 +11,7 @@ Qt Designer 文件位于：
 - `apps/pointcloudview/ui/mainwindow.ui`
 - `apps/pointcloudstitch/ui/stitchingwindow.ui`
 
-`PointCloudCanvas` 的实现位于 `modules/20_pointcloudrender/src/pointcloud_canvas.cpp`，应用只负责异步任务、关闭状态、业务流程和 DTO 转换。
+`PointCloudCanvas` 的实现位于 `modules/20_pointcloud_render/src/pointcloud_canvas.cpp`，应用只负责异步任务、关闭状态、业务流程和 DTO 转换。
 
 ## 处理流程
 
@@ -27,4 +27,4 @@ Qt Designer 文件位于：
 
 自动化测试不能替代 Windows 桌面点选、矩形选区、视角交互、关闭生命周期和真实生产数据验收。当前验收状态以 v0.3 需求文档为准。
 
-最后核对日期：2026-09-04。
+最后核对日期：2026-09-06。

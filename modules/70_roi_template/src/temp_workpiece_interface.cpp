@@ -1,5 +1,7 @@
 #include <pcv/interface/temp_workpiece_interface.h>
 
+#include <pcv/matching/roi_matching.h>
+
 #include <pcv/infrastructure/runtime_paths.h>
 #include <pcv/io/cloud_cache.h>
 #include <pcv/io/ply_reader.h>
@@ -495,13 +497,37 @@ TempWorkpieceResult finalizeTempWorkpiece(const TempWorkpiecePreparation &prepar
         return failedResult(QString::fromLatin1(kErrorImage),
                             QStringLiteral("plane mask image must be non-empty Grayscale8"), error);
     QString detail;
-    if (!validIndices(options.planeIndices, prepared.robotBasePoints.size(), &detail)
-        || !validIndices(options.roiIndices, prepared.robotBasePoints.size(), &detail))
-        return failedResult(QString::fromLatin1(kErrorPlane), detail, error);
     const QVector3D modelNormal(options.planeModel.x(), options.planeModel.y(), options.planeModel.z());
     if (!std::isfinite(modelNormal.x()) || !std::isfinite(modelNormal.y())
         || !std::isfinite(modelNormal.z()) || modelNormal.lengthSquared() <= 1.0e-10f)
         return failedResult(QString::fromLatin1(kErrorPlane), QStringLiteral("plane model is invalid"), error);
+
+    // The preparation stage already converted the complete cloud to
+    // robot_base. Reuse the module-40 matching contract with an identity
+    // transform here so ROI validation and source-index preservation follow
+    // the same fail-closed path as camera-coordinate ROI matching.
+    pointcloud::HandEyeCalibration identityCalibration;
+    identityCalibration.flangeFromDepth.setToIdentity();
+    identityCalibration.valid = true;
+    QMatrix4x4 identity;
+    identity.setToIdentity();
+    pointcloud::CloudTransformOptions identityOptions;
+    identityOptions.layout = pointcloud::DepthPointLayout::FullXyz;
+    identityOptions.sampleStride = 1;
+    identityOptions.interpolateRotation = false;
+    pcv::matching::RoiMatchInput matchInput;
+    matchInput.sourcePoints = prepared.robotBasePoints;
+    matchInput.planeIndices = options.planeIndices;
+    matchInput.roiIndices = options.roiIndices;
+    matchInput.planeModel = options.planeModel;
+    matchInput.calibration = identityCalibration;
+    matchInput.startBaseFromFlange = identity;
+    matchInput.endBaseFromFlange = identity;
+    matchInput.transformOptions = identityOptions;
+    const pcv::matching::RoiMatchResult matched =
+        pcv::matching::matchRoiToRobotBase(matchInput);
+    if (!matched.ok)
+        return failedResult(QString::fromLatin1(kErrorPlane), matched.error, error);
     bool invertible = false;
     options.TBaseWorkpiece.inverted(&invertible);
     if (!invertible)
@@ -522,11 +548,7 @@ TempWorkpieceResult finalizeTempWorkpiece(const TempWorkpiecePreparation &prepar
     const QString finalJson = QDir(outputDirectory).filePath(QStringLiteral("temp_workpiece_info.json"));
     if (!writePly(stagedBaseline, prepared.robotBasePoints, &detail))
         return failedResult(QString::fromLatin1(kErrorOutputIncomplete), detail, error);
-    QVector<pointcloud::Point3D> roiPoints;
-    for (const int index : options.roiIndices) {
-        auto point = prepared.robotBasePoints[index];
-        roiPoints.push_back(point);
-    }
+    const QVector<pointcloud::Point3D> &roiPoints = matched.robotBasePoints;
     if (!writePly(stagedRoi, roiPoints, &detail)
         || !writeMask(stagedMask, options.planeMask, &detail))
         return failedResult(QString::fromLatin1(kErrorOutputIncomplete), detail, error);
@@ -546,7 +568,7 @@ TempWorkpieceResult finalizeTempWorkpiece(const TempWorkpiecePreparation &prepar
     result.tempWorkpieceInfoPath = finalJson; result.baselineRobotBasePly = finalBaseline;
     result.roiTemplateRobotBasePly = finalRoi; result.planeMaskPng = finalMask;
     result.createdAtIso8601 = createdAt; result.planePointCount = options.planeIndices.size();
-    result.roiPointCount = options.roiIndices.size(); result.imageWidthPx = options.planeMask.width();
+    result.roiPointCount = matched.matchedPointCount; result.imageWidthPx = options.planeMask.width();
     result.imageHeightPx = options.planeMask.height(); result.imageWidthMm = result.imageWidthPx * 0.05;
     result.imageHeightMm = result.imageHeightPx * 0.05;
     return result;

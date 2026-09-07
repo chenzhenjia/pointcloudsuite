@@ -21,11 +21,11 @@ set_property(SOURCE pointcloudprocessor.cpp APPEND PROPERTY OBJECT_DEPENDS
 target_link_libraries(pointcloudstitch PRIVATE
     Qt::Core Qt::Gui Qt::Widgets Qt::Concurrent
     pcv_core pcv_infrastructure pcv_filtering
-    pcv_m10_pointcloudread
-    pcv_m30_pointcloudstitch
-    pcv_m40_pointcloudregistration
-    pcv_m50_coordinateconversion
-    pcv_m80_planeoutput)
+    pcv_m10_pointcloud_read
+    pcv_m30_pointcloud_stitch
+    pcv_m40_pointcloud_matching
+    pcv_m50_coordinate_conversion
+    pcv_m80_plane_output)
 
 # Qt Creator detects this as the sole runnable desktop target. Keep its working
 # directory beside the executable so direct runs and deployed runs behave alike.

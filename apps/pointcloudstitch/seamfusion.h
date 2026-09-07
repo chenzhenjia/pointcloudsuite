@@ -1,7 +1,7 @@
 #pragma once
 
 #include "pointcloudprocessor.h"
-#include <pcv/registration/seam_fusion_types.h>
+#include <pcv/stitching/seam_fusion_types.h>
 
 #include <QVector>
 #include <QString>

@@ -6,16 +6,22 @@
 
 | target | 主要职责 | 依赖边界 |
 |---|---|---|
-| `pcv_m10_pointcloudread` | PLY 读写、缓存、取消和进度 | `pcv_core`、`pcv_infrastructure`、Qt Core |
-| `pcv_m20_pointcloudrender` | OpenGL context、VBO/FBO、绘制和点选 | `pcv_core`、Qt GUI/Widgets/OpenGL |
-| `pcv_m30_pointcloudstitch` | 读取后流程编排和正式输出 | 10、40、50、80 |
-| `pcv_m40_pointcloudregistration` | ICP、结构校验、seam fusion | `pcv_core`、`pcv_filtering`、Qt Core/Gui |
-| `pcv_m50_coordinateconversion` | XML 标定、位姿插值、坐标转换 | `pcv_core`、Qt Core/Gui |
-| `pcv_m60_planefitting` | 三点/n 点拟合、RANSAC/PCA、连通域 | `pcv_core`、Qt Core/Gui |
-| `pcv_m70_roi_template` | 临时扫描、ROI、模板和 Mask | 10、50、80 |
-| `pcv_m80_planeoutput` | PNG、PLY、JSON 成套输出和回滚 | `pcv_core`、`pcv_infrastructure`、Qt Core/Gui |
+| `pcv_m10_pointcloud_read` | PLY 读写、缓存；相机帧数据类型、帧转换、Mock 源；可选 Mv3dLp 实现（05 已并入） | `pcv_core`、`pcv_infrastructure`、Qt Core |
+| `pcv_m20_pointcloud_render` | OpenGL context、VBO/FBO、绘制和点选 | `pcv_core`、Qt GUI/Widgets/OpenGL |
+| `pcv_m30_pointcloud_stitch` | 多帧输入组织与 PLY 读取、坐标转换/多帧匹配调用、seam fusion、拼接诊断、正式输出（唯一拼接编排） | 10、40、50、80 |
+| `pcv_m40_pointcloud_matching` | ICP、结构校验等底层能力；平面/ROI 点匹配接口 `pcv::matching` 与 `robot_base` 完整回传 | `pcv_core`、`pcv_filtering`、50、Qt Core/Gui |
+| `pcv_m50_coordinate_conversion` | XML 标定、位姿插值、坐标转换（唯一数学实现） | `pcv_core`、Qt Core/Gui |
+| `pcv_m60_plane_fitting` | 三点/n 点拟合、RANSAC/PCA、连通域、几何诊断 | `pcv_core`、Qt Core/Gui |
+| `pcv_m70_roi_template` | 临时扫描、ROI、模板和 Mask；ROI 匹配改调 40 统一接口 | 10、40、50、80 |
+| `pcv_m80_plane_output` | PNG、PLY、JSON 成套输出和回滚 | `pcv_core`、`pcv_infrastructure`、10、Qt Core/Gui |
 
-实验模块 `pcv_m05_camerainput` 由 `PCV_BUILD_EXPERIMENTAL_CAMERA` 控制，封装 Mv3dLp 回调取流、完整扫描组帧和 Mock 源；它不属于 v0.3 稳定发布基线。
+实验相机能力由 `PCV_BUILD_EXPERIMENTAL_CAMERA` 控制，位于 `pcv_m10_pointcloud_read`
+（`pcv::camera` 头与实现）。无 SDK 时仍可构建纯函数转换与 Mock 源；真实 Mv3dLp 编译
+仅在 SDK 存在时启用。相机取流不属于 v0.3 稳定发布基线。
+
+历史目录名 `05_camerainput`、`10_pointcloudread`、`20_pointcloudrender`、
+`30_pointcloudstitch`、`40_pointcloudregistration`、`50_coordinateconversion`、
+`60_planefitting`、`80_planeoutput` 仅在兼容层与历史文档中出现。
 
 ## 应用和工具
 
@@ -27,6 +33,11 @@
 
 ## 兼容层
 
-`pcv_io`、`pcv_registration`、`pcv_interface`、`pcv_output` 和旧 forwarding header 在迁移期保留。删除前必须完成引用审计、全量构建、CTest、GUI 和真实夹具验收，并单独提交。
+`pcv_m05_camerainput`、`pcv_m10_pointcloudread`、`pcv_m20_pointcloudrender`、
+`pcv_m30_pointcloudstitch`、`pcv_m40_pointcloudregistration`、
+`pcv_m50_coordinateconversion`、`pcv_m60_planefitting`、`pcv_m80_planeoutput`，
+以及 `pcv_io`、`pcv_registration`、`pcv_interface`、`pcv_output` 和旧 forwarding
+header 在迁移期保留，只做 target/header 转发，不再增加新功能。删除前必须完成引用审计、
+全量构建、CTest、GUI 和真实夹具验收，并单独提交。
 
-最后核对日期：2026-09-04。
+最后核对日期：2026-09-07（模块重命名、30/40 职责重划与 ROI 匹配接口收敛后）。

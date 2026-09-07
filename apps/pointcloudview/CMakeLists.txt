@@ -39,16 +39,16 @@ target_link_libraries(pointcloudview
         Qt::OpenGLWidgets
         pcv_core
         pcv_infrastructure
-        pcv_m10_pointcloudread
-        pcv_m20_pointcloudrender
+        pcv_m10_pointcloud_read
+        pcv_m20_pointcloud_render
         pcv_filtering
-        pcv_m60_planefitting
+        pcv_m60_plane_fitting
         pcv_m70_roi_template
-        pcv_m30_pointcloudstitch
-        pcv_m80_planeoutput
+        pcv_m30_pointcloud_stitch
+        pcv_m80_plane_output
 )
 if(PCV_BUILD_EXPERIMENTAL_CAMERA)
-    target_link_libraries(pointcloudview PRIVATE pcv_m05_camerainput)
+    target_link_libraries(pointcloudview PRIVATE pcv_m10_pointcloud_read)
     target_compile_definitions(pointcloudview PRIVATE PCV_BUILD_EXPERIMENTAL_CAMERA=1)
 endif()
 

@@ -50,8 +50,8 @@
 Mv3dLp 回调线程：回调到点 → 校验/必要的 SDK 权威转换 → 深拷贝 ABC32f → 完整扫描组帧 → LatestFrameSlot（latest-frame-wins）
 GUI 线程：LatestFrameSlot 发布通知（QueuedConnection）→ take() → QtConcurrent 转换 ABC32f→Point3D → setCloudStreaming → 画布渲染 → 按 JSON pipeline 触发下游节点
 
-- 新模块 05_camerainput（pcv_m05_camerainput）：Mv3dLpCamera（pimpl）+ LatestFrameSlot + convertPointCloudToPoints + MockFrameSource；
-- 20_pointcloudrender：新增 setCloudStreaming（仅刷新点云+深度色域，保留选区/坐标系/轮廓覆盖层，不 resetView）；
+- 相机能力并入模块 10_pointcloud_read（target pcv_m10_pointcloud_read）：Mv3dLpCamera（pimpl）+ LatestFrameSlot + convertPointCloudToPoints + MockFrameSource；（历史名称：模块 05_camerainput / target pcv_m05_camerainput，2026-09-06 迁移）
+- 20_pointcloud_render：新增 setCloudStreaming（仅刷新点云+深度色域，保留选区/坐标系/轮廓覆盖层，不 resetView）；
 - apps/pointcloudview：CameraDialog（枚举/连接/启停/帧统计，注入画布发布回调）+ live_pipeline（JSON pipeline 执行器，可单测）。
 
 ## 4. 实施与验证
