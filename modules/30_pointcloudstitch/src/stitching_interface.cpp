@@ -135,6 +135,7 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         frame.scanRatios = std::move(transformed.scanRatios);
         frame.startBaseFromFlange = pointcloud::robotPoseToMatrix(input.startPose);
         frame.endBaseFromFlange = pointcloud::robotPoseToMatrix(input.endPose);
+        frame.flangeFromDepth = calibration.flangeFromDepth;
         frame.declaredCount = cloud.points.size();
         frame.rejectedInvalid = transformed.rejectedInvalid;
         frame.rejectedRange = transformed.rejectedRange;

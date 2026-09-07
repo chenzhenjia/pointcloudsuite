@@ -46,6 +46,8 @@ struct ConvertedCloud {
     qsizetype rejectedRange = 0;
     float inputYMinimum = std::numeric_limits<float>::max();
     float inputYMaximum = std::numeric_limits<float>::lowest();
+    float signedTravel = 0.0f;
+    int dominantTravelAxis = -1;
 };
 
 bool finitePoint(const Point3D &point) {
@@ -172,6 +174,8 @@ WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inpu
         converted.rejectedRange=transformed.rejectedRange;
         converted.inputYMinimum=transformed.inputYMinimum;
         converted.inputYMaximum=transformed.inputYMaximum;
+        converted.signedTravel=transformed.signedTravel;
+        converted.dominantTravelAxis=transformed.dominantTravelAxis;
         FrameTransformMetadata frame;
         frame.sourceFile=inputs[index].filePath;
         frame.startBaseFromFlange=inputs[index].startBaseFromFlange;
@@ -211,11 +215,14 @@ WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inpu
         frame.scanRatios = std::move(clouds[index].scanRatios);
         frame.startBaseFromFlange = inputs[index].startBaseFromFlange;
         frame.endBaseFromFlange = inputs[index].endBaseFromFlange;
+        frame.flangeFromDepth = inputs[index].flangeFromDepth;
         frame.declaredCount = clouds[index].declaredCount;
         frame.rejectedInvalid = clouds[index].rejectedBasic;
         frame.rejectedRange = clouds[index].rejectedRange;
         frame.inputYMinimum = clouds[index].inputYMinimum;
         frame.inputYMaximum = clouds[index].inputYMaximum;
+        frame.signedTravel = clouds[index].signedTravel;
+        frame.dominantTravelAxis = clouds[index].dominantTravelAxis;
         moduleFrames.push_back(std::move(frame));
     }
     return pointcloud::registerRobotBaseFrames(std::move(moduleFrames), icp, progress);

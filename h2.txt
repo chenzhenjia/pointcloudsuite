@@ -1,2 +1,0 @@
-apps/pointcloudview/cameradialog.cpp
-apps/pointcloudview/live_pipeline.cpp

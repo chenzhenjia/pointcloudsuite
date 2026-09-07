@@ -23,6 +23,7 @@ struct RobotBaseFrame {
     QVector<float> scanRatios;
     QMatrix4x4 startBaseFromFlange;
     QMatrix4x4 endBaseFromFlange;
+    QMatrix4x4 flangeFromDepth;
     qsizetype declaredCount = 0;
     qsizetype rejectedInvalid = 0;
     qsizetype rejectedRange = 0;

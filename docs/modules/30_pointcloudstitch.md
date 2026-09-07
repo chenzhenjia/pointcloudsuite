@@ -6,6 +6,11 @@
 
 最后核对日期：2026-09-04。
 
+### 2026-09-04（元数据补全）
+
+- `stitchRawLineProfiles` 路径为 `RobotBaseFrame` 填入 `flangeFromDepth = calibration.flangeFromDepth`，配合模块 40 使报告/诊断记录真实标定矩阵。
+- 验证：未编译；待 Debug 构建与 `stitching_interface_tests`。
+
 ### 2026-08-31（M5.1 seam pipeline）
 
 - M5.4：`registration_diagnostic` 已改用 `pcv::interface::stitchRawLineProfiles`，工具不再编译应用 processor；固定四帧输入、no-seam/seam 两套输出均由同一接口流水线执行。

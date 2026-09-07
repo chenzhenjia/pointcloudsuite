@@ -1,6 +1,0 @@
- M docs/development/build-windows.md
- M docs/modules/05_camerainput.md
- M docs/modules/10_pointcloudread.md
- M docs/modules/30_pointcloudstitch.md
- M docs/requirements/pointcloudview_v0.3.md
- M docs/research/camera_sdk_direct_canvas_plan.md

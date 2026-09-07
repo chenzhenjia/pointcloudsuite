@@ -236,6 +236,43 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
         frames.append(item);
     }
     root.insert(QStringLiteral("frames"), frames);
+
+    {
+        QJsonObject orientation;
+        bool hasFrame = !result.merge.frameMetadata.isEmpty();
+        float zCoefficient = 0.0f;
+        QString frameSource;
+        if (hasFrame) {
+            const auto &first = result.merge.frameMetadata.first();
+            frameSource = first.sourceFile;
+            const QMatrix4x4 net = first.startBaseFromFlange * first.flangeFromDepth;
+            zCoefficient = net(2, 2);
+        }
+        orientation.insert(QStringLiteral("frame_source"), frameSource);
+        orientation.insert(QStringLiteral("net_z_coefficient"), double(zCoefficient));
+        const float plane = result.merge.planeIdentityConsensusHeight;
+        orientation.insert(QStringLiteral("plane_height_mm"), double(plane));
+        qint64 above = 0, below = 0, sampled = 0;
+        const qsizetype stride = qMax<qsizetype>(1, result.merge.points.size() / 5000);
+        for (qsizetype index = 0; index < result.merge.points.size(); index += stride) {
+            const float z = result.merge.points[index].z;
+            if (!std::isfinite(z)) continue;
+            ++sampled;
+            if (z > plane + 2.0f) ++above;
+            else if (z < plane - 2.0f) ++below;
+        }
+        orientation.insert(QStringLiteral("sample_points"), double(sampled));
+        orientation.insert(QStringLiteral("points_above_plane_gt2mm"), double(above));
+        orientation.insert(QStringLiteral("points_below_plane_gt2mm"), double(below));
+        const bool suspicious = zCoefficient < 0.0f && below > above;
+        orientation.insert(QStringLiteral("suspected_upside_down"),
+                           suspicious ? QStringLiteral("true") : QStringLiteral("false"));
+        orientation.insert(QStringLiteral("interpretation"), suspicious
+            ? QStringLiteral("净旋转 Z 系数为负且多数采样点位于台面平面以下：输出相对 +Z 向上约定可能上下颠倒，"
+                             "请核对扫描位姿 A/B/C 与手眼标定（flangeFromDepth）的 z 方向约定")
+            : QStringLiteral("ok"));
+        root.insert(QStringLiteral("orientation_check"), orientation);
+    }
     QJsonObject mapping;
     mapping.insert(QStringLiteral("point_count"), double(result.merge.points.size()));
     mapping.insert(QStringLiteral("cloud_id_semantics"), QStringLiteral("frames array index"));

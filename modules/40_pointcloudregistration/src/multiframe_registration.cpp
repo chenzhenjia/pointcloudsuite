@@ -1120,6 +1120,7 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
         frame.sourceFile=inputs[index].sourceFile;
         frame.startBaseFromFlange=inputs[index].startBaseFromFlange;
         frame.endBaseFromFlange=inputs[index].endBaseFromFlange;
+        frame.flangeFromDepth=inputs[index].flangeFromDepth;
         frame.declaredCount=converted.declaredCount;
         frame.convertedCount=converted.full.size();
         frame.rejectedInvalid=converted.rejectedBasic;
