@@ -21,22 +21,22 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(PCV_BUILD_POINTCLOUDVIEW "Build the point cloud viewer" ON)
-option(PCV_BUILD_POINTCLOUDSTITCH "Build the point cloud stitching application" ON)
+# Keep these cache variables for compatibility with existing local CMake
+# configurations. The two desktop applications are the fixed root entrypoints
+# so Qt Creator always discovers runnable View and Stitch targets after a
+# reconfigure, even if an old cache had disabled them.
+set(PCV_BUILD_POINTCLOUDVIEW ON CACHE BOOL "Build the point cloud viewer" FORCE)
+set(PCV_BUILD_POINTCLOUDSTITCH ON CACHE BOOL
+    "Build the point cloud stitching application" FORCE)
 option(PCV_BUILD_CLI "Build the PointCloudSuite CLI" OFF)
 option(PCV_BUILD_TOOLS "Build diagnostic command-line tools" OFF)
 option(PCV_BUILD_TESTS "Build all automated tests" OFF)
 option(PCV_BUILD_EXPERIMENTAL_CAMERA
     "Build Hikvision camera acquisition and its UI/tests" ON)
 
-set(PCV_BUILD_SHARED_STACK OFF)
-if(PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_POINTCLOUDSTITCH OR PCV_BUILD_TOOLS)
-    set(PCV_BUILD_SHARED_STACK ON)
-elseif(PCV_BUILD_TESTS AND NOT PCV_BUILD_CLI)
-    # Preserve the existing tests-only configuration. A CLI-only test run uses
-    # the self-contained tests registered by apps/pointcloudcli instead.
-    set(PCV_BUILD_SHARED_STACK ON)
-endif()
+# pointcloudview and pointcloudstitch are fixed desktop entrypoints, so their
+# shared Qt/module stack is always required by the root project.
+set(PCV_BUILD_SHARED_STACK ON)
 
 if(MSVC)
     set(CMAKE_CXX_COMPILER_LAUNCHER
@@ -48,33 +48,27 @@ if(MSVC)
     endif()
 endif()
 
-if(PCV_BUILD_SHARED_STACK)
-    find_package(Qt6 6.5 REQUIRED COMPONENTS
-        Core Gui Widgets Concurrent OpenGL OpenGLWidgets)
-    qt_standard_project_setup()
-endif()
+find_package(Qt6 6.5 REQUIRED COMPONENTS
+    Core Gui Widgets Concurrent OpenGL OpenGLWidgets)
+qt_standard_project_setup()
 
 if(PCV_BUILD_TESTS)
     enable_testing()
 endif()
 
-if(PCV_BUILD_SHARED_STACK)
-    add_subdirectory(src)
-    add_subdirectory(modules)
-endif()
+add_subdirectory(src)
+add_subdirectory(modules)
 
-if(PCV_BUILD_POINTCLOUDVIEW)
-    add_subdirectory(apps/pointcloudview)
-endif()
-if(PCV_BUILD_POINTCLOUDSTITCH)
-    add_subdirectory(apps/pointcloudstitch)
-endif()
+# Keep the desktop applications directly connected to the root project. This
+# makes both executable targets visible to Qt Creator after CMake reconfigure.
+add_subdirectory(apps/pointcloudview)
+add_subdirectory(apps/pointcloudstitch)
 if(PCV_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
 if(PCV_BUILD_CLI)
     add_subdirectory(apps/pointcloudcli)
 endif()
-if(PCV_BUILD_TESTS AND PCV_BUILD_SHARED_STACK)
+if(PCV_BUILD_TESTS)
     add_subdirectory(tests)
 endif()

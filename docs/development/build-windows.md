@@ -27,21 +27,41 @@ cmake --build --preset build-debug
 ctest --preset test-debug --output-on-failure
 ```
 
+## Qt Creator 直接运行 View 和 Stitch
+
+根 `CMakeLists.txt` 固定接入 `pointcloudview` 与 `pointcloudstitch`，因此
+Qt Creator 完成一次 CMake 重新配置后，项目树会显示 `apps/` 和两个可执行
+target；可在项目栏右键构建/运行，或从右上角运行目标列表选择它们。
+
+旧的 `build\\Desktop_Qt_6_8_3_MSVC2022_64bit_Debug` 配置曾把两个 target
+缓存为 `OFF`，不能仅靠重新编译恢复。请在 Qt Creator 中关闭项目、移除该旧
+构建配置或创建新的源码树外构建目录，再打开根 `CMakeLists.txt`，选择
+`Desktop Qt 6.8.3 MSVC2022 64bit` Kit 并执行 **CMake Reconfigure**。构建时
+选择 `NMake Makefiles`，不要使用 `NMake Makefiles JOM`。
+
+启动自测可使用：
+
+```powershell
+# pointcloudstitch 的运行参数
+--selftest-close
+
+# pointcloudview 的运行环境变量
+POINTCLOUDVIEW_SELFTEST_CLOSE=1
+```
+
 ## CLI 骨架构建
 
-`pointcloudcli` 默认关闭，打开 `PCV_BUILD_CLI` 后可在同一源码树中使用独立构建目录编译。关闭两个 GUI 应用的 CLI-only 组合不会配置 Qt、共享模块或 GUI 测试；CLI target 不链接 GUI 或 OpenGL target。当前仅实现 `--help`、`--version` 和参数错误契约。
+`pointcloudcli` 默认关闭，打开 `PCV_BUILD_CLI` 后可与两个桌面应用在同一构建目录中编译。CLI target 不链接 GUI 或 OpenGL target。当前仅实现 `--help`、`--version` 和参数错误契约。
 
 ```powershell
 cmake -S . -B <CliBuildDir> `
-  -DPCV_BUILD_POINTCLOUDVIEW=OFF `
-  -DPCV_BUILD_POINTCLOUDSTITCH=OFF `
   -DPCV_BUILD_CLI=ON `
   -DPCV_BUILD_TESTS=ON
 cmake --build <CliBuildDir> --config Debug --target pointcloudcli
 ctest --test-dir <CliBuildDir> -C Debug -R "cli_" --output-on-failure
 ```
 
-保持默认 `PCV_BUILD_CLI=OFF` 时，既有 GUI 构建及产物不变。
+保持默认 `PCV_BUILD_CLI=OFF` 时，Qt Creator 的 View/Stitch 运行目标不受影响。
 
 脚本会检查 Qt、CMake 和 MSVC 环境。构建输出、缓存、日志和导出物应放在源码树之外。
 

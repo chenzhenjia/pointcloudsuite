@@ -920,6 +920,11 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
         high = cache->high;
         sourceCrop = cache->sourceCrop;
         targetCrop = cache->targetCrop;
+        // The retry shares attempt-invariant preprocessing.  Restore the
+        // fitted planes as well; leaving these default-invalid makes the
+        // relaxed structural pass report a misleading 0/0 point count.
+        sourcePlane = cache->initial.sourcePlane;
+        targetPlane = cache->initial.targetPlane;
         stampPairInitialData(&diagnostic, cache->initial, planeIdentityTracked,
             preferredSourcePlaneHeight, preferredTargetPlaneHeight, planeIdentityReason);
     } else {
@@ -970,27 +975,40 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
         }
     }
     const QMatrix4x4 overlapBaselineCorrection=*correction;
-    QVector<Point3D> overlapAlignedSource=sourceCrop;
-    applyTransform(&overlapAlignedSource,overlapBaselineCorrection);
-    QVector<Point3D> overlapAlignedFull=source;
-    applyTransform(&overlapAlignedFull,overlapBaselineCorrection);
-    const Bounds alignedSourceBounds=cloudBounds(overlapAlignedFull);
+    QVector<Point3D> overlapAlignedSource;
+    QVector<Point3D> overlapAlignedFull;
     const Bounds alignedTargetBounds=cloudBounds(target);
     Bounds actualOverlap;
-    actualOverlap.minimum=QVector3D(qMax(alignedSourceBounds.minimum.x(),alignedTargetBounds.minimum.x()),
-                                    qMax(alignedSourceBounds.minimum.y(),alignedTargetBounds.minimum.y()),
-                                    qMax(alignedSourceBounds.minimum.z(),alignedTargetBounds.minimum.z()));
-    actualOverlap.maximum=QVector3D(qMin(alignedSourceBounds.maximum.x(),alignedTargetBounds.maximum.x()),
-                                    qMin(alignedSourceBounds.maximum.y(),alignedTargetBounds.maximum.y()),
-                                    qMin(alignedSourceBounds.maximum.z(),alignedTargetBounds.maximum.z()));
-    actualOverlap.valid=actualOverlap.maximum.x()>actualOverlap.minimum.x()
-        &&actualOverlap.maximum.y()>actualOverlap.minimum.y()
-        &&actualOverlap.maximum.z()>actualOverlap.minimum.z();
-    if(!actualOverlap.valid){diagnostic.reason=QStringLiteral("主平面预对齐后相邻帧无实际三维重叠区");return diagnostic;}
-    diagnostic.actualOverlapSourceCount=countInsideBounds(overlapAlignedSource,actualOverlap);
-    diagnostic.actualOverlapTargetCount=countInsideBounds(targetCrop,actualOverlap);
-    if(diagnostic.actualOverlapSourceCount<100||diagnostic.actualOverlapTargetCount<100){
-        diagnostic.reason=QStringLiteral("实际相邻帧重叠区任一侧抽样点少于 100");return diagnostic;
+    const auto rebuildActualOverlap = [&](const QMatrix4x4 &candidateCorrection) {
+        overlapAlignedSource = sourceCrop;
+        applyTransform(&overlapAlignedSource, candidateCorrection);
+        overlapAlignedFull = source;
+        applyTransform(&overlapAlignedFull, candidateCorrection);
+        const Bounds candidateSourceBounds = cloudBounds(overlapAlignedFull);
+        actualOverlap.minimum = QVector3D(
+            qMax(candidateSourceBounds.minimum.x(), alignedTargetBounds.minimum.x()),
+            qMax(candidateSourceBounds.minimum.y(), alignedTargetBounds.minimum.y()),
+            qMax(candidateSourceBounds.minimum.z(), alignedTargetBounds.minimum.z()));
+        actualOverlap.maximum = QVector3D(
+            qMin(candidateSourceBounds.maximum.x(), alignedTargetBounds.maximum.x()),
+            qMin(candidateSourceBounds.maximum.y(), alignedTargetBounds.maximum.y()),
+            qMin(candidateSourceBounds.maximum.z(), alignedTargetBounds.maximum.z()));
+        actualOverlap.valid = actualOverlap.maximum.x() > actualOverlap.minimum.x()
+            && actualOverlap.maximum.y() > actualOverlap.minimum.y()
+            && actualOverlap.maximum.z() > actualOverlap.minimum.z();
+        diagnostic.actualOverlapSourceCount = actualOverlap.valid
+            ? countInsideBounds(overlapAlignedSource, actualOverlap) : 0;
+        diagnostic.actualOverlapTargetCount = actualOverlap.valid
+            ? countInsideBounds(targetCrop, actualOverlap) : 0;
+        return actualOverlap.valid
+            && diagnostic.actualOverlapSourceCount >= 100
+            && diagnostic.actualOverlapTargetCount >= 100;
+    };
+    if(!rebuildActualOverlap(overlapBaselineCorrection)){
+        diagnostic.reason=actualOverlap.valid
+            ?QStringLiteral("实际相邻帧重叠区任一侧抽样点少于 100")
+            :QStringLiteral("主平面预对齐后相邻帧无实际三维重叠区");
+        return diagnostic;
     }
     bool runTangentCoarse = options.tangentCoarseAlignmentEnabled;
     if (runTangentCoarse || (options.tangentCoarseAlignmentAuto && sourcePlane.valid && targetPlane.valid)) {
@@ -1020,11 +1038,33 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
         const QVector3D coarse=tangentCoarseTranslation(sourceStructural,targetStructural,targetPlane,options,&diagnostic,&coarseRotation);
         if(diagnostic.tangentCoarseAlignmentApplied){
             QMatrix4x4 coarseMatrix;coarseMatrix.setToIdentity();coarseMatrix.translate(coarse);
-            *correction=coarseRotation*coarseMatrix*(*correction);
-            if(translationLength(*correction)>options.maximumCorrectionTranslation||rotationAngle(*correction)>options.maximumCorrectionAngleDegrees){
-                diagnostic.correctionTranslation=translationLength(*correction);
-                diagnostic.correctionAngleDegrees=rotationAngle(*correction);
-                diagnostic.reason=QStringLiteral("平面内粗对齐后累计修正超过 %1 mm / %2 deg 安全范围").arg(options.maximumCorrectionTranslation).arg(options.maximumCorrectionAngleDegrees);return diagnostic;
+            const QMatrix4x4 coarseIncrement=coarseRotation*coarseMatrix;
+            const QMatrix4x4 correctionBeforeCoarse=*correction;
+            bool coarseAccepted=false;
+            float acceptedFactor=0.0f;
+            const float factors[4]{1.0f,0.5f,0.25f,0.125f};
+            for(float factor:factors){
+                const QMatrix4x4 candidateCorrection=
+                    scaledRigidIncrement(coarseIncrement,factor)*correctionBeforeCoarse;
+                if(translationLength(candidateCorrection)>options.maximumCorrectionTranslation
+                    ||rotationAngle(candidateCorrection)>options.maximumCorrectionAngleDegrees)
+                    continue;
+                if(!rebuildActualOverlap(candidateCorrection))continue;
+                *correction=candidateCorrection;
+                coarseAccepted=true;
+                acceptedFactor=factor;
+                break;
+            }
+            if(!coarseAccepted){
+                diagnostic.tangentCoarseAlignmentApplied=false;
+                diagnostic.tangentCoarseAlignmentReason=QStringLiteral(
+                    "切向粗对齐候选均超出 %1 mm / %2 deg 安全范围或破坏实际重叠，保持主平面预对齐")
+                    .arg(options.maximumCorrectionTranslation).arg(options.maximumCorrectionAngleDegrees);
+                *correction=correctionBeforeCoarse;
+                rebuildActualOverlap(*correction);
+            }else if(acceptedFactor<0.999f){
+                diagnostic.tangentCoarseAlignmentReason+=QStringLiteral("；按安全预算缩放为 %1")
+                    .arg(acceptedFactor,0,'g',3);
             }
         }
     }else diagnostic.tangentCoarseAlignmentReason=options.tangentCoarseAlignmentEnabled
@@ -1042,14 +1082,16 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             pureStructuralPoints(target,targetPlane,options.structuralPlaneExclusionMm),targetPlane,options,&diagnostic,&wideCandidate);
         if(options.applyWideStructureCandidate&&diagnostic.wideStructureDiagnosticValid
             &&diagnostic.wideStructureCoverageBest>diagnostic.wideStructureCoverageBefore+options.tangentCoarseMinimumCoverageGain){
+            const QMatrix4x4 correctionBeforeWide=*correction;
             const QMatrix4x4 candidateCorrection=wideCandidate*(*correction);
-            QVector<Point3D> candidateSource=sourceCrop;applyTransform(&candidateSource,candidateCorrection);
             if(translationLength(candidateCorrection)<=options.maximumCorrectionTranslation
                 &&rotationAngle(candidateCorrection)<=options.maximumCorrectionAngleDegrees
-                &&countInsideBounds(candidateSource,actualOverlap)>=100){
+                &&rebuildActualOverlap(candidateCorrection)){
                 *correction=candidateCorrection;
             }else{
                 diagnostic.wideStructureDiagnosticReason=QStringLiteral("大范围结构候选超出修正预算或实际重叠点不足，未应用");
+                *correction=correctionBeforeWide;
+                rebuildActualOverlap(*correction);
             }
         }
     }else diagnostic.wideStructureDiagnosticReason=options.wideStructureDiagnosticEnabled
