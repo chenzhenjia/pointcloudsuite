@@ -215,26 +215,31 @@ bool validIndices(const QVector<int> &indices, qsizetype pointCount, QString *er
     return true;
 }
 
-bool writePly(const QString &path, const QVector<pointcloud::Point3D> &points, QString *error)
+bool writePly(const QString &path, const QVector<pointcloud::Point3D> &points,
+              const std::function<bool()> &isCancelled, QString *error)
 {
     pcv::detail::io::BinaryPlyWriteOptions options;
     options.includeNormals = false;
     options.comment = QStringLiteral("source_frame robot_base");
+    options.isCancelled = isCancelled;
     return pcv::detail::io::writeBinaryPly(path, points, error, options);
 }
 
-bool writeMask(const QString &path, const QImage &image, QString *error)
+bool writeMask(const QString &path, const QImage &image,
+               const std::function<bool()> &isCancelled, QString *error)
 {
     if (image.isNull() || image.format() != QImage::Format_Grayscale8
         || image.width() <= 0 || image.height() <= 0)
         return fail(error, QStringLiteral("plane mask image must be non-empty Grayscale8"));
     QImage binaryMask = image;
     for (int y = 0; y < binaryMask.height(); ++y) {
+        if (isCancelled && isCancelled()) return fail(error, QStringLiteral("cancelled"));
         uchar *row = binaryMask.scanLine(y);
         for (int x = 0; x < binaryMask.width(); ++x)
             row[x] = row[x] == 0 ? 0 : 255;
     }
     QSaveFile file(path);
+    if (isCancelled && isCancelled()) return fail(error, QStringLiteral("cancelled"));
     if (!file.open(QIODevice::WriteOnly) || !binaryMask.save(&file, "PNG") || !file.commit())
         return fail(error, file.errorString().isEmpty()
             ? QStringLiteral("failed to write PNG") : file.errorString());
@@ -284,7 +289,8 @@ bool writeMetadata(const QString &path, const TempWorkpieceFinalizeOptions &opti
     return true;
 }
 
-bool commitFiles(const QVector<QPair<QString, QString>> &files, bool allowOverwrite, QString *error)
+bool commitFiles(const QVector<QPair<QString, QString>> &files, bool allowOverwrite,
+                 const std::function<bool()> &isCancelled, QString *error)
 {
     struct Entry { QString staged; QString final; QString backup; bool backedUp = false; bool committed = false; };
     QVector<Entry> entries;
@@ -294,7 +300,12 @@ bool commitFiles(const QVector<QPair<QString, QString>> &files, bool allowOverwr
         for (const Entry &entry : entries) if (entry.committed) QFile::remove(entry.final);
         for (const Entry &entry : entries) if (entry.backedUp) QFile::rename(entry.backup, entry.final);
     };
+    if (isCancelled && isCancelled()) return fail(error, QStringLiteral("cancelled"));
     for (int i = 0; i < entries.size(); ++i) {
+        if (isCancelled && isCancelled()) {
+            rollback();
+            return fail(error, QStringLiteral("cancelled"));
+        }
         Entry &entry = entries[i];
         if (!QFileInfo::exists(entry.final)) continue;
         if (!allowOverwrite)
@@ -311,6 +322,10 @@ bool commitFiles(const QVector<QPair<QString, QString>> &files, bool allowOverwr
         entry.backedUp = true;
     }
     for (Entry &entry : entries) {
+        if (isCancelled && isCancelled()) {
+            rollback();
+            return fail(error, QStringLiteral("cancelled"));
+        }
         if (!QFile::rename(entry.staged, entry.final)) {
             rollback();
             return fail(error, QStringLiteral("failed to commit output: %1").arg(entry.final));
@@ -395,6 +410,8 @@ bool parseTempScanningInfo(const QString &filePath, TempScanningInfo *info, QStr
 
 TempWorkpiecePreparation prepareTempWorkpiece(const TempWorkpieceOptions &options, QString *error)
 {
+    if (options.isCancelled && options.isCancelled())
+        return failedPreparation(QStringLiteral("PCV_CANCELLED"), QStringLiteral("cancelled"), error);
     const bool explicitPath = !options.scanningInfoPath.trimmed().isEmpty();
     const QString runtimeRoot = options.runtimeRoot.trimmed().isEmpty()
         ? defaultRuntimeRoot() : QDir::cleanPath(options.runtimeRoot);
@@ -455,6 +472,7 @@ TempWorkpiecePreparation prepareTempWorkpiece(const TempWorkpieceOptions &option
     pointcloud::CloudTransformOptions transformOptions;
     transformOptions.layout = scan.pointCloudLayout;
     transformOptions.sampleStride = 1;
+    transformOptions.isCancelled = options.isCancelled;
     auto cloud = pointcloud::transformLineScanToRobotBase(
         cached.points, calibration, scan.robotPoseStart, scan.robotPoseEnd, transformOptions);
     if (!cloud.ok)
@@ -486,6 +504,8 @@ TempWorkpieceResult finalizeTempWorkpiece(const TempWorkpiecePreparation &prepar
                                           const TempWorkpieceFinalizeOptions &options,
                                           QString *error)
 {
+    if (options.isCancelled && options.isCancelled())
+        return failedResult(QStringLiteral("PCV_CANCELLED"), QStringLiteral("cancelled"), error);
     if (!prepared.success || prepared.robotBasePoints.isEmpty()
         || prepared.sourceIndices.size() != prepared.robotBasePoints.size())
         return failedResult(QString::fromLatin1(kErrorContract),
@@ -524,8 +544,11 @@ TempWorkpieceResult finalizeTempWorkpiece(const TempWorkpiecePreparation &prepar
     matchInput.startBaseFromFlange = identity;
     matchInput.endBaseFromFlange = identity;
     matchInput.transformOptions = identityOptions;
+    matchInput.isCancelled = options.isCancelled;
     const pcv::matching::RoiMatchResult matched =
         pcv::matching::matchRoiToRobotBase(matchInput);
+    if (matched.cancelled)
+        return failedResult(QStringLiteral("PCV_CANCELLED"), QStringLiteral("cancelled"), error);
     if (!matched.ok)
         return failedResult(QString::fromLatin1(kErrorPlane), matched.error, error);
     bool invertible = false;
@@ -546,23 +569,39 @@ TempWorkpieceResult finalizeTempWorkpiece(const TempWorkpiecePreparation &prepar
     const QString finalRoi = QDir(outputDirectory).filePath(QStringLiteral("roi_template_robot_base.ply"));
     const QString finalMask = QDir(outputDirectory).filePath(QStringLiteral("plane_mask.png"));
     const QString finalJson = QDir(outputDirectory).filePath(QStringLiteral("temp_workpiece_info.json"));
-    if (!writePly(stagedBaseline, prepared.robotBasePoints, &detail))
+    if (options.isCancelled && options.isCancelled())
+        return failedResult(QStringLiteral("PCV_CANCELLED"), QStringLiteral("cancelled"), error);
+    if (!writePly(stagedBaseline, prepared.robotBasePoints, options.isCancelled, &detail)) {
+        if (detail == QStringLiteral("cancelled")) {
+            return failedResult(QStringLiteral("PCV_CANCELLED"), detail, error);
+        }
         return failedResult(QString::fromLatin1(kErrorOutputIncomplete), detail, error);
+    }
     const QVector<pointcloud::Point3D> &roiPoints = matched.robotBasePoints;
-    if (!writePly(stagedRoi, roiPoints, &detail)
-        || !writeMask(stagedMask, options.planeMask, &detail))
+    if (!writePly(stagedRoi, roiPoints, options.isCancelled, &detail)
+        || !writeMask(stagedMask, options.planeMask, options.isCancelled, &detail)) {
+        if (detail == QStringLiteral("cancelled")) {
+            return failedResult(QStringLiteral("PCV_CANCELLED"), detail, error);
+        }
         return failedResult(QString::fromLatin1(kErrorOutputIncomplete), detail, error);
+    }
     if (prepared.createdAtIso8601.trimmed().isEmpty())
         return failedResult(QString::fromLatin1(kErrorInputUnsupported),
                             QStringLiteral("created_at is required by the temporary workpiece contract"), error);
     const QString createdAt = prepared.createdAtIso8601;
+    if (options.isCancelled && options.isCancelled())
+        return failedResult(QStringLiteral("PCV_CANCELLED"), QStringLiteral("cancelled"), error);
     if (!writeMetadata(stagedJson, options, createdAt,
                        finalBaseline, finalRoi, finalMask, &detail))
         return failedResult(QString::fromLatin1(kErrorOutputIncomplete), detail, error);
     if (!commitFiles({{stagedBaseline, finalBaseline}, {stagedRoi, finalRoi},
-                      {stagedMask, finalMask}, {stagedJson, finalJson}},
-                     options.allowOverwrite, &detail))
+                     {stagedMask, finalMask}, {stagedJson, finalJson}},
+                     options.allowOverwrite, options.isCancelled, &detail)) {
+        if (detail == QStringLiteral("cancelled")) {
+            return failedResult(QStringLiteral("PCV_CANCELLED"), detail, error);
+        }
         return failedResult(QString::fromLatin1(kErrorOutputIncomplete), detail, error);
+    }
     TempWorkpieceResult result;
     result.success = true; result.outputDirectory = outputDirectory;
     result.tempWorkpieceInfoPath = finalJson; result.baselineRobotBasePly = finalBaseline;

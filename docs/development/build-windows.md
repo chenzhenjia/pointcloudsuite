@@ -51,7 +51,7 @@ POINTCLOUDVIEW_SELFTEST_CLOSE=1
 
 ## CLI 骨架构建
 
-`pointcloudcli` 默认关闭，打开 `PCV_BUILD_CLI` 后可与两个桌面应用在同一构建目录中编译。CLI target 不链接 GUI 或 OpenGL target。当前仅实现 `--help`、`--version` 和参数错误契约。
+`pointcloudcli` 默认关闭，打开 `PCV_BUILD_CLI` 后可与两个桌面应用在同一构建目录中编译。CLI target 仅依赖 Core/Gui/Concurrent 和业务模块，不链接 Widgets、OpenGL、PointCloudCanvas 或 GUI application target。当前业务入口为 `temp-workpiece run <job.json>`。
 
 ```powershell
 cmake -S . -B <CliBuildDir> `
@@ -62,6 +62,8 @@ ctest --test-dir <CliBuildDir> -C Debug -R "cli_" --output-on-failure
 ```
 
 保持默认 `PCV_BUILD_CLI=OFF` 时，Qt Creator 的 View/Stitch 运行目标不受影响。
+
+CLI-only 配置不会查找 Qt Widgets/OpenGL；若使用 Job JSON 执行业务命令，成功摘要写入 stdout，阶段进度和错误 JSON 写入 stderr。退出码 `0/2/10/20/30/40/130` 分别表示成功、契约、输入、坐标转换、平面/WObj1/ROI、输出和取消。
 
 脚本会检查 Qt、CMake 和 MSVC 环境。构建输出、缓存、日志和导出物应放在源码树之外。
 

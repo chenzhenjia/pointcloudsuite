@@ -81,6 +81,8 @@ struct IcpOptions {
     // pre/post ICP diagnostic frames; callers in standard output mode disable
     // this to skip the unused diagnostic generation entirely.
     bool collectDiagnosticFrames = true;
+    bool parallelEnabled = true;
+    int maxParallelTasks = 0;
     float tangentCoarseSearchRadiusMm = 10.0f;
     float tangentCoarseStepMm = 1.0f;
     float tangentCoarseRefineStepMm = 0.25f;
@@ -295,6 +297,13 @@ struct MultiFrameRegistrationResult {
     qint64 structuralValidationMs = 0;
     qint64 retryMs = 0;
     qint64 registrationTotalMs = 0;
+    qint64 conversionWallMs = 0;
+    qint64 readWorkMs = 0;
+    qint64 transformWorkMs = 0;
+    bool parallelEnabled = false;
+    int requestedParallelTasks = 0;
+    int actualParallelTasks = 1;
+    qint64 registrationWorkMs = 0;
     qint64 targetLevelCacheMs = 0;   // sum of per-level target prep over attempts
     qint64 correspondenceMs = 0;     // sum of estimateIncrement time over attempts
     qint64 boundaryCheckMs = 0;      // sum of step-factor trial time over attempts

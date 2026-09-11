@@ -79,6 +79,12 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 
 ## 8. 变更记录
 
+### 2026-09-09（亮度图取流验证 GUI）
+
+- `10_pointcloud_read` 增加 `extractIntensityImage()`，并在扫描组帧中同步保留 `CameraFrame::intensityData`。
+- 新增实验性独立 target `intensity_viewer`：固定 `Range_Image=7` 和 `MV3D_LP_RegisterImageDataCallBack`，支持实时 `Mono8` 预览及非覆盖 PNG 保存。
+- 自动化验证：Debug 构建及 CTest `19/19` 通过；真实设备亮度帧、多批次同步和 GUI 人工操作仍待现场验收。
+
 ### 2026-09-07（PointCloudStitch 配准与拼接耗时优化）
 
 - 登记主模块 `30_pointcloud_stitch`、`40_pointcloud_matching`，应用配套为 `apps/pointcloudstitch`。本次仅优化多帧配准/拼接路径及其诊断输出，不改变手眼坐标转换、`robot_base` 输出坐标系、点源映射和 seam fusion 参数合同。
@@ -122,9 +128,10 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 
 ### 2026-09-03（CLI 构建路径骨架）
 
-- 新增 `PCV_BUILD_CLI`（默认 `OFF`）和独立 `pointcloudcli` target；开启后可在关闭 `pointcloudview`、`pointcloudstitch` 的配置中单独构建 CLI，CLI-only 路径不配置 Qt 或共享模块，既有 GUI target、UI 和默认构建行为不变；
+- 新增 `PCV_BUILD_CLI`（默认 `OFF`）和独立 `pointcloudcli` target；开启后可在关闭 `pointcloudview`、`pointcloudstitch` 的配置中单独构建 CLI，CLI-only 路径仅配置 `Qt6::Core`、`Qt6::Gui`、`Qt6::Concurrent` 及 CLI 所需共享模块，不配置 Widgets/OpenGL，既有 GUI target、UI 和默认构建行为不变；
+- `pointcloudcli temp-workpiece run <job.json>` 已登记为首期临时工件业务入口：复用扫描校验、坐标转换、三点平面拟合、第二组三点验证、自动 WObj1、ROI/Mask 和四件套原子输出；实时相机采集、拼接、干涉平面和质量报告不在本期范围；
 - CLI 首期仅提供 `--help`、`--version`、空参数及未知参数的稳定退出码契约，不接入点云读取、配准、拼接、临时工件、平面、文件输出或 Qt 事件循环；
-- `pointcloudcli` 不链接 `Qt::Widgets`、`Qt::OpenGL`、`PointCloudCanvas` 或 GUI application target；`PCV_BUILD_CLI=ON` 与 `PCV_BUILD_TESTS=ON` 时注册四项 CLI CTest；
+- `pointcloudcli` 不链接 `Qt::Widgets`、`Qt::OpenGL`、`PointCloudCanvas` 或 GUI application target；`PCV_BUILD_CLI=ON` 与 `PCV_BUILD_TESTS=ON` 时注册 8 项 CLI CTest，覆盖参数契约、临时工件矩形/索引 ROI、覆盖保护和路径穿越拒绝；
 - 验收范围：独立 CLI target 构建与参数测试，及默认 GUI 配置回归。GUI 人工操作和真实生产夹具不属于本项自动化验收。
 
 ### 2026-09（相机取流扩展，风险收敛）

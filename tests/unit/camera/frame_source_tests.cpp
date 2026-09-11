@@ -1,4 +1,5 @@
 #include <pcv/camera/frame_source.h>
+#include <pcv/camera/intensity_image.h>
 #include <pcv/camera/mock_frame_source.h>
 
 #include "live_frame_policy.h"
@@ -21,6 +22,9 @@ std::shared_ptr<pcv::camera::CameraFrame> makeScanChunk(
     frame->frameNumber = firstRow;
     frame->valid = true;
     frame->data = QByteArray(qsizetype(width) * qsizetype(height) * 12, '\0');
+    frame->intensityData.resize(int(width * height));
+    for (int i = 0; i < frame->intensityData.size(); ++i)
+        frame->intensityData[i] = char((firstRow + std::uint32_t(i)) & 0xff);
     return frame;
 }
 } // namespace
@@ -88,6 +92,32 @@ int main(int argc, char **argv)
                          && complete.frame->scanFragmentCount == 2
                          && complete.frame->completeScan,
                      "contiguous final batch should publish one complete scan")) return 1;
+        const auto intensity = pcv::camera::extractIntensityImage(*complete.frame);
+        if (!require(intensity.ok && intensity.mono8.size() == 2 * 4
+                         && uchar(intensity.mono8.at(0)) == 100
+                         && uchar(intensity.mono8.at(6)) == 103,
+                     "complete scan should retain and expose the intensity raster")) return 1;
+    }
+
+    // Intensity extraction is fail-closed for missing, malformed, invalid, or
+    // incomplete frames.
+    {
+        auto frame = makeScanChunk(3, 2, 0);
+        auto extracted = pcv::camera::extractIntensityImage(*frame);
+        if (!require(extracted.ok && extracted.mono8.size() == 6,
+                     "valid complete intensity raster should be extracted")) return 1;
+        frame->intensityData.chop(1);
+        if (!require(!pcv::camera::extractIntensityImage(*frame).ok,
+                     "short intensity payload must be rejected")) return 1;
+        frame = makeScanChunk(3, 2, 0);
+        frame->intensityData.clear();
+        frame->valid = false;
+        if (!require(!pcv::camera::extractIntensityImage(*frame).ok,
+                     "invalid frame must be rejected before intensity use")) return 1;
+        frame = makeScanChunk(3, 1, 0);
+        frame->completeScan = false;
+        if (!require(!pcv::camera::extractIntensityImage(*frame).ok,
+                     "incomplete scan must not be exposed as an image")) return 1;
     }
 
     // A callback with the configured full scan height is accepted directly.

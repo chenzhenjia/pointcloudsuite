@@ -10,6 +10,8 @@
 #include <QVector3D>
 #include <QVector4D>
 
+#include <functional>
+
 namespace pcv::interface {
 
 inline constexpr const char *kTempScanningSchema =
@@ -57,6 +59,7 @@ struct TempWorkpieceOptions {
     // Optional UI-selected calibration override. It never modifies the input JSON.
     QString calibrationOverridePath;
     QString outputDirectory;
+    std::function<bool()> isCancelled;
 };
 
 struct TempWorkpiecePreparation {
@@ -113,6 +116,7 @@ struct TempWorkpieceFinalizeOptions {
     QVector3D abcDeg;
     QMatrix4x4 TBaseWorkpiece;
     QMatrix4x4 TWorkpieceBase;
+    std::function<bool()> isCancelled;
 };
 
 struct TempWorkpieceResult {

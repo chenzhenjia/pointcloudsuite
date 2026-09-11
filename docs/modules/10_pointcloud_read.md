@@ -10,7 +10,16 @@
 
 接口/测试：`pcv::detail::io::readPly`、`readPlyCached`；`ply_reader_tests`、`cloud_cache_tests`。相机帧转换/最新帧槽/Mock/组帧接口与测试（`frame_converter_tests`、`frame_source_tests`）历史见 `05_camerainput.md`。
 
-最后核对日期：2026-09-07。当前状态以源码、CMake 和测试为准。本文件历史正文中的旧目录名/旧 target（`modules/10_pointcloudread`、`pcv_m10_pointcloudread`）为当时名称，仅用于追溯。
+亮度图验证：`CameraFrame::intensityData` 保存与深度/点云栅格一一对应的 `Mono8` 数据；`extractIntensityImage()` 仅接受有效完整扫描并严格校验 `width * height` 字节。独立验证 GUI `intensity_viewer` 在实验相机开关开启时构建，使用 `Range_Image=7`、`MV3D_LP_RegisterImageDataCallBack`，实时预览并手动保存 PNG；不提供 Mock，不保存高度文件。
+
+最后核对日期：2026-09-09。当前状态以源码、CMake 和测试为准。本文件历史正文中的旧目录名/旧 target（`modules/10_pointcloudread`、`pcv_m10_pointcloudread`）为当时名称，仅用于追溯。
+
+### 2026-09-09（亮度图取流验证 GUI）
+
+- `ScanFrameAssembler` 同步拼接几何与 `intensityData`，拒绝亮度缺失、长度不匹配或不完整扫描。
+- 新增 `extractIntensityImage()` 纯函数和 `intensity_image_tests`，覆盖 Mono8 提取、无效/短负载拒绝及 PNG 回读。
+- 新增独立 `intensity_viewer`，复用 `Mv3dLpCamera` 生命周期、回调和 `LatestFrameSlot`，支持设备刷新、连接、Range_Image 取流、预览和非覆盖 PNG 保存。
+- Debug 验证：`intensity_viewer` 构建成功，全量 CTest `18/18` 通过；无设备 GUI offscreen 启动烟测通过。真实设备亮度帧、多批次同步和坐标/高度定义仍待现场验收。
 
 ## 变更记录
 

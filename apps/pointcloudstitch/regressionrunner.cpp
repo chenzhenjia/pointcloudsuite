@@ -426,6 +426,8 @@ int runRegression(const QStringList &arguments)
     parameterObject.insert(QStringLiteral("wide_structure_yaw_step_deg"), options.wideStructureYawStepDegrees);
     parameterObject.insert(QStringLiteral("tangent_coarse_minimum_coverage_gain"), options.tangentCoarseMinimumCoverageGain);
     parameterObject.insert(QStringLiteral("sample_stride"), options.sampleStride);
+    parameterObject.insert(QStringLiteral("parallel_enabled"), options.parallelEnabled);
+    parameterObject.insert(QStringLiteral("max_parallel_tasks"), options.maxParallelTasks);
     parameterObject.insert(QStringLiteral("overlap_margin_mm"), options.overlapMargin);
     parameterObject.insert(QStringLiteral("plane_prealignment_enabled"), options.planePrealignmentEnabled);
     parameterObject.insert(QStringLiteral("maximum_plane_prealignment_translation_mm"), options.maximumPlanePrealignmentTranslation);

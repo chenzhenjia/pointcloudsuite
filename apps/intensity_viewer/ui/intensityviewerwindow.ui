@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>IntensityViewerWindow</class>
+ <widget class="QMainWindow" name="IntensityViewerWindow">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>1120</width><height>760</height></rect></property>
+  <property name="windowTitle"><string>Intensity Viewer</string></property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="mainLayout">
+    <item>
+     <layout class="QHBoxLayout" name="deviceLayout">
+      <item><widget class="QLabel" name="lbl_device"><property name="text"><string>设备</string></property></widget></item>
+      <item><widget class="QComboBox" name="cb_devices"><property name="minimumWidth"><number>520</number></property></widget></item>
+      <item><widget class="QPushButton" name="btn_refresh"><property name="text"><string>刷新</string></property></widget></item>
+      <item><widget class="QPushButton" name="btn_connect"><property name="text"><string>连接</string></property></widget></item>
+      <item><widget class="QPushButton" name="btn_start"><property name="enabled"><bool>false</bool></property><property name="text"><string>开始取流</string></property></widget></item>
+      <item><widget class="QPushButton" name="btn_save"><property name="enabled"><bool>false</bool></property><property name="text"><string>保存 PNG</string></property></widget></item>
+     </layout>
+    </item>
+    <item>
+     <widget class="QLabel" name="lbl_preview">
+      <property name="minimumSize"><size><width>800</width><height>560</height></size></property>
+      <property name="frameShape"><enum>QFrame::Box</enum></property>
+      <property name="alignment"><set>Qt::AlignCenter</set></property>
+      <property name="text"><string>暂无亮度图</string></property>
+     </widget>
+    </item>
+    <item><widget class="QLabel" name="lbl_status"><property name="text"><string>初始化中</string></property></widget></item>
+    <item><widget class="QLabel" name="lbl_frame"><property name="text"><string>帧：-</string></property></widget></item>
+   </layout>
+  </widget>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

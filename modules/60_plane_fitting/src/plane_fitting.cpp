@@ -133,6 +133,10 @@ Result fit(const QVector<pointcloud::Point3D> &points,
         return std::abs(value) / (options.useZAxisResidual ? qMax(std::abs(modelNormal.z()), 1.0e-6f) : 1.0f);
     };
     for (int i = 0; i < points.size(); ++i) {
+        if (options.isCancelled && options.isCancelled()) {
+            result.error = QStringLiteral("cancelled");
+            return result;
+        }
         if (finite(points[i]) && residualFor(normal, d, points[i]) <= initialTolerance) result.candidateIndices.push_back(i);
     }
     const int required = qMax(3, options.minInliers);
@@ -151,6 +155,10 @@ Result fit(const QVector<pointcloud::Point3D> &points,
     std::uniform_int_distribution<int> pick(0, modelCandidates.size() - 1);
     const float minimumNormalZ = std::cos(qDegreesToRadians(qBound(0.0f, options.maxNormalTiltDegrees, 89.0f)));
     for (int iteration = 0; iteration < qMax(1, options.ransacIterations); ++iteration) {
+        if (options.isCancelled && options.isCancelled()) {
+            result.error = QStringLiteral("cancelled");
+            return result;
+        }
         const int ia = pick(rng), ib = pick(rng), ic = pick(rng);
         if (ia == ib || ia == ic || ib == ic) continue;
         QVector3D candidateNormal = QVector3D::crossProduct(vectorFor(modelCandidates[ib]) - vectorFor(modelCandidates[ia]), vectorFor(modelCandidates[ic]) - vectorFor(modelCandidates[ia]));
@@ -171,7 +179,11 @@ Result fit(const QVector<pointcloud::Point3D> &points,
         if (inliers.size() > bestModelInliers.size()) { bestModelInliers = std::move(inliers); bestNormal = candidateNormal; bestD = candidateD; }
     }
     QVector<int> refinedInliers;
-    for (int index : result.candidateIndices) {
+        for (int index : result.candidateIndices) {
+            if (options.isCancelled && options.isCancelled()) {
+                result.error = QStringLiteral("cancelled");
+                return result;
+            }
         const auto &p = points[index];
         const float value = std::abs(bestNormal.x() * p.x + bestNormal.y() * p.y + bestNormal.z() * p.z + bestD) / (options.useZAxisResidual ? qMax(std::abs(bestNormal.z()), 1.0e-6f) : 1.0f);
         if (value <= surfaceTolerance) refinedInliers.push_back(index);
@@ -260,9 +272,11 @@ ConsistencyResult validateConsistency(const QVector<pointcloud::Point3D> &points
                                        const QVector<int> &referenceIndices,
                                        const QVector<int> &verificationIndices,
                                        float angleToleranceDegrees,
-                                       float distanceToleranceMm)
+                                       float distanceToleranceMm,
+                                       const std::function<bool()> &isCancelled)
 {
     ConsistencyResult result;
+    const auto cancelled = [&]() { return isCancelled && isCancelled(); };
     const auto fail = [&result](ConsistencyStatus status, const QString &message) {
         result.status = status; result.error = message; return result;
     };
@@ -273,10 +287,20 @@ ConsistencyResult validateConsistency(const QVector<pointcloud::Point3D> &points
     const auto valid = [&points](int i) { return i >= 0 && i < points.size(); };
     const auto finite = [](const pointcloud::Point3D &p) { return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z); };
     for (int i = 0; i < referenceIndices.size(); ++i) {
+        if (cancelled()) {
+            result.cancelled = true;
+            result.error = QStringLiteral("cancelled");
+            return result;
+        }
         if (!valid(referenceIndices[i]) || !finite(points[referenceIndices[i]])) return fail(ConsistencyStatus::InvalidInput, QStringLiteral("平面校验点索引越界或包含无效点"));
         for (int j = i + 1; j < referenceIndices.size(); ++j) if (referenceIndices[i] == referenceIndices[j]) return fail(ConsistencyStatus::ReusedPoint, QStringLiteral("第一组采样点必须使用不同的点"));
     }
     for (int i = 0; i < 3; ++i) {
+        if (cancelled()) {
+            result.cancelled = true;
+            result.error = QStringLiteral("cancelled");
+            return result;
+        }
         const int index = verificationIndices[i];
         if (!valid(index) || !finite(points[index])) return fail(ConsistencyStatus::InvalidInput, QStringLiteral("平面校验点索引越界或包含无效点"));
         for (int j = i + 1; j < 3; ++j) if (verificationIndices[i] == verificationIndices[j]) return fail(ConsistencyStatus::ReusedPoint, QStringLiteral("第二组三点必须使用不同的点"));

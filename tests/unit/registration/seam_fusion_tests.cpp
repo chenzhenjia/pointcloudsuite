@@ -86,13 +86,38 @@ int main(int argc, char **argv)
     valid.cloudIds.push_back(0);
     valid.sourceIndices.push_back(700);
     valid.scanRatios.push_back(0.5f);
-    const auto fused = pointcloud::applyTrajectorySeamFusion(&valid, enabled);
+    pointcloud::MultiFrameRegistrationResult parallelInput = valid;
+    pointcloud::SeamFusionOptions sequentialOptions = enabled;
+    sequentialOptions.parallelEnabled = false;
+    const auto fused = pointcloud::applyTrajectorySeamFusion(&valid, sequentialOptions);
     if (!require(fused.ok && fused.outputPoints > 0 && !fused.diagnostics.isEmpty()
                  && fused.diagnostics.first().actualOverlapValid
                  && fused.diagnostics.first().applied,
                  "valid overlapping frames must produce seam diagnostics and fused points")) return 1;
     if (!require(fused.diagnostics.first().unmatchedPreserved > 0,
                  "unmatched seam points must be preserved")) return 1;
+
+    pointcloud::SeamFusionOptions parallelOptions = enabled;
+    parallelOptions.parallelEnabled = true;
+    parallelOptions.maxParallelTasks = 2;
+    const auto parallelFused = pointcloud::applyTrajectorySeamFusion(&parallelInput, parallelOptions);
+    if (!require(parallelFused.ok && parallelFused.outputPoints == fused.outputPoints
+                 && parallelInput.points.size() == valid.points.size()
+                 && parallelInput.cloudIds == valid.cloudIds
+                 && parallelInput.sourceIndices == valid.sourceIndices
+                 && parallelInput.scanRatios == valid.scanRatios,
+                 "parallel seam fusion must preserve sequential output mappings")) return 1;
+    for (qsizetype index = 0; index < valid.points.size(); ++index) {
+        if (!require(parallelInput.points[index].x == valid.points[index].x
+                     && parallelInput.points[index].y == valid.points[index].y
+                     && parallelInput.points[index].z == valid.points[index].z,
+                     "parallel seam fusion must preserve sequential point order")) return 1;
+    }
+    if (!require(parallelFused.diagnostics.size() == fused.diagnostics.size()
+                 && parallelFused.diagnostics.first().mutualPairs == fused.diagnostics.first().mutualPairs
+                 && parallelFused.diagnostics.first().unmatchedPreserved
+                     == fused.diagnostics.first().unmatchedPreserved,
+                 "parallel seam fusion must preserve diagnostics")) return 1;
 
     pointcloud::SeamFusionOptions cancelledOptions = enabled;
     cancelledOptions.isCancelled = [] { return true; };

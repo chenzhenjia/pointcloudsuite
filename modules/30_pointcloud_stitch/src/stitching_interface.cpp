@@ -8,9 +8,12 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QFuture>
 #include <QSaveFile>
 #include <QSet>
+#include <QThreadPool>
 #include <QTextStream>
+#include <QtConcurrent>
 
 #include <atomic>
 #include <cmath>
@@ -88,8 +91,14 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         return failure(QStringLiteral("PCV_TRANSFORM_001"), detail);
 
     QSet<QString> paths;
-    QVector<pointcloud::RobotBaseFrame> frames;
-    frames.reserve(options.frames.size());
+    QVector<pointcloud::RobotBaseFrame> frames(options.frames.size());
+    QVector<QString> sourcePaths(options.frames.size());
+    const int requestedParallelTasks = options.maxParallelTasks;
+    const int actualParallelTasks = options.parallelEnabled
+        ? (requestedParallelTasks > 0 ? requestedParallelTasks
+                                      : qMax(1, qMin(4, QThread::idealThreadCount() - 1)))
+        : 1;
+    const bool useParallelFrames = options.parallelEnabled && actualParallelTasks > 1;
     for (int index = 0; index < options.frames.size(); ++index) {
         syncCancellationToken();
         if (tokenCancelled()) {
@@ -107,51 +116,113 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         paths.insert(cleanSourcePath);
         if (!finitePose(input.startPose) || !finitePose(input.endPose))
             return failure(QStringLiteral("PCV_TRANSFORM_002"), QStringLiteral("第 %1 帧 Start/End 位姿包含无效数值").arg(index + 1));
+        sourcePaths[index] = sourcePath;
+    }
 
-        progress(0.15f * float(index) / float(options.frames.size()),
-                 QStringLiteral("读取并转换点云 %1/%2：%3").arg(index + 1).arg(options.frames.size())
-                     .arg(QFileInfo(sourcePath).fileName()));
+    struct FrameTaskResult {
+        pointcloud::RobotBaseFrame frame;
+        QString errorCode;
+        QString error;
+        qint64 readMs = 0;
+        qint64 transformMs = 0;
+        bool ok = false;
+        bool cancelled = false;
+        bool hardFailure = false;
+    };
+    const auto processFrame = [&](int index) {
+        FrameTaskResult task;
+        const StitchingFrameInput &input = options.frames[index];
+        if (tokenCancelled()) {
+            task.cancelled = true;
+            task.error = QStringLiteral("已取消");
+            return task;
+        }
         QElapsedTimer stageClock;
         pcv::detail::io::PlyReadOptions readOptions;
-        readOptions.isCancelled = cancelled;
+        readOptions.isCancelled = tokenCancelled;
         stageClock.start();
-        const auto cloud = pcv::detail::io::readPlyCached(sourcePath, {}, readOptions);
-        readMsAccumulator += stageClock.elapsed();
+        const auto cloud = pcv::detail::io::readPlyCached(sourcePaths[index], {}, readOptions);
+        task.readMs = stageClock.elapsed();
         if (!cloud.ok) {
-            StitchingResult result = failure(cloud.cancelled ? QString() : QStringLiteral("PCV_INPUT_002"), cloud.error);
-            result.cancelled = cloud.cancelled;
-            return result;
+            task.cancelled = cloud.cancelled;
+            task.hardFailure = !cloud.cancelled;
+            task.errorCode = cloud.cancelled ? QString() : QStringLiteral("PCV_INPUT_002");
+            task.error = cloud.error;
+            if (task.hardFailure) cancellationToken->store(true, std::memory_order_relaxed);
+            return task;
         }
         pointcloud::CloudTransformOptions transformOptions;
         transformOptions.layout = pointcloud::DepthPointLayout::LineProfileXz;
         transformOptions.sampleStride = options.sampleStride;
-        transformOptions.isCancelled = cancelled;
-        stageClock.start();
+        transformOptions.isCancelled = tokenCancelled;
+        stageClock.restart();
         auto transformed = pointcloud::transformLineScanToRobotBase(
             cloud.points, calibration, input.startPose, input.endPose, transformOptions);
+        task.transformMs = stageClock.elapsed();
         if (!transformed.ok) {
-            StitchingResult result = failure(transformed.cancelled ? QString() : QStringLiteral("PCV_TRANSFORM_001"), transformed.error);
-            result.cancelled = transformed.cancelled;
+            task.cancelled = transformed.cancelled;
+            task.hardFailure = !transformed.cancelled;
+            task.errorCode = transformed.cancelled ? QString() : QStringLiteral("PCV_TRANSFORM_001");
+            task.error = transformed.error;
+            if (task.hardFailure) cancellationToken->store(true, std::memory_order_relaxed);
+            return task;
+        }
+        task.frame.sourceFile = sourcePaths[index];
+        task.frame.fullPoints = std::move(transformed.points);
+        task.frame.samplePoints = std::move(transformed.samplePoints);
+        task.frame.sourceIndices = std::move(transformed.sourceIndices);
+        task.frame.scanRatios = std::move(transformed.scanRatios);
+        task.frame.startBaseFromFlange = pointcloud::robotPoseToMatrix(input.startPose);
+        task.frame.endBaseFromFlange = pointcloud::robotPoseToMatrix(input.endPose);
+        task.frame.flangeFromDepth = calibration.flangeFromDepth;
+        task.frame.declaredCount = cloud.points.size();
+        task.frame.rejectedInvalid = transformed.rejectedInvalid;
+        task.frame.rejectedRange = transformed.rejectedRange;
+        task.frame.inputYMinimum = transformed.inputYMinimum;
+        task.frame.inputYMaximum = transformed.inputYMaximum;
+        task.frame.signedTravel = transformed.signedTravel;
+        task.frame.dominantTravelAxis = transformed.dominantTravelAxis;
+        task.ok = true;
+        return task;
+    };
+    QVector<FrameTaskResult> frameTasks(options.frames.size());
+    QElapsedTimer frameWallClock;
+    frameWallClock.start();
+    if (useParallelFrames) {
+        QThreadPool pool;
+        pool.setMaxThreadCount(actualParallelTasks);
+        QVector<QFuture<FrameTaskResult>> futures;
+        futures.reserve(options.frames.size());
+        for (int index = 0; index < options.frames.size(); ++index)
+            futures.push_back(QtConcurrent::run(&pool, processFrame, index));
+        for (int index = 0; index < futures.size(); ++index)
+            frameTasks[index] = futures[index].result();
+    } else {
+        for (int index = 0; index < frameTasks.size(); ++index)
+            frameTasks[index] = processFrame(index);
+    }
+    const qint64 frameWallMs = frameWallClock.elapsed();
+    int firstHardFailure = -1;
+    for (int index = 0; index < frameTasks.size(); ++index) {
+        if (frameTasks[index].hardFailure) { firstHardFailure = index; break; }
+    }
+    for (int index = 0; index < frameTasks.size(); ++index) {
+        const FrameTaskResult &task = frameTasks[index];
+        readMsAccumulator += task.readMs;
+        transformMsAccumulator += task.transformMs;
+        progress(0.15f * float(index + 1) / float(options.frames.size()),
+                 QStringLiteral("读取并转换点云 %1/%2：%3").arg(index + 1).arg(options.frames.size())
+                     .arg(QFileInfo(sourcePaths[index]).fileName()));
+        if (index == firstHardFailure) {
+            StitchingResult result = failure(task.errorCode, task.error);
             return result;
         }
-        transformMsAccumulator += stageClock.elapsed();
-        pointcloud::RobotBaseFrame frame;
-        frame.sourceFile = sourcePath;
-        frame.fullPoints = std::move(transformed.points);
-        frame.samplePoints = std::move(transformed.samplePoints);
-        frame.sourceIndices = std::move(transformed.sourceIndices);
-        frame.scanRatios = std::move(transformed.scanRatios);
-        frame.startBaseFromFlange = pointcloud::robotPoseToMatrix(input.startPose);
-        frame.endBaseFromFlange = pointcloud::robotPoseToMatrix(input.endPose);
-        frame.flangeFromDepth = calibration.flangeFromDepth;
-        frame.declaredCount = cloud.points.size();
-        frame.rejectedInvalid = transformed.rejectedInvalid;
-        frame.rejectedRange = transformed.rejectedRange;
-        frame.inputYMinimum = transformed.inputYMinimum;
-        frame.inputYMaximum = transformed.inputYMaximum;
-        frame.signedTravel = transformed.signedTravel;
-        frame.dominantTravelAxis = transformed.dominantTravelAxis;
-        frames.push_back(std::move(frame));
+        if (!task.ok && firstHardFailure < 0) {
+            StitchingResult result = failure(QString(), QStringLiteral("已取消"));
+            result.cancelled = true;
+            return result;
+        }
+        frames[index] = task.frame;
     }
 
     qInfo() << "Stitching hand-eye conversion completed, frames=" << frames.size();
@@ -159,6 +230,8 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     pointcloud::IcpOptions registrationOptions;
     registrationOptions.sampleStride = options.sampleStride;
     registrationOptions.collectDiagnosticFrames = options.collectDiagnosticFrames;
+    registrationOptions.parallelEnabled = options.parallelEnabled;
+    registrationOptions.maxParallelTasks = options.maxParallelTasks;
     registrationOptions.cancellation = cancellationToken;
     registrationOptions.isCancelled = tokenCancelled;
     QElapsedTimer registrationClock;
@@ -173,6 +246,11 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     StitchingResult result;
     result.readMs = readMsAccumulator;
     result.transformMs = transformMsAccumulator;
+    result.readWorkMs = readMsAccumulator;
+    result.transformWorkMs = transformMsAccumulator;
+    result.parallelEnabled = useParallelFrames;
+    result.requestedParallelTasks = requestedParallelTasks;
+    result.actualParallelTasks = useParallelFrames ? actualParallelTasks : 1;
     result.registrationMs = registrationMs;
     result.icpDiagnostics = registration.icpDiagnostics;
     result.diagnostics = registration.diagnostics;

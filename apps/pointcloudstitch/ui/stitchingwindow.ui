@@ -74,7 +74,10 @@
        <item row="3" column="3"><widget class="QDoubleSpinBox" name="dsb_mutual_distance"><property name="suffix"><string> mm</string></property><property name="decimals"><number>3</number></property><property name="minimum"><double>0.010000000000000</double></property><property name="maximum"><double>10.000000000000000</double></property><property name="value"><double>0.600000000000000</double></property></widget></item>
        <item row="3" column="4"><widget class="QLabel" name="lbl_decision_voxel"><property name="text"><string>接缝决策块</string></property></widget></item>
        <item row="3" column="5"><widget class="QDoubleSpinBox" name="dsb_decision_voxel"><property name="suffix"><string> mm</string></property><property name="decimals"><number>3</number></property><property name="minimum"><double>0.010000000000000</double></property><property name="maximum"><double>10.000000000000000</double></property><property name="value"><double>0.500000000000000</double></property></widget></item>
-       <item row="4" column="0" colspan="6">
+       <item row="4" column="0"><widget class="QCheckBox" name="chk_parallel_processing"><property name="text"><string>启用并行处理</string></property><property name="checked"><bool>true</bool></property><property name="toolTip"><string>并行读取/坐标转换、相邻帧预检查和接缝带分析；ICP 矩阵仍按扫描顺序累积。</string></property></widget></item>
+       <item row="4" column="1"><widget class="QSpinBox" name="sb_parallel_tasks"><property name="toolTip"><string>0 表示自动，最多使用 4 个工作任务；1 强制顺序执行。</string></property><property name="minimum"><number>0</number></property><property name="maximum"><number>32</number></property><property name="value"><number>0</number></property></widget></item>
+       <item row="4" column="2" colspan="4"><widget class="QLabel" name="lbl_parallel_tasks"><property name="text"><string>最大并行任务数（0=自动，1=顺序）</string></property></widget></item>
+       <item row="5" column="0" colspan="6">
         <widget class="QCheckBox" name="chk_diagnostic_output">
          <property name="toolTip"><string>标准模式只输出正式合并点云、.pcvmap 与报告，配准采用平衡策略（默认关闭昂贵粗搜索，仅按需触发）。诊断模式额外输出逐帧来源 PLY、pre/post ICP 诊断帧 PLY，并重新开启完整粗搜索（切向粗对齐 + 大范围结构诊断）。</string></property>
          <property name="text"><string>诊断输出模式（来源点云、pre/post ICP 诊断帧、完整粗搜索）</string></property>

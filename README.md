@@ -10,7 +10,7 @@ PointCloudSuite 是基于 Qt 6、C++17 和 CMake 的工业点云处理项目，�
 
 - `pointcloudview`：点云读取、渲染、点选、平面拟合、ROI/模板和输出。
 - `pointcloudstitch`：线扫点云坐标转换、多帧配准、接缝融合和结果编排。
-- `pointcloudcli`：独立命令行入口骨架；当前只提供 `--help` 和 `--version`，不执行点云业务处理。
+- `pointcloudcli`：独立命令行工具；当前提供 `temp-workpiece run <job.json>` 临时工件四件套业务闭环，以及 `--help`、`--version`。
 - 相机（海康 Mv3dLp）实验取流能力：已并入 `modules/10_pointcloud_read`（target `pcv_m10_pointcloud_read`），由 `PCV_BUILD_EXPERIMENTAL_CAMERA` 控制；仍属实验，需实机验收。
 - `modules/10_pointcloud_read` 至 `modules/80_plane_output`：规范共享模块。
 - `registration_diagnostic`：通过 `pcv::interface::stitchRawLineProfiles` 执行统一拼接流水线的诊断工具，支持通用多帧输入、位姿匹配和 `inspect` PLY header 检查。
@@ -61,7 +61,7 @@ cmake --build --preset build-debug
 ctest --preset test-debug --output-on-failure
 ```
 
-CLI 骨架默认不构建。以下配置会关闭两个 GUI 应用并只构建 `pointcloudcli`；该 CLI-only 组合不配置 Qt、共享模块或 GUI 测试：
+CLI 默认不构建。以下配置会关闭两个 GUI 应用并只构建 `pointcloudcli`；该 CLI-only 组合不配置 Qt Widgets/OpenGL：
 
 ```powershell
 cmake -S . -B <CliBuildDir> `
@@ -74,6 +74,15 @@ ctest --test-dir <CliBuildDir> -C Debug -R "cli_" --output-on-failure
 ```
 
 `PCV_BUILD_CLI=OFF` 是默认值，因此既有 GUI 构建和产物不变。
+
+业务命令示例：
+
+```powershell
+pointcloudcli temp-workpiece run <job.json>
+pointcloudcli temp-workpiece run <job.json> --allow-overwrite
+```
+
+Job JSON 使用 `pointcloudcli-temp-workpiece-job-v1`。CLI 会校验扫描 JSON、PLY/XML、三点平面和第二组三点一致性，自动建立 WObj1，并原子生成 `baseline_robot_base.ply`、`roi_template_robot_base.ply`、`plane_mask.png` 和 `temp_workpiece_info.json`。实时相机、拼接、干涉平面和质量报告暂不属于本期 CLI。
 
 根 CMake 默认启用 `PCV_BUILD_EXPERIMENTAL_CAMERA`；`scripts/build_windows.ps1` 默认将该开关传为 `OFF`，需要实验相机时请显式添加 `-ExperimentalCamera`。
 

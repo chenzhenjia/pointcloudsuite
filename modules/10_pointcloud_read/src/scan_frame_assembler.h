@@ -77,6 +77,7 @@ public:
         m_fragmentCount = 0;
         m_active = false;
         m_data.clear();
+        m_intensityData.clear();
     }
 
     std::uint32_t expectedRows() const { return m_expectedRows; }
@@ -89,7 +90,8 @@ public:
         if (!chunk || chunk->frameType != FrameType::PointCloudABC32f
             || !chunk->valid || chunk->width == 0 || chunk->height == 0
             || chunk->data.size() % 12 != 0
-            || chunk->data.size() / 12 != qsizetype(chunk->width) * qsizetype(chunk->height)) {
+            || chunk->data.size() / 12 != qsizetype(chunk->width) * qsizetype(chunk->height)
+            || chunk->intensityData.size() != qsizetype(chunk->width) * qsizetype(chunk->height)) {
             discardActiveScan();
             return reject(QStringLiteral("normalized scan chunk is not a valid ABC32f raster"));
         }
@@ -136,8 +138,13 @@ public:
             discardActiveScan();
             return reject(QStringLiteral("scan payload exceeds assembly memory limit"));
         }
+        if (chunk->intensityData.size() > m_maximumPayloadBytes - m_intensityData.size()) {
+            discardActiveScan();
+            return reject(QStringLiteral("intensity payload exceeds assembly memory limit"));
+        }
 
         m_data.append(chunk->data);
+        m_intensityData.append(chunk->intensityData);
         m_accumulatedRows += chunk->height;
         m_nextFrameNumber = chunk->frameNumber + chunk->height;
         ++m_fragmentCount;
@@ -148,7 +155,7 @@ public:
         completed->width = m_width;
         completed->height = m_expectedRows;
         completed->data = std::move(m_data);
-        completed->intensityData.clear();
+        completed->intensityData = std::move(m_intensityData);
         completed->frameNumber = ++m_completedScanCount;
         completed->expectedScanRows = m_expectedRows;
         completed->accumulatedScanRows = m_expectedRows;
@@ -177,6 +184,14 @@ private:
         m_active = true;
         m_data.clear();
         m_data.reserve(qsizetype(expectedBytes));
+        const std::uint64_t expectedIntensityBytes = std::uint64_t(chunk->width)
+            * std::uint64_t(m_expectedRows);
+        if (expectedIntensityBytes > std::uint64_t(m_maximumPayloadBytes)
+            || expectedIntensityBytes > std::uint64_t(std::numeric_limits<qsizetype>::max())) {
+            reset();
+            return false;
+        }
+        m_intensityData.reserve(qsizetype(expectedIntensityBytes));
         return true;
     }
 
@@ -189,7 +204,8 @@ private:
 
     ScanAssemblyResult completeDirect(const std::shared_ptr<CameraFrame> &chunk)
     {
-        if (chunk->data.size() > m_maximumPayloadBytes) {
+        if (chunk->data.size() > m_maximumPayloadBytes
+            || chunk->intensityData.size() > m_maximumPayloadBytes) {
             return reject(QStringLiteral("complete scan payload exceeds assembly memory limit"));
         }
         auto completed = std::make_shared<CameraFrame>(*chunk);
@@ -217,6 +233,7 @@ private:
     std::uint32_t m_discardedScanCount = 0;
     bool m_active = false;
     QByteArray m_data;
+    QByteArray m_intensityData;
     std::shared_ptr<CameraFrame> m_lastChunk;
 };
 

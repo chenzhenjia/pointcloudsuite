@@ -1,6 +1,8 @@
 add_library(pcv_m70_roi_template STATIC
     src/temp_workpiece_interface.cpp
+    src/temp_workpiece_geometry.cpp
     include/pcv/interface/temp_workpiece_interface.h
+    include/pcv/roi/temp_workpiece_geometry.h
 )
 target_include_directories(pcv_m70_roi_template PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

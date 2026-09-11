@@ -6,6 +6,8 @@
 #include <QVector>
 #include <QVector3D>
 
+#include <functional>
+
 namespace pcv::planefitting {
 
 struct PlaneModel {
@@ -29,6 +31,7 @@ struct Options {
     int minimumDisconnectedComponentPoints = 30;
     float minimumDisconnectedComponentRatio = 0.005f;
     bool deferFinalClassification = false;
+    std::function<bool()> isCancelled;
 };
 
 struct Result {
@@ -58,6 +61,7 @@ struct ConsistencyResult {
     float normalAngleDegrees = 0.0f;
     float maximumDistanceMm = 0.0f;
     QString error;
+    bool cancelled = false;
     bool passed = false;
 };
 
@@ -77,7 +81,8 @@ ConsistencyResult validateConsistency(
     const QVector<int> &referenceIndices,
     const QVector<int> &verificationIndices,
     float angleToleranceDegrees = 1.0f,
-    float distanceToleranceMm = 0.4f);
+    float distanceToleranceMm = 0.4f,
+    const std::function<bool()> &isCancelled = {});
 
 BoundsCenterResult calculateBoundsCenter(
     const QVector<pointcloud::Point3D> &points,

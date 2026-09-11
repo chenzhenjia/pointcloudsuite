@@ -25,9 +25,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # configurations. The two desktop applications are the fixed root entrypoints
 # so Qt Creator always discovers runnable View and Stitch targets after a
 # reconfigure, even if an old cache had disabled them.
-set(PCV_BUILD_POINTCLOUDVIEW ON CACHE BOOL "Build the point cloud viewer" FORCE)
-set(PCV_BUILD_POINTCLOUDSTITCH ON CACHE BOOL
-    "Build the point cloud stitching application" FORCE)
+option(PCV_BUILD_POINTCLOUDVIEW "Build the point cloud viewer" ON)
+option(PCV_BUILD_POINTCLOUDSTITCH
+    "Build the point cloud stitching application" ON)
 option(PCV_BUILD_CLI "Build the PointCloudSuite CLI" OFF)
 option(PCV_BUILD_TOOLS "Build diagnostic command-line tools" OFF)
 option(PCV_BUILD_TESTS "Build all automated tests" OFF)
@@ -48,8 +48,16 @@ if(MSVC)
     endif()
 endif()
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS
-    Core Gui Widgets Concurrent OpenGL OpenGLWidgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core)
+if(PCV_BUILD_CLI OR PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_POINTCLOUDSTITCH
+   OR PCV_BUILD_TESTS)
+    find_package(Qt6 6.5 REQUIRED COMPONENTS Gui Concurrent)
+endif()
+if(PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_POINTCLOUDSTITCH
+   OR (PCV_BUILD_EXPERIMENTAL_CAMERA AND
+       (PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_POINTCLOUDSTITCH)))
+    find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets)
+endif()
 qt_standard_project_setup()
 
 if(PCV_BUILD_TESTS)
@@ -61,8 +69,16 @@ add_subdirectory(modules)
 
 # Keep the desktop applications directly connected to the root project. This
 # makes both executable targets visible to Qt Creator after CMake reconfigure.
-add_subdirectory(apps/pointcloudview)
-add_subdirectory(apps/pointcloudstitch)
+if(PCV_BUILD_POINTCLOUDVIEW)
+    add_subdirectory(apps/pointcloudview)
+endif()
+if(PCV_BUILD_POINTCLOUDSTITCH)
+    add_subdirectory(apps/pointcloudstitch)
+endif()
+if(PCV_BUILD_EXPERIMENTAL_CAMERA AND
+   (PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_POINTCLOUDSTITCH))
+    add_subdirectory(apps/intensity_viewer)
+endif()
 if(PCV_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()

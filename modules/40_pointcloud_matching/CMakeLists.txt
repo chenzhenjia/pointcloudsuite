@@ -11,7 +11,7 @@ target_include_directories(pcv_m40_pointcloud_matching PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(pcv_m40_pointcloud_matching PUBLIC
-    pcv_core pcv_filtering pcv_m50_coordinate_conversion Qt::Core Qt::Gui)
+    pcv_core pcv_filtering pcv_m50_coordinate_conversion Qt::Core Qt::Gui Qt::Concurrent)
 
 add_library(pcv_m40_pointcloudregistration INTERFACE)
 target_link_libraries(pcv_m40_pointcloudregistration INTERFACE pcv_m40_pointcloud_matching)

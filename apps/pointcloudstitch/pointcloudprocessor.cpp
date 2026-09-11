@@ -6,9 +6,12 @@
 
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QFuture>
+#include <QThreadPool>
 #include <QQuaternion>
 #include <QStringList>
 #include <QVector3D>
+#include <QtConcurrent>
 #include <QtMath>
 
 #include <algorithm>
@@ -138,75 +141,135 @@ WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inpu
     if(icp.enabled&&(icp.voxelLevels.size()!=3||icp.correspondenceDistances.size()!=3)){
         result.error=QStringLiteral("参考流程要求三个体素和对应距离层级");return result;
     }
-    QVector<ConvertedCloud> clouds;
-    clouds.reserve(inputs.size());
-    const float conversionEnd=0.55f;
-    for(int index=0;index<inputs.size();++index){
-        if(icp.isCancelled&&icp.isCancelled()){result.cancelled=true;result.error=QStringLiteral("已取消");return result;}
-        update(conversionEnd*float(index)/float(inputs.size()),QStringLiteral("读取并转换点云 %1/%2：%3").arg(index+1).arg(inputs.size()).arg(QFileInfo(inputs[index].filePath).fileName()));
+    const float conversionEnd = 0.55f;
+    QVector<ConvertedCloud> clouds(inputs.size());
+    const int requestedParallelTasks = icp.maxParallelTasks;
+    const int actualParallelTasks = icp.parallelEnabled
+        ? (requestedParallelTasks > 0 ? requestedParallelTasks
+                                      : qMax(1, qMin(4, QThread::idealThreadCount() - 1)))
+        : 1;
+    const bool useParallelFrames = icp.parallelEnabled && actualParallelTasks > 1;
+    struct FrameTaskResult {
+        ConvertedCloud cloud;
+        FrameTransformMetadata metadata;
+        QString error;
+        bool ok = false;
+        bool cancelled = false;
+        bool hardFailure = false;
+        qint64 readMs = 0;
+        qint64 transformMs = 0;
+    };
+    const auto processFrame = [&](int index) {
+        FrameTaskResult task;
+        const auto &input = inputs[index];
+        QElapsedTimer conversionClock;
         RawCloud raw;
         QString readError;
-        QElapsedTimer conversionClock;
         conversionClock.start();
-        const bool readOk=readCanonicalPly(inputs[index].filePath,&raw,&readError,icp.isCancelled);
-        readTotalMs += conversionClock.elapsed();
-        if(!readOk){
-            result.cancelled=readError==QStringLiteral("已取消");
-            result.error=QStringLiteral("%1：%2").arg(inputs[index].filePath,readError);
-            return result;
+        const bool readOk = readCanonicalPly(input.filePath, &raw, &readError, icp.isCancelled);
+        task.readMs = conversionClock.elapsed();
+        if (!readOk) {
+            task.cancelled = readError == QStringLiteral("已取消");
+            task.hardFailure = !task.cancelled;
+            task.error = QStringLiteral("%1：%2").arg(input.filePath, readError);
+            if (task.hardFailure && icp.cancellation)
+                icp.cancellation->store(true, std::memory_order_relaxed);
+            return task;
         }
         conversionClock.restart();
         HandEyeCalibration calibration;
-        calibration.flangeFromDepth=inputs[index].flangeFromDepth;
-        calibration.valid=true;
+        calibration.flangeFromDepth = input.flangeFromDepth;
+        calibration.valid = true;
         CloudTransformOptions transformOptions;
-        transformOptions.layout=DepthPointLayout::LineProfileXz;
-        transformOptions.sampleStride=icp.sampleStride;
-        transformOptions.interpolateRotation=true;
-        transformOptions.isCancelled=icp.isCancelled;
-        RobotCloudResult transformed=transformLineScanToRobotBase(
-            raw.points,calibration,inputs[index].startBaseFromFlange,
-            inputs[index].endBaseFromFlange,transformOptions);
-        transformTotalMs += conversionClock.elapsed();
-        if(!transformed.ok){
-            result.cancelled=transformed.cancelled;
-            result.error=QStringLiteral("第 %1 帧：%2").arg(index+1).arg(transformed.error);
+        transformOptions.layout = DepthPointLayout::LineProfileXz;
+        transformOptions.sampleStride = icp.sampleStride;
+        transformOptions.interpolateRotation = true;
+        transformOptions.isCancelled = icp.isCancelled;
+        RobotCloudResult transformed = transformLineScanToRobotBase(
+            raw.points, calibration, input.startBaseFromFlange,
+            input.endBaseFromFlange, transformOptions);
+        task.transformMs = conversionClock.elapsed();
+        if (!transformed.ok) {
+            task.cancelled = transformed.cancelled;
+            task.hardFailure = !transformed.cancelled;
+            task.error = QStringLiteral("第 %1 帧：%2").arg(index + 1).arg(transformed.error);
+            if (task.hardFailure && icp.cancellation)
+                icp.cancellation->store(true, std::memory_order_relaxed);
+            return task;
+        }
+        task.cloud.full = std::move(transformed.points);
+        task.cloud.sample = std::move(transformed.samplePoints);
+        task.cloud.sourceIndices = std::move(transformed.sourceIndices);
+        task.cloud.scanRatios = std::move(transformed.scanRatios);
+        task.cloud.declaredCount = raw.declaredCount;
+        task.cloud.rejectedBasic = transformed.rejectedInvalid;
+        task.cloud.rejectedRange = transformed.rejectedRange;
+        task.cloud.inputYMinimum = transformed.inputYMinimum;
+        task.cloud.inputYMaximum = transformed.inputYMaximum;
+        task.cloud.signedTravel = transformed.signedTravel;
+        task.cloud.dominantTravelAxis = transformed.dominantTravelAxis;
+        task.metadata.sourceFile = input.filePath;
+        task.metadata.startBaseFromFlange = input.startBaseFromFlange;
+        task.metadata.endBaseFromFlange = input.endBaseFromFlange;
+        task.metadata.flangeFromDepth = input.flangeFromDepth;
+        task.metadata.declaredCount = task.cloud.declaredCount;
+        task.metadata.convertedCount = task.cloud.full.size();
+        task.metadata.rejectedInvalid = task.cloud.rejectedBasic;
+        task.metadata.rejectedRange = task.cloud.rejectedRange;
+        task.metadata.inputYMinimum = task.cloud.inputYMinimum;
+        task.metadata.inputYMaximum = task.cloud.inputYMaximum;
+        task.metadata.signedTravel = task.cloud.signedTravel;
+        task.metadata.dominantTravelAxis = task.cloud.dominantTravelAxis;
+        task.ok = true;
+        return task;
+    };
+    QVector<FrameTaskResult> frameTasks(inputs.size());
+    QElapsedTimer frameWallClock;
+    frameWallClock.start();
+    if (useParallelFrames) {
+        QThreadPool pool;
+        pool.setMaxThreadCount(actualParallelTasks);
+        QVector<QFuture<FrameTaskResult>> futures;
+        futures.reserve(inputs.size());
+        for (int index = 0; index < inputs.size(); ++index)
+            futures.push_back(QtConcurrent::run(&pool, processFrame, index));
+        for (int index = 0; index < futures.size(); ++index)
+            frameTasks[index] = futures[index].result();
+    } else {
+        for (int index = 0; index < frameTasks.size(); ++index)
+            frameTasks[index] = processFrame(index);
+    }
+    const qint64 frameWallMs = frameWallClock.elapsed();
+    int firstHardFailure = -1;
+    for (int index = 0; index < frameTasks.size(); ++index) {
+        if (frameTasks[index].hardFailure) { firstHardFailure = index; break; }
+    }
+    for (int index = 0; index < frameTasks.size(); ++index) {
+        const FrameTaskResult &task = frameTasks[index];
+        readTotalMs += task.readMs;
+        transformTotalMs += task.transformMs;
+        update(conversionEnd * float(index + 1) / float(inputs.size()),
+               QStringLiteral("读取并转换点云 %1/%2：%3")
+                   .arg(index + 1).arg(inputs.size())
+                   .arg(QFileInfo(inputs[index].filePath).fileName()));
+        if (index == firstHardFailure) {
+            result.cancelled = task.cancelled;
+            result.error = task.error;
             return result;
         }
-        ConvertedCloud converted;
-        converted.full=std::move(transformed.points);
-        converted.sample=std::move(transformed.samplePoints);
-        converted.sourceIndices=std::move(transformed.sourceIndices);
-        converted.scanRatios=std::move(transformed.scanRatios);
-        converted.declaredCount=raw.declaredCount;
-        converted.rejectedBasic=transformed.rejectedInvalid;
-        converted.rejectedRange=transformed.rejectedRange;
-        converted.inputYMinimum=transformed.inputYMinimum;
-        converted.inputYMaximum=transformed.inputYMaximum;
-        converted.signedTravel=transformed.signedTravel;
-        converted.dominantTravelAxis=transformed.dominantTravelAxis;
-        FrameTransformMetadata frame;
-        frame.sourceFile=inputs[index].filePath;
-        frame.startBaseFromFlange=inputs[index].startBaseFromFlange;
-        frame.endBaseFromFlange=inputs[index].endBaseFromFlange;
-        frame.flangeFromDepth=inputs[index].flangeFromDepth;
-        frame.declaredCount=converted.declaredCount;
-        frame.convertedCount=converted.full.size();
-        frame.rejectedInvalid=converted.rejectedBasic;
-        frame.rejectedRange=converted.rejectedRange;
-        frame.inputYMinimum=converted.inputYMinimum;
-        frame.inputYMaximum=converted.inputYMaximum;
-        frame.signedTravel=transformed.signedTravel;
-        frame.dominantTravelAxis=transformed.dominantTravelAxis;
-        result.frameMetadata.push_back(frame);
-        result.diagnostics+=QStringLiteral("scan %1: kept=%2/%3, basic rejected=%4, range rejected=%5, sample=%6, PLY.Y=[%7,%8], base bounds=%9, canonical binary reader\n")
-            .arg(index+1).arg(converted.full.size()).arg(converted.declaredCount)
-            .arg(converted.rejectedBasic).arg(converted.rejectedRange).arg(converted.sample.size())
-            .arg(converted.inputYMinimum,0,'g',8).arg(converted.inputYMaximum,0,'g',8)
-            .arg(boundsText(cloudBounds(converted.full)))
-            ;
+        if (!task.ok && firstHardFailure < 0) {
+            result.cancelled = true;
+            result.error = QStringLiteral("已取消");
+            return result;
+        }
+        clouds[index] = task.cloud;
+        result.frameMetadata.push_back(task.metadata);
+        result.diagnostics += QStringLiteral("scan %1: kept=%2/%3, basic rejected=%4, range rejected=%5, sample=%6, PLY.Y=[%7,%8], base bounds=%9, canonical binary reader\n")
+            .arg(index + 1).arg(task.cloud.full.size()).arg(task.cloud.declaredCount)
+            .arg(task.cloud.rejectedBasic).arg(task.cloud.rejectedRange).arg(task.cloud.sample.size())
+            .arg(task.cloud.inputYMinimum, 0, 'g', 8).arg(task.cloud.inputYMaximum, 0, 'g', 8)
+            .arg(boundsText(cloudBounds(task.cloud.full)));
         result.sourceFiles.push_back(inputs[index].filePath);
-        clouds.push_back(std::move(converted));
     }
 
     // Registration and overlap handling are owned by module 40.  Keep the
@@ -237,6 +300,13 @@ WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inpu
     WorldCloudMergeResult merged = pointcloud::registerRobotBaseFrames(std::move(moduleFrames), icp, progress);
     merged.readMs = readTotalMs;
     merged.transformMs = transformTotalMs;
+    merged.conversionWallMs = frameWallMs;
+    merged.readWorkMs = readTotalMs;
+    merged.transformWorkMs = transformTotalMs;
+    merged.parallelEnabled = useParallelFrames;
+    merged.requestedParallelTasks = requestedParallelTasks;
+    merged.actualParallelTasks = useParallelFrames ? actualParallelTasks : 1;
+    merged.registrationWorkMs += readTotalMs + transformTotalMs;
     return merged;
 
 }

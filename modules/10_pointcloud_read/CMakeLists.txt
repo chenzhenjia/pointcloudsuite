@@ -22,6 +22,7 @@ endif()
 add_library(pcv_m10_pointcloud_read STATIC
     src/cloud_cache.cpp
     src/frame_converter.cpp
+    src/intensity_image.cpp
     src/latest_frame_slot.cpp
     src/mock_frame_source.cpp
     src/ply_reader.cpp
@@ -31,6 +32,7 @@ add_library(pcv_m10_pointcloud_read STATIC
     src/trigger_mode_policy.h
     include/pcv/camera/frame_data.h
     include/pcv/camera/frame_converter.h
+    include/pcv/camera/intensity_image.h
     include/pcv/camera/frame_source.h
     include/pcv/camera/mock_frame_source.h
     include/pcv/camera/mv3d_lp_camera.h

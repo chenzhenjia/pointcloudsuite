@@ -13,6 +13,8 @@ struct SeamFusionOptions {
     float halfWidth = 8.0f;
     float mutualDistance = 0.6f;
     float decisionCellSize = 0.5f;
+    bool parallelEnabled = true;
+    int maxParallelTasks = 0;
     CancellationToken cancellation;
     std::function<bool()> isCancelled;
 };
@@ -55,6 +57,10 @@ struct SeamFusionResult {
     qint64 seamFusionMs = 0;
     // Wall-clock time spent building the per-cloud mutual-distance indexes.
     qint64 seamIndexBuildMs = 0;
+    bool parallelEnabled = false;
+    int requestedParallelTasks = 0;
+    int actualParallelTasks = 1;
+    qint64 workerMs = 0;
     QString error;
     bool ok = false;
     bool cancelled = false;

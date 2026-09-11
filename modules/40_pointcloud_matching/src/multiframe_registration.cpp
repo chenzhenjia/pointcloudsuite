@@ -2,9 +2,12 @@
 #include <pcv/filtering/downsample.h>
 
 #include <QElapsedTimer>
+#include <QFuture>
 #include <QQuaternion>
+#include <QThreadPool>
 #include <QStringList>
 #include <QVector3D>
+#include <QtConcurrent>
 #include <QtMath>
 
 #include <algorithm>
@@ -1527,12 +1530,37 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
         }
     }
     const int pairCount=inputs.size()-1;
+    const int requestedParallelTasks = icp.maxParallelTasks;
+    const int actualParallelTasks = icp.parallelEnabled
+        ? (requestedParallelTasks > 0 ? requestedParallelTasks
+                                      : qMax(1, qMin(4, QThread::idealThreadCount() - 1)))
+        : 1;
+    result.parallelEnabled = icp.parallelEnabled && actualParallelTasks > 1;
+    result.requestedParallelTasks = requestedParallelTasks;
+    result.actualParallelTasks = result.parallelEnabled ? actualParallelTasks : 1;
+    QVector<MultiFrameRegistrationResult::OverlapDiagnostic> preparedOverlaps(pairCount);
+    if (icp.enabled && result.parallelEnabled) {
+        QThreadPool pool;
+        pool.setMaxThreadCount(actualParallelTasks);
+        QVector<QFuture<MultiFrameRegistrationResult::OverlapDiagnostic>> futures;
+        futures.reserve(pairCount);
+        for (int index = 1; index < inputs.size(); ++index)
+            futures.push_back(QtConcurrent::run(&pool, [&, index] {
+                return overlapDiagnostic(index, clouds[index].sample, clouds[index - 1].sample);
+            }));
+        for (int index = 0; index < futures.size(); ++index)
+            preparedOverlaps[index] = futures[index].result();
+    } else if (icp.enabled) {
+        for (int index = 1; index < inputs.size(); ++index)
+            preparedOverlaps[index - 1] = overlapDiagnostic(index, clouds[index].sample,
+                                                            clouds[index - 1].sample);
+    }
     if(icp.enabled)
     for(int index=1;index<inputs.size();++index){
         const float pairStart=0.15f+(0.85f*float(index-1)/float(pairCount));
         const float pairSpan=0.85f/float(pairCount);
         update(pairStart,QString::fromUtf8("配准 scan %1 到相邻点云 scan %2").arg(index+1).arg(index));
-        result.overlapDiagnostics.push_back(overlapDiagnostic(index,clouds[index].sample,clouds[index-1].sample));
+        result.overlapDiagnostics.push_back(preparedOverlaps[index - 1]);
         const QVector3D sourceCenter((inputs[index].startBaseFromFlange(0,3)+inputs[index].endBaseFromFlange(0,3))*.5f,
                                      (inputs[index].startBaseFromFlange(1,3)+inputs[index].endBaseFromFlange(1,3))*.5f,
                                      (inputs[index].startBaseFromFlange(2,3)+inputs[index].endBaseFromFlange(2,3))*.5f);

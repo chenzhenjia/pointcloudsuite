@@ -14,7 +14,7 @@ target_link_libraries(pcv_m30_pointcloud_stitch PUBLIC
     pcv_m50_coordinate_conversion
     pcv_m10_pointcloud_read
     pcv_m80_plane_output
-    Qt::Core Qt::Gui)
+    Qt::Core Qt::Gui Qt::Concurrent)
 
 add_library(pcv_m30_pointcloudstitch INTERFACE)
 target_link_libraries(pcv_m30_pointcloudstitch INTERFACE pcv_m30_pointcloud_stitch)

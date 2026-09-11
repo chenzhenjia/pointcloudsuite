@@ -11,8 +11,13 @@ if(PCV_BUILD_EXPERIMENTAL_CAMERA)
     target_link_libraries(frame_source_tests PRIVATE Qt::Core pcv_m10_pointcloud_read)
     add_test(NAME frame_source_tests COMMAND frame_source_tests)
 
+    add_executable(intensity_image_tests unit/camera/intensity_image_tests.cpp)
+    target_link_libraries(intensity_image_tests PRIVATE Qt::Core Qt::Gui pcv_m10_pointcloud_read)
+    add_test(NAME intensity_image_tests COMMAND intensity_image_tests)
+
     list(APPEND PCV_APPLICATION_TEST_TARGETS frame_converter_tests)
     list(APPEND PCV_APPLICATION_TEST_TARGETS frame_source_tests)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS intensity_image_tests)
 endif()
 
 add_executable(application_config_tests unit/infrastructure/application_config_tests.cpp)
@@ -43,9 +48,11 @@ add_executable(temp_workpiece_interface_tests unit/interface/temp_workpiece_inte
 target_link_libraries(temp_workpiece_interface_tests PRIVATE Qt::Core Qt::Gui pcv_m70_roi_template)
 add_test(NAME temp_workpiece_interface_tests COMMAND temp_workpiece_interface_tests)
 
-add_executable(stitching_interface_tests unit/interface/stitching_interface_tests.cpp)
+if(TARGET pcv_m30_pointcloud_stitch)
+    add_executable(stitching_interface_tests unit/interface/stitching_interface_tests.cpp)
     target_link_libraries(stitching_interface_tests PRIVATE Qt::Core Qt::Gui pcv_m30_pointcloud_stitch pcv_m50_coordinate_conversion)
-add_test(NAME stitching_interface_tests COMMAND stitching_interface_tests)
+    add_test(NAME stitching_interface_tests COMMAND stitching_interface_tests)
+endif()
 
 list(APPEND PCV_APPLICATION_TEST_TARGETS
     application_config_tests
@@ -55,7 +62,9 @@ list(APPEND PCV_APPLICATION_TEST_TARGETS
     statistical_filter_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS plane_output_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS temp_workpiece_interface_tests)
-list(APPEND PCV_APPLICATION_TEST_TARGETS stitching_interface_tests)
+if(TARGET stitching_interface_tests)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS stitching_interface_tests)
+endif()
 
 if(PCV_BUILD_POINTCLOUDVIEW AND PCV_BUILD_EXPERIMENTAL_CAMERA)
     add_executable(live_pipeline_tests
@@ -98,10 +107,12 @@ target_link_libraries(roi_matching_tests PRIVATE
 add_test(NAME roi_matching_tests COMMAND roi_matching_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS roi_matching_tests)
 
-add_executable(seam_fusion_tests unit/registration/seam_fusion_tests.cpp)
-target_link_libraries(seam_fusion_tests PRIVATE Qt::Core Qt::Gui pcv_m30_pointcloud_stitch pcv_m40_pointcloud_matching)
-add_test(NAME seam_fusion_tests COMMAND seam_fusion_tests)
-list(APPEND PCV_APPLICATION_TEST_TARGETS seam_fusion_tests)
+if(TARGET pcv_m30_pointcloud_stitch)
+    add_executable(seam_fusion_tests unit/registration/seam_fusion_tests.cpp)
+    target_link_libraries(seam_fusion_tests PRIVATE Qt::Core Qt::Gui pcv_m30_pointcloud_stitch pcv_m40_pointcloud_matching)
+    add_test(NAME seam_fusion_tests COMMAND seam_fusion_tests)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS seam_fusion_tests)
+endif()
 
 add_executable(multiframe_registration_tests unit/registration/multiframe_registration_tests.cpp)
 target_link_libraries(multiframe_registration_tests PRIVATE Qt::Core Qt::Gui pcv_m40_pointcloud_matching)
@@ -113,12 +124,14 @@ target_link_libraries(plane_fitting_tests PRIVATE Qt::Core Qt::Gui pcv_m60_plane
 add_test(NAME plane_fitting_tests COMMAND plane_fitting_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS plane_fitting_tests)
 
-add_executable(pointcloud_canvas_contract_tests unit/render/pointcloud_canvas_contract_tests.cpp)
-target_link_libraries(pointcloud_canvas_contract_tests PRIVATE Qt::Core Qt::Gui pcv_m20_pointcloud_render)
-target_include_directories(pointcloud_canvas_contract_tests PRIVATE
-    ${PROJECT_SOURCE_DIR}/modules/20_pointcloud_render/src)
-add_test(NAME pointcloud_canvas_contract_tests COMMAND pointcloud_canvas_contract_tests)
-list(APPEND PCV_APPLICATION_TEST_TARGETS pointcloud_canvas_contract_tests)
+if(TARGET pcv_m20_pointcloud_render)
+    add_executable(pointcloud_canvas_contract_tests unit/render/pointcloud_canvas_contract_tests.cpp)
+    target_link_libraries(pointcloud_canvas_contract_tests PRIVATE Qt::Core Qt::Gui pcv_m20_pointcloud_render)
+    target_include_directories(pointcloud_canvas_contract_tests PRIVATE
+        ${PROJECT_SOURCE_DIR}/modules/20_pointcloud_render/src)
+    add_test(NAME pointcloud_canvas_contract_tests COMMAND pointcloud_canvas_contract_tests)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS pointcloud_canvas_contract_tests)
+endif()
 
 if(WIN32 AND TARGET Qt6::Core AND PCV_APPLICATION_TEST_TARGETS)
     set(PCV_TEST_PATH "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}")

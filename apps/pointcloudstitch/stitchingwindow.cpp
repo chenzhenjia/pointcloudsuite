@@ -211,6 +211,12 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
     QJsonObject timings;
     timings.insert(QStringLiteral("read_ms"), double(result.merge.readMs));
     timings.insert(QStringLiteral("transform_ms"), double(result.merge.transformMs));
+    timings.insert(QStringLiteral("conversion_wall_ms"), double(result.merge.conversionWallMs));
+    timings.insert(QStringLiteral("read_work_ms"), double(result.merge.readWorkMs));
+    timings.insert(QStringLiteral("transform_work_ms"), double(result.merge.transformWorkMs));
+    timings.insert(QStringLiteral("parallel_enabled"), result.merge.parallelEnabled);
+    timings.insert(QStringLiteral("requested_parallel_tasks"), result.merge.requestedParallelTasks);
+    timings.insert(QStringLiteral("actual_parallel_tasks"), result.merge.actualParallelTasks);
     timings.insert(QStringLiteral("registration_preprocess_ms"), double(result.merge.preprocessMs));
     timings.insert(QStringLiteral("coarse_search_ms"), double(result.merge.coarseSearchMs));
     timings.insert(QStringLiteral("icp_level_1_ms"), double(result.merge.icpLevel1Ms));
@@ -227,6 +233,7 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
     timings.insert(QStringLiteral("diagnostic_frame_ms"), double(result.merge.diagnosticFrameMs));
     timings.insert(QStringLiteral("seam_fusion_ms"), double(result.seamFusionMs));
     timings.insert(QStringLiteral("seam_index_build_ms"), double(result.seamFusion.seamIndexBuildMs));
+    timings.insert(QStringLiteral("seam_worker_ms"), double(result.seamFusion.workerMs));
     timings.insert(QStringLiteral("output_ms"), double(result.outputMs));
     timings.insert(QStringLiteral("formal_output_write_ms"), double(result.outputMs));
     const qint64 reportedTotalMs = result.merge.readMs + result.merge.transformMs
@@ -956,6 +963,8 @@ pointcloud::IcpOptions StitchingWindow::collectIcpOptions(QString *error) const
     }
     options.maximumCorrectionTranslation = float(ui->dsb_max_translation->value());
     options.maximumCorrectionAngleDegrees = float(ui->dsb_max_rotation->value());
+    options.parallelEnabled = ui->chk_parallel_processing->isChecked();
+    options.maxParallelTasks = ui->sb_parallel_tasks->value();
     if (ui->chk_diagnostic_output->isChecked()) {
         // Diagnostic mode re-enables the complete coarse search (in-plane
         // tangent coarse alignment and the wide structure diagnostic).
@@ -975,7 +984,7 @@ void StitchingWindow::startStitching()
         QMessageBox::warning(this, tr("输入无效"), error);
         return;
     }
-    const pointcloud::IcpOptions icp = collectIcpOptions(&error);
+    pointcloud::IcpOptions icp = collectIcpOptions(&error);
     if (!error.isEmpty()) {
         QMessageBox::warning(this, tr("参数无效"), error);
         return;
@@ -995,6 +1004,9 @@ void StitchingWindow::startStitching()
                   .arg(inputs.size())
                   .arg(icp.enabled ? tr("配准与融合") : tr("仅手眼坐标转换"))
                   .arg(icp.enabled ? tr("开启") : tr("关闭")));
+    appendLog(tr("并行处理=%1，最大任务数=%2")
+                  .arg(icp.parallelEnabled ? tr("开启") : tr("关闭"))
+                  .arg(icp.maxParallelTasks == 0 ? tr("自动") : QString::number(icp.maxParallelTasks)));
     const double previewRatio = ui->dsb_preview_ratio->value();
     const bool diagnosticOutput = ui->chk_diagnostic_output->isChecked();
     const bool writeSources = diagnosticOutput;
@@ -1003,6 +1015,8 @@ void StitchingWindow::startStitching()
     seamOptions.halfWidth = float(ui->dsb_seam_half_width->value());
     seamOptions.mutualDistance = float(ui->dsb_mutual_distance->value());
     seamOptions.decisionCellSize = float(ui->dsb_decision_voxel->value());
+    seamOptions.parallelEnabled = icp.parallelEnabled;
+    seamOptions.maxParallelTasks = icp.maxParallelTasks;
     seamOptions.cancellation = m_cancelRequested;
     const auto progress = [this](int value, const QString &message) {
         QMetaObject::invokeMethod(this, [this, value, message]() {

@@ -2,8 +2,11 @@
 #include <pcv/stitching/seam_fusion_kernel.h>
 
 #include <QElapsedTimer>
+#include <QFuture>
 #include <QHash>
+#include <QThreadPool>
 #include <QVector3D>
+#include <QtConcurrent>
 
 #include <algorithm>
 #include <cmath>
@@ -45,6 +48,14 @@ SeamFusionResult applyTrajectorySeamFusionImpl(MultiFrameRegistrationResult *mer
     if (merge->points.size() != merge->cloudIds.size() || merge->points.size() != merge->sourceIndices.size() || merge->points.size() != merge->scanRatios.size()) { result.error = QStringLiteral("接缝输入点与来源映射长度不一致"); return result; }
     if (merge->frameMetadata.size() < 2 || merge->registrationCorrections.size() != merge->frameMetadata.size()) { result.error = QStringLiteral("接缝帧元数据不完整"); return result; }
     for (int id : merge->cloudIds) if (id < 0 || id >= merge->frameMetadata.size()) { result.error = QStringLiteral("接缝点云来源索引无效"); return result; }
+    const int requestedParallelTasks = options.maxParallelTasks;
+    const int actualParallelTasks = options.parallelEnabled
+        ? (requestedParallelTasks > 0 ? requestedParallelTasks
+                                      : qMax(1, qMin(4, QThread::idealThreadCount() - 1)))
+        : 1;
+    result.parallelEnabled = options.parallelEnabled && actualParallelTasks > 1;
+    result.requestedParallelTasks = requestedParallelTasks;
+    result.actualParallelTasks = result.parallelEnabled ? actualParallelTasks : 1;
 
     QVector<QVector3D> centers, directions; centers.reserve(merge->frameMetadata.size()); directions.reserve(merge->frameMetadata.size());
     for (int i = 0; i < merge->frameMetadata.size(); ++i) {
@@ -67,23 +78,32 @@ SeamFusionResult applyTrajectorySeamFusionImpl(MultiFrameRegistrationResult *mer
         buckets[merge->cloudIds[k]].push_back(k);
     }
 
-    QVector<Seam> seams(centers.size() - 1);
-    QVector<QVector<qsizetype>> left(seams.size()), right(seams.size());
-    for (int i = 0; i + 1 < centers.size(); ++i) {
-        Seam &s = seams[i]; s.normal = (centers[i + 1] - centers[i]).normalized(); s.offset = QVector3D::dotProduct((centers[i] + centers[i + 1]) * 0.5f, s.normal);
-        s.travel = directions[i] + directions[i + 1]; s.travel -= s.normal * QVector3D::dotProduct(s.travel, s.normal); if (s.travel.lengthSquared() <= 1.0e-12f) { result.error = QStringLiteral("无法确定接缝处扫描行程方向"); return result; } s.travel.normalize();
+    struct SeamBandTask {
+        Seam seam;
+        QVector<qsizetype> left;
+        QVector<qsizetype> right;
+        qint64 workerMs = 0;
+        bool cancelled = false;
+        QString error;
+    };
+    const auto buildSeamBand = [&](int i) {
+        SeamBandTask task;
+        QElapsedTimer workerClock;
+        workerClock.start();
+        Seam &s = task.seam; s.normal = (centers[i + 1] - centers[i]).normalized(); s.offset = QVector3D::dotProduct((centers[i] + centers[i + 1]) * 0.5f, s.normal);
+        s.travel = directions[i] + directions[i + 1]; s.travel -= s.normal * QVector3D::dotProduct(s.travel, s.normal); if (s.travel.lengthSquared() <= 1.0e-12f) { task.error = QStringLiteral("无法确定接缝处扫描行程方向"); return task; } s.travel.normalize();
         s.aMin = std::numeric_limits<float>::max(); s.aMax = -s.aMin; s.bMin = s.aMin; s.bMax = -s.aMin;
         const QVector<qsizetype> &bucketA = buckets[i];
         const QVector<qsizetype> &bucketB = buckets[i + 1];
         qsizetype visited = 0;
         for (qsizetype local = 0; local < bucketA.size(); ++local) {
-            if ((visited++ & 0x3fff) == 0 && cancelled()) return result;
+            if ((visited++ & 0x3fff) == 0 && cancellationRequested(options)) { task.cancelled = true; return task; }
             const float value = QVector3D::dotProduct(pv(merge->points[bucketA[local]]), s.normal);
             s.aMin = qMin(s.aMin, value); s.aMax = qMax(s.aMax, value);
         }
         visited = 0;
         for (qsizetype local = 0; local < bucketB.size(); ++local) {
-            if ((visited++ & 0x3fff) == 0 && cancelled()) return result;
+            if ((visited++ & 0x3fff) == 0 && cancellationRequested(options)) { task.cancelled = true; return task; }
             const float value = QVector3D::dotProduct(pv(merge->points[bucketB[local]]), s.normal);
             s.bMin = qMin(s.bMin, value); s.bMax = qMax(s.bMax, value);
         }
@@ -93,21 +113,47 @@ SeamFusionResult applyTrajectorySeamFusionImpl(MultiFrameRegistrationResult *mer
         if (s.valid) {
             visited = 0;
             for (qsizetype local = 0; local < bucketA.size(); ++local) {
-                if ((visited++ & 0x3fff) == 0 && cancelled()) return result;
+                if ((visited++ & 0x3fff) == 0 && cancellationRequested(options)) { task.cancelled = true; return task; }
                 const qsizetype k = bucketA[local];
                 const QVector3D p = pv(merge->points[k]);
                 if (std::abs(QVector3D::dotProduct(p, s.normal) - s.offset) < options.halfWidth)
-                    left[i].push_back(k);
+                    task.left.push_back(k);
             }
             visited = 0;
             for (qsizetype local = 0; local < bucketB.size(); ++local) {
-                if ((visited++ & 0x3fff) == 0 && cancelled()) return result;
+                if ((visited++ & 0x3fff) == 0 && cancellationRequested(options)) { task.cancelled = true; return task; }
                 const qsizetype k = bucketB[local];
                 const QVector3D p = pv(merge->points[k]);
                 if (std::abs(QVector3D::dotProduct(p, s.normal) - s.offset) < options.halfWidth)
-                    right[i].push_back(k);
+                    task.right.push_back(k);
             }
         }
+        task.workerMs = workerClock.elapsed();
+        return task;
+    };
+    QVector<Seam> seams(centers.size() - 1);
+    QVector<QVector<qsizetype>> left(seams.size()), right(seams.size());
+    QVector<SeamBandTask> bandTasks(seams.size());
+    if (result.parallelEnabled) {
+        QThreadPool pool;
+        pool.setMaxThreadCount(actualParallelTasks);
+        QVector<QFuture<SeamBandTask>> futures;
+        futures.reserve(seams.size());
+        for (int i = 0; i < seams.size(); ++i)
+            futures.push_back(QtConcurrent::run(&pool, buildSeamBand, i));
+        for (int i = 0; i < futures.size(); ++i)
+            bandTasks[i] = futures[i].result();
+    } else {
+        for (int i = 0; i < seams.size(); ++i)
+            bandTasks[i] = buildSeamBand(i);
+    }
+    for (int i = 0; i < bandTasks.size(); ++i) {
+        if (bandTasks[i].cancelled) { result.cancelled = true; result.error = QStringLiteral("已取消"); return result; }
+        if (!bandTasks[i].error.isEmpty()) { result.error = bandTasks[i].error; return result; }
+        result.workerMs += bandTasks[i].workerMs;
+        seams[i] = std::move(bandTasks[i].seam);
+        left[i] = std::move(bandTasks[i].left);
+        right[i] = std::move(bandTasks[i].right);
     }
 
     QVector<bool> usable(seams.size(), false);
@@ -129,18 +175,57 @@ SeamFusionResult applyTrajectorySeamFusionImpl(MultiFrameRegistrationResult *mer
         ratios.push_back(ratio);
     };
     QVector<quint8> handled(merge->points.size(), 0);
-    // Core pass: a single global scan (the fused arrays keep the input order);
-    // keep decisions are evaluated per point from its adjacent usable seams.
-    for (qsizetype k = 0; k < merge->points.size(); ++k) {
-        if ((k & 0x3fff) == 0 && cancelled()) return result;
-        const int id = merge->cloudIds[k];
-        const QVector3D p = pv(merge->points[k]);
-        bool keepPoint = true;
-        if (id > 0 && usable[id - 1])
-            keepPoint = keepPoint && QVector3D::dotProduct(p, seams[id - 1].normal) - seams[id - 1].offset >= options.halfWidth;
-        if (id + 1 < centers.size() && usable[id])
-            keepPoint = keepPoint && QVector3D::dotProduct(p, seams[id].normal) - seams[id].offset <= -options.halfWidth;
-        if (keepPoint) {
+    struct CoreChunk {
+        QVector<qsizetype> kept;
+        qint64 workerMs = 0;
+        bool cancelled = false;
+    };
+    constexpr qsizetype coreChunkSize = 65536;
+    const int coreChunkCount = int((merge->points.size() + coreChunkSize - 1) / coreChunkSize);
+    const auto buildCoreChunk = [&](int chunk) {
+        CoreChunk task;
+        QElapsedTimer workerClock;
+        workerClock.start();
+        const qsizetype begin = qsizetype(chunk) * coreChunkSize;
+        const qsizetype end = qMin(begin + coreChunkSize, merge->points.size());
+        task.kept.reserve(end - begin);
+        for (qsizetype k = begin; k < end; ++k) {
+            if (((k - begin) & 0x3fff) == 0 && cancellationRequested(options)) {
+                task.cancelled = true;
+                return task;
+            }
+            const int id = merge->cloudIds[k];
+            const QVector3D p = pv(merge->points[k]);
+            bool keepPoint = true;
+            if (id > 0 && usable[id - 1])
+                keepPoint = keepPoint && QVector3D::dotProduct(p, seams[id - 1].normal) - seams[id - 1].offset >= options.halfWidth;
+            if (id + 1 < centers.size() && usable[id])
+                keepPoint = keepPoint && QVector3D::dotProduct(p, seams[id].normal) - seams[id].offset <= -options.halfWidth;
+            if (keepPoint) task.kept.push_back(k);
+        }
+        task.workerMs = workerClock.elapsed();
+        return task;
+    };
+    QVector<CoreChunk> coreChunks(coreChunkCount);
+    if (result.parallelEnabled && coreChunkCount > 1) {
+        QThreadPool pool;
+        pool.setMaxThreadCount(actualParallelTasks);
+        QVector<QFuture<CoreChunk>> futures;
+        futures.reserve(coreChunkCount);
+        for (int chunk = 0; chunk < coreChunkCount; ++chunk)
+            futures.push_back(QtConcurrent::run(&pool, buildCoreChunk, chunk));
+        for (int chunk = 0; chunk < futures.size(); ++chunk)
+            coreChunks[chunk] = futures[chunk].result();
+    } else {
+        for (int chunk = 0; chunk < coreChunkCount; ++chunk)
+            coreChunks[chunk] = buildCoreChunk(chunk);
+    }
+    // Chunks are committed in source order so point ordering and handled-point
+    // semantics remain identical to the sequential pipeline.
+    for (const CoreChunk &chunk : coreChunks) {
+        if (chunk.cancelled) { result.cancelled = true; result.error = QStringLiteral("已取消"); return result; }
+        result.workerMs += chunk.workerMs;
+        for (qsizetype k : chunk.kept) {
             append(merge->points[k], merge->cloudIds[k], merge->sourceIndices[k],
                    merge->scanRatios[k]);
             handled[k] = 1;

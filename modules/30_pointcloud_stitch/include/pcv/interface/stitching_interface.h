@@ -28,6 +28,8 @@ struct StitchingOptions {
     // Compatible default: the registration result keeps the 2 mm pre/post ICP
     // diagnostic frames. Standard output callers disable this to skip frames.
     bool collectDiagnosticFrames = true;
+    bool parallelEnabled = true;
+    int maxParallelTasks = 0;
     std::function<bool()> isCancelled;
     std::function<void(float, const QString &)> progress;
 };
@@ -52,6 +54,11 @@ struct StitchingResult {
     qint64 seamFusionMs = 0;
     qint64 outputMs = 0;
     qint64 totalMs = 0;
+    bool parallelEnabled = false;
+    int requestedParallelTasks = 0;
+    int actualParallelTasks = 1;
+    qint64 readWorkMs = 0;
+    qint64 transformWorkMs = 0;
 };
 
 StitchingResult stitchRawLineProfiles(const StitchingOptions &options);
