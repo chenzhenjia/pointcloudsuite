@@ -27,8 +27,9 @@
 
 - `pointcloudview`：界面、异步读取、画布生命周期、业务状态和 DTO 转换。
 - `pointcloudstitch`：界面、输入组织、进度和结果展示。
+- `intensity_viewer`：实验性相机亮度图预览与非覆盖 PNG 保存；仅在实验相机开关开启且至少构建一个桌面应用时生成。
 - `registration_diagnostic`：仅链接模块 target，调用 `stitchRawLineProfiles`。
-- `pointcloudcli`：独立 C++17 命令行入口，仅提供参数和版本输出。
+- `pointcloudcli`：独立 C++17 命令行入口，使用 Qt Core/Gui/Concurrent 及所需共享模块，提供 PLY Header/完整读取摘要与临时工件四件套流程；不链接 Widgets、OpenGL 或 GUI application target。
 - `tests/`：注册模块单元测试、接口测试和必要的兼容入口测试。
 
 ## 兼容层
@@ -40,4 +41,4 @@
 header 在迁移期保留，只做 target/header 转发，不再增加新功能。删除前必须完成引用审计、
 全量构建、CTest、GUI 和真实夹具验收，并单独提交。
 
-最后核对日期：2026-09-07（模块重命名、30/40 职责重划与 ROI 匹配接口收敛后）。
+最后核对日期：2026-09-13（CLI PLY 读取、运行数据目录与便携部署同步后）。

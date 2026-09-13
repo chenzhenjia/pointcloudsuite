@@ -10,7 +10,8 @@ PointCloudSuite 是基于 Qt 6、C++17 和 CMake 的工业点云处理项目，�
 
 - `pointcloudview`：点云读取、渲染、点选、平面拟合、ROI/模板和输出。
 - `pointcloudstitch`：线扫点云坐标转换、多帧配准、接缝融合和结果编排。
-- `pointcloudcli`：独立命令行工具；当前提供 `temp-workpiece run <job.json>` 临时工件四件套业务闭环，以及 `--help`、`--version`。
+- `pointcloudcli`：独立命令行工具；当前提供 `inspect ply`、`read ply`、`temp-workpiece run <job.json>`，以及 `--help`、`--version`。
+- `intensity_viewer`：实验性亮度图预览与手动 PNG 保存工具，仅在 `PCV_BUILD_EXPERIMENTAL_CAMERA=ON` 且至少构建一个桌面应用时生成。
 - 相机（海康 Mv3dLp）实验取流能力：已并入 `modules/10_pointcloud_read`（target `pcv_m10_pointcloud_read`），由 `PCV_BUILD_EXPERIMENTAL_CAMERA` 控制；仍属实验，需实机验收。
 - `modules/10_pointcloud_read` 至 `modules/80_plane_output`：规范共享模块。
 - `registration_diagnostic`：通过 `pcv::interface::stitchRawLineProfiles` 执行统一拼接流水线的诊断工具，支持通用多帧输入、位姿匹配和 `inspect` PLY header 检查。
@@ -20,7 +21,7 @@ PointCloudSuite 是基于 Qt 6、C++17 和 CMake 的工业点云处理项目，�
 ## 目录结构
 
 ```text
-apps/          两个 Qt 桌面应用和 pointcloudcli
+apps/          Qt 桌面应用、实验性 intensity_viewer 和 pointcloudcli
 modules/       v0.3 规范模块
 src/           迁移期基础实现和兼容聚合 target
 include/pcv/   公共头和 forwarding header
@@ -75,21 +76,48 @@ ctest --test-dir <CliBuildDir> -C Debug -R "cli_" --output-on-failure
 
 `PCV_BUILD_CLI=OFF` 是默认值，因此既有 GUI 构建和产物不变。
 
+也可以使用脚本自动探测 MSVC、CMake 和 Qt，并生成 Release 便携目录：
+
+```powershell
+.\scripts\build_windows.ps1 -CliOnly -BuildTests -Config Debug -BuildDir C:\pcv-build\cli-debug
+ctest --test-dir C:\pcv-build\cli-debug -C Debug -R "cli_" --output-on-failure
+.\scripts\build_windows.ps1 -CliOnly -Config Release -BuildDir C:\pcv-build\cli-release -Deploy -DeployDir C:\pcv-deploy\pointcloudcli
+```
+
+`-Deploy` 仅支持 `-CliOnly -Config Release`，会将 `pointcloudcli.exe`、Qt/VC 运行库、`data` 和 `README.txt` 放入目标目录，并在清空 PATH 的子进程中运行 15 项 CLI 契约测试。目标目录必须在源码树外且不能是盘符根目录；已有目录会在安全检查后清空重建。也可双击 `scripts\build_pointcloudcli_release.bat` 使用默认构建目录。便携目录可整体复制到另一台 Windows x64 机器；业务输入文件需随任务目录另行提供。
+
 业务命令示例：
 
 ```powershell
 pointcloudcli temp-workpiece run <job.json>
 pointcloudcli temp-workpiece run <job.json> --allow-overwrite
+pointcloudcli inspect ply input.ply --json
+pointcloudcli read ply input.ply --json
+pointcloudcli temp-workpiece run job.json --data-dir .\data
 ```
 
 Job JSON 使用 `pointcloudcli-temp-workpiece-job-v1`。CLI 会校验扫描 JSON、PLY/XML、三点平面和第二组三点一致性，自动建立 WObj1，并原子生成 `baseline_robot_base.ply`、`roi_template_robot_base.ply`、`plane_mask.png` 和 `temp_workpiece_info.json`。实时相机、拼接、干涉平面和质量报告暂不属于本期 CLI。
+
+`inspect ply` 只读取 PLY Header，`read ply` 完整读取点云并输出格式、点数、Bounds 和 intensity 摘要；两个命令默认不写文件。Python 可通过 `subprocess.run` 调用并解析 JSON：
+
+```python
+import json
+import subprocess
+
+result = subprocess.run(
+    ["pointcloudcli.exe", "read", "ply", "input.ply", "--json"],
+    capture_output=True, text=True, check=False)
+if result.returncode != 0:
+    raise RuntimeError(json.loads(result.stderr)["message"])
+print(json.loads(result.stdout)["loaded_points"])
+```
 
 根 CMake 默认启用 `PCV_BUILD_EXPERIMENTAL_CAMERA`；`scripts/build_windows.ps1` 默认将该开关传为 `OFF`，需要实验相机时请显式添加 `-ExperimentalCamera`。
 
 ## 代码边界
 
-共享算法位于模块 `src/`，公共头位于模块 `include/`。应用可以依赖共享模块，共享模块不得依赖应用。Qt Designer 文件位于 `apps/pointcloudview/ui/` 和 `apps/pointcloudstitch/ui/`。
+共享算法位于模块 `src/`，公共头位于模块 `include/`。应用可以依赖共享模块，共享模块不得依赖应用。Qt Designer 文件位于 `apps/pointcloudview/ui/`、`apps/pointcloudstitch/ui/` 和实验性 `apps/intensity_viewer/ui/`。
 
 详细模块职责见 [v0.3 需求文档](docs/requirements/pointcloudview_v0.3.md) 和 [模块文档](docs/modules/)。
 
-最后核对日期：2026-09-07。
+最后核对日期：2026-09-13。

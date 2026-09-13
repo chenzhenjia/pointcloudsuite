@@ -51,7 +51,7 @@ POINTCLOUDVIEW_SELFTEST_CLOSE=1
 
 ## CLI 骨架构建
 
-`pointcloudcli` 默认关闭，打开 `PCV_BUILD_CLI` 后可与两个桌面应用在同一构建目录中编译。CLI target 仅依赖 Core/Gui/Concurrent 和业务模块，不链接 Widgets、OpenGL、PointCloudCanvas 或 GUI application target。当前业务入口为 `temp-workpiece run <job.json>`。
+`pointcloudcli` 默认关闭，打开 `PCV_BUILD_CLI` 后可与两个桌面应用在同一构建目录中编译。CLI target 仅依赖 Core/Gui/Concurrent 和业务模块，不链接 Widgets、OpenGL、PointCloudCanvas 或 GUI application target。当前入口包括 `inspect ply`、`read ply` 和 `temp-workpiece run <job.json>`。
 
 ```powershell
 cmake -S . -B <CliBuildDir> `
@@ -63,9 +63,23 @@ ctest --test-dir <CliBuildDir> -C Debug -R "cli_" --output-on-failure
 
 保持默认 `PCV_BUILD_CLI=OFF` 时，Qt Creator 的 View/Stitch 运行目标不受影响。
 
-CLI-only 配置不会查找 Qt Widgets/OpenGL；若使用 Job JSON 执行业务命令，成功摘要写入 stdout，阶段进度和错误 JSON 写入 stderr。退出码 `0/2/10/20/30/40/130` 分别表示成功、契约、输入、坐标转换、平面/WObj1/ROI、输出和取消。
+CLI-only 配置不会查找 Qt Widgets/OpenGL。`inspect ply` 只检查 Header，`read ply` 读取完整点云并输出摘要；两个命令默认不写文件。若使用 Job JSON 执行业务命令，成功摘要写入 stdout，阶段进度和错误 JSON 写入 stderr。退出码 `0/2/10/20/30/40/130` 分别表示成功、契约、输入、坐标转换、平面/WObj1/ROI、输出和取消。
 
 脚本会检查 Qt、CMake 和 MSVC 环境。构建输出、缓存、日志和导出物应放在源码树之外。
+
+### 一键 CLI 构建与便携部署
+
+`scripts/build_windows.ps1` 在 `-CliOnly` 下会自动探测 CMake、Visual Studio/MSVC 和 Qt；仍可通过 `-CMakePath`、`-QtDir` 覆盖探测结果。`-CliOnly` 与 `-ExperimentalCamera` 互斥，`-Deploy` 必须配合 `-CliOnly` 且只支持 Release：
+
+```powershell
+.\scripts\build_windows.ps1 -CliOnly -BuildTests -Config Debug -BuildDir C:\pcv-build\cli-debug
+ctest --test-dir C:\pcv-build\cli-debug -C Debug -R "cli_" --output-on-failure
+.\scripts\build_windows.ps1 -CliOnly -Config Release -BuildDir C:\pcv-build\cli-release -Deploy -DeployDir C:\pcv-deploy\pointcloudcli
+```
+
+部署步骤会调用同一 Qt 版本的 `windeployqt --release --compiler-runtime`，补齐可用的 x64 VC Runtime，检查 `pointcloudcli.exe` 及 Qt DLL 的导入依赖，创建 `data` 目录并运行清空 PATH 的 15 项 CLI 契约测试。目标目录必须位于源码树外且不能是盘符根目录；现有目录会在安全检查通过后清空重建。也可运行 `scripts\build_pointcloudcli_release.bat` 使用默认 Release 部署目录。
+
+CLI 运行数据目录按 `--data-dir`、`PCV_DATA_DIR`、exe 同级 `data`、`%LOCALAPPDATA%\PointCloudSuite\data` 顺序选择可写目录。只有 `temp-workpiece run` 接受 `--data-dir`；`inspect ply` 和 `read ply` 携带该选项会返回 `PCV_CONTRACT_001` 和退出码 `2`。
 
 ## 生成器与头文件依赖跟踪
 
@@ -93,4 +107,4 @@ CLI-only 配置不会查找 Qt Widgets/OpenGL；若使用 Job JSON 执行业务�
 
 修改公共头、CMake、UI、processor 或输出契约后，必须重新配置并构建受影响应用，必要时执行 Debug/Release 全量 CTest。GUI 人工验收和真实生产夹具验收必须单独记录。
 
-最后核对日期：2026-09-04。
+最后核对日期：2026-09-13。

@@ -45,10 +45,22 @@ if(PCV_BUILD_TESTS)
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_cli_job.cmake"
         )
     endforeach()
+    foreach(PCV_CLI_PLY_MODE IN ITEMS inspect_ascii inspect_binary_le inspect_binary_be inspect_missing read_summary read_invalid read_bounds)
+        add_test(
+            NAME cli_${PCV_CLI_PLY_MODE}
+            COMMAND ${CMAKE_COMMAND}
+                "-DPCV_CLI=$<TARGET_FILE:pointcloudcli>"
+                "-DPCV_MODE=${PCV_CLI_PLY_MODE}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_cli_ply.cmake"
+        )
+    endforeach()
     if(WIN32 AND TARGET Qt6::Core)
         set_tests_properties(cli_help cli_version cli_empty cli_unknown
             cli_temp_workpiece_rectangle cli_temp_workpiece_indices
             cli_temp_workpiece_overwrite cli_temp_workpiece_traversal PROPERTIES
+            ENVIRONMENT "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}")
+        set_tests_properties(cli_inspect_ascii cli_inspect_binary_le cli_inspect_binary_be
+            cli_inspect_missing cli_read_summary cli_read_invalid cli_read_bounds PROPERTIES
             ENVIRONMENT "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}")
     endif()
 endif()

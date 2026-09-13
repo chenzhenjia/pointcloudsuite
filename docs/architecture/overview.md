@@ -8,7 +8,8 @@ PointCloudSuite v0.3 是多应用 CMake 工作区。应用依赖共享模块，�
 apps/
   pointcloudview        Qt Widgets/OpenGL 查看与处理（含实验相机 UI）
   pointcloudstitch      Qt 多帧拼接界面
-  pointcloudcli         独立命令行参数入口骨架
+  intensity_viewer      实验性亮度图预览与 PNG 保存 GUI
+  pointcloudcli         独立 PLY 读取与临时工件命令行入口
 modules/
   10_pointcloud_read    点云读写、缓存；相机帧采集与转换（05 已并入）
   20_pointcloud_render  Qt/OpenGL 点云画布
@@ -68,7 +69,9 @@ tools/                可选诊断工具
 
 `registration_diagnostic` 通过 `pcv::interface::stitchRawLineProfiles` 调用统一拼接接口。
 
-`pointcloudcli` 仅在 `PCV_BUILD_CLI=ON` 时生成，当前提供 `--help`、`--version` 及参数错误契约，不链接 Qt 或共享点云模块。
+`intensity_viewer` 仅在 `PCV_BUILD_EXPERIMENTAL_CAMERA=ON` 且至少构建一个桌面应用时生成；它使用 `pcv_m10_pointcloud_read` 和 Qt Widgets 预览有效完整扫描的亮度图，属于实验性相机能力。
+
+`pointcloudcli` 仅在 `PCV_BUILD_CLI=ON` 时生成，当前提供 `--help`、`--version`、`inspect ply`、`read ply` 和 `temp-workpiece run`。它依赖 Qt Core/Gui/Concurrent 与所需共享模块，但不链接 Widgets、OpenGL 或 GUI application target。
 
 ## 兼容层
 
@@ -78,4 +81,4 @@ tools/                可选诊断工具
 `pcv_interface`、`pcv_output`）保留为迁移期兼容入口，只做 target/header 转发。
 新代码一律使用规范 target；删除旧入口前需完成引用审计、全量构建、CTest、GUI 和真实夹具验收。
 
-最后核对日期：2026-09-07（模块重命名、30/40 职责重划与 ROI 匹配接口收敛后）。
+最后核对日期：2026-09-13（CLI PLY 读取、运行数据目录与便携部署同步后）。

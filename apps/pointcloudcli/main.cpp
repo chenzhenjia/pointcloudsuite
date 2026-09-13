@@ -1,4 +1,6 @@
 #include <pcv/interface/temp_workpiece_interface.h>
+#include <pcv/infrastructure/runtime_paths.h>
+#include <pcv/io/ply_reader.h>
 #include <pcv/planefitting/plane_fitting.h>
 #include <pcv/roi/temp_workpiece_geometry.h>
 
@@ -9,6 +11,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QDir>
+#include <QStandardPaths>
+#include <QStringList>
+#include <QUuid>
 #include <QVector4D>
 
 #include <atomic>
@@ -34,14 +39,209 @@ void usage(std::ostream &out)
         << "Usage:\n"
         << "  pointcloudcli --help\n"
         << "  pointcloudcli --version\n"
-        << "  pointcloudcli temp-workpiece run <job.json> [--allow-overwrite]\n"
+        << "  pointcloudcli inspect ply <file.ply> [--json]\n"
+        << "  pointcloudcli read ply <file.ply> [--json]\n"
+        << "  pointcloudcli temp-workpiece run <job.json> [--allow-overwrite] [--data-dir <path>]\n"
         << "Options:\n"
         << "  --help     Show this help message.\n"
         << "  --version  Show the PointCloudSuite version.\n"
-        << "  --allow-overwrite  Allow replacing existing output files.\n";
+        << "  --allow-overwrite  Allow replacing existing output files.\n"
+        << "  --data-dir <path>  Override temp-workpiece runtime data directory.\n";
+}
+
+QString plyFormatName(pcv::detail::io::PlyFormat format)
+{
+    using pcv::detail::io::PlyFormat;
+    switch (format) {
+    case PlyFormat::BinaryLittleEndian: return QStringLiteral("binary_little_endian");
+    case PlyFormat::BinaryBigEndian: return QStringLiteral("binary_big_endian");
+    case PlyFormat::Ascii: return QStringLiteral("ascii");
+    }
+    return QStringLiteral("unknown");
+}
+
+QJsonObject failure(const QString &code, const QString &stage, const QString &message);
+
+QJsonObject inputFailure(const QString &code, const QString &stage, const QString &message)
+{
+    return failure(code, stage, message);
+}
+
+int emitPlyFailure(const QString &code, const QString &stage, const QString &message,
+                   int exitCode)
+{
+    std::cerr << QJsonDocument(inputFailure(code, stage, message))
+                         .toJson(QJsonDocument::Compact).constData() << '\n';
+    return exitCode;
+}
+
+int inspectPly(const QString &path, bool json)
+{
+    const QString absolutePath = QFileInfo(path).absoluteFilePath();
+    if (!QFileInfo::exists(absolutePath))
+        return emitPlyFailure(QStringLiteral("PCV_INPUT_001"), QStringLiteral("inspect_ply"),
+                              QStringLiteral("PLY file does not exist: %1").arg(absolutePath),
+                              kInputError);
+    const auto header = pcv::detail::io::inspectPlyHeader(absolutePath);
+    if (!header.ok)
+        return emitPlyFailure(QStringLiteral("PCV_INPUT_002"), QStringLiteral("inspect_ply"),
+                              header.error, kInputError);
+    const QString format = plyFormatName(header.format);
+    const bool requiresConversion = header.format != pcv::detail::io::PlyFormat::BinaryLittleEndian;
+    if (json) {
+        const QJsonObject output{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("command"), QStringLiteral("inspect ply")},
+            {QStringLiteral("file"), QDir::fromNativeSeparators(absolutePath)},
+            {QStringLiteral("format"), format},
+            {QStringLiteral("version"), header.version},
+            {QStringLiteral("declared_points"), qint64(header.declaredPointCount)},
+            {QStringLiteral("header_bytes"), header.headerBytes},
+            {QStringLiteral("requires_conversion"), requiresConversion},
+            {QStringLiteral("canonical_format"), QStringLiteral("binary_little_endian")}};
+        std::cout << QJsonDocument(output).toJson(QJsonDocument::Compact).constData() << '\n';
+    } else {
+        std::cout << "command=inspect ply\n"
+                  << "file=" << QDir::fromNativeSeparators(absolutePath).toStdString() << '\n'
+                  << "format=" << format.toStdString() << '\n'
+                  << "version=" << header.version.toStdString() << '\n'
+                  << "declared_points=" << header.declaredPointCount << '\n'
+                  << "header_bytes=" << header.headerBytes << '\n'
+                  << "requires_conversion=" << (requiresConversion ? "true" : "false") << '\n'
+                  << "canonical_format=binary_little_endian\n";
+    }
+    return 0;
+}
+
+int readPlySummary(const QString &path, bool json)
+{
+    const QString absolutePath = QFileInfo(path).absoluteFilePath();
+    if (!QFileInfo::exists(absolutePath))
+        return emitPlyFailure(QStringLiteral("PCV_INPUT_001"), QStringLiteral("read_ply"),
+                              QStringLiteral("PLY file does not exist: %1").arg(absolutePath),
+                              kInputError);
+    if (g_cancelled.load(std::memory_order_relaxed))
+        return emitPlyFailure(QStringLiteral("PCV_CANCELLED"), QStringLiteral("read_ply"),
+                              QStringLiteral("cancelled"), kCancelled);
+    std::cerr << "[1/1] read_ply\n";
+    pcv::detail::io::PlyReadOptions options;
+    options.readIntensity = true;
+    options.isCancelled = [] { return g_cancelled.load(std::memory_order_relaxed); };
+    const auto result = pcv::detail::io::readPly(absolutePath, options);
+    if (result.cancelled || g_cancelled.load(std::memory_order_relaxed))
+        return emitPlyFailure(QStringLiteral("PCV_CANCELLED"), QStringLiteral("read_ply"),
+                              QStringLiteral("cancelled"), kCancelled);
+    if (!result.ok)
+        return emitPlyFailure(QStringLiteral("PCV_INPUT_002"), QStringLiteral("read_ply"),
+                              result.error, kInputError);
+    qsizetype rejectedInvalid = 0;
+    for (const auto &point : result.points) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+            ++rejectedInvalid;
+    }
+    const qsizetype loadedPoints = result.points.size() - rejectedInvalid;
+    QJsonObject bounds;
+    if (result.hasBounds) {
+        bounds = {{QStringLiteral("min"), QJsonArray{result.minimum.x, result.minimum.y, result.minimum.z}},
+                  {QStringLiteral("max"), QJsonArray{result.maximum.x, result.maximum.y, result.maximum.z}}};
+    }
+    if (json) {
+        QJsonObject output{{QStringLiteral("ok"), true},
+                           {QStringLiteral("command"), QStringLiteral("read ply")},
+                           {QStringLiteral("file"), QDir::fromNativeSeparators(absolutePath)},
+                           {QStringLiteral("format"), plyFormatName(result.format)},
+                           {QStringLiteral("declared_points"), qint64(result.declaredPointCount)},
+                           {QStringLiteral("loaded_points"), qint64(loadedPoints)},
+                           {QStringLiteral("rejected_invalid"), qint64(rejectedInvalid)},
+                           {QStringLiteral("has_intensity"), !result.intensity.isEmpty()}};
+        if (!bounds.isEmpty()) output.insert(QStringLiteral("bounds"), bounds);
+        std::cout << QJsonDocument(output).toJson(QJsonDocument::Compact).constData() << '\n';
+    } else {
+        std::cout << "command=read ply\n"
+                  << "file=" << QDir::fromNativeSeparators(absolutePath).toStdString() << '\n'
+                  << "format=" << plyFormatName(result.format).toStdString() << '\n'
+                  << "declared_points=" << result.declaredPointCount << '\n'
+                  << "loaded_points=" << loadedPoints << '\n'
+                  << "rejected_invalid=" << rejectedInvalid << '\n'
+                  << "has_intensity=" << (!result.intensity.isEmpty() ? "true" : "false") << '\n';
+        if (result.hasBounds)
+            std::cout << "bounds_min=" << result.minimum.x << ',' << result.minimum.y << ',' << result.minimum.z << '\n'
+                      << "bounds_max=" << result.maximum.x << ',' << result.maximum.y << ',' << result.maximum.z << '\n';
+    }
+    return 0;
 }
 
 void progress(int n, const char *stage) { std::cerr << "[" << n << "/8] " << stage << '\n'; }
+
+struct DataDirectoryResolution {
+    QString path;
+    QStringList warnings;
+};
+
+bool probeWritableDirectory(const QString &candidate, QString *error)
+{
+    const QString path = QDir::cleanPath(QFileInfo(candidate).absoluteFilePath());
+    if (!QDir().mkpath(path)) {
+        if (error) *error = QStringLiteral("cannot create data directory: %1").arg(path);
+        return false;
+    }
+    const QString probePath = QDir(path).filePath(
+        QStringLiteral(".pointcloudcli-write-test-%1.tmp").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    QFile probe(probePath);
+    const QByteArray marker("pointcloudcli");
+    if (!probe.open(QIODevice::WriteOnly | QIODevice::Truncate)
+        || probe.write(marker) != marker.size() || !probe.flush()) {
+        if (error) *error = QStringLiteral("data directory is not writable: %1").arg(path);
+        probe.close();
+        QFile::remove(probePath);
+        return false;
+    }
+    probe.close();
+    if (!QFile::remove(probePath)) {
+        if (error) *error = QStringLiteral("cannot remove data directory probe: %1").arg(path);
+        return false;
+    }
+    return true;
+}
+
+bool resolveDataDirectory(const QString &requested, DataDirectoryResolution *resolution,
+                          QString *error)
+{
+    QStringList candidates;
+    const auto normalize = [](const QString &value) {
+        if (value.trimmed().isEmpty()) return QString();
+        const QFileInfo info(value.trimmed());
+        return QDir::cleanPath(info.isAbsolute()
+            ? info.absoluteFilePath() : QDir::current().absoluteFilePath(value.trimmed()));
+    };
+    if (!requested.trimmed().isEmpty()) candidates.push_back(normalize(requested));
+    const QString environment = qEnvironmentVariable("PCV_DATA_DIR");
+    if (!environment.trimmed().isEmpty()) candidates.push_back(normalize(environment));
+    candidates.push_back(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("data")));
+    const QString localAppData = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    if (!localAppData.isEmpty())
+        candidates.push_back(QDir(localAppData).filePath(QStringLiteral("PointCloudSuite/data")));
+
+    QStringList failures;
+    for (const QString &candidate : candidates) {
+        if (candidate.isEmpty()) continue;
+        if (g_cancelled.load(std::memory_order_relaxed)) {
+            if (error) *error = QStringLiteral("cancelled");
+            return false;
+        }
+        QString probeError;
+        if (probeWritableDirectory(candidate, &probeError)) {
+            if (resolution) resolution->path = QDir::cleanPath(QFileInfo(candidate).absoluteFilePath());
+            if (!failures.isEmpty() && resolution)
+                resolution->warnings.push_back(QStringLiteral("data directory fallback: %1").arg(failures.join(QStringLiteral("; "))));
+            return true;
+        }
+        failures.push_back(probeError);
+    }
+    if (error) *error = failures.isEmpty()
+        ? QStringLiteral("no writable data directory candidate") : failures.join(QStringLiteral("; "));
+    return false;
+}
 
 bool finiteNumber(const QJsonValue &value, double *number)
 {
@@ -208,12 +408,19 @@ int emitFailure(const QString &code, const QString &stage, const QString &messag
     return exitCode;
 }
 
-int runJob(const QString &jobPath, bool allowOverwrite)
+int runJob(const QString &jobPath, bool allowOverwrite, const QString &requestedDataDir)
 {
     progress(1, "parse_job");
     Job job; QString error;
     if (!parseJob(jobPath, allowOverwrite, &job, &error)) return emitFailure("PCV_CONTRACT_001", "parse_job", error, kUsageError);
     if (g_cancelled.load()) return emitFailure("PCV_CANCELLED", "parse_job", "cancelled", kCancelled);
+    DataDirectoryResolution dataDirectory;
+    if (!resolveDataDirectory(requestedDataDir, &dataDirectory, &error)) {
+        if (error == QStringLiteral("cancelled"))
+            return emitFailure("PCV_CANCELLED", "prepare_data_dir", "cancelled", kCancelled);
+        return emitFailure("PCV_OUTPUT_001", "prepare_data_dir", error, kOutputError);
+    }
+    pcv::runtime::configureDataDirectory(dataDirectory.path);
     progress(2, "prepare_scan");
     pcv::interface::TempWorkpieceOptions prepareOptions;
     prepareOptions.jobId = job.jobId; prepareOptions.scanningInfoPath = job.scanningInfo;
@@ -294,9 +501,13 @@ int runJob(const QString &jobPath, bool allowOverwrite)
         {QStringLiteral("plane_points"), int(result.planePointCount)}, {QStringLiteral("roi_points"), int(result.roiPointCount)}};
     const QJsonObject wobj{{QStringLiteral("origin_xyz"), QJsonArray{frame.originInRobotBase.x(), frame.originInRobotBase.y(), frame.originInRobotBase.z()}},
         {QStringLiteral("abc_deg"), QJsonArray{frame.poseA, frame.poseB, frame.poseC}}};
+    QJsonArray warnings;
+    for (const QString &warning : dataDirectory.warnings) warnings.push_back(warning);
+    if (!prepared.warning.isEmpty()) warnings.push_back(prepared.warning);
     const QJsonObject summary{{QStringLiteral("ok"), true}, {QStringLiteral("command"), QStringLiteral("temp-workpiece run")},
         {QStringLiteral("job_id"), job.jobId}, {QStringLiteral("outputs"), outputs}, {QStringLiteral("counts"), counts},
-        {QStringLiteral("wobj1"), wobj}, {QStringLiteral("warnings"), prepared.warning.isEmpty() ? QJsonArray{} : QJsonArray{prepared.warning}}};
+        {QStringLiteral("wobj1"), wobj}, {QStringLiteral("data_dir"), QDir::fromNativeSeparators(dataDirectory.path)},
+        {QStringLiteral("warnings"), warnings}};
     std::cout << QJsonDocument(summary).toJson(QJsonDocument::Compact).constData() << '\n';
     return 0;
 }
@@ -305,26 +516,50 @@ int runJob(const QString &jobPath, bool allowOverwrite)
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
+    const QStringList arguments = app.arguments();
     g_cancelled.store(false, std::memory_order_relaxed);
     std::signal(SIGINT, signalHandler);
-    if (argc == 1) { std::cerr << "error: missing command-line option\n"; usage(std::cerr); return kUsageError; }
-    const QString first = QString::fromLocal8Bit(argv[1]);
-    if (argc == 2 && first == QStringLiteral("--help")) { usage(std::cout); return 0; }
-    if (argc == 2 && first == QStringLiteral("--version")) { std::cout << "pointcloudcli " << PCV_PROJECT_VERSION << '\n'; return 0; }
-    if (argc == 2 && first.startsWith(QStringLiteral("--"))) {
+    if (arguments.size() == 1) { std::cerr << "error: missing command-line option\n"; usage(std::cerr); return kUsageError; }
+    const QString first = arguments.at(1);
+    if (arguments.size() == 2 && first == QStringLiteral("--help")) { usage(std::cout); return 0; }
+    if (arguments.size() == 2 && first == QStringLiteral("--version")) { std::cout << "pointcloudcli " << PCV_PROJECT_VERSION << '\n'; return 0; }
+    if (arguments.size() == 2 && first.startsWith(QStringLiteral("--"))) {
         std::cerr << "error: unknown option: " << first.toStdString() << '\n';
         usage(std::cerr);
         return kUsageError;
     }
-    if (first != QStringLiteral("temp-workpiece") || argc < 4 || QString::fromLocal8Bit(argv[2]) != QStringLiteral("run"))
+    if ((first == QStringLiteral("inspect") || first == QStringLiteral("read"))
+        && arguments.size() >= 3 && arguments.at(2) == QStringLiteral("ply")) {
+        bool json = false;
+        QString plyPath;
+        for (int i = 3; i < arguments.size(); ++i) {
+            const QString arg = arguments.at(i);
+            if (arg == QStringLiteral("--json")) json = true;
+            else if (plyPath.isEmpty()) plyPath = arg;
+            else return emitFailure("PCV_CONTRACT_001", "parse_command", "unknown option: " + arg, kUsageError);
+        }
+        if (plyPath.isEmpty())
+            return emitFailure("PCV_CONTRACT_001", "parse_command", "PLY file is required", kUsageError);
+        return first == QStringLiteral("inspect") ? inspectPly(plyPath, json)
+                                                   : readPlySummary(plyPath, json);
+    }
+    if (first != QStringLiteral("temp-workpiece") || arguments.size() < 4 || arguments.at(2) != QStringLiteral("run"))
         return emitFailure("PCV_CONTRACT_001", "parse_command", "unknown command or missing job.json", kUsageError);
-    bool allowOverwrite = false; QString jobPath;
-    for (int i = 3; i < argc; ++i) {
-        const QString arg = QString::fromLocal8Bit(argv[i]);
+    bool allowOverwrite = false; QString jobPath; QString requestedDataDir;
+    for (int i = 3; i < arguments.size(); ++i) {
+        const QString arg = arguments.at(i);
         if (arg == QStringLiteral("--allow-overwrite")) allowOverwrite = true;
+        else if (arg == QStringLiteral("--data-dir")) {
+            if (i + 1 >= arguments.size()) return emitFailure("PCV_CONTRACT_001", "parse_command", "--data-dir requires a path", kUsageError);
+            requestedDataDir = arguments.at(++i);
+            if (requestedDataDir.trimmed().isEmpty()) return emitFailure("PCV_CONTRACT_001", "parse_command", "--data-dir requires a path", kUsageError);
+        } else if (arg.startsWith(QStringLiteral("--data-dir="))) {
+            requestedDataDir = arg.mid(QStringLiteral("--data-dir=").size());
+            if (requestedDataDir.trimmed().isEmpty()) return emitFailure("PCV_CONTRACT_001", "parse_command", "--data-dir requires a path", kUsageError);
+        }
         else if (jobPath.isEmpty()) jobPath = arg;
         else return emitFailure("PCV_CONTRACT_001", "parse_command", "unknown option: " + arg, kUsageError);
     }
     if (jobPath.isEmpty()) return emitFailure("PCV_CONTRACT_001", "parse_command", "job.json is required", kUsageError);
-    return runJob(QFileInfo(jobPath).absoluteFilePath(), allowOverwrite);
+    return runJob(QFileInfo(jobPath).absoluteFilePath(), allowOverwrite, requestedDataDir);
 }

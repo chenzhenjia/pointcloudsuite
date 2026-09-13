@@ -2,7 +2,7 @@ if(NOT DEFINED PCV_CLI OR NOT DEFINED PCV_MODE)
     message(FATAL_ERROR "PCV_CLI and PCV_MODE are required")
 endif()
 
-set(PCV_ROOT "${CMAKE_CURRENT_BINARY_DIR}/cli-job-${PCV_MODE}")
+set(PCV_ROOT "${CMAKE_CURRENT_BINARY_DIR}/cli-job-${PCV_MODE}-中文")
 file(REMOVE_RECURSE "${PCV_ROOT}")
 file(MAKE_DIRECTORY "${PCV_ROOT}")
 
@@ -44,8 +44,13 @@ else()
 endif()
 file(WRITE "${PCV_ROOT}/job.json" "${PCV_JOB}")
 
+if(PCV_PORTABLE)
+    get_filename_component(PCV_PORTABLE_DIR "${PCV_CLI}" DIRECTORY)
+    set(ENV{PATH} "${PCV_PORTABLE_DIR}")
+endif()
+
 execute_process(
-    COMMAND "${PCV_CLI}" temp-workpiece run "${PCV_ROOT}/job.json"
+    COMMAND "${PCV_CLI}" temp-workpiece run "${PCV_ROOT}/job.json" --data-dir "${PCV_ROOT}/data"
     RESULT_VARIABLE PCV_EXIT
     OUTPUT_VARIABLE PCV_STDOUT
     ERROR_VARIABLE PCV_STDERR
@@ -67,6 +72,13 @@ endif()
 if(NOT PCV_STDOUT MATCHES "\"ok\":true" OR NOT PCV_STDOUT MATCHES "${PCV_EXPECTED_ROI}")
     message(FATAL_ERROR "Unexpected success summary: ${PCV_STDOUT}")
 endif()
+if(NOT PCV_STDOUT MATCHES "\"data_dir\":\".*/data\"")
+    message(FATAL_ERROR "CLI did not report requested data directory: ${PCV_STDOUT}")
+endif()
+file(GLOB PCV_CACHE_FILES "${PCV_ROOT}/data/cache/*")
+if(NOT PCV_CACHE_FILES)
+    message(FATAL_ERROR "CLI did not create a cache file under requested data directory")
+endif()
 set(PCV_OUTPUT_ROOT "${PCV_ROOT}/${PCV_OUTPUT}")
 foreach(PCV_FILE IN ITEMS baseline_robot_base.ply roi_template_robot_base.ply plane_mask.png temp_workpiece_info.json)
     if(NOT EXISTS "${PCV_OUTPUT_ROOT}/${PCV_FILE}")
@@ -80,7 +92,7 @@ endif()
 
 if(PCV_MODE STREQUAL "overwrite")
     execute_process(
-        COMMAND "${PCV_CLI}" temp-workpiece run "${PCV_ROOT}/job.json"
+        COMMAND "${PCV_CLI}" temp-workpiece run "${PCV_ROOT}/job.json" --data-dir "${PCV_ROOT}/data"
         RESULT_VARIABLE PCV_REFUSED_EXIT
         OUTPUT_VARIABLE PCV_REFUSED_STDOUT
         ERROR_VARIABLE PCV_REFUSED_STDERR
@@ -89,12 +101,34 @@ if(PCV_MODE STREQUAL "overwrite")
         message(FATAL_ERROR "Overwrite protection failed: exit=${PCV_REFUSED_EXIT} stderr=${PCV_REFUSED_STDERR}")
     endif()
     execute_process(
-        COMMAND "${PCV_CLI}" temp-workpiece run "${PCV_ROOT}/job.json" --allow-overwrite
+        COMMAND "${PCV_CLI}" temp-workpiece run "${PCV_ROOT}/job.json" --allow-overwrite --data-dir "${PCV_ROOT}/data"
         RESULT_VARIABLE PCV_OVERWRITE_EXIT
         OUTPUT_VARIABLE PCV_OVERWRITE_STDOUT
         ERROR_VARIABLE PCV_OVERWRITE_STDERR
         TIMEOUT 30)
     if(NOT PCV_OVERWRITE_EXIT EQUAL 0 OR NOT PCV_OVERWRITE_STDOUT MATCHES "\"ok\":true")
         message(FATAL_ERROR "Explicit overwrite failed: exit=${PCV_OVERWRITE_EXIT} stdout=${PCV_OVERWRITE_STDOUT} stderr=${PCV_OVERWRITE_STDERR}")
+    endif()
+endif()
+
+if(PCV_MODE STREQUAL "rectangle")
+    set(PCV_ENV_DATA "${PCV_ROOT}/env-data")
+    set(PCV_ENV_JOB "${PCV_ROOT}/env-job.json")
+    file(WRITE "${PCV_ENV_JOB}" [=[{"schema_version":"pointcloudcli-temp-workpiece-job-v1","kind":"temp_workpiece_job","job_id":"job-env","scanning_info_file":"temp_scanning_info.json","calibration_override_file":"","output_directory":"output/job-env","allow_overwrite":false,"plane":{"seed_indices":[0,2,4],"verification_indices":[1,3,5],"plane_indices":[],"angle_tolerance_deg":1.0,"distance_tolerance_mm":0.4},"roi":{"mode":"rectangle","roi_indices":[],"width_mm":20.0,"height_mm":20.0}}]=])
+    set(PCV_PREVIOUS_DATA_DIR "$ENV{PCV_DATA_DIR}")
+    set(ENV{PCV_DATA_DIR} "${PCV_ENV_DATA}")
+    execute_process(
+        COMMAND "${PCV_CLI}" temp-workpiece run "${PCV_ENV_JOB}"
+        RESULT_VARIABLE PCV_ENV_EXIT
+        OUTPUT_VARIABLE PCV_ENV_STDOUT
+        ERROR_VARIABLE PCV_ENV_STDERR
+        TIMEOUT 30)
+    set(ENV{PCV_DATA_DIR} "${PCV_PREVIOUS_DATA_DIR}")
+    if(NOT PCV_ENV_EXIT EQUAL 0 OR NOT PCV_ENV_STDOUT MATCHES "\"data_dir\":\".*/env-data\"")
+        message(FATAL_ERROR "PCV_DATA_DIR was not selected: exit=${PCV_ENV_EXIT} stdout=${PCV_ENV_STDOUT} stderr=${PCV_ENV_STDERR}")
+    endif()
+    file(GLOB PCV_ENV_CACHE_FILES "${PCV_ENV_DATA}/cache/*")
+    if(NOT PCV_ENV_CACHE_FILES)
+        message(FATAL_ERROR "PCV_DATA_DIR did not receive the CLI cache")
     endif()
 endif()

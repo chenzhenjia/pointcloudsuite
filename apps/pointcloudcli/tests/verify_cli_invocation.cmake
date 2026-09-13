@@ -31,6 +31,11 @@ else()
     message(FATAL_ERROR "Unsupported PCV_MODE: ${PCV_MODE}")
 endif()
 
+if(PCV_PORTABLE)
+    get_filename_component(PCV_PORTABLE_DIR "${PCV_CLI}" DIRECTORY)
+    set(ENV{PATH} "${PCV_PORTABLE_DIR}")
+endif()
+
 execute_process(
     COMMAND "${PCV_CLI}" ${PCV_ARGUMENTS}
     RESULT_VARIABLE PCV_ACTUAL_EXIT

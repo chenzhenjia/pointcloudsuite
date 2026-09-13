@@ -22,7 +22,7 @@
 - [60_plane_fitting](modules/60_plane_fitting.md)
 - [70_roi_template](modules/70_roi_template.md)
 - [80_plane_output](modules/80_plane_output.md)
-- [pointcloudcli](modules/pointcloudcli.md)：独立 CLI 构建与参数入口骨架（当前不处理点云业务）
+- [pointcloudcli](modules/pointcloudcli.md)：独立 CLI 构建、PLY 读取摘要与临时工件业务入口
 - [90_interferenceplane](modules/90_interferenceplane.md)：未实现
 - [100_qualityreport](modules/100_qualityreport.md)：未实现
 

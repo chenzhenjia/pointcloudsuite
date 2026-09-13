@@ -1,6 +1,6 @@
 # PointCloudSuite Agent 工作手册
 
-适用范围：本仓库。沟通默认使用中文；代码、命令、变量名、文件名、路径和错误信息保留原文。最后核对日期：2026-09-07。
+适用范围：本仓库。沟通默认使用中文；代码、命令、变量名、文件名、路径和错误信息保留原文。最后核对日期：2026-09-13。
 
 ## 1. 真相源与安全边界
 
@@ -20,7 +20,7 @@
 - 根选项：
   - `PCV_BUILD_POINTCLOUDVIEW`
   - `PCV_BUILD_POINTCLOUDSTITCH`
-  - `PCV_BUILD_CLI`（默认 `OFF`，生成独立的 `pointcloudcli` 参数入口）
+  - `PCV_BUILD_CLI`（默认 `OFF`，生成独立的 `pointcloudcli` 点云读取和临时工件入口）
   - `PCV_BUILD_TOOLS`
   - `PCV_BUILD_TESTS`
   - `PCV_BUILD_EXPERIMENTAL_CAMERA`（CMake 默认 `ON`；构建脚本默认关闭）
@@ -63,8 +63,8 @@
 - `70_roi_template` 的 ROI 匹配必须调用 `pcv::matching::matchRoiToRobotBase`，不得保留第二套匹配实现。
 - `modules/10_pointcloud_read` 同时承载原 `05_camerainput` 的相机帧转换、Mock、组帧和可选 Mv3dLp 实现；相机能力受 `PCV_BUILD_EXPERIMENTAL_CAMERA` 控制。
 - `20_pointcloud_render` 的 `PointCloudCanvas` 实现位于 `modules/20_pointcloud_render/src/pointcloud_canvas.cpp`；应用只负责业务状态、异步生命周期和渲染 DTO 转换。
-- Qt Designer 文件位于 `apps/pointcloudview/ui/` 和 `apps/pointcloudstitch/ui/`，不得把生成头文件提交为手工 UI 源。
-- `pointcloudcli` 仅提供 `--help`、`--version` 和参数错误契约，不接入点云业务或 Qt。
+- Qt Designer 文件位于 `apps/pointcloudview/ui/`、`apps/pointcloudstitch/ui/` 和实验性 `apps/intensity_viewer/ui/`，不得把生成头文件提交为手工 UI 源。
+- `pointcloudcli` 提供 `--help`、`--version`、`inspect ply`、`read ply` 和 `temp-workpiece run`；仅依赖 Qt Core/Gui/Concurrent，不接入 QWidget、OpenGL 或 GUI 事件循环。前两个 PLY 命令只读输入，不写出新文件；`--data-dir` 只用于临时工件命令，按 CLI 参数、`PCV_DATA_DIR`、exe 同级 `data`、`%LOCALAPPDATA%\\PointCloudSuite\\data` 顺序选择可写运行目录。
 - `registration_diagnostic` 仅通过 `pcv::interface::stitchRawLineProfiles` 调用统一拼接流水线。
 - 应用 wrapper 只能做参数转换和结果映射，不得保留第二套算法。
 
@@ -110,6 +110,16 @@ Windows + Qt/MSVC 推荐使用仓库脚本，并显式传入可写、位于源�
 .\scripts\build_windows.ps1 -Config Release -BuildTests -QtDir <QtDir> -BuildDir <ReleaseBuildDir> -CMakePath <cmake.exe>
 ```
 
+CLI-only 构建会自动探测 CMake、Visual Studio/MSVC 和 Qt（也可通过 `-CMakePath`、`-QtDir` 显式覆盖），并关闭两个 GUI 应用：
+
+```powershell
+.\scripts\build_windows.ps1 -CliOnly -BuildTests -Config Debug -BuildDir C:\pcv-build\cli-debug
+ctest --test-dir C:\pcv-build\cli-debug -C Debug -R "cli_" --output-on-failure
+.\scripts\build_windows.ps1 -CliOnly -Config Release -BuildDir C:\pcv-build\cli-release -Deploy -DeployDir C:\pcv-deploy\pointcloudcli
+```
+
+`-Deploy` 仅接受 `-CliOnly -Config Release`，会生成包含 Qt/VC 运行库、`data` 目录和 `README.txt` 的便携目录，并在清空 PATH 的子进程中执行 15 项 CLI 契约测试。部署目录必须在源码树外且不能是盘符根目录；已有目录会在安全检查后清空重建。`PCV_BUILD_CLI` 默认仍为 `OFF`；不传 `-CliOnly` 时 GUI 构建逻辑保持不变。
+
 脚本默认使用 `NMake Makefiles` 并将 `PCV_BUILD_EXPERIMENTAL_CAMERA` 设为 `OFF`；需要实验相机时追加 `-ExperimentalCamera`。`NMake Makefiles JOM` 不支持头文件依赖跟踪。
 
 CTest 使用对应构建目录和配置运行：
@@ -129,7 +139,7 @@ cmake --build <ToolsBuildDir> --config Debug --target registration_diagnostic
 当前自动化回归包含 `roi_matching_tests`、`seam_fusion_tests`、`multiframe_registration_tests`、
 `plane_fitting_tests`、`pointcloud_canvas_contract_tests`、`handeye_transform_tests`、
 IO/输出/接口测试，以及实验相机开关开启时的 `frame_converter_tests`、`frame_source_tests`
-和实时 pipeline 测试。验证结论只报告本次实际运行的命令和结果；GUI 人工操作、真实生产
+和实时 pipeline 测试；启用 `PCV_BUILD_CLI` 时另注册 15 项 `cli_` 契约测试。验证结论只报告本次实际运行的命令和结果；GUI 人工操作、真实生产
 夹具和未实现模块不能用单元测试替代。
 
 ## 8. 兼容层清理

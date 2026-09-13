@@ -1,7 +1,7 @@
 # PointCloudSuite 点云处理项目需求文档
 
 版本：v0.3  
-最后核对日期：2026-09-07
+最后核对日期：2026-09-13
 状态：核心模块稳定（模块重命名与 30/40 职责重划完成），相机扩展实验中，发布验收待完成
 
 ## 1. 目标和事实来源
@@ -130,9 +130,16 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 
 - 新增 `PCV_BUILD_CLI`（默认 `OFF`）和独立 `pointcloudcli` target；开启后可在关闭 `pointcloudview`、`pointcloudstitch` 的配置中单独构建 CLI，CLI-only 路径仅配置 `Qt6::Core`、`Qt6::Gui`、`Qt6::Concurrent` 及 CLI 所需共享模块，不配置 Widgets/OpenGL，既有 GUI target、UI 和默认构建行为不变；
 - `pointcloudcli temp-workpiece run <job.json>` 已登记为首期临时工件业务入口：复用扫描校验、坐标转换、三点平面拟合、第二组三点验证、自动 WObj1、ROI/Mask 和四件套原子输出；实时相机采集、拼接、干涉平面和质量报告不在本期范围；
-- CLI 首期仅提供 `--help`、`--version`、空参数及未知参数的稳定退出码契约，不接入点云读取、配准、拼接、临时工件、平面、文件输出或 Qt 事件循环；
-- `pointcloudcli` 不链接 `Qt::Widgets`、`Qt::OpenGL`、`PointCloudCanvas` 或 GUI application target；`PCV_BUILD_CLI=ON` 与 `PCV_BUILD_TESTS=ON` 时注册 8 项 CLI CTest，覆盖参数契约、临时工件矩形/索引 ROI、覆盖保护和路径穿越拒绝；
+- `pointcloudcli inspect ply <file.ply>` 和 `pointcloudcli read ply <file.ply>` 已接入 10 模块 PLY 读取接口；前者只检查 Header，后者输出完整读取摘要，均不默认写出文件；
+- CLI 的早期骨架阶段仅提供 `--help`、`--version`、空参数及未知参数契约；当前实现已在此基础上接入 PLY Header/完整读取摘要和 `temp-workpiece run`，仍不接入 Qt Widgets、OpenGL 或 GUI 事件循环；
+- `pointcloudcli` 不链接 `Qt::Widgets`、`Qt::OpenGL`、`PointCloudCanvas` 或 GUI application target；`PCV_BUILD_CLI=ON` 与 `PCV_BUILD_TESTS=ON` 时注册 15 项 CLI CTest，覆盖参数契约、PLY Header/完整读取、三种 PLY 格式、Bounds、临时工件矩形/索引 ROI、覆盖保护和路径穿越拒绝；
 - 验收范围：独立 CLI target 构建与参数测试，及默认 GUI 配置回归。GUI 人工操作和真实生产夹具不属于本项自动化验收。
+
+### 2026-09-13（CLI 一键构建与便携部署）
+
+- `scripts/build_windows.ps1` 新增 `-CliOnly`、`-Deploy`、`-DeployDir`；CLI-only 自动探测 CMake、MSVC 和 Qt，显式关闭两个 GUI 应用，`-Deploy` 仅允许 Release 并执行 Qt/VC 运行库部署、依赖检查和清空 PATH 的 15 项契约测试。部署目标必须在源码树外且不能是盘符根目录；已有目标目录会在安全检查后清空重建。
+- `pointcloudcli temp-workpiece run` 新增 `--data-dir`/`PCV_DATA_DIR`/exe 同级 `data`/`%LOCALAPPDATA%\\PointCloudSuite\\data` 可写目录回退，缓存不再依赖固定盘符；GUI 数据目录和默认 `PCV_BUILD_CLI=OFF` 保持不变。
+- 新增 `scripts/build_pointcloudcli_release.bat` 作为 Release 便携构建入口；便携目录不包含业务输入文件，不提供安装程序或签名。
 
 ### 2026-09（相机取流扩展，风险收敛）
 
