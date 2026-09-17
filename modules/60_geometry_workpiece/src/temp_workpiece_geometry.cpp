@@ -1,4 +1,4 @@
-#include <pcv/roi/temp_workpiece_geometry.h>
+#include <pcv/workpiece/temp_workpiece_geometry.h>
 
 #include <QtMath>
 

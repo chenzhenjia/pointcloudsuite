@@ -1,6 +1,6 @@
 # 文档索引
 
-当前项目基线为 v0.3，统筹文档为 [pointcloudview_v0.3.md](requirements/pointcloudview_v0.3.md)。
+当前模块重整基线为 v0.4；协同真相源为 [module_ui_integration_v0.4.md](architecture/module_ui_integration_v0.4.md)，数据契约仍沿用 [pointcloudview_v0.3.md](requirements/pointcloudview_v0.3.md)。
 
 ## 文档分类
 

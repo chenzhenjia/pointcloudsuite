@@ -2,17 +2,17 @@ set(PCV_APPLICATION_TEST_TARGETS)
 
 if(PCV_BUILD_EXPERIMENTAL_CAMERA)
     add_executable(frame_converter_tests unit/camera/frame_converter_tests.cpp)
-    target_link_libraries(frame_converter_tests PRIVATE Qt::Core pcv_m10_pointcloud_read)
+    target_link_libraries(frame_converter_tests PRIVATE Qt::Core pcv_m10_pointcloud_io)
     add_test(NAME frame_converter_tests COMMAND frame_converter_tests)
 
     add_executable(frame_source_tests unit/camera/frame_source_tests.cpp)
     target_include_directories(frame_source_tests PRIVATE
-        ${PROJECT_SOURCE_DIR}/modules/10_pointcloud_read/src)
-    target_link_libraries(frame_source_tests PRIVATE Qt::Core pcv_m10_pointcloud_read)
+        ${PROJECT_SOURCE_DIR}/modules/10_pointcloud_io/src)
+    target_link_libraries(frame_source_tests PRIVATE Qt::Core pcv_m10_pointcloud_io)
     add_test(NAME frame_source_tests COMMAND frame_source_tests)
 
     add_executable(intensity_image_tests unit/camera/intensity_image_tests.cpp)
-    target_link_libraries(intensity_image_tests PRIVATE Qt::Core Qt::Gui pcv_m10_pointcloud_read)
+    target_link_libraries(intensity_image_tests PRIVATE Qt::Core Qt::Gui pcv_m10_pointcloud_io)
     add_test(NAME intensity_image_tests COMMAND intensity_image_tests)
 
     list(APPEND PCV_APPLICATION_TEST_TARGETS frame_converter_tests)
@@ -25,27 +25,31 @@ target_link_libraries(application_config_tests PRIVATE Qt::Core pcv_infrastructu
 add_test(NAME application_config_tests COMMAND application_config_tests)
 
 add_executable(ply_reader_tests unit/io/ply_reader_tests.cpp)
-target_link_libraries(ply_reader_tests PRIVATE Qt::Core pcv_m10_pointcloud_read)
+target_link_libraries(ply_reader_tests PRIVATE Qt::Core pcv_m10_pointcloud_io)
 add_test(NAME ply_reader_tests COMMAND ply_reader_tests)
 
 add_executable(cloud_cache_tests unit/io/cloud_cache_tests.cpp)
-target_link_libraries(cloud_cache_tests PRIVATE Qt::Core pcv_m10_pointcloud_read)
+target_link_libraries(cloud_cache_tests PRIVATE Qt::Core pcv_m10_pointcloud_io)
 add_test(NAME cloud_cache_tests COMMAND cloud_cache_tests)
 
+add_executable(artifact_transaction_tests unit/io/artifact_transaction_tests.cpp)
+target_link_libraries(artifact_transaction_tests PRIVATE Qt::Core Qt::Gui pcv_m10_pointcloud_io)
+add_test(NAME artifact_transaction_tests COMMAND artifact_transaction_tests)
+
 add_executable(downsample_tests unit/filtering/downsample_tests.cpp)
-target_link_libraries(downsample_tests PRIVATE Qt::Core pcv_filtering)
+target_link_libraries(downsample_tests PRIVATE Qt::Core pcv_m10_pointcloud_io)
 add_test(NAME downsample_tests COMMAND downsample_tests)
 
 add_executable(statistical_filter_tests unit/filtering/statistical_filter_tests.cpp)
-target_link_libraries(statistical_filter_tests PRIVATE Qt::Core pcv_filtering)
+target_link_libraries(statistical_filter_tests PRIVATE Qt::Core pcv_m10_pointcloud_io)
 add_test(NAME statistical_filter_tests COMMAND statistical_filter_tests)
 
 add_executable(plane_output_tests unit/output/plane_output_tests.cpp)
-target_link_libraries(plane_output_tests PRIVATE Qt::Core Qt::Gui pcv_m80_plane_output pcv_m10_pointcloud_read)
+target_link_libraries(plane_output_tests PRIVATE Qt::Core Qt::Gui pcv_m10_pointcloud_io)
 add_test(NAME plane_output_tests COMMAND plane_output_tests)
 
 add_executable(temp_workpiece_interface_tests unit/interface/temp_workpiece_interface_tests.cpp)
-target_link_libraries(temp_workpiece_interface_tests PRIVATE Qt::Core Qt::Gui pcv_m70_roi_template)
+target_link_libraries(temp_workpiece_interface_tests PRIVATE Qt::Core Qt::Gui pcv_m60_geometry_workpiece)
 add_test(NAME temp_workpiece_interface_tests COMMAND temp_workpiece_interface_tests)
 
 if(TARGET pcv_m30_pointcloud_stitch)
@@ -58,6 +62,7 @@ list(APPEND PCV_APPLICATION_TEST_TARGETS
     application_config_tests
     ply_reader_tests
     cloud_cache_tests
+    artifact_transaction_tests
     downsample_tests
     statistical_filter_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS plane_output_tests)
@@ -77,7 +82,7 @@ if(PCV_BUILD_POINTCLOUDVIEW AND PCV_BUILD_EXPERIMENTAL_CAMERA)
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/pointcloudview
     )
     target_link_libraries(live_pipeline_tests PRIVATE
-        Qt::Core pcv_core pcv_m10_pointcloud_read pcv_filtering)
+        Qt::Core pcv_core pcv_m10_pointcloud_io)
     add_test(NAME live_pipeline_tests COMMAND live_pipeline_tests)
     list(APPEND PCV_APPLICATION_TEST_TARGETS live_pipeline_tests)
 
@@ -91,7 +96,7 @@ if(PCV_BUILD_POINTCLOUDVIEW AND PCV_BUILD_EXPERIMENTAL_CAMERA)
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/pointcloudview
     )
     target_link_libraries(pointcloudprocessor_obstacle_tests PRIVATE
-        Qt::Core Qt::Gui pcv_core pcv_infrastructure pcv_m10_pointcloud_read pcv_filtering pcv_m60_plane_fitting pcv_m70_roi_template)
+        Qt::Core Qt::Gui pcv_core pcv_infrastructure pcv_m10_pointcloud_io pcv_m60_geometry_workpiece)
     add_test(NAME pointcloudprocessor_obstacle_tests COMMAND pointcloudprocessor_obstacle_tests)
     list(APPEND PCV_APPLICATION_TEST_TARGETS pointcloudprocessor_obstacle_tests)
 endif()
@@ -103,24 +108,24 @@ list(APPEND PCV_APPLICATION_TEST_TARGETS handeye_transform_tests)
 
 add_executable(roi_matching_tests unit/registration/roi_matching_tests.cpp)
 target_link_libraries(roi_matching_tests PRIVATE
-    Qt::Core Qt::Gui pcv_m40_pointcloud_matching pcv_m50_coordinate_conversion)
+    Qt::Core Qt::Gui pcv_m60_geometry_workpiece pcv_m50_coordinate_conversion)
 add_test(NAME roi_matching_tests COMMAND roi_matching_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS roi_matching_tests)
 
 if(TARGET pcv_m30_pointcloud_stitch)
     add_executable(seam_fusion_tests unit/registration/seam_fusion_tests.cpp)
-    target_link_libraries(seam_fusion_tests PRIVATE Qt::Core Qt::Gui pcv_m30_pointcloud_stitch pcv_m40_pointcloud_matching)
+    target_link_libraries(seam_fusion_tests PRIVATE Qt::Core Qt::Gui pcv_m30_pointcloud_stitch)
     add_test(NAME seam_fusion_tests COMMAND seam_fusion_tests)
     list(APPEND PCV_APPLICATION_TEST_TARGETS seam_fusion_tests)
 endif()
 
 add_executable(multiframe_registration_tests unit/registration/multiframe_registration_tests.cpp)
-target_link_libraries(multiframe_registration_tests PRIVATE Qt::Core Qt::Gui pcv_m40_pointcloud_matching)
+target_link_libraries(multiframe_registration_tests PRIVATE Qt::Core Qt::Gui pcv_m30_pointcloud_stitch)
 add_test(NAME multiframe_registration_tests COMMAND multiframe_registration_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS multiframe_registration_tests)
 
 add_executable(plane_fitting_tests unit/planefitting/plane_fitting_tests.cpp)
-target_link_libraries(plane_fitting_tests PRIVATE Qt::Core Qt::Gui pcv_m60_plane_fitting)
+target_link_libraries(plane_fitting_tests PRIVATE Qt::Core Qt::Gui pcv_m60_geometry_workpiece)
 add_test(NAME plane_fitting_tests COMMAND plane_fitting_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS plane_fitting_tests)
 

@@ -8,7 +8,25 @@
 
 接口/测试：`pcv::matching`（`roi_matching.h`）、`multiframe_registration`、`seam_fusion`（转发头）；`roi_matching_tests`、`multiframe_registration_tests`、`seam_fusion_tests`。
 
-最后核对日期：2026-09-15。历史正文中“点云配准/seam fusion 编排”职责及旧名称（`40_pointcloudregistration`、`pcv_m40_pointcloudregistration`、`modules/40_pointcloudregistration`）为当时名称与当时职责，仅用于追溯；当前 seam fusion 实现与编排归属 30 模块，本模块保留 ICP/结构校验等底层兼容能力。
+最后核对日期：2026-09-17。历史正文中“点云配准/seam fusion 编排”职责及旧名称（`40_pointcloudregistration`、`pcv_m40_pointcloudregistration`、`modules/40_pointcloudregistration`）为当时名称与当时职责，仅用于追溯；当前 seam fusion 实现与编排归属 30 模块，本模块保留 ICP/结构校验等底层兼容能力。
+
+### 2026-09-17（结构点验收改为命中口径；粗对齐 trimmed 目标；ICP 内并行与提速）
+
+- 需求登记：主模块 `40_pointcloud_matching`，配套透传位于 `30_pointcloud_stitch`。本轮 9 项已确认决策：新口径为默认、不设可见性硬门槛、证据门槛为裁剪区结构点的 10%、命中率 <0.25 只警告、允许工作区外回放、改动范围限 30/40 + 测试 + 文档、加速漂移 ≤0.01 mm/0.005 度且判定必须一致、速度不设硬指标、多平面对齐延后。
+- 证据（由现网 `stitching_report.json` 反算）：失败数据集的结构点 15 mm 命中率只有 0.182 / 0.229 / 0.376 / 0.487，而旧验收把 3 mm 覆盖率除以**全部**裁剪区结构点、门槛 0.65，任何刚体变换都无法满足；同期命中点内的 3 mm 覆盖率为 0.633 / 0.639 / 0.519 / 0.716。
+- `IcpOptions` / `IcpDiagnostics` 新字段全部追加在结构体尾部，旧字段与旧公式一律保留可复算：
+  1. **验收口径**：`structuralCoverageOfMatched=true`（默认）时覆盖率分母改为命中点；证据门槛 = `max(minimumStructuralPoints, ceil(minimumStructuralMatchedRatio × 裁剪区结构点数))`；`visibilityWarningRatio`（默认 0.25）只置位警告、不参与判定；失败原因码区分为 `structural_points_insufficient` 与 `structural_coverage_insufficient`（`failureCode` 机器可读，`reason` 保留中文）；`structuralCoverageOfMatched=false` 逐位复现旧行为。
+  2. **粗对齐目标**：`tangentCoarseTrimmedScore=true`（默认）把切向搜索目标换成“最小 K 个最近邻距离均值”（`tangentCoarseTrimmedRatio=0.25`），接受条件为相对改善 `tangentCoarseMinimumScoreGain=0.01`；旧 `translatedCoverage` 目标保留可切换，`tangentCoverageBefore/After` 继续按 5 mm 双向覆盖率上报，便于与历史报告对照。
+  3. **鲁棒对应**：`normalCompatibilityDegrees`（默认 **0 = 关闭**）法向一致性门控；`correspondenceTrimFraction`（默认 0）与 `autoTrimCorrespondences`（默认 false）提供 trim 加权；`adaptiveCorrespondenceRadius` 在预对齐 p90 > 2 mm 时把首层对应半径放宽到 4 mm。
+  4. **重叠框路由**：`structuralFrameRouteDegrees`（默认 **90 = 关闭**）——主平面倾角仍为浅、但其上的主结构面偏离平面法向超过阈值时，重叠框改用该结构面的局部 `u/v/n` 坐标。
+  5. **提速**：ICP 内对应搜索按块并行（`correspondenceParallelTasks`，0=自动，受 `parallelEnabled` 约束），worker 只读 const 视图、只返回私有块、按块序串行合并，与串行结果逐位一致；步长试探改为“变换即计数”，不再每次试探拷贝整云；relaxed retry 增加证据预判并记录 `relaxedRetrySkippedReason`。
+- 关键取舍：`autoTrimCorrespondences` 默认关闭。实测中按残差顺序裁剪会优先保留退化的支撑面点、丢弃有信息量的结构点，把已由粗对齐恢复的位姿重新拉走（合成夹具实测 4.00 mm → 8.94 mm），因此 trim 只作为显式开关保留。
+- 验证：Debug 构建成功；`ctest -C Debug` **14/14 通过**；`multiframe_registration_tests` 新增 4 组用例（视角相关丢点下的命中口径与证据门槛 + legacy 对照、4 mm 切向偏移下 trimmed 与 legacy 目标的判定差异、浅主平面 + 40 度结构面的重叠框路由、150×150 稠密夹具上 ICP 内并行的逐位等价）。
+- **真实数据回放（Release 工具 `registration_diagnostic`，输入为 `D:\stitch_test` 原 PLY 的硬链接 + 由报告位姿反解生成的 `pose_info.txt`）**：
+  - `1/test_1`：仍接受，命中率 0.9845、命中点内 3 mm 0.8693；修正 (0.7015, 1.6979, -0.6516)/0.2784 度，与记录基线 (0.7012, 1.7057, -0.6515) 相差 0.008 mm、0.0009 度，落在 0.01 mm/0.005 度预算内。**在法向门控与结构路由同时打开时同一对修正漂移到约 1.8 mm**，因此两者改为默认关闭。
+  - `5_40/test`：由拒绝转为**接受**，命中率 0.2246（`visibility=warn`）、命中点内 3 mm 0.6566、修正 (-3.7708, -2.7613, 1.6065)/0.1154 度；严格档直接通过，不再触发 relaxed retry。
+  - `6_50/test`：仍拒绝，命中率 0.3703、命中点内 3 mm 0.4989（trimmed 粗对齐已把目标从 3.1292 改善到 1.7485，但精度门槛仍未达到）。按方案停止判据，不放宽门槛，改以可见性/精度数值与工艺层建议收尾。
+  - 计时（Release，同一工具）：`1` registration 2.4-2.7 s、`5_40` 1.7-2.5 s；基线报告 `5_40` 为 47.7 s，但其中包含 relaxed retry（24.3 s）且为当时的构建配置，**不能全部归因于本轮提速**，同配置 A/B 仍未执行。
 
 ### 2026-09-15（并行 overlap 预计算改为只读访问）
 
@@ -108,3 +126,8 @@
 - 融合带中的未匹配点现在显式保留，并累计到 `SeamFusionDiagnostic::unmatchedPreserved`；只有成功匹配的点生成插值结果。
 - 应用 `seamfusion.h/.cpp` 改用 `pcv::SeamFusionOptions/Result/Diagnostic` 类型别名，包装层不再复制结果模型。
 - 应用 `pointcloudprocessor.h` 已改为直接复用 `multiframe_registration.h` 的 `IcpOptions`、`IcpDiagnostics`、`FrameTransformMetadata` 和 `MultiFrameRegistrationResult`；仅保留兼容函数入口和 `WorldCloudInput` 别名。
+# 40_pointcloud_matching：工件位置确认（规划占位）
+
+正式声明：对经过点云处理和平面/坐标转换后的数据，生成含 `robot_base` 坐标信息的平面点云数据和坐标元数据，用于确定机器人坐标系中的工件信息；后续可通过基准模板或参考扫描比较，判断工件是否被挪动。
+
+当前状态：**规划目标，未实现**。本模块当前不实现基准模板持久化、当前扫描与基准扫描比较、移动阈值和 6DoF 偏差判定、机器人执行或坐标修正下发，也不产生新的正式输出闭环。`pcv_m40_pointcloud_matching` 仅聚合 30/60 的兼容能力，旧 registration/matching header 仅转发。正式设计和 UI 交接以 `docs/architecture/module_ui_integration_v0.4.md` 为准。

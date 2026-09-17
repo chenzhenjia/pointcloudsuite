@@ -17,13 +17,10 @@ target_compile_definitions(pointcloudcli PRIVATE
 
 target_link_libraries(pointcloudcli PRIVATE
     Qt::Core Qt::Gui Qt::Concurrent
-    pcv_core pcv_infrastructure pcv_filtering
-    pcv_m10_pointcloud_read
-    pcv_m40_pointcloud_matching
+    pcv_core pcv_infrastructure
+    pcv_m10_pointcloud_io
     pcv_m50_coordinate_conversion
-    pcv_m60_plane_fitting
-    pcv_m70_roi_template
-    pcv_m80_plane_output)
+    pcv_m60_geometry_workpiece)
 
 if(PCV_BUILD_TESTS)
     foreach(PCV_CLI_TEST_MODE IN ITEMS help version empty unknown)

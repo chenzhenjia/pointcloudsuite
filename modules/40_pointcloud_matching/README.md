@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-已实现。规范代码位于 `modules/40_pointcloud_matching/include` 和 `modules/40_pointcloud_matching/src`，target 为 `pcv_m40_pointcloud_matching`。旧 target `pcv_m40_pointcloudregistration` 与 `pcv_registration` 保留为迁移期兼容入口（仅转发）。
+规划占位。40 的正式声明是工件位置确认能力，但本版不实现移动判定或新输出闭环。多帧 ICP 已迁入 30，ROI/临时工件几何已迁入 60；`pcv_m40_pointcloud_matching` 与 `pcv_m40_pointcloudregistration` 仅为兼容聚合入口。
 
 ## 职责
 

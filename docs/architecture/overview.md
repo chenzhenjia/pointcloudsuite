@@ -1,6 +1,6 @@
 # 架构概览
 
-PointCloudSuite v0.3 是多应用 CMake 工作区。应用依赖共享模块，共享模块不得反向依赖应用。
+PointCloudSuite v0.4 是多应用 CMake 工作区。应用依赖共享模块，共享模块不得反向依赖应用。迁移与 UI 交接真相源见 `module_ui_integration_v0.4.md`。
 
 ## 分层结构
 
@@ -11,15 +11,13 @@ apps/
   intensity_viewer      实验性亮度图预览与 PNG 保存 GUI
   pointcloudcli         独立 PLY 读取与临时工件命令行入口
 modules/
-  10_pointcloud_read    点云读写、缓存；相机帧采集与转换（05 已并入）
+  10_pointcloud_io      点云 IO、缓存、相机、过滤、writer、事务提交
   20_pointcloud_render  Qt/OpenGL 点云画布
   30_pointcloud_stitch  多帧拼接、seam fusion、正式输出（唯一拼接编排）
-  40_pointcloud_matching 平面/ROI 点匹配、覆盖校验、robot_base 完整回传
+  40_pointcloud_matching 工件位置确认规划占位（移动判定未实现）
   50_coordinate_conversion 手眼标定、位姿插值、坐标变换（唯一数学实现）
-  60_plane_fitting      纯平面算法与几何诊断
-  70_roi_template       ROI、模板和临时工件接口
-  80_plane_output       PNG、PLY、JSON 成套输出
-src/                  基础设施、过滤和兼容聚合 target
+  60_geometry_workpiece 平面、边缘、ROI、WObj、临时工件
+src/                  基础设施和兼容聚合 target
 tests/                CTest 测试
 tools/                可选诊断工具
 ```
@@ -33,28 +31,20 @@ tools/                可选诊断工具
 - `20_pointcloud_render` 是唯一允许依赖 Qt Widgets/OpenGL 的共享模块。
 - `30_pointcloud_stitch` 是多帧拼接的唯一编排边界：读取、坐标转换调用、
   多帧匹配调用、seam fusion、拼接诊断和正式输出均由其收敛。
-- `40_pointcloud_matching` 是平面/ROI 点匹配与 `robot_base` 完整回传模块；
-  保留底层 ICP/对应点搜索能力，但不再负责最终拼接输出或 seam fusion 编排。
+- `40_pointcloud_matching` 是规划中的工件位置确认占位，当前仅为 30/60 的兼容聚合。
 - seam fusion 实现与公共类型位于 `30_pointcloud_stitch` 的 stitching 目录。
 - `50_coordinate_conversion` 是旋转、位姿插值和手眼变换的唯一数学实现来源。
-- `60_plane_fitting` 只负责纯几何拟合和诊断。
+- `60_geometry_workpiece` 负责平面、边缘、ROI、WObj 和临时工件。
 - 应用负责 UI、异步任务和用户提示。
 - 运行数据不得写入源码树。
 
 ## 数据流
 
 ```text
-10 输入/相机采集
-    ↓
-20 渲染与交互
-    ↓
-60 平面拟合
-    ↓
-70 ROI 生成
-    ↓
-40 ROI 点匹配并完整回传 robot_base
-    ↓
-30 多帧拼接、seam fusion、正式输出
+10 输入/预处理 → 50 robot_base 坐标转换 → 30 拼接或 60 工件几何
+       ↑                                              ↓
+       └────────────── 10 事务提交 ← manifest ───────┘
+20 独立负责渲染与交互 DTO；40 是未来位置确认占位。
 ```
 
 ## 当前入口

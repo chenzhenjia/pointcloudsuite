@@ -2,11 +2,11 @@
 
 ## 当前状态
 
-接口已实现，应用仍负责部分 UI 编排。规范代码位于 `modules/70_roi_template`，target 为 `pcv_m70_roi_template`。
+兼容入口。实现已迁入 `modules/60_geometry_workpiece`；`pcv_m70_roi_template` 和旧 header 仅转发。
 
 ## 职责
 
-临时扫描信息解析、工件坐标系、矩形 ROI、平面映射、模板点云和 Mask 流程。纯几何拟合调用 `pcv_m60_plane_fitting`，ROI 点匹配统一调用 `pcv::matching::matchRoiToRobotBase`（模块 40），输出调用 `pcv_m80_plane_output`。匹配失败、取消或点索引不完整时 fail-closed，不写入部分 ROI 输出。
+临时扫描、工件坐标系、ROI、模板和 Mask 的规范职责归 60；正式输出事务归 10。本目录不得新增重复实现。
 
 ## 接口与测试
 

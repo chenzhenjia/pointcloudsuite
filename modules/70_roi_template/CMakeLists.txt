@@ -1,16 +1,5 @@
-add_library(pcv_m70_roi_template STATIC
-    src/temp_workpiece_interface.cpp
-    src/temp_workpiece_geometry.cpp
-    include/pcv/interface/temp_workpiece_interface.h
-    include/pcv/roi/temp_workpiece_geometry.h
-)
-target_include_directories(pcv_m70_roi_template PUBLIC
+add_library(pcv_m70_roi_template INTERFACE)
+target_include_directories(pcv_m70_roi_template INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${PROJECT_SOURCE_DIR}/include)
-target_link_libraries(pcv_m70_roi_template PUBLIC
-    pcv_m10_pointcloud_read
-    pcv_m40_pointcloud_matching
-    pcv_m50_coordinate_conversion
-    pcv_m80_plane_output
-    pcv_infrastructure
-    pcv_core Qt::Core Qt::Gui)
+target_link_libraries(pcv_m70_roi_template INTERFACE pcv_m60_geometry_workpiece)

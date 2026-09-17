@@ -1,7 +1,7 @@
 #include <pcv/interface/stitching_interface.h>
 
 #include <pcv/io/cloud_cache.h>
-#include <pcv/io/ply_writer.h>
+#include <pcv/io/artifact_transaction.h>
 
 #include <QDataStream>
 #include <QDebug>
@@ -10,6 +10,9 @@
 #include <QFileInfo>
 #include <QFuture>
 #include <QSaveFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSet>
 #include <QThreadPool>
 #include <QTextStream>
@@ -20,9 +23,14 @@
 #include <exception>
 #include <memory>
 #include <new>
+#include <limits>
 
 namespace pcv::interface {
 namespace {
+
+QVector<pointcloud::Point3D> previewPoints(const QVector<pointcloud::Point3D> &points,
+                                           double ratio);
+QByteArray mappingBytes(const pointcloud::MultiFrameRegistrationResult &merge);
 
 StitchingResult failure(const QString &code, const QString &message)
 {
@@ -38,14 +46,36 @@ bool finitePose(const pointcloud::RobotPose &pose)
         && std::isfinite(pose.rx) && std::isfinite(pose.ry) && std::isfinite(pose.rz);
 }
 
-bool writeRobotBasePly(const QString &path, const QVector<pointcloud::Point3D> &points,
-                       const std::function<bool()> &isCancelled, QString *error)
+QVector<pointcloud::Point3D> previewPoints(const QVector<pointcloud::Point3D> &points, double ratio)
 {
-    pcv::detail::io::BinaryPlyWriteOptions options;
-    options.includeNormals = false;
-    options.comment = QStringLiteral("coordinate_frame robot_base");
-    options.isCancelled = isCancelled;
-    return pcv::detail::io::writeBinaryPly(path, points, error, options);
+    ratio = qBound(0.01, ratio, 1.0);
+    if (ratio >= 0.999) return points;
+    const quint64 threshold = quint64(ratio * static_cast<long double>(std::numeric_limits<quint64>::max()));
+    QVector<pointcloud::Point3D> preview;
+    for (const auto &point : points) {
+        const qint64 x = qint64(std::floor(double(point.x) / 0.2));
+        const qint64 y = qint64(std::floor(double(point.y) / 0.2));
+        const qint64 z = qint64(std::floor(double(point.z) / 0.2));
+        quint64 value = quint64(x) * 73856093ULL ^ quint64(y) * 19349663ULL ^ quint64(z) * 83492791ULL;
+        value ^= value >> 30; value *= 0xBF58476D1CE4E5B9ULL;
+        value ^= value >> 27; value *= 0x94D049BB133111EBULL; value ^= value >> 31;
+        if (value <= threshold) preview.push_back(point);
+    }
+    return preview;
+}
+
+QByteArray mappingBytes(const pointcloud::MultiFrameRegistrationResult &merge)
+{
+    QByteArray bytes;
+    QDataStream stream(&bytes, QIODevice::WriteOnly);
+    stream.setByteOrder(QDataStream::LittleEndian);
+    stream.setFloatingPointPrecision(QDataStream::SinglePrecision);
+    stream << quint32(0x314D4350) << quint32(1) << quint64(merge.points.size());
+    for (qsizetype i = 0; i < merge.points.size(); ++i)
+        stream << qint32(merge.cloudIds.value(i, -1))
+               << qint64(merge.sourceIndices.value(i, -1))
+               << merge.scanRatios.value(i, 0.0f);
+    return stream.status() == QDataStream::Ok ? bytes : QByteArray{};
 }
 
 } // namespace
@@ -71,7 +101,7 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     const auto tokenCancelled = [cancellationToken]() {
         return cancellationToken->load(std::memory_order_relaxed);
     };
-    if (options.frames.size() < 2)
+    if (options.frames.size() < (options.registrationOptions.enabled ? 2 : 1))
         return failure(QStringLiteral("PCV_CONTRACT_001"), QStringLiteral("配准至少需要两个 PLY 文件"));
     if (options.sampleStride < 1 || options.sampleStride > 100)
         return failure(QStringLiteral("PCV_CONTRACT_001"), QStringLiteral("配准抽样步长必须在 1 到 100 之间"));
@@ -227,9 +257,15 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
 
     qInfo() << "Stitching hand-eye conversion completed, frames=" << frames.size();
 
-    pointcloud::IcpOptions registrationOptions;
+    pointcloud::IcpOptions registrationOptions = options.useRegistrationOptions
+        ? options.registrationOptions : pointcloud::IcpOptions{};
     registrationOptions.sampleStride = options.sampleStride;
     registrationOptions.collectDiagnosticFrames = options.collectDiagnosticFrames;
+    registrationOptions.structuralCoverageOfMatched = options.structuralCoverageOfMatched;
+    registrationOptions.minimumStructuralMatchedRatio = options.minimumStructuralMatchedRatio;
+    registrationOptions.visibilityWarningRatio = options.visibilityWarningRatio;
+    registrationOptions.tangentCoarseTrimmedScore = options.tangentCoarseTrimmedScore;
+    registrationOptions.correspondenceParallelTasks = options.correspondenceParallelTasks;
     registrationOptions.parallelEnabled = options.parallelEnabled;
     registrationOptions.maxParallelTasks = options.maxParallelTasks;
     registrationOptions.cancellation = cancellationToken;
@@ -254,6 +290,7 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     result.registrationMs = registrationMs;
     result.icpDiagnostics = registration.icpDiagnostics;
     result.diagnostics = registration.diagnostics;
+    result.merge = registration;
     qInfo() << "Stitching ICP completed, ok=" << registration.ok
             << "points=" << registration.points.size();
     if (!registration.ok) {
@@ -263,10 +300,18 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         return result;
     }
     for (int index = 1; index < registration.icpDiagnostics.size(); ++index) {
-        if (!registration.icpDiagnostics[index].accepted) {
+        const pointcloud::IcpDiagnostics &diagnostic = registration.icpDiagnostics[index];
+        if (!diagnostic.accepted) {
             result.errorCode = QStringLiteral("PCV_STITCH_001");
-            result.message = QStringLiteral("第 %1 帧配准未通过：%2")
-                .arg(index + 1).arg(registration.icpDiagnostics[index].reason);
+            // The failure code is already part of the reason text; the visibility
+            // numbers are added here because they decide whether the pair is
+            // simply not comparable (little common surface) or misregistered.
+            result.message = QStringLiteral("第 %1 帧配准未通过（%2）：%3；命中率=%4，命中点内双向 3 mm=%5")
+                .arg(index + 1)
+                .arg(diagnostic.failureCode.isEmpty() ? QStringLiteral("未分类") : diagnostic.failureCode)
+                .arg(diagnostic.reason)
+                .arg(QString::number(double(diagnostic.structuralBidirectionalMatchRatio), 'f', 4))
+                .arg(QString::number(double(diagnostic.structuralBidirectionalCoverage3mmOfMatched), 'f', 4));
             return result;
         }
     }
@@ -279,6 +324,7 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         const auto seam = pointcloud::applyTrajectorySeamFusion(&registration, seamOptions);
         result.seamFusionMs = seam.seamFusionMs;
         result.seamDiagnostics = seam.diagnostics;
+        result.seamFusion = seam;
         if (!seam.ok) {
             result.errorCode = QStringLiteral("PCV_STITCH_001");
             result.message = seam.error;
@@ -289,6 +335,7 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
             result.message = QStringLiteral("已取消");
             return result;
         }
+        result.merge = registration;
         if (seam.diagnostics.size() != options.frames.size() - 1) {
             result.errorCode = QStringLiteral("PCV_STITCH_001");
             result.message = QStringLiteral("接缝融合未生成完整相邻帧诊断");
@@ -306,6 +353,10 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
                 return result;
             }
         }
+    } else {
+        result.seamFusion.ok = true;
+        result.seamFusion.inputPoints = registration.points.size();
+        result.seamFusion.outputPoints = registration.points.size();
     }
     if (cancelled()) {
         result.cancelled = true;
@@ -318,9 +369,60 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         .filePath(QStringLiteral("stitched_robot_base.ply"));
     QElapsedTimer outputClock;
     outputClock.start();
-    const bool outputWritten = writeRobotBasePly(outputPath, registration.points, cancelled, &detail);
+    pcv::io::ArtifactTransaction transaction(options.outputDirectory,
+                                              options.allowOverwrite,
+                                              cancelled);
+    const QVector<pointcloud::Point3D> preview = previewPoints(registration.points, options.previewRatio);
+    const QString previewName = QStringLiteral("stitched_robot_base_preview.ply");
+    const QString mappingName = QStringLiteral("stitched_robot_base.pcvmap");
+    const QString reportName = QStringLiteral("stitching_manifest.json");
+    QJsonObject manifestJson;
+    manifestJson.insert(QStringLiteral("schema"), QStringLiteral("pcv-stitching-manifest-v0.4"));
+    manifestJson.insert(QStringLiteral("coordinate_frame"), QStringLiteral("robot_base"));
+    manifestJson.insert(QStringLiteral("formal_ply"), QStringLiteral("stitched_robot_base.ply"));
+    manifestJson.insert(QStringLiteral("preview_ply"), previewName);
+    manifestJson.insert(QStringLiteral("mapping_file"), mappingName);
+    manifestJson.insert(QStringLiteral("success"), true);
+    manifestJson.insert(QStringLiteral("diagnostics"), result.diagnostics);
+    bool outputWritten = transaction.stageBinaryPly(
+        QStringLiteral("stitched_robot_base.ply"), registration.points, false,
+        {QStringLiteral("coordinate_frame robot_base")})
+        && transaction.stageBinaryPly(previewName, preview, false,
+                                      {QStringLiteral("coordinate_frame robot_base")})
+        && transaction.stageBytes(mappingName, mappingBytes(registration))
+        && transaction.stageJson(reportName,
+                                 QJsonDocument(manifestJson).toJson(QJsonDocument::Indented))
+        ;
+    if (outputWritten && options.writeDiagnosticFrames) {
+        for (int index = 0; index < registration.diagnosticPreIcpFrames.size(); ++index) {
+            const QString pre = QStringLiteral("diagnostic_pre_icp_frame_%1.ply").arg(index + 1, 2, 10, QChar('0'));
+            const QString post = QStringLiteral("diagnostic_post_icp_frame_%1.ply").arg(index + 1, 2, 10, QChar('0'));
+            outputWritten = transaction.stageBinaryPly(pre, registration.diagnosticPreIcpFrames.at(index), false)
+                && transaction.stageBinaryPly(post, registration.diagnosticPostIcpFrames.value(index), false);
+            if (!outputWritten) break;
+            result.manifest.diagnosticPreIcpFiles.push_back(QDir(options.outputDirectory).filePath(pre));
+            result.manifest.diagnosticPostIcpFiles.push_back(QDir(options.outputDirectory).filePath(post));
+        }
+    }
+    if (outputWritten && options.writeSourceClouds) {
+        QVector<QVector<pointcloud::Point3D>> buckets(sourcePaths.size());
+        for (qsizetype index = 0; index < registration.points.size(); ++index) {
+            const int cloudId = registration.cloudIds.value(index, -1);
+            if (cloudId < 0 || cloudId >= buckets.size()) continue;
+            buckets[cloudId].push_back(registration.points.at(index));
+        }
+        for (int cloudId = 0; cloudId < buckets.size(); ++cloudId) {
+            const QString name = QStringLiteral("%1_%2_robot_base.ply")
+                .arg(cloudId + 1).arg(QFileInfo(sourcePaths.at(cloudId)).completeBaseName());
+            outputWritten = transaction.stageBinaryPly(name, buckets.at(cloudId), false);
+            if (!outputWritten) break;
+            result.manifest.sourcePlyFiles.push_back(QDir(options.outputDirectory).filePath(name));
+        }
+    }
+    if (outputWritten) outputWritten = transaction.commit();
     result.outputMs = outputClock.elapsed();
     if (!outputWritten) {
+        detail = transaction.error();
         result.cancelled = detail == QStringLiteral("已取消");
         result.errorCode = result.cancelled ? QString() : QStringLiteral("PCV_OUTPUT_002");
         result.message = detail;
@@ -328,7 +430,14 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     }
     result.success = true;
     result.outputPly = outputPath;
+    result.manifest.formalPly = outputPath;
+    result.manifest.previewPly = QDir(options.outputDirectory).filePath(previewName);
+    result.manifest.mappingFile = QDir(options.outputDirectory).filePath(mappingName);
+    result.manifest.reportJson = QDir(options.outputDirectory).filePath(reportName);
     result.points = std::move(registration.points);
+    result.merge.points = result.points;
+    result.merge.ok = true;
+    result.merge.error.clear();
     result.diagnostics += QStringLiteral("formal_output=%1\n").arg(outputPath);
     result.totalMs = result.readMs + result.transformMs + result.registrationMs
         + result.seamFusionMs + result.outputMs;
@@ -359,6 +468,34 @@ StitchingResult stitchRawLineProfiles(const StitchingOptions &options)
         return failure(QStringLiteral("PCV_STITCH_001"),
                        QStringLiteral("多帧配准发生未知异常，正式输出未更新"));
     }
+}
+
+StitchingResult stitch(const StitchingRequest &request)
+{
+    StitchingOptions options;
+    options.calibrationPath = request.input.calibrationPath;
+    options.frames = request.input.frames;
+    options.outputDirectory = request.artifacts.outputDirectory;
+    options.allowOverwrite = request.artifacts.allowOverwrite;
+    options.registrationOptions = request.registration.options;
+    options.useRegistrationOptions = true;
+    options.previewRatio = request.artifacts.previewRatio;
+    options.writeSourceClouds = request.artifacts.writeSourceClouds;
+    options.writeDiagnosticFrames = request.artifacts.writeDiagnosticFrames;
+    options.sampleStride = request.registration.sampleStride;
+    options.parallelEnabled = request.registration.parallelEnabled;
+    options.maxParallelTasks = request.registration.maxParallelTasks;
+    options.collectDiagnosticFrames = request.registration.collectDiagnosticFrames;
+    options.structuralCoverageOfMatched = request.registration.structuralCoverageOfMatched;
+    options.minimumStructuralMatchedRatio = request.registration.minimumStructuralMatchedRatio;
+    options.visibilityWarningRatio = request.registration.visibilityWarningRatio;
+    options.tangentCoarseTrimmedScore = request.registration.tangentCoarseTrimmedScore;
+    options.correspondenceParallelTasks = request.registration.correspondenceParallelTasks;
+    options.seamEnabled = request.seam.enabled;
+    options.seamHalfWidthMm = request.seam.halfWidthMm;
+    options.isCancelled = request.isCancelled;
+    options.progress = request.progress;
+    return stitchRawLineProfiles(options);
 }
 
 } // namespace pcv::interface

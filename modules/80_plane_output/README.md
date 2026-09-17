@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-已实现。规范代码位于 `modules/80_plane_output/include` 和 `modules/80_plane_output/src`，target 为 `pcv_m80_plane_output`。旧 target `pcv_m80_planeoutput` 与 `pcv_output` 保留为迁移期兼容入口（仅转发）。
+兼容入口。实现已迁入 `modules/10_pointcloud_io`；`pcv_m80_plane_output`、`pcv_m80_planeoutput` 与 `pcv_output` 仅转发。
 
 ## 职责
 

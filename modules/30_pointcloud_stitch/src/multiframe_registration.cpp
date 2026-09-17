@@ -1,4 +1,4 @@
-#include <pcv/registration/multiframe_registration.h>
+#include <pcv/stitching/multiframe_registration.h>
 #include <pcv/filtering/downsample.h>
 
 #include <QElapsedTimer>
@@ -321,6 +321,65 @@ const std::array<GridKey, 27> &neighborOffsets27() {
     return offsets;
 }
 
+struct CorrespondenceChunk {
+    QVector<CorrespondencePair> pairs;
+    int rejectedByNormal = 0;
+};
+
+// One chunk of the correspondence search. Everything it reads is const (the
+// source cloud, the target cloud and the index) and it writes only its private
+// chunk, so several chunks may run concurrently. The caller merges them in
+// index order, which reproduces the serial pair order exactly and therefore
+// keeps the accumulated normal equations bit-for-bit identical.
+CorrespondenceChunk findCorrespondences(const QVector<Point3D> &source,
+                                        const QVector<Point3D> &target,
+                                        const SpatialIndex &targetIndex,
+                                        float maximumDistance,
+                                        const Bounds &actualOverlap,
+                                        float minimumNormalDot,
+                                        qsizetype begin,
+                                        qsizetype end)
+{
+    CorrespondenceChunk chunk;
+    const float limitSquared = maximumDistance * maximumDistance;
+    const std::array<GridKey, 27> &offsets = neighborOffsets27();
+    chunk.pairs.reserve(end - begin);
+    for (qsizetype index = begin; index < end; ++index) {
+        const Point3D &point = source.at(index);
+        if (!insideBounds(vectorOf(point), actualOverlap)) continue;
+        const GridKey key = gridKey(point, maximumDistance);
+        float best = limitSquared;
+        int selected = -1;
+        for (const GridKey &offset : offsets) {
+            const auto found = targetIndex.cells.find(
+                {key.x + offset.x, key.y + offset.y, key.z + offset.z});
+            if (found == targetIndex.cells.end()) continue;
+            for (int candidate : found->second) {
+                const float distance = (vectorOf(point) - vectorOf(target.at(candidate))).lengthSquared();
+                if (distance < best) { best = distance; selected = candidate; }
+            }
+        }
+        if (selected < 0) continue;
+        const Point3D &reference = target.at(selected);
+        QVector3D normal(reference.nx, reference.ny, reference.nz);
+        if (normal.lengthSquared() <= 1.0e-8f) continue;
+        normal.normalize();
+        // Normal compatibility: the nearest target point of a pair that jumped
+        // across an edge or a step points somewhere else. Both normals must be
+        // available before the gate can judge the pair.
+        if (minimumNormalDot > -1.0f) {
+            const QVector3D sourceNormal(point.nx, point.ny, point.nz);
+            if (sourceNormal.lengthSquared() > 1.0e-8f
+                && QVector3D::dotProduct(sourceNormal.normalized(), normal) < minimumNormalDot) {
+                ++chunk.rejectedByNormal;
+                continue;
+            }
+        }
+        chunk.pairs.push_back({vectorOf(point), vectorOf(reference), normal, selected});
+    }
+    return chunk;
+}
+
 Increment estimateIncrement(const QVector<Point3D> &source,
                             const QVector<Point3D> &target,
                             const SpatialIndex &targetIndex,
@@ -328,36 +387,55 @@ Increment estimateIncrement(const QVector<Point3D> &source,
                             const Bounds &actualOverlap,
                             QVector<CorrespondencePair> *pairsScratch = nullptr,
                             std::unordered_set<int> *uniqueScratch = nullptr,
-                            const FeatureResidualOptions *featureResiduals = nullptr) {
+                            const FeatureResidualOptions *featureResiduals = nullptr,
+                            float normalCompatibilityDegrees = 0.0f,
+                            float trimFraction = 1.0f,
+                            QVector<float> *residualScratch = nullptr,
+                            int *normalRejected = nullptr,
+                            int parallelTasks = 1) {
     // The reference point set is always cropped to actualOverlap before it is
     // downsampled and indexed, so every indexed candidate is already inside
     // the overlap box and the per-candidate insideBounds() check is removed.
     QVector<CorrespondencePair> localPairs;
     QVector<CorrespondencePair> &pairs = pairsScratch ? *pairsScratch : localPairs;
     pairs.clear();
-    const float limitSquared=maximumDistance*maximumDistance;
-    const std::array<GridKey, 27> &offsets = neighborOffsets27();
-    for(const Point3D &point:source){
-        if(!insideBounds(vectorOf(point),actualOverlap))continue;
-        const GridKey key=gridKey(point,maximumDistance);
-        float best=limitSquared;
-        int selected=-1;
-        for(const GridKey &offset:offsets){
-            const auto found=targetIndex.cells.find({key.x+offset.x,key.y+offset.y,key.z+offset.z});
-            if(found==targetIndex.cells.end())continue;
-            for(int candidate:found->second){
-                const QVector3D difference=vectorOf(point)-vectorOf(target[candidate]);
-                const float distance=difference.lengthSquared();
-                if(distance<best){best=distance;selected=candidate;}
-            }
+    const float minimumNormalDot = normalCompatibilityDegrees>0.0f
+        ? float(std::cos(double(qDegreesToRadians(qBound(0.0f,normalCompatibilityDegrees,180.0f)))))
+        : -1.0f;
+    int rejectedByNormal = 0;
+    // The search is the dominant cost of every iteration. It is split into
+    // ordered chunks so it can use several workers; the merge below runs on the
+    // calling thread and reproduces the serial pair order exactly.
+    constexpr qsizetype minimumParallelPoints = 20000;
+    if(parallelTasks>1 && source.size()>=minimumParallelPoints){
+        const int chunkCount=qMin<int>(parallelTasks*4,int(source.size()));
+        const qsizetype chunkSize=(source.size()+chunkCount-1)/chunkCount;
+        QThreadPool pool;
+        pool.setMaxThreadCount(parallelTasks);
+        QVector<QFuture<CorrespondenceChunk>> futures;
+        futures.reserve(chunkCount);
+        for(int chunk=0;chunk<chunkCount;++chunk){
+            const qsizetype begin=qsizetype(chunk)*chunkSize;
+            const qsizetype end=qMin(begin+chunkSize,source.size());
+            if(begin>=end)continue;
+            futures.push_back(QtConcurrent::run(&pool,
+                [&source,&target,&targetIndex,maximumDistance,&actualOverlap,minimumNormalDot,begin,end]{
+                    return findCorrespondences(source,target,targetIndex,maximumDistance,
+                                               actualOverlap,minimumNormalDot,begin,end);
+                }));
         }
-        if(selected>=0){
-            const Point3D &reference=target[selected];
-            const QVector3D normal(reference.nx,reference.ny,reference.nz);
-            if(normal.lengthSquared()>1.0e-8f)
-                pairs.push_back({vectorOf(point),vectorOf(reference),normal.normalized(),selected});
+        for(QFuture<CorrespondenceChunk> &future:futures){
+            const CorrespondenceChunk chunk=future.result();
+            rejectedByNormal+=chunk.rejectedByNormal;
+            for(const CorrespondencePair &pair:chunk.pairs)pairs.push_back(pair);
         }
+    }else{
+        CorrespondenceChunk chunk=findCorrespondences(source,target,targetIndex,
+            maximumDistance,actualOverlap,minimumNormalDot,0,source.size());
+        rejectedByNormal=chunk.rejectedByNormal;
+        pairs=std::move(chunk.pairs);
     }
+    if(normalRejected)*normalRejected+=rejectedByNormal;
     Increment result;
     result.correspondences=pairs.size();
     if(pairs.size()<100)return result;
@@ -398,6 +476,31 @@ Increment estimateIncrement(const QVector<Point3D> &source,
                 normalMatrix[row][column]+=weight*jacobian[row]*jacobian[column];
         }
     };
+    // Trimmed weighting: on a pair the other view only partly observed, the tail
+    // of the residual distribution is dominated by correspondences that do not
+    // really exist, so only the best fraction is allowed into the normal
+    // equations. The cutoff comes from an O(N) order statistic, so no full sort
+    // is paid per iteration.
+    const float trim = qBound(0.05f,trimFraction,1.0f);
+    double residualLimit = std::numeric_limits<double>::max();
+    if(trim<0.999f && pairs.size()>=100){
+        QVector<float> localResiduals;
+        QVector<float> &residuals = residualScratch ? *residualScratch : localResiduals;
+        residuals.clear();
+        residuals.reserve(pairs.size());
+        for(const CorrespondencePair &pair:pairs){
+            const QVector3D difference=pair.source-pair.target;
+            residuals.push_back(float(isFeatureTarget(pair)
+                ? difference.length()/maximumDistance
+                : std::abs(QVector3D::dotProduct(pair.normal,difference))/maximumDistance));
+        }
+        const int keep=qBound(1,int(std::ceil(double(trim)*double(residuals.size()))),
+                              int(residuals.size()));
+        if(keep<int(residuals.size())){
+            std::nth_element(residuals.begin(),residuals.begin()+(keep-1),residuals.end());
+            residualLimit=double(residuals[keep-1]);
+        }
+    }
     for(const CorrespondencePair &pair:pairs){
         unique.insert(pair.targetIndex);
         const QVector3D difference = pair.source-pair.target;
@@ -406,6 +509,7 @@ Increment estimateIncrement(const QVector<Point3D> &source,
             ? difference.length()/maximumDistance
             : std::abs(QVector3D::dotProduct(pair.normal,difference))/maximumDistance;
         if(normalized>=1.0)continue;
+        if(normalized>residualLimit)continue;
         const double weight=std::pow(1.0-normalized*normalized,2.0);
         if (pointToPoint) {
             accumulateResidual(QVector3D(1,0,0),pair.source,pair.target,weight);
@@ -467,6 +571,21 @@ QMatrix4x4 scaledRigidIncrement(const QMatrix4x4 &matrix, float factor) {
 
 void applyTransform(QVector<Point3D> *points, const QMatrix4x4 &matrix) {
     for(Point3D &point:*points){const QVector3D transformed=matrix.map(vectorOf(point));point.x=transformed.x();point.y=transformed.y();point.z=transformed.z();if(point.nx!=0||point.ny!=0||point.nz!=0){const QVector3D normal=matrix.mapVector(QVector3D(point.nx,point.ny,point.nz));point.nx=normal.x();point.ny=normal.y();point.nz=normal.z();}}
+}
+
+// Counts how many points of `points` land inside `bounds` after `matrix`,
+// without materialising a transformed copy. The step-factor trials only need the
+// count; the accepted factor is applied to the moving cloud once, so a whole
+// cloud copy per trial factor disappears from the inner loop.
+int countInsideBoundsTransformed(const QVector<Point3D> &points,
+                                 const QMatrix4x4 &matrix,
+                                 const Bounds &bounds,
+                                 int minimum) {
+    int count = 0;
+    for (const Point3D &point : points) {
+        if (insideBounds(matrix.map(vectorOf(point)), bounds) && ++count >= minimum) break;
+    }
+    return count;
 }
 
 void copyCloudPoints(QVector<Point3D> *destination, const QVector<Point3D> &source) {
@@ -544,7 +663,15 @@ struct PlaneDiagnostic {
 struct PlanePeak { float height=0; int count=0; };
 struct DistanceDiagnostic {
     int total=0,matched=0;
+    // Raw hit counts. The ratios below keep the legacy denominators (every
+    // sampled point) while the *OfMatched helpers divide by the points that
+    // actually found a counterpart, which is the only meaningful denominator
+    // when the two views observe partly different surface.
+    int within3Count=0,within5Count=0,within10Count=0;
     float p50=0,p90=0,p95=0,within3=0,within5=0,within10=0;
+    float matchedRatio() const { return total>0 ? float(matched)/float(total) : 0.0f; }
+    float within3OfMatched() const { return matched>0 ? float(within3Count)/float(matched) : 0.0f; }
+    float within5OfMatched() const { return matched>0 ? float(within5Count)/float(matched) : 0.0f; }
 };
 
 QVector3D choosePlaneAxisU(const QVector3D &normal, const QVector3D &preferred)
@@ -624,6 +751,7 @@ DistanceDiagnostic nearestDistanceDiagnostic(const QVector<Point3D> &source,
         for(qint64 z=-1;z<=1;++z)for(qint64 y=-1;y<=1;++y)for(qint64 x=-1;x<=1;++x){const auto cell=index.cells.find({key.x+x,key.y+y,key.z+z});if(cell==index.cells.end())continue;for(int candidate:cell->second){const float value=(vectorOf(point)-vectorOf(reference[candidate])).lengthSquared();if(value<best){best=value;found=true;}}}
         if(!found)continue;const float distance=std::sqrt(best);distances.push_back(distance);within3+=distance<=3.0f;within5+=distance<=5.0f;within10+=distance<=10.0f;}
     result.matched=distances.size();
+    result.within3Count=within3;result.within5Count=within5;result.within10Count=within10;
     if(distances.isEmpty())return result;
     std::sort(distances.begin(),distances.end());const auto percentile=[&](float p){return distances[qBound(0,int(std::floor(p*float(distances.size()-1))),int(distances.size()-1))];};
     result.p50=percentile(.50f);result.p90=percentile(.90f);result.p95=percentile(.95f);const float count=float(moving.size());result.within3=within3/count;result.within5=within5/count;result.within10=within10/count;return result;
@@ -715,6 +843,57 @@ float translatedCoverage(const QVector<Point3D> &source,
     return qMin(float(forward)/float(source.size()),float(backward)/float(target.size()));
 }
 
+// Trimmed nearest-neighbour objective for the coarse in-plane search.
+//
+// The bidirectional coverage score above is diluted by the points the other view
+// never observed - exactly the regime the coarse search has to work in. On the
+// 5_40 pair the best translation moved that score from 0.150 to 0.166, i.e.
+// below the legacy 5% acceptance gate, even though the surface was really
+// misplaced by about 8 mm. This score averages the K smallest nearest-neighbour
+// distances after translating the source (smaller is better); a point without a
+// neighbour inside searchDistance contributes that distance, so a candidate can
+// never win by matching fewer points.
+float trimmedNearestScore(const QVector<Point3D> &source,
+                          const QVector<Point3D> &target,
+                          const SpatialIndex &targetIndex,
+                          const QVector3D &translation,
+                          float searchDistance,
+                          int inlierCount)
+{
+    if (source.isEmpty() || inlierCount <= 0) return std::numeric_limits<float>::max();
+    const float limitSquared = searchDistance * searchDistance;
+    // A neighbour much closer than the search radius already is the smallest
+    // term of the sum by a wide margin, so the remaining cells cannot change the
+    // ranking and the scan stops early.
+    const float earlyExitSquared = limitSquared * 0.0625f;
+    const std::array<GridKey, 27> &offsets = neighborOffsets27();
+    QVector<float> distances;
+    distances.reserve(source.size());
+    for (const Point3D &point : source) {
+        Point3D moved = point;
+        moved.x += translation.x(); moved.y += translation.y(); moved.z += translation.z();
+        const QVector3D position = vectorOf(moved);
+        const GridKey key = gridKey(moved, searchDistance);
+        float best = limitSquared;
+        for (const GridKey &offset : offsets) {
+            const auto cell = targetIndex.cells.find({key.x + offset.x, key.y + offset.y, key.z + offset.z});
+            if (cell == targetIndex.cells.end()) continue;
+            for (int candidate : cell->second) {
+                const float distance = (position - vectorOf(target[candidate])).lengthSquared();
+                if (distance < best) best = distance;
+            }
+            if (best <= earlyExitSquared) break;
+        }
+        distances.push_back(best < limitSquared ? std::sqrt(best) : searchDistance);
+    }
+    if (distances.isEmpty()) return std::numeric_limits<float>::max();
+    const int keep = qBound(1, inlierCount, int(distances.size()));
+    std::nth_element(distances.begin(), distances.begin() + (keep - 1), distances.end());
+    float sum = 0.0f;
+    for (int index = 0; index < keep; ++index) sum += distances[index];
+    return sum / float(keep);
+}
+
 void runWideStructureDiagnostic(const QVector<Point3D> &source,
                                 const QVector<Point3D> &target,
                                 const PlaneDiagnostic &targetPlane,
@@ -731,15 +910,29 @@ void runWideStructureDiagnostic(const QVector<Point3D> &source,
     QVector3D axisU = targetPlane.axisU.lengthSquared() > 1.0e-8f
         ? targetPlane.axisU : choosePlaneAxisU(targetPlane.normal, QVector3D(1,0,0));
     axisU.normalize();const QVector3D axisV=QVector3D::crossProduct(targetPlane.normal,axisU).normalized();
-    QVector3D best;float bestScore=translatedCoverage(moving,reference,targetIndex,sourceIndex,{},scoreDistance);
-    diagnostic->wideStructureCoverageBefore=bestScore;
+    const int trimmedCount=qBound(1,
+        int(std::ceil(double(options.tangentCoarseTrimmedRatio)*double(moving.size()))),
+        int(moving.size()));
+    const auto trimmedScore=[&](const QVector<Point3D> &cloud,const QVector3D &translation){
+        return trimmedNearestScore(cloud,reference,targetIndex,translation,scoreDistance,trimmedCount);
+    };
+    // Same objective switch as the tangent search: the legacy coverage score is
+    // negated so both modes minimise. wideStructureCoverageBefore/Best keep
+    // reporting plain coverage so historical comparisons remain possible.
+    const auto objective=[&](const QVector<Point3D> &cloud,const QVector3D &translation){
+        return options.tangentCoarseTrimmedScore
+            ?trimmedScore(cloud,translation)
+            :-translatedCoverage(cloud,reference,targetIndex,sourceIndex,translation,scoreDistance);
+    };
+    QVector3D best;float bestScore=objective(moving,{});
+    diagnostic->wideStructureCoverageBefore=translatedCoverage(moving,reference,targetIndex,sourceIndex,{},scoreDistance);
     const auto search=[&](float centerU,float centerV,float radius,float step){
         for(float u=centerU-radius;u<=centerU+radius+.001f;u+=step)
             for(float v=centerV-radius;v<=centerV+radius+.001f;v+=step){
                 const QVector3D candidate=axisU*u+axisV*v;
                 if(candidate.length()>options.wideStructureSearchRadiusMm+.001f)continue;
-                const float score=translatedCoverage(moving,reference,targetIndex,sourceIndex,candidate,scoreDistance);
-                if(score>bestScore){bestScore=score;best=candidate;}
+                const float score=objective(moving,candidate);
+                if(score<bestScore){bestScore=score;best=candidate;}
             }
     };
     search(0,0,options.wideStructureSearchRadiusMm,options.wideStructureSearchStepMm);
@@ -751,12 +944,11 @@ void runWideStructureDiagnostic(const QVector<Point3D> &source,
     for(float angle=-options.wideStructureYawRadiusDegrees;angle<=options.wideStructureYawRadiusDegrees+.001f;angle+=options.wideStructureYawStepDegrees){
         QMatrix4x4 rotation;rotation.setToIdentity();rotation.translate(centroid+best);rotation.rotate(angle,targetPlane.normal);rotation.translate(-(centroid+best));
         QVector<Point3D> rotated=translated;applyTransform(&rotated,rotation);
-        const SpatialIndex rotatedIndex=buildIndex(rotated,scoreDistance);
-        const float score=translatedCoverage(rotated,reference,targetIndex,rotatedIndex,{},scoreDistance);
-        if(score>bestScore){bestScore=score;bestYaw=angle;}
+        const float score=objective(rotated,{});
+        if(score<bestScore){bestScore=score;bestYaw=angle;}
     }
     diagnostic->wideStructureDiagnosticValid=true;
-    diagnostic->wideStructureCoverageBest=bestScore;
+    diagnostic->wideStructureCoverageBest=translatedCoverage(moving,reference,targetIndex,sourceIndex,best,scoreDistance);
     diagnostic->wideStructureX=best.x();diagnostic->wideStructureY=best.y();diagnostic->wideStructureZ=best.z();
     diagnostic->wideStructureYawDegrees=bestYaw;
     if(candidateMatrix){
@@ -780,6 +972,10 @@ QVector3D tangentCoarseTranslation(const QVector<Point3D> &source,
                                    IcpDiagnostics *diagnostic,
                                    QMatrix4x4 *coarseRotation) {
     diagnostic->tangentCoarseAlignmentAttempted=true;
+    // Reported even when the search bails out below, so a skipped coarse stage
+    // always states which objective it would have used.
+    diagnostic->tangentCoarseScoreMode=options.tangentCoarseTrimmedScore
+        ?QStringLiteral("trimmed_nearest"):QStringLiteral("legacy_coverage");
     if(source.size()<options.minimumStructuralPoints||target.size()<options.minimumStructuralPoints||!targetPlane.valid){
         diagnostic->tangentCoarseAlignmentReason=QStringLiteral("结构点或目标平面不足，跳过切向粗对齐");return {};
     }
@@ -793,40 +989,83 @@ QVector3D tangentCoarseTranslation(const QVector<Point3D> &source,
         ? targetPlane.axisU : choosePlaneAxisU(targetPlane.normal, QVector3D(1,0,0));
     axisU.normalize();const QVector3D axisV=QVector3D::crossProduct(targetPlane.normal,axisU).normalized();
     coarseRotation->setToIdentity();
-    QVector3D best;float bestScore=translatedCoverage(moving,reference,targetIndex,sourceIndex,best,scoreDistance);
-    diagnostic->tangentCoverageBefore=bestScore;
-    const auto search=[&](float centerU,float centerV,float radius,float step,QVector3D *bestValue,float *score){
+    const int trimmedCount=qBound(1,
+        int(std::ceil(double(options.tangentCoarseTrimmedRatio)*double(moving.size()))),
+        int(moving.size()));
+    const auto trimmedScore=[&](const QVector3D &translation){
+        return trimmedNearestScore(moving,reference,targetIndex,translation,scoreDistance,trimmedCount);
+    };
+    const auto coverageScore=[&](const QVector3D &translation){
+        return translatedCoverage(moving,reference,targetIndex,sourceIndex,translation,scoreDistance);
+    };
+    // Lower is better in both modes, so the legacy coverage score is negated and
+    // the search below stays identical for both objectives.
+    const auto objective=[&](const QVector3D &translation){
+        return options.tangentCoarseTrimmedScore?trimmedScore(translation):-coverageScore(translation);
+    };
+    diagnostic->tangentCoverageBefore=coverageScore({});
+    diagnostic->tangentCoarseScoreBefore=trimmedScore({});
+    QVector3D best;float bestScore=objective(best);
+    const auto search=[&](float centerU,float centerV,float radius,float step){
         for(float u=centerU-radius;u<=centerU+radius+.001f;u+=step)
             for(float v=centerV-radius;v<=centerV+radius+.001f;v+=step){
                 const QVector3D candidate=axisU*u+axisV*v;
                 if(candidate.length()>options.tangentCoarseSearchRadiusMm+.001f)continue;
-                const float value=translatedCoverage(moving,reference,targetIndex,sourceIndex,candidate,scoreDistance);
-                if(value>*score){*score=value;*bestValue=candidate;}
+                const float value=objective(candidate);
+                if(value<bestScore){bestScore=value;best=candidate;}
             }
     };
-    search(0,0,options.tangentCoarseSearchRadiusMm,options.tangentCoarseStepMm,&best,&bestScore);
+    search(0,0,options.tangentCoarseSearchRadiusMm,options.tangentCoarseStepMm);
     QVector3D centroid;for(const Point3D &point:moving)centroid+=vectorOf(point);centroid/=float(moving.size());
     float bestYaw=0.0f;
     QVector<Point3D> translatedMoving=moving;for(Point3D &point:translatedMoving){point.x+=best.x();point.y+=best.y();point.z+=best.z();}
     for(float angle=-options.tangentCoarseYawRadiusDegrees;angle<=options.tangentCoarseYawRadiusDegrees+.001f;angle+=options.tangentCoarseYawStepDegrees){
         QMatrix4x4 rotation;rotation.setToIdentity();rotation.translate(centroid+best);rotation.rotate(angle,targetPlane.normal);rotation.translate(-(centroid+best));
         QVector<Point3D> rotated=translatedMoving;applyTransform(&rotated,rotation);
-        const SpatialIndex rotatedIndex=buildIndex(rotated,scoreDistance);
-        const float value=translatedCoverage(rotated,reference,targetIndex,rotatedIndex,{},scoreDistance);
-        if(value>bestScore){bestScore=value;bestYaw=angle;*coarseRotation=rotation;}
+        float value=0.0f;
+        if(options.tangentCoarseTrimmedScore){
+            value=trimmedNearestScore(rotated,reference,targetIndex,{},scoreDistance,trimmedCount);
+        }else{
+            const SpatialIndex rotatedIndex=buildIndex(rotated,scoreDistance);
+            value=-translatedCoverage(rotated,reference,targetIndex,rotatedIndex,{},scoreDistance);
+        }
+        if(value<bestScore){bestScore=value;bestYaw=angle;*coarseRotation=rotation;}
     }
     diagnostic->tangentCoarseYawDegrees=bestYaw;
     const float centerU=QVector3D::dotProduct(best,axisU),centerV=QVector3D::dotProduct(best,axisV);
-    search(centerU,centerV,options.tangentCoarseStepMm,options.tangentCoarseRefineStepMm,&best,&bestScore);
-    diagnostic->tangentCoverageAfter=bestScore;
+    search(centerU,centerV,options.tangentCoarseStepMm,options.tangentCoarseRefineStepMm);
+    const float coverageAfter=coverageScore(best);
+    const float trimmedAfter=options.tangentCoarseTrimmedScore?bestScore:trimmedScore(best);
+    diagnostic->tangentCoverageAfter=coverageAfter;
+    diagnostic->tangentCoarseScoreAfter=trimmedAfter;
     diagnostic->tangentCoarseX=best.x();diagnostic->tangentCoarseY=best.y();diagnostic->tangentCoarseZ=best.z();
-    if(bestScore-diagnostic->tangentCoverageBefore<options.tangentCoarseMinimumCoverageGain){
-        diagnostic->tangentCoarseAlignmentReason=QStringLiteral("切向搜索覆盖率增益 %1 低于 %2，保持机器人初值")
-            .arg(bestScore-diagnostic->tangentCoverageBefore,0,'f',4).arg(options.tangentCoarseMinimumCoverageGain,0,'f',4);return {};
+    const float coverageGain=coverageAfter-diagnostic->tangentCoverageBefore;
+    const float scoreGain=diagnostic->tangentCoarseScoreBefore>1.0e-6f
+        ?(diagnostic->tangentCoarseScoreBefore-trimmedAfter)/diagnostic->tangentCoarseScoreBefore
+        :0.0f;
+    const bool accepted=options.tangentCoarseTrimmedScore
+        ?scoreGain>=options.tangentCoarseMinimumScoreGain
+        :coverageGain>=options.tangentCoarseMinimumCoverageGain;
+    if(!accepted){
+        diagnostic->tangentCoarseAlignmentReason=options.tangentCoarseTrimmedScore
+            ?QStringLiteral("切向搜索 trimmed 目标改善 %1 低于 %2，保持机器人初值")
+                .arg(QString::number(double(scoreGain),'f',4))
+                .arg(QString::number(double(options.tangentCoarseMinimumScoreGain),'g',4))
+            :QStringLiteral("切向搜索覆盖率增益 %1 低于 %2，保持机器人初值")
+                .arg(QString::number(double(coverageGain),'f',4))
+                .arg(QString::number(double(options.tangentCoarseMinimumCoverageGain),'g',4));
+        return {};
     }
     diagnostic->tangentCoarseAlignmentApplied=true;
-    diagnostic->tangentCoarseAlignmentReason=QStringLiteral("切向结构覆盖率由 %1 提升至 %2")
-        .arg(diagnostic->tangentCoverageBefore,0,'f',4).arg(bestScore,0,'f',4);
+    diagnostic->tangentCoarseAlignmentReason=options.tangentCoarseTrimmedScore
+        ?QStringLiteral("切向结构对齐：trimmed 目标 %1 降至 %2，5 mm 双向覆盖率 %3 → %4")
+            .arg(QString::number(double(diagnostic->tangentCoarseScoreBefore),'f',4))
+            .arg(QString::number(double(trimmedAfter),'f',4))
+            .arg(QString::number(double(diagnostic->tangentCoverageBefore),'f',4))
+            .arg(QString::number(double(coverageAfter),'f',4))
+        :QStringLiteral("切向结构覆盖率由 %1 提升至 %2")
+            .arg(QString::number(double(diagnostic->tangentCoverageBefore),'f',4))
+            .arg(QString::number(double(coverageAfter),'f',4));
     return best;
 }
 
@@ -939,6 +1178,36 @@ QVector<PlanePeak> planePeakCandidates(const QVector<Point3D> &points) {
         result.push_back({(float(entry.first)+.5f)*heightBin,entry.second});
     std::sort(result.begin(),result.end(),[](const PlanePeak &a,const PlanePeak &b){return a.height<b.height;});
     return result;
+}
+
+// Chooses the local frame the overlap box must be built in, or an invalid
+// plane when the legacy robot-XYZ intersection is the right one.
+//
+// The real steep fixtures show a shallow (~0.9 deg) support plane carrying the
+// whole steep workpiece inside the crop. Routing only by the main plane's tilt
+// then keeps the fixed robot-XYZ box, which reaches far beyond the surface the
+// other view ever observed. When the dominant structure sitting on the main
+// plane points elsewhere, that structure defines the crop frame instead.
+PlaneDiagnostic structuralOverlapPlane(const QVector<Point3D> &targetCrop,
+                                       const PlaneDiagnostic &sourcePlane,
+                                       const PlaneDiagnostic &targetPlane,
+                                       const IcpOptions &options)
+{
+    if(!targetPlane.valid)return {};
+    if(targetPlane.tiltDegrees>36.9f
+       ||(sourcePlane.valid&&sourcePlane.tiltDegrees>36.9f))return targetPlane;
+    const Bounds cropBounds=cloudBounds(targetCrop);
+    if(!cropBounds.valid)return {};
+    const QVector<Point3D> structural=structuralPoints(targetCrop,targetPlane,
+        options.structuralPlaneExclusionMm,cropBounds);
+    if(structural.size()<options.minimumStructuralPoints)return {};
+    const PlaneDiagnostic structuralPlane=pcaPlane(structural,
+        std::numeric_limits<float>::quiet_NaN(),&options);
+    if(!structuralPlane.valid)return {};
+    const float minimumCosine=float(std::cos(double(qDegreesToRadians(
+        qBound(0.0f,options.structuralFrameRouteDegrees,90.0f)))));
+    if(std::abs(QVector3D::dotProduct(structuralPlane.normal,targetPlane.normal))>=minimumCosine)return {};
+    return structuralPlane;
 }
 
 bool trackPlaneIdentity(const QVector<ConvertedCloud> &clouds,
@@ -1173,6 +1442,15 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
         return options.isCancelled && options.isCancelled();
     };
     correction->setToIdentity();
+    // Intra-pair parallelism for the correspondence search. It is independent of
+    // the outer frame parallelism: the per-pair loop stays serial and in scan
+    // order, only the search inside one iteration is chunked.
+    const int correspondenceTasks = options.parallelEnabled
+        ? (options.correspondenceParallelTasks > 0
+               ? options.correspondenceParallelTasks
+               : qMax(1, qMin(4, QThread::idealThreadCount() - 1)))
+        : 1;
+    diagnostic.icpCorrespondenceParallelTasks = correspondenceTasks;
     RegionTimer stageClock;
     if (stageTimes) stageClock.start(&stageTimes->preprocessMs);
     const QString planeIdentityReason = planeIdentityTracked
@@ -1263,6 +1541,7 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             ? sourcePlane.rejectionReason : targetPlane.rejectionReason;
         if (planeReason == QStringLiteral("plane_tilt_exceeds_limit")) {
             diagnostic.reason = planeReason;
+            diagnostic.failureCode = planeReason;
             diagnostic.steepPlaneRejectionReason = planeReason;
             return diagnostic;
         }
@@ -1288,18 +1567,20 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
     QVector<Point3D> overlapAlignedFull;
     const Bounds alignedTargetBounds=cloudBounds(target);
     Bounds actualOverlap;
+    // Routing decision, taken once per pair: an invalid plane means the legacy
+    // robot-XYZ box is used.
+    const PlaneDiagnostic overlapPlane=structuralOverlapPlane(targetCrop,sourcePlane,targetPlane,options);
+    const bool steepOverlapFrame=overlapPlane.valid;
     const auto rebuildActualOverlap = [&](const QMatrix4x4 &candidateCorrection) {
         overlapAlignedSource = sourceCrop;
         applyTransform(&overlapAlignedSource, candidateCorrection);
         overlapAlignedFull = source;
         applyTransform(&overlapAlignedFull, candidateCorrection);
-        const bool steepPlane = sourcePlane.valid && targetPlane.valid
-            && qMax(sourcePlane.tiltDegrees, targetPlane.tiltDegrees) > 36.9f;
-        if (steepPlane) {
-            const QVector3D origin = targetPlane.centroid;
-            const QVector3D axisU = targetPlane.axisU;
-            const QVector3D axisV = targetPlane.axisV;
-            const QVector3D axisN = targetPlane.normal;
+        if (steepOverlapFrame) {
+            const QVector3D origin = overlapPlane.centroid;
+            const QVector3D axisU = overlapPlane.axisU;
+            const QVector3D axisV = overlapPlane.axisV;
+            const QVector3D axisN = overlapPlane.normal;
             const Bounds sourceLocal = projectedBounds(overlapAlignedFull, origin, axisU, axisV, axisN);
             const Bounds targetLocal = projectedBounds(target, origin, axisU, axisV, axisN);
             actualOverlap = intersectBounds(sourceLocal, targetLocal);
@@ -1500,12 +1781,43 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
         float previousFitness=-1.0f;
         float previousRmse=std::numeric_limits<float>::max();
         const float voxel=options.voxelLevels[level];
-        const float distance=options.correspondenceDistances[level];
+        float distance=options.correspondenceDistances[level];
+        // The pre-alignment residual is the only pre-ICP visibility signal the
+        // pair has: when it is below the acceptance gate the pair is in a hard
+        // regime, and two adaptations below become active (wider first-level
+        // basin, trimmed correspondence set). Well behaved pairs keep the legacy
+        // numbers, so their corrections stay untouched.
+        const float prealignmentCoverage = diagnostic.coverageWithin3mmAfterPrealignment>0.0f
+            ? diagnostic.coverageWithin3mmAfterPrealignment : diagnostic.coverageWithin3mm;
+        const bool hardRegime = prealignmentCoverage>0.0f
+            && prealignmentCoverage<options.minimumDegenerateStructuralCoverage3mm;
+        // A pre-alignment p90 beyond the first-level correspondence radius means
+        // part of the surface starts outside the ICP basin; only then is the
+        // first level widened, so a pair that is already inside the basin keeps
+        // the historical numbers.
+        if(level==0 && options.adaptiveCorrespondenceRadius
+            && options.adaptiveCorrespondenceRadiusMm>distance
+            && diagnostic.nearestDistanceP90AfterPrealignment>2.0f){
+            distance=options.adaptiveCorrespondenceRadiusMm;
+            diagnostic.adaptiveCorrespondenceRadiusUsed=true;
+        }
+        float trimFraction=1.0f;
+        if(options.correspondenceTrimFraction>0.0f){
+            trimFraction=qBound(0.05f,options.correspondenceTrimFraction,1.0f);
+        }else if(options.autoTrimCorrespondences&&hardRegime){
+            trimFraction=float(qBound(0.25,2.0*double(prealignmentCoverage),0.9));
+        }
+        if(trimFraction<0.999f)diagnostic.correspondenceTrimFractionUsed=trimFraction;
         QVector<Point3D> moving;
         if (cache && cache->built && !cache->movingLevelBase[level].isEmpty()) {
             moving = cache->movingLevelBase[level];
         } else {
             moving = voxelDownsample(sourceCrop, voxel);
+            // The normal-compatibility gate needs a source normal as well; the
+            // estimate is cached with the level base so a relaxed retry reuses
+            // it instead of recomputing it.
+            if(options.normalCompatibilityDegrees>0.0f)
+                estimateNormals(&moving,qMax(voxel*4.0f,distance*1.5f));
             if (cache && cache->built && !moving.isEmpty())
                 cache->movingLevelBase[level] = moving;
         }
@@ -1596,9 +1908,9 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
         std::array<std::array<double,6>,6> lockedEigenvectors{};
         std::array<double,6> lockedEigenvalues{};
         bool degeneracyBasisLocked=false;
-        QVector<Point3D> trialBuffer;
         QVector<CorrespondencePair> correspondenceScratch;
         std::unordered_set<int> uniqueReferenceScratch;
+        QVector<float> residualScratch;
         int stallIterations=0;
         RegionTimer correspondenceClock;
         RegionTimer boundaryClock;
@@ -1606,7 +1918,9 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             if(cancelled()){diagnostic.reason=QStringLiteral("已取消");return diagnostic;}
             if (stageTimes) correspondenceClock.start(&stageTimes->correspondenceMs);
             last=estimateIncrement(moving,reference,index,distance,actualOverlap,
-                &correspondenceScratch,&uniqueReferenceScratch,&featureResiduals);
+                &correspondenceScratch,&uniqueReferenceScratch,&featureResiduals,
+                options.normalCompatibilityDegrees,trimFraction,&residualScratch,
+                &diagnostic.normalRejectedCorrespondences,correspondenceTasks);
             if (stageTimes) correspondenceClock.stop();
             if(!last.ok){diagnostic.reason=QStringLiteral("%1 mm 层有效对应少于 100").arg(voxel);return diagnostic;}
             if(!degeneracyBasisLocked){
@@ -1639,8 +1953,7 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             if (stageTimes) boundaryClock.start(&stageTimes->boundaryCheckMs);
             for(float factor:stepFactors){
                 const QMatrix4x4 candidate=scaledRigidIncrement(last.matrix,factor);
-                copyCloudPoints(&trialBuffer,moving);
-                if(countInsideBoundsAfterTransformXyz(&trialBuffer,candidate,actualOverlap,minimumInside)>=minimumInside){
+                if(countInsideBoundsTransformed(moving,candidate,actualOverlap,minimumInside)>=minimumInside){
                     overlapCandidateAvailable=true;
                     const QMatrix4x4 candidateCorrection=candidate*(*correction);
                     if(translationLength(candidateCorrection)>options.maximumCorrectionTranslation
@@ -1723,24 +2036,86 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
         validateStructural(options.structuralPlaneExclusionMm,&sourceStructural,&targetStructural);
         DistanceDiagnostic sourceToTarget=nearestDistanceDiagnostic(sourceStructural,targetStructural);
         DistanceDiagnostic targetToSource=nearestDistanceDiagnostic(targetStructural,sourceStructural);
-        diagnostic.structuralSourcePoints=sourceToTarget.total;
-        diagnostic.structuralTargetPoints=targetToSource.total;
-        diagnostic.structuralSourceMatchedPoints=sourceToTarget.matched;
-        diagnostic.structuralTargetMatchedPoints=targetToSource.matched;
-        diagnostic.structuralSourceToTargetP50=sourceToTarget.p50;
-        diagnostic.structuralSourceToTargetP90=sourceToTarget.p90;
-        diagnostic.structuralSourceToTargetP95=sourceToTarget.p95;
-        diagnostic.structuralTargetToSourceP50=targetToSource.p50;
-        diagnostic.structuralTargetToSourceP90=targetToSource.p90;
-        diagnostic.structuralTargetToSourceP95=targetToSource.p95;
-        diagnostic.structuralSourceToTargetCoverage3mm=sourceToTarget.within3;
-        diagnostic.structuralSourceToTargetCoverage5mm=sourceToTarget.within5;
-        diagnostic.structuralSourceToTargetCoverage10mm=sourceToTarget.within10;
-        diagnostic.structuralTargetToSourceCoverage3mm=targetToSource.within3;
-        diagnostic.structuralTargetToSourceCoverage5mm=targetToSource.within5;
-        diagnostic.structuralTargetToSourceCoverage10mm=targetToSource.within10;
-        diagnostic.structuralBidirectionalCoverage3mm=qMin(sourceToTarget.within3,targetToSource.within3);
-        diagnostic.structuralBidirectionalCoverage5mm=qMin(sourceToTarget.within5,targetToSource.within5);
+        // Evidence floor: an absolute count plus a share of the cropped
+        // structural points, so a pair is never judged on a handful of hits.
+        const auto evidenceFloor = [&](const DistanceDiagnostic &distances) {
+            return qMax(options.minimumStructuralPoints,
+                        int(std::ceil(double(options.minimumStructuralMatchedRatio)
+                                      * double(qMax(1,distances.total)))));
+        };
+        // Central stamping of every structural metric: the legacy total-point
+        // fields stay byte-for-byte what the hand-written report and the
+        // regression baseline expect, and the matched-point view is added next
+        // to them. Both the strict pass and the 2 mm relaxed pass reuse this.
+        const auto stampStructuralDistances = [&](const DistanceDiagnostic &s2t,
+                                                  const DistanceDiagnostic &t2s) {
+            diagnostic.structuralSourcePoints=s2t.total;
+            diagnostic.structuralTargetPoints=t2s.total;
+            diagnostic.structuralSourceMatchedPoints=s2t.matched;
+            diagnostic.structuralTargetMatchedPoints=t2s.matched;
+            diagnostic.structuralSourceToTargetP50=s2t.p50;
+            diagnostic.structuralSourceToTargetP90=s2t.p90;
+            diagnostic.structuralSourceToTargetP95=s2t.p95;
+            diagnostic.structuralTargetToSourceP50=t2s.p50;
+            diagnostic.structuralTargetToSourceP90=t2s.p90;
+            diagnostic.structuralTargetToSourceP95=t2s.p95;
+            diagnostic.structuralSourceToTargetCoverage3mm=s2t.within3;
+            diagnostic.structuralSourceToTargetCoverage5mm=s2t.within5;
+            diagnostic.structuralSourceToTargetCoverage10mm=s2t.within10;
+            diagnostic.structuralTargetToSourceCoverage3mm=t2s.within3;
+            diagnostic.structuralTargetToSourceCoverage5mm=t2s.within5;
+            diagnostic.structuralTargetToSourceCoverage10mm=t2s.within10;
+            diagnostic.structuralBidirectionalCoverage3mm=qMin(s2t.within3,t2s.within3);
+            diagnostic.structuralBidirectionalCoverage5mm=qMin(s2t.within5,t2s.within5);
+            diagnostic.structuralSourceToTargetCoverage3mmOfMatched=s2t.within3OfMatched();
+            diagnostic.structuralSourceToTargetCoverage5mmOfMatched=s2t.within5OfMatched();
+            diagnostic.structuralTargetToSourceCoverage3mmOfMatched=t2s.within3OfMatched();
+            diagnostic.structuralTargetToSourceCoverage5mmOfMatched=t2s.within5OfMatched();
+            diagnostic.structuralBidirectionalCoverage3mmOfMatched=
+                qMin(s2t.within3OfMatched(),t2s.within3OfMatched());
+            diagnostic.structuralBidirectionalCoverage5mmOfMatched=
+                qMin(s2t.within5OfMatched(),t2s.within5OfMatched());
+            diagnostic.structuralSourceMatchRatio=s2t.matchedRatio();
+            diagnostic.structuralTargetMatchRatio=t2s.matchedRatio();
+            diagnostic.structuralBidirectionalMatchRatio=qMin(s2t.matchedRatio(),t2s.matchedRatio());
+            diagnostic.structuralSourceMatchedEvidenceFloor=evidenceFloor(s2t);
+            diagnostic.structuralTargetMatchedEvidenceFloor=evidenceFloor(t2s);
+        };
+        // Default rule: evidence floor on the matched counts, then accuracy
+        // among the matched points. The opt-in legacy rule keeps the historical
+        // total-point counts and total-point ratios unchanged.
+        const auto evaluateAcceptance = [&](const DistanceDiagnostic &s2t,
+                                            const DistanceDiagnostic &t2s,
+                                            bool relaxedBranch,
+                                            bool *enoughStructure,
+                                            bool *enoughCoverage) {
+            *enoughStructure=false;*enoughCoverage=false;
+            const bool countsOk = options.structuralCoverageOfMatched
+                ? (s2t.matched>=evidenceFloor(s2t) && t2s.matched>=evidenceFloor(t2s))
+                : (s2t.total>=options.minimumStructuralPoints
+                   && t2s.total>=options.minimumStructuralPoints);
+            if(!countsOk)return;
+            *enoughStructure=true;
+            const int minimumStructure = options.structuralCoverageOfMatched
+                ? qMin(s2t.matched,t2s.matched) : qMin(s2t.total,t2s.total);
+            const float coverage3 = options.structuralCoverageOfMatched
+                ? diagnostic.structuralBidirectionalCoverage3mmOfMatched
+                : diagnostic.structuralBidirectionalCoverage3mm;
+            const float coverage5 = options.structuralCoverageOfMatched
+                ? diagnostic.structuralBidirectionalCoverage5mmOfMatched
+                : diagnostic.structuralBidirectionalCoverage5mm;
+            const bool lowCountThresholds = relaxedBranch
+                ? !diagnostic.steepPlaneDetected
+                : (options.relaxedStructuralValidation && minimumStructure<500
+                   && !diagnostic.steepPlaneDetected);
+            if(lowCountThresholds){
+                *enoughCoverage=coverage3>=options.minimumLowCountStructuralCoverage3mm
+                    &&coverage5>=options.minimumLowCountStructuralCoverage5mm;
+            }else{
+                *enoughCoverage=coverage3>=options.minimumDegenerateStructuralCoverage3mm;
+            }
+        };
+        stampStructuralDistances(sourceToTarget,targetToSource);
         diagnostic.steepPlaneDetected = sourcePlane.valid && targetPlane.valid
             && qMax(sourcePlane.tiltDegrees, targetPlane.tiltDegrees) > 36.9f;
         diagnostic.steepPlaneFeatureCountSource = sourceToTarget.total;
@@ -1757,58 +2132,64 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
                     .arg(sourceToTarget.total).arg(targetToSource.total).arg(options.minimumStructuralPoints);
             diagnostic.structuralValidationReason = diagnostic.steepPlaneRejectionReason;
             diagnostic.reason = diagnostic.steepPlaneRejectionReason;
+            diagnostic.failureCode = QStringLiteral("steep_plane_feature_insufficient");
             return diagnostic;
         }
-        bool enoughStructure=sourceToTarget.total>=options.minimumStructuralPoints
-            &&targetToSource.total>=options.minimumStructuralPoints;
-        bool enoughCoverage=false;
-        if(enoughStructure){
-            const int minimumStructure=qMin(sourceToTarget.total,targetToSource.total);
-            if(options.relaxedStructuralValidation && minimumStructure<500 && !diagnostic.steepPlaneDetected){
-                enoughCoverage=diagnostic.structuralBidirectionalCoverage3mm>=options.minimumLowCountStructuralCoverage3mm
-                    &&diagnostic.structuralBidirectionalCoverage5mm>=options.minimumLowCountStructuralCoverage5mm;
-            }else{
-                enoughCoverage=diagnostic.structuralBidirectionalCoverage3mm>=options.minimumDegenerateStructuralCoverage3mm;
-            }
-        }else if(options.relaxedStructuralValidation){
+        bool enoughStructure=false,enoughCoverage=false;
+        evaluateAcceptance(sourceToTarget,targetToSource,false,&enoughStructure,&enoughCoverage);
+        if(!enoughStructure && options.relaxedStructuralValidation){
             // The relaxed pass may recover points hidden by the strict +/-3 mm plane band.
             validateStructural(2.0f,&sourceStructural,&targetStructural);
-            const DistanceDiagnostic relaxedSourceToTarget=nearestDistanceDiagnostic(sourceStructural,targetStructural);
-            const DistanceDiagnostic relaxedTargetToSource=nearestDistanceDiagnostic(targetStructural,sourceStructural);
-            sourceToTarget=relaxedSourceToTarget;
-            targetToSource=relaxedTargetToSource;
-            diagnostic.structuralSourcePoints=relaxedSourceToTarget.total;
-            diagnostic.structuralTargetPoints=relaxedTargetToSource.total;
-            diagnostic.structuralSourceMatchedPoints=relaxedSourceToTarget.matched;
-            diagnostic.structuralTargetMatchedPoints=relaxedTargetToSource.matched;
-            diagnostic.structuralSourceToTargetCoverage3mm=relaxedSourceToTarget.within3;
-            diagnostic.structuralSourceToTargetCoverage5mm=relaxedSourceToTarget.within5;
-            diagnostic.structuralSourceToTargetCoverage10mm=relaxedSourceToTarget.within10;
-            diagnostic.structuralTargetToSourceCoverage3mm=relaxedTargetToSource.within3;
-            diagnostic.structuralTargetToSourceCoverage5mm=relaxedTargetToSource.within5;
-            diagnostic.structuralTargetToSourceCoverage10mm=relaxedTargetToSource.within10;
-            diagnostic.structuralBidirectionalCoverage3mm=qMin(relaxedSourceToTarget.within3,relaxedTargetToSource.within3);
-            diagnostic.structuralBidirectionalCoverage5mm=qMin(relaxedSourceToTarget.within5,relaxedTargetToSource.within5);
-            enoughStructure=diagnostic.structuralSourcePoints>=options.minimumStructuralPoints
-                &&diagnostic.structuralTargetPoints>=options.minimumStructuralPoints;
-            enoughCoverage=enoughStructure
-                && (diagnostic.steepPlaneDetected
-                    ? diagnostic.structuralBidirectionalCoverage3mm>=options.minimumDegenerateStructuralCoverage3mm
-                    : diagnostic.structuralBidirectionalCoverage3mm>=options.minimumLowCountStructuralCoverage3mm
-                      &&diagnostic.structuralBidirectionalCoverage5mm>=options.minimumLowCountStructuralCoverage5mm);
+            sourceToTarget=nearestDistanceDiagnostic(sourceStructural,targetStructural);
+            targetToSource=nearestDistanceDiagnostic(targetStructural,sourceStructural);
+            stampStructuralDistances(sourceToTarget,targetToSource);
+            evaluateAcceptance(sourceToTarget,targetToSource,true,&enoughStructure,&enoughCoverage);
         }
+        diagnostic.structuralCoverageMode = options.structuralCoverageOfMatched
+            ? QStringLiteral("matched_ratio") : QStringLiteral("legacy_total");
+        diagnostic.acceptanceRule = options.structuralCoverageOfMatched
+            ? QStringLiteral("matched>=max(%1, %2 pct of cropped structural) && min(cov3_of_matched)>=%3")
+                .arg(options.minimumStructuralPoints)
+                .arg(QString::number(double(options.minimumStructuralMatchedRatio)*100.0,'g',4))
+                .arg(QString::number(double(options.minimumDegenerateStructuralCoverage3mm),'g',4))
+            : QStringLiteral("total>=%1 && min(cov3_of_total)>=%2")
+                .arg(options.minimumStructuralPoints)
+                .arg(QString::number(double(options.minimumDegenerateStructuralCoverage3mm),'g',4));
+        // Visibility is reported, never used to reject: a low matched ratio
+        // means the pair is verified on a small subset, which the operator must
+        // see in the report.
+        diagnostic.visibilityWarning =
+            diagnostic.structuralBidirectionalMatchRatio < options.visibilityWarningRatio;
         if(!enoughStructure||!enoughCoverage){
-            diagnostic.structuralValidationReason=!enoughStructure
-                ?QStringLiteral("重叠区结构点不足：%1/%2，最低各 %3")
-                    .arg(sourceToTarget.total).arg(targetToSource.total).arg(options.minimumStructuralPoints)
-                :QStringLiteral("结构点覆盖率不足：双向 3 mm=%1，5 mm=%2")
-                    .arg(diagnostic.structuralBidirectionalCoverage3mm,0,'f',4)
-                    .arg(diagnostic.structuralBidirectionalCoverage5mm,0,'f',4);
+            if(!enoughStructure){
+                diagnostic.failureCode=QStringLiteral("structural_points_insufficient");
+                diagnostic.structuralValidationReason=options.structuralCoverageOfMatched
+                    ? QStringLiteral("结构点命中不足（structural_points_insufficient）：命中 %1/%2 与 %3/%4，证据下限 %5/%6")
+                        .arg(sourceToTarget.matched).arg(sourceToTarget.total)
+                        .arg(targetToSource.matched).arg(targetToSource.total)
+                        .arg(diagnostic.structuralSourceMatchedEvidenceFloor)
+                        .arg(diagnostic.structuralTargetMatchedEvidenceFloor)
+                    : QStringLiteral("重叠区结构点不足：%1/%2，最低各 %3")
+                        .arg(sourceToTarget.total).arg(targetToSource.total).arg(options.minimumStructuralPoints);
+            }else{
+                diagnostic.failureCode=QStringLiteral("structural_coverage_insufficient");
+                diagnostic.structuralValidationReason=options.structuralCoverageOfMatched
+                    ? QStringLiteral("结构点覆盖率不足（structural_coverage_insufficient）：命中点内双向 3 mm=%1，5 mm=%2")
+                        .arg(diagnostic.structuralBidirectionalCoverage3mmOfMatched,0,'f',4)
+                        .arg(diagnostic.structuralBidirectionalCoverage5mmOfMatched,0,'f',4)
+                    : QStringLiteral("结构点覆盖率不足：双向 3 mm=%1，5 mm=%2")
+                        .arg(diagnostic.structuralBidirectionalCoverage3mm,0,'f',4)
+                        .arg(diagnostic.structuralBidirectionalCoverage5mm,0,'f',4);
+            }
             diagnostic.reason=diagnostic.structuralValidationReason;
             return diagnostic;
         }
         diagnostic.structuralValidationPassed=true;
-        diagnostic.structuralValidationReason=QStringLiteral("已通过结构点双向覆盖验收");
+        diagnostic.structuralValidationReason=options.structuralCoverageOfMatched
+            ? QStringLiteral("已通过结构点双向覆盖验收（命中点内 3 mm=%1，命中率=%2）")
+                .arg(diagnostic.structuralBidirectionalCoverage3mmOfMatched,0,'f',4)
+                .arg(diagnostic.structuralBidirectionalMatchRatio,0,'f',4)
+            : QStringLiteral("已通过结构点双向覆盖验收");
     }else{
         diagnostic.structuralValidationPassed=true;
         diagnostic.structuralValidationReason=QStringLiteral("结构点验收已禁用");
@@ -1821,21 +2202,55 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
 
 QString classifyBlocking(const IcpDiagnostics &diagnostic);
 
-bool eligibleForRelaxedRetry(const IcpDiagnostics &diagnostic) {
-    if (diagnostic.accepted || diagnostic.reason == QStringLiteral("已取消")) return false;
+bool eligibleForRelaxedRetry(const IcpDiagnostics &diagnostic, QString *skipReason = nullptr) {
+    if (diagnostic.accepted || diagnostic.reason == QStringLiteral("已取消")) {
+        if (skipReason) *skipReason = QStringLiteral("该对已接受或已取消");
+        return false;
+    }
+    // Conservative pre-check before paying for a full second attempt: when both
+    // directions hold less than half of the evidence the default rule already
+    // needed, a wider correction budget cannot create correspondences that were
+    // never observed.
+    if (diagnostic.failureCode == QStringLiteral("structural_points_insufficient")) {
+        const int sourceFloor = qMax(1, diagnostic.structuralSourceMatchedEvidenceFloor / 2);
+        const int targetFloor = qMax(1, diagnostic.structuralTargetMatchedEvidenceFloor / 2);
+        if (diagnostic.structuralSourceMatchedPoints < sourceFloor
+            && diagnostic.structuralTargetMatchedPoints < targetFloor) {
+            if (skipReason) *skipReason = QStringLiteral(
+                "命中证据不足（%1/%2 与 %3/%4）且低于证据下限一半，放宽重试无法补出对应点")
+                .arg(diagnostic.structuralSourceMatchedPoints)
+                .arg(diagnostic.structuralSourceMatchedEvidenceFloor)
+                .arg(diagnostic.structuralTargetMatchedPoints)
+                .arg(diagnostic.structuralTargetMatchedEvidenceFloor);
+            return false;
+        }
+    }
     // Retry only well-defined geometric recovery cases (safety boundary,
     // pre-alignment boundary or structural validation). no_overlap, user
     // cancellation and obvious input errors are never retried.
     const QString blocking = classifyBlocking(diagnostic);
-    return blocking == QStringLiteral("safety_boundary")
+    const bool eligible = blocking == QStringLiteral("safety_boundary")
         || blocking == QStringLiteral("prealignment_boundary")
         || blocking == QStringLiteral("structural_validation");
+    if (!eligible && skipReason)
+        *skipReason = QStringLiteral("阻塞类别 %1 不在放宽重试范围").arg(blocking);
+    return eligible;
 }
 
 QString classifyBlocking(const IcpDiagnostics &diagnostic)
 {
     if (diagnostic.accepted) return QStringLiteral("accepted");
     if (diagnostic.reason == QStringLiteral("已取消")) return QStringLiteral("cancelled");
+    // Machine-readable codes win over the legacy message matching below; the
+    // substring rules stay as a fallback for paths that do not set a code yet.
+    if (!diagnostic.failureCode.isEmpty()) {
+        if (diagnostic.failureCode == QStringLiteral("plane_tilt_exceeds_limit")
+            || diagnostic.failureCode == QStringLiteral("steep_plane_feature_insufficient"))
+            return diagnostic.failureCode;
+        if (diagnostic.failureCode == QStringLiteral("structural_points_insufficient")
+            || diagnostic.failureCode == QStringLiteral("structural_coverage_insufficient"))
+            return QStringLiteral("structural_validation");
+    }
     if (diagnostic.reason == QStringLiteral("plane_tilt_exceeds_limit")) return QStringLiteral("plane_tilt_exceeds_limit");
     if (diagnostic.reason.contains(QStringLiteral("steep_plane_feature_insufficient"))) return QStringLiteral("steep_plane_feature_insufficient");
     if (diagnostic.stoppedAtSafetyBoundary || diagnostic.safetyConstrainedStepReductions > 0
@@ -2085,7 +2500,8 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
         diagnostic.attemptCount=1;
         diagnostic.primaryAttemptReason=diagnostic.reason;
         diagnostic.blockingClass=classifyBlocking(diagnostic);
-        if(eligibleForRelaxedRetry(diagnostic)){
+        QString retrySkipReason;
+        if(eligibleForRelaxedRetry(diagnostic,&retrySkipReason)){
             if(cancellationRequested(icp)){result.cancelled=true;result.error=QStringLiteral("已取消");return result;}
             diagnostic.relaxedRetryAttempted=true;
             result.diagnostics+=QStringLiteral("scan %1 retry start: class=%2, reason=%3\n")
@@ -2133,9 +2549,41 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
                 .arg(diagnostic.relaxedRetryAccepted ? QStringLiteral("true") : QStringLiteral("false"))
                 .arg(diagnostic.relaxedRetryAccepted ? QStringLiteral("accepted") : classifyBlocking(retry))
                 .arg(diagnostic.relaxedRetryReason);
+        }else{
+            diagnostic.relaxedRetrySkippedReason=retrySkipReason;
+            if(!retrySkipReason.isEmpty())
+                result.diagnostics+=QStringLiteral("scan %1 retry skipped: %2\n")
+                    .arg(index+1).arg(retrySkipReason);
         }
         diagnostic.blockingClass=classifyBlocking(diagnostic);
         result.icpDiagnostics.push_back(diagnostic);
+        // Module-owned, machine-readable acceptance line. It surfaces the new
+        // matched-point accounting through the existing diagnostics string, so
+        // the tool, the GUI diagnostics panel and the log files show it without
+        // any application-side change.
+        result.diagnostics+=QStringLiteral(
+            "pair %1 metrics: matched=%2/%3(%4) matched_target=%5/%6(%7) cov3_of_matched=%8 cov5_of_matched=%9 evidence_floor=%10/%11 visibility=%12 rule=%13 accepted=%14 trim=%16 normal_rejected=%17 coarse_trimmed=%18->%19 corr_xyz=%20,%21,%22 corr_angle=%23 reason=%15\n")
+            .arg(index+1)
+            .arg(diagnostic.structuralSourceMatchedPoints).arg(diagnostic.structuralSourcePoints)
+            .arg(QString::number(double(diagnostic.structuralSourceMatchRatio),'f',4))
+            .arg(diagnostic.structuralTargetMatchedPoints).arg(diagnostic.structuralTargetPoints)
+            .arg(QString::number(double(diagnostic.structuralTargetMatchRatio),'f',4))
+            .arg(QString::number(double(diagnostic.structuralBidirectionalCoverage3mmOfMatched),'f',4))
+            .arg(QString::number(double(diagnostic.structuralBidirectionalCoverage5mmOfMatched),'f',4))
+            .arg(diagnostic.structuralSourceMatchedEvidenceFloor)
+            .arg(diagnostic.structuralTargetMatchedEvidenceFloor)
+            .arg(diagnostic.visibilityWarning?QStringLiteral("warn"):QStringLiteral("ok"))
+            .arg(diagnostic.structuralCoverageMode.isEmpty()?QStringLiteral("legacy_total"):diagnostic.structuralCoverageMode)
+            .arg(diagnostic.accepted?QStringLiteral("true"):QStringLiteral("false"))
+            .arg(diagnostic.reason)
+            .arg(QString::number(double(diagnostic.correspondenceTrimFractionUsed),'f',3))
+            .arg(diagnostic.normalRejectedCorrespondences)
+            .arg(QString::number(double(diagnostic.tangentCoarseScoreBefore),'f',4))
+            .arg(QString::number(double(diagnostic.tangentCoarseScoreAfter),'f',4))
+            .arg(QString::number(double(diagnostic.correctionX),'f',5))
+            .arg(QString::number(double(diagnostic.correctionY),'f',5))
+            .arg(QString::number(double(diagnostic.correctionZ),'f',5))
+            .arg(QString::number(double(diagnostic.correctionAngleDegrees),'f',5));
         if(diagnostic.accepted){
             const QMatrix4x4 globalCorrection=result.registrationCorrections[index-1]*correction;
             result.registrationCorrections[index]=globalCorrection;

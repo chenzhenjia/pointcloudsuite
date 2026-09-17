@@ -1,4 +1,5 @@
 #include "stitchingwindow.h"
+#include <pcv/interface/stitching_interface.h>
 #include <pcv/registration/handeye_transform.h>
 #include "ui_stitchingwindow.h"
 #include <pcv/io/ply_writer.h>
@@ -556,6 +557,7 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
                               const pointcloud::IcpOptions &icp,
                               const SeamFusionOptions &seamOptions,
                               const QString &outputDirectory,
+                              const QString &calibrationPath,
                               double previewRatio,
                               bool writeSources,
                               bool diagnosticOutput,
@@ -574,19 +576,58 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
     runtimeIcp.isCancelled = [cancelRequested]() {
         return cancelRequested && cancelRequested->load();
     };
-    result.merge = pointcloud::mergePlyCloudsInWorld(inputs, runtimeIcp,
-        [&reportProgress](float value, const QString &message) {
-            reportProgress(qRound(value * 78.0f), message);
-        });
-    if (!result.merge.ok) {
-        if (result.merge.cancelled) {
+    pcv::interface::StitchingRequest request;
+    request.input.calibrationPath = calibrationPath;
+    request.registration.options = runtimeIcp;
+    request.registration.options.enabled = icp.enabled;
+    request.registration.sampleStride = icp.sampleStride;
+    request.registration.parallelEnabled = icp.parallelEnabled;
+    request.registration.maxParallelTasks = icp.maxParallelTasks;
+    request.registration.collectDiagnosticFrames = icp.collectDiagnosticFrames;
+    request.registration.structuralCoverageOfMatched = icp.structuralCoverageOfMatched;
+    request.registration.minimumStructuralMatchedRatio = icp.minimumStructuralMatchedRatio;
+    request.registration.visibilityWarningRatio = icp.visibilityWarningRatio;
+    request.registration.tangentCoarseTrimmedScore = icp.tangentCoarseTrimmedScore;
+    request.registration.correspondenceParallelTasks = icp.correspondenceParallelTasks;
+    request.registration.options.cancellation = cancelRequested;
+    request.registration.options.isCancelled = [cancelRequested]() {
+        return cancelRequested && cancelRequested->load();
+    };
+    request.seam.enabled = seamOptions.enabled;
+    request.seam.halfWidthMm = seamOptions.halfWidth;
+    request.artifacts.outputDirectory = outputDirectory;
+    request.artifacts.allowOverwrite = true;
+    request.artifacts.previewRatio = previewRatio;
+    request.artifacts.writeSourceClouds = writeSources;
+    request.artifacts.writeDiagnosticFrames = diagnosticOutput;
+    request.isCancelled = [cancelRequested]() {
+        return cancelRequested && cancelRequested->load();
+    };
+    request.progress = [&reportProgress](float value, const QString &message) {
+        reportProgress(qRound(value * 78.0f), message);
+    };
+    for (const pointcloud::WorldCloudInput &input : inputs) {
+        pcv::interface::StitchingFrameInput frame;
+        frame.plyPath = input.filePath;
+        frame.startPose = pointcloud::matrixToRobotPose(input.startBaseFromFlange);
+        frame.endPose = pointcloud::matrixToRobotPose(input.endBaseFromFlange);
+        request.input.frames.push_back(frame);
+    }
+    const pcv::interface::StitchingResult shared = pcv::interface::stitch(request);
+    result.merge = shared.merge;
+    result.merge.points = shared.points;
+    result.merge.icpDiagnostics = shared.icpDiagnostics;
+    result.merge.diagnostics = shared.diagnostics;
+    result.seamFusion = shared.seamFusion;
+    if (!shared.success) {
+        if (shared.cancelled) {
             result.cancelled = true;
             return result;
         }
-        result.error = result.merge.error.isEmpty()
+        result.error = shared.message.isEmpty()
             ? (result.transformOnly ? QObject::tr("点云手眼坐标转换失败")
                                     : QObject::tr("点云世界坐标转换或配准失败"))
-            : result.merge.error;
+            : shared.message;
         return result;
     }
     result.registrationAccepted = true;
@@ -604,6 +645,20 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
         for(int index=1;index<result.merge.icpDiagnostics.size();++index)
             result.registrationApplied=result.registrationApplied||result.merge.icpDiagnostics[index].accepted;
     }
+    result.mergedFile = shared.manifest.formalPly.isEmpty() ? shared.outputPly : shared.manifest.formalPly;
+    result.previewFile = shared.manifest.previewPly;
+    result.mappingFile = shared.manifest.mappingFile;
+    result.reportFile = shared.manifest.reportJson;
+    result.formalOutput = true;
+    result.ok = true;
+    result.seamFusionApplied = !shared.seamDiagnostics.isEmpty();
+    result.previewCount = 0;
+    result.merge.diagnostics += QStringLiteral("production_pipeline=pcv::interface::stitch\n");
+    // v0.4 production boundary: module 30 has already committed the formal
+    // PLY, preview, mapping and manifest through module 10's transaction.
+    // The legacy application writer below remains only as a recorded rollback
+    // point for the compatibility-cleanup batch and is unreachable in v0.4.
+    return result;
     QDir directory(outputDirectory);
     reportProgress(79, QObject::tr("正在准备输出目录"));
     if (!directory.exists() && !QDir().mkpath(outputDirectory)) {
@@ -669,13 +724,13 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
         : (result.registrationAccepted
             ? QObject::tr("正在按真实重叠区执行接缝融合")
             : QObject::tr("配准失败，跳过正式接缝融合")));
-    if (!result.transformOnly && result.registrationAccepted) {
+    if (!result.transformOnly && result.registrationAccepted && !shared.seamFusion.ok) {
         QElapsedTimer seamClock;
         seamClock.start();
         result.seamFusion = applyTrajectorySeamFusion(&result.merge, inputs, seamOptions);
         result.seamFusionMs = seamClock.elapsed();
     }
-    else {
+    else if (!shared.seamFusion.ok) {
         result.seamFusion.inputPoints = result.merge.points.size();
         result.seamFusion.outputPoints = result.merge.points.size();
         result.seamFusion.ok = true;
@@ -1049,6 +1104,7 @@ void StitchingWindow::startStitching()
         return;
     }
     const QString output = QDir::fromNativeSeparators(ui->le_output_directory->text().trimmed());
+    const QString calibrationPath = ui->le_calibration_path->text().trimmed();
     if (output.isEmpty()) {
         QMessageBox::warning(this, tr("输出无效"), tr("请选择输出目录"));
         return;
@@ -1085,9 +1141,9 @@ void StitchingWindow::startStitching()
             appendLog(message);
         }, Qt::QueuedConnection);
     };
-    m_watcher->setFuture(QtConcurrent::run([inputs, icp, seamOptions, output, previewRatio, writeSources,
+    m_watcher->setFuture(QtConcurrent::run([inputs, icp, seamOptions, output, calibrationPath, previewRatio, writeSources,
                                             diagnosticOutput, cancel = m_cancelRequested, progress]() {
-        return runStitching(inputs, icp, seamOptions, output, previewRatio, writeSources,
+        return runStitching(inputs, icp, seamOptions, output, calibrationPath, previewRatio, writeSources,
                             diagnosticOutput, cancel, progress);
     }));
 }

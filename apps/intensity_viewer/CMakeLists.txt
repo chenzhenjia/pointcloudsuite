@@ -15,7 +15,7 @@ target_link_libraries(intensity_viewer
         Qt::Gui
         Qt::Widgets
         Qt::Concurrent
-        pcv_m10_pointcloud_read
+        pcv_m10_pointcloud_io
 )
 
 if(PCV_BUILD_EXPERIMENTAL_CAMERA)

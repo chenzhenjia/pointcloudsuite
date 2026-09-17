@@ -79,6 +79,18 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 
 ## 8. 变更记录
 
+### 2026-09-17（PointCloudStitch 高倾角配准修复第一轮：命中口径 + 鲁棒粗对齐 + 提速）
+
+- 登记主模块 `40_pointcloud_matching`，配套 `30_pointcloud_stitch` 选项透传与失败信息细化；未改动坐标链、手眼矩阵、PLY 读写、渲染与平面输出模块。
+- 证据基线与根因：现网 `stitching_report.json` 显示失败数据集的结构点 15 mm 命中率只有 0.182 / 0.229 / 0.376 / 0.487，而旧验收把 3 mm 覆盖率除以全部裁剪区结构点（门槛 0.65），在这些数据上任何刚体变换都无法满足；同期命中点内覆盖率为 0.633 / 0.639 / 0.519 / 0.716。另外 `5_40` 的切向粗对齐已找到约 8 mm 的正确候选，却因 5 mm 覆盖率增益只有 1.55% 低于 5% 门槛被丢弃。
+- 契约变更（已确认）：默认验收口径改为“命中点分母 + 证据门槛（命中点 ≥ max(minimumStructuralPoints, 10% 裁剪区结构点数)）”，命中率不再作为硬门槛，低于 0.25 只输出警告；失败原因码区分为 `structural_points_insufficient` 与 `structural_coverage_insufficient`；`structuralCoverageOfMatched=false` 可逐位复现旧行为。对外错误码仍为 `PCV_STITCH_001`，fail-closed 语义不放松。
+- 配准质量：切向粗对齐目标函数默认改为 trimmed 最近邻目标（最小 K 个距离均值，K=25%），旧覆盖率目标保留可切换；新增可选 trim 加权（默认关，实测在平面主导配对上会拉走已恢复位姿）、预对齐 p90 > 2 mm 时首层对应半径放宽到 4 mm、法向一致性门控与按主结构方向的裁剪框路由（两者均实现但**默认关闭**，见下条回放证据）。
+- 提速：ICP 内对应搜索分块并行（块序合并，与串行逐位一致）、步长试探改为不落地的变换计数、relaxed retry 增加证据预判并记录跳过原因。速度指标按确认结论不设硬指标，以“判定一致 + 可测变快”为准。
+- 文件：`modules/40_pointcloud_matching/include/pcv/registration/multiframe_registration.h`、`modules/40_pointcloud_matching/src/multiframe_registration.cpp`、`modules/30_pointcloud_stitch/include/pcv/interface/stitching_interface.h`、`modules/30_pointcloud_stitch/src/stitching_interface.cpp`、`tests/unit/registration/multiframe_registration_tests.cpp`、`docs/modules/30_pointcloud_stitch.md`、`docs/modules/40_pointcloud_matching.md`。
+- 验证：Debug 构建成功、`ctest -C Debug` 14/14 通过（含 4 组新增用例：命中口径与证据门槛、4 mm 切向偏移下 trimmed/legacy 判定差异、结构裁剪框路由、稠密夹具上 ICP 内并行逐位等价）。
+- 真实数据回放结果（Release `registration_diagnostic`，输入为原 PLY 硬链接 + 由报告反解位姿）：`1/test_1` 仍接受，修正与基线差 0.008 mm / 0.0009 度（在 0.01 mm/0.005 度预算内）；`5_40/test` **由拒绝转为接受**（命中率 0.2246、命中点内 3 mm 0.6566、修正 (-3.7708, -2.7613, 1.6065)/0.1154 度，严格档直接通过）；`6_50/test` 仍拒绝（命中率 0.3703、命中点内 3 mm 0.4989），按停止判据不放宽门槛。法向门控与结构路由在 `1` 组上把修正漂移到约 1.8 mm，故两者默认关闭、仅作为显式开关保留。
+- 未验证项（不得视为已通过）：`4_30` 与 `3` 两组未回放；提速与基线报告不是同一构建配置，同配置 A/B 未执行；法向门控/结构路由在真实数据上只有“会改变结果”的证据、没有“更好”的证据；Release 全量 CTest 与 GUI 人工冒烟未执行。
+
 ### 2026-09-15（PointCloudStitch 间歇 0xc0000005：并行路径 Qt 隐式共享容器并发 detach）
 
 - 登记主模块 `30_pointcloud_stitch`，同步审计 `40_pointcloud_matching`；未提交、未推送、未删除任何旧构建目录，陡峭平面相关未提交修改（`apps/pointcloudstitch/*`、`docs/modules/40_pointcloud_matching.md`、`modules/40_pointcloud_matching/{include,src}`、`tests/unit/registration/multiframe_registration_tests.cpp`）全部保留。

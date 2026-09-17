@@ -1,4 +1,4 @@
 #pragma once
 
-// Compatibility forwarding header; canonical implementation moved to module 80.
-#include "../../../modules/80_plane_output/include/pcv/output/plane_output.h"
+// Compatibility forwarding header; canonical implementation moved to module 10.
+#include "../../../modules/10_pointcloud_io/include/pcv/io/plane_output.h"
