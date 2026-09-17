@@ -45,6 +45,11 @@ struct Bounds {
                       std::numeric_limits<float>::lowest(),
                       std::numeric_limits<float>::lowest()};
     bool valid = false;
+    bool oriented = false;
+    QVector3D origin;
+    QVector3D axisU{1.0f,0.0f,0.0f};
+    QVector3D axisV{0.0f,1.0f,0.0f};
+    QVector3D axisN{0.0f,0.0f,1.0f};
 };
 
 struct ConvertedCloud {
@@ -117,6 +122,18 @@ struct Increment {
     bool ok = false;
 };
 
+struct FeatureResidualOptions {
+    bool enabled = false;
+    QVector3D normal;
+    QVector3D origin;
+    QVector3D axisU;
+    QVector3D axisV;
+    float offset = 0.0f;
+    float planeExclusion = 0.0f;
+    float boundaryWidth = 2.0f;
+    Bounds boundaryBounds;
+};
+
 bool finitePoint(const Point3D &point) {
     return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
 }
@@ -157,10 +174,19 @@ Bounds cloudBounds(const QVector<Point3D> &points) {
 }
 
 bool insideBounds(const QVector3D &point, const Bounds &bounds) {
-    return bounds.valid
-        && point.x()>=bounds.minimum.x()&&point.x()<=bounds.maximum.x()
-        && point.y()>=bounds.minimum.y()&&point.y()<=bounds.maximum.y()
-        && point.z()>=bounds.minimum.z()&&point.z()<=bounds.maximum.z();
+    if (!bounds.valid) return false;
+    if (bounds.oriented) {
+        const QVector3D delta = point - bounds.origin;
+        const QVector3D local(QVector3D::dotProduct(delta, bounds.axisU),
+                              QVector3D::dotProduct(delta, bounds.axisV),
+                              QVector3D::dotProduct(delta, bounds.axisN));
+        return local.x()>=bounds.minimum.x()&&local.x()<=bounds.maximum.x()
+            &&local.y()>=bounds.minimum.y()&&local.y()<=bounds.maximum.y()
+            &&local.z()>=bounds.minimum.z()&&local.z()<=bounds.maximum.z();
+    }
+    return point.x()>=bounds.minimum.x()&&point.x()<=bounds.maximum.x()
+        &&point.y()>=bounds.minimum.y()&&point.y()<=bounds.maximum.y()
+        &&point.z()>=bounds.minimum.z()&&point.z()<=bounds.maximum.z();
 }
 
 int countInsideBounds(const QVector<Point3D> &points, const Bounds &bounds) {
@@ -301,7 +327,8 @@ Increment estimateIncrement(const QVector<Point3D> &source,
                             float maximumDistance,
                             const Bounds &actualOverlap,
                             QVector<CorrespondencePair> *pairsScratch = nullptr,
-                            std::unordered_set<int> *uniqueScratch = nullptr) {
+                            std::unordered_set<int> *uniqueScratch = nullptr,
+                            const FeatureResidualOptions *featureResiduals = nullptr) {
     // The reference point set is always cropped to actualOverlap before it is
     // downsampled and indexed, so every indexed candidate is already inside
     // the overlap box and the per-candidate insideBounds() check is removed.
@@ -344,7 +371,52 @@ Increment estimateIncrement(const QVector<Point3D> &source,
     for(const CorrespondencePair &pair:pairs)squaredRadius+=(pair.source-sourceCentroid).lengthSquared();
     const double rotationScale=qMax(1.0,std::sqrt(squaredRadius/double(pairs.size())));
     double normalMatrix[6][6]{},rhs[6]{},weightSum=0.0;
-    for(const CorrespondencePair &pair:pairs){unique.insert(pair.targetIndex);const double residual=QVector3D::dotProduct(pair.normal,pair.source-pair.target);const double normalized=std::abs(residual)/maximumDistance;if(normalized>=1.0)continue;const double weight=std::pow(1.0-normalized*normalized,2.0);const QVector3D rotation=QVector3D::crossProduct(pair.source-sourceCentroid,pair.normal)/float(rotationScale);const double jacobian[6]{rotation.x(),rotation.y(),rotation.z(),pair.normal.x(),pair.normal.y(),pair.normal.z()};for(int row=0;row<6;++row){rhs[row]-=weight*jacobian[row]*residual;for(int column=0;column<6;++column)normalMatrix[row][column]+=weight*jacobian[row]*jacobian[column];}weightSum+=weight;}
+    const auto isFeatureTarget = [&](const CorrespondencePair &pair) {
+        if (!featureResiduals || !featureResiduals->enabled) return false;
+        if (std::abs(QVector3D::dotProduct(featureResiduals->normal, pair.target)
+                     - featureResiduals->offset) > featureResiduals->planeExclusion)
+            return true;
+        if (!featureResiduals->boundaryBounds.valid) return false;
+        const QVector3D delta = pair.target - featureResiduals->origin;
+        const float u = QVector3D::dotProduct(delta, featureResiduals->axisU);
+        const float v = QVector3D::dotProduct(delta, featureResiduals->axisV);
+        const Bounds &bounds = featureResiduals->boundaryBounds;
+        return u - bounds.minimum.x() <= featureResiduals->boundaryWidth
+            || bounds.maximum.x() - u <= featureResiduals->boundaryWidth
+            || v - bounds.minimum.y() <= featureResiduals->boundaryWidth
+            || bounds.maximum.y() - v <= featureResiduals->boundaryWidth;
+    };
+    const auto accumulateResidual = [&](const QVector3D &axis, const QVector3D &sourcePoint,
+                                        const QVector3D &targetPoint, double weight) {
+        const double residual = QVector3D::dotProduct(axis, sourcePoint - targetPoint);
+        const QVector3D rotation = QVector3D::crossProduct(sourcePoint-sourceCentroid,axis)
+            / float(rotationScale);
+        const double jacobian[6]{rotation.x(),rotation.y(),rotation.z(),axis.x(),axis.y(),axis.z()};
+        for(int row=0;row<6;++row){
+            rhs[row]-=weight*jacobian[row]*residual;
+            for(int column=0;column<6;++column)
+                normalMatrix[row][column]+=weight*jacobian[row]*jacobian[column];
+        }
+    };
+    for(const CorrespondencePair &pair:pairs){
+        unique.insert(pair.targetIndex);
+        const QVector3D difference = pair.source-pair.target;
+        const bool pointToPoint = isFeatureTarget(pair);
+        const double normalized = pointToPoint
+            ? difference.length()/maximumDistance
+            : std::abs(QVector3D::dotProduct(pair.normal,difference))/maximumDistance;
+        if(normalized>=1.0)continue;
+        const double weight=std::pow(1.0-normalized*normalized,2.0);
+        if (pointToPoint) {
+            accumulateResidual(QVector3D(1,0,0),pair.source,pair.target,weight);
+            accumulateResidual(QVector3D(0,1,0),pair.source,pair.target,weight);
+            accumulateResidual(QVector3D(0,0,1),pair.source,pair.target,weight);
+            weightSum+=3.0*weight;
+        } else {
+            accumulateResidual(pair.normal,pair.source,pair.target,weight);
+            weightSum+=weight;
+        }
+    }
     if(weightSum<=1.0e-9)return result;
     double eigenvalues[6]{},eigenvectors[6][6]{};
     symmetricEigen6(normalMatrix,eigenvalues,eigenvectors);
@@ -457,12 +529,88 @@ QPair<float,float> projectionRange(const QVector<Point3D> &points, const QVector
     return {minimum,maximum};
 }
 
-struct PlaneDiagnostic { bool valid=false; QVector3D normal,centroid; float offset=0,height=0; };
+struct PlaneDiagnostic {
+    bool valid=false;
+    QVector3D normal,centroid;
+    float offset=0,height=0;
+    int inlierCount=0;
+    float inlierRatio=0.0f;
+    float rms=0.0f;
+    float tiltDegrees=0.0f;
+    QString method;
+    QString rejectionReason;
+    QVector3D axisU, axisV;
+};
 struct PlanePeak { float height=0; int count=0; };
 struct DistanceDiagnostic {
     int total=0,matched=0;
     float p50=0,p90=0,p95=0,within3=0,within5=0,within10=0;
 };
+
+QVector3D choosePlaneAxisU(const QVector3D &normal, const QVector3D &preferred)
+{
+    QVector3D axis = preferred - normal * QVector3D::dotProduct(preferred, normal);
+    if (axis.lengthSquared() < 1.0e-8f) {
+        axis = QVector3D(1, 0, 0) - normal * normal.x();
+        if (axis.lengthSquared() < 1.0e-8f)
+            axis = QVector3D(0, 1, 0) - normal * normal.y();
+    }
+    if (axis.lengthSquared() < 1.0e-8f) axis = QVector3D(1, 0, 0);
+    axis.normalize();
+    return axis;
+}
+
+void assignPlaneAxes(PlaneDiagnostic *plane, const QVector3D &preferred)
+{
+    if (!plane || !plane->valid) return;
+    plane->axisU = choosePlaneAxisU(plane->normal, preferred);
+    plane->axisV = QVector3D::crossProduct(plane->normal, plane->axisU).normalized();
+}
+
+Bounds projectedBounds(const QVector<Point3D> &points,
+                       const QVector3D &origin,
+                       const QVector3D &axisU,
+                       const QVector3D &axisV,
+                       const QVector3D &axisN)
+{
+    Bounds bounds;
+    bounds.oriented = true;
+    bounds.origin = origin;
+    bounds.axisU = axisU;
+    bounds.axisV = axisV;
+    bounds.axisN = axisN;
+    for (const Point3D &point : points) {
+        if (!finitePoint(point)) continue;
+        const QVector3D delta = vectorOf(point) - origin;
+        const QVector3D local(QVector3D::dotProduct(delta, axisU),
+                              QVector3D::dotProduct(delta, axisV),
+                              QVector3D::dotProduct(delta, axisN));
+        bounds.minimum.setX(qMin(bounds.minimum.x(), local.x()));
+        bounds.minimum.setY(qMin(bounds.minimum.y(), local.y()));
+        bounds.minimum.setZ(qMin(bounds.minimum.z(), local.z()));
+        bounds.maximum.setX(qMax(bounds.maximum.x(), local.x()));
+        bounds.maximum.setY(qMax(bounds.maximum.y(), local.y()));
+        bounds.maximum.setZ(qMax(bounds.maximum.z(), local.z()));
+        bounds.valid = true;
+    }
+    return bounds;
+}
+
+Bounds intersectBounds(const Bounds &a, const Bounds &b)
+{
+    Bounds result = a;
+    if (!a.valid || !b.valid) { result.valid = false; return result; }
+    result.minimum.setX(qMax(a.minimum.x(), b.minimum.x()));
+    result.minimum.setY(qMax(a.minimum.y(), b.minimum.y()));
+    result.minimum.setZ(qMax(a.minimum.z(), b.minimum.z()));
+    result.maximum.setX(qMin(a.maximum.x(), b.maximum.x()));
+    result.maximum.setY(qMin(a.maximum.y(), b.maximum.y()));
+    result.maximum.setZ(qMin(a.maximum.z(), b.maximum.z()));
+    result.valid = result.maximum.x() > result.minimum.x()
+        && result.maximum.y() > result.minimum.y()
+        && result.maximum.z() > result.minimum.z();
+    return result;
+}
 
 DistanceDiagnostic nearestDistanceDiagnostic(const QVector<Point3D> &source,
                                              const QVector<Point3D> &target) {
@@ -498,16 +646,32 @@ QVector<Point3D> structuralPoints(const QVector<Point3D> &points,
 }
 
 QVector<Point3D> structureWeightedPoints(const QVector<Point3D> &points,
-                                         const PlaneDiagnostic &plane,
-                                         float exclusionDistance,
-                                         int supportStride) {
+                                          const PlaneDiagnostic &plane,
+                                          float exclusionDistance,
+                                          int supportStride,
+                                          bool includeLocalBoundary = false) {
     QVector<Point3D> result;
     if(!plane.valid)return result;
     result.reserve(points.size()/3);
+    const Bounds localBounds = includeLocalBoundary
+        ? projectedBounds(points, plane.centroid, plane.axisU, plane.axisV, plane.normal)
+        : Bounds{};
     int supportIndex=0;
     for(const Point3D &point:points){
-        const bool structural=std::abs(QVector3D::dotProduct(plane.normal,vectorOf(point))-plane.offset)>exclusionDistance;
-        if(structural||((supportIndex++%qMax(1,supportStride))==0))
+        const QVector3D value = vectorOf(point);
+        const bool structural=std::abs(QVector3D::dotProduct(plane.normal,value)-plane.offset)>exclusionDistance;
+        bool boundary = false;
+        if (includeLocalBoundary && localBounds.valid && !structural) {
+            const QVector3D delta = value-plane.centroid;
+            const float u = QVector3D::dotProduct(delta, plane.axisU);
+            const float v = QVector3D::dotProduct(delta, plane.axisV);
+            constexpr float edgeWidthMm = 2.0f;
+            boundary = u-localBounds.minimum.x()<=edgeWidthMm
+                || localBounds.maximum.x()-u<=edgeWidthMm
+                || v-localBounds.minimum.y()<=edgeWidthMm
+                || localBounds.maximum.y()-v<=edgeWidthMm;
+        }
+        if(structural||boundary||((supportIndex++%qMax(1,supportStride))==0))
             result.push_back(point);
     }
     return result;
@@ -564,8 +728,8 @@ void runWideStructureDiagnostic(const QVector<Point3D> &source,
     }
     const float scoreDistance=qMax(3.0f,options.tangentCoarseScoreDistanceMm);
     const SpatialIndex targetIndex=buildIndex(reference,scoreDistance),sourceIndex=buildIndex(moving,scoreDistance);
-    QVector3D axisU=QVector3D::crossProduct(targetPlane.normal,QVector3D(0,0,1));
-    if(axisU.lengthSquared()<1.0e-6f)axisU=QVector3D::crossProduct(targetPlane.normal,QVector3D(1,0,0));
+    QVector3D axisU = targetPlane.axisU.lengthSquared() > 1.0e-8f
+        ? targetPlane.axisU : choosePlaneAxisU(targetPlane.normal, QVector3D(1,0,0));
     axisU.normalize();const QVector3D axisV=QVector3D::crossProduct(targetPlane.normal,axisU).normalized();
     QVector3D best;float bestScore=translatedCoverage(moving,reference,targetIndex,sourceIndex,{},scoreDistance);
     diagnostic->wideStructureCoverageBefore=bestScore;
@@ -625,8 +789,8 @@ QVector3D tangentCoarseTranslation(const QVector<Point3D> &source,
     }
     const float scoreDistance=qMax(3.0f,options.tangentCoarseScoreDistanceMm);
     const SpatialIndex targetIndex=buildIndex(reference,scoreDistance),sourceIndex=buildIndex(moving,scoreDistance);
-    QVector3D axisU=QVector3D::crossProduct(targetPlane.normal,QVector3D(0,0,1));
-    if(axisU.lengthSquared()<1.0e-6f)axisU=QVector3D::crossProduct(targetPlane.normal,QVector3D(1,0,0));
+    QVector3D axisU = targetPlane.axisU.lengthSquared() > 1.0e-8f
+        ? targetPlane.axisU : choosePlaneAxisU(targetPlane.normal, QVector3D(1,0,0));
     axisU.normalize();const QVector3D axisV=QVector3D::crossProduct(targetPlane.normal,axisU).normalized();
     coarseRotation->setToIdentity();
     QVector3D best;float bestScore=translatedCoverage(moving,reference,targetIndex,sourceIndex,best,scoreDistance);
@@ -672,22 +836,10 @@ PlaneDiagnostic pcaPlane(const QVector<Point3D> &points,
     PlaneDiagnostic result;
     const QVector<Point3D> sample=voxelDownsample(points,1.0f);
     if(sample.size()<100)return result;
-    constexpr float heightBin=0.5f;
-    std::unordered_map<qint64,int> histogram;
-    histogram.reserve(size_t(sample.size()/4));
-    qint64 dominantBin=0;int dominantCount=0;
-    for(const Point3D &point:sample){const qint64 bin=qint64(std::floor(point.z/heightBin));const int count=++histogram[bin];if(count>dominantCount){dominantCount=count;dominantBin=bin;}}
-    if(std::isfinite(preferredHeight)){
-        float bestDifference=std::numeric_limits<float>::max();
-        const int minimumPeakCount=qMax(100,dominantCount/10);
-        for(const auto &entry:histogram)if(entry.second>=minimumPeakCount){const float height=(float(entry.first)+.5f)*heightBin;const float difference=std::abs(height-preferredHeight);if(difference<bestDifference){bestDifference=difference;dominantBin=entry.first;}}
-    }
-    const float dominantHeight=(float(dominantBin)+.5f)*heightBin;
-    const float heightBand=fitOptions?qMax(1.0f,fitOptions->planeFitHeightBandMm):1.5f;
-    QVector<Point3D> planePoints;planePoints.reserve(dominantCount*4);
-    for(const Point3D &point:sample)if(std::abs(point.z-dominantHeight)<=heightBand)planePoints.push_back(point);
-    if(planePoints.size()<100)return result;
-    QVector3D mean; double covariance[3][3]{};
+    const float inlierDistance=fitOptions?qMax(.2f,fitOptions->planeFitInlierDistanceMm):1.5f;
+    const int iterations=fitOptions?qMax(0,fitOptions->planeFitIterations):0;
+    const float minimumRatio=fitOptions?qBound(0.01f,fitOptions->minimumPlaneInlierRatio,1.0f):0.15f;
+    const float maximumTilt=fitOptions?qMax(0.0f,fitOptions->maximumPlaneTiltDegrees):75.0f;
     const auto fit=[&](const QVector<Point3D> &fitPoints,QVector3D *fitMean,QVector3D *fitNormal){
         *fitMean={};double matrix[3][3]{};
         for(const Point3D &point:fitPoints)*fitMean+=vectorOf(point);
@@ -695,18 +847,83 @@ PlaneDiagnostic pcaPlane(const QVector<Point3D> &points,
         for(const Point3D &point:fitPoints){const QVector3D d=vectorOf(point)-*fitMean;const double v[3]{d.x(),d.y(),d.z()};for(int row=0;row<3;++row)for(int column=0;column<3;++column)matrix[row][column]+=v[row]*v[column];}
         smallestEigenvector(matrix,fitNormal);
     };
-    fit(planePoints,&mean,&result.normal);
-    const int iterations=fitOptions?qMax(0,fitOptions->planeFitIterations):0;
-    const float inlierDistance=fitOptions?qMax(.2f,fitOptions->planeFitInlierDistanceMm):1.5f;
-    for(int iteration=0;iteration<iterations&&result.normal.lengthSquared()>1.0e-8f;++iteration){
-        QVector<Point3D> inliers;inliers.reserve(planePoints.size());
-        for(const Point3D &point:planePoints)if(std::abs(QVector3D::dotProduct(result.normal,vectorOf(point)-mean))<=inlierDistance)inliers.push_back(point);
-        if(inliers.size()<100)break;
-        fit(inliers,&mean,&result.normal);planePoints.swap(inliers);
+    const auto finalize=[&](QVector<Point3D> planePoints,const QString &method,float height)->PlaneDiagnostic {
+        PlaneDiagnostic fitted;
+        if(planePoints.size()<100)return fitted;
+        QVector3D mean,normal;fit(planePoints,&mean,&normal);
+        if(normal.lengthSquared()<=1.0e-8f)return fitted;
+        if(normal.z()<0)normal=-normal;
+        for(int iteration=0;iteration<iterations;++iteration){
+            QVector<Point3D> inliers;inliers.reserve(planePoints.size());
+            for(const Point3D &point:planePoints)if(std::abs(QVector3D::dotProduct(normal,vectorOf(point)-mean))<=inlierDistance)inliers.push_back(point);
+            if(inliers.size()<100)break;
+            fit(inliers,&mean,&normal);if(normal.z()<0)normal=-normal;planePoints.swap(inliers);
+        }
+        double squared=0.0;for(const Point3D &point:planePoints){const double d=QVector3D::dotProduct(normal,vectorOf(point)-mean);squared+=d*d;}
+        fitted.normal=normal;fitted.centroid=mean;fitted.offset=QVector3D::dotProduct(mean,normal);fitted.height=height;
+        fitted.inlierCount=planePoints.size();fitted.inlierRatio=float(planePoints.size())/float(sample.size());
+        fitted.rms=planePoints.isEmpty()?0.0f:float(std::sqrt(squared/double(planePoints.size())));
+        fitted.tiltDegrees=qRadiansToDegrees(std::acos(qBound(-1.0f,std::abs(normal.z()),1.0f)));
+        fitted.method=method;
+        if (!std::isfinite(fitted.rms)) fitted.rejectionReason=QStringLiteral("plane_fit_non_finite");
+        else if (fitted.inlierRatio < minimumRatio) fitted.rejectionReason=QStringLiteral("plane_fit_inlier_ratio_low");
+        else if (fitted.tiltDegrees > maximumTilt) fitted.rejectionReason=QStringLiteral("plane_tilt_exceeds_limit");
+        fitted.valid=fitted.rejectionReason.isEmpty();
+        return fitted;
+    };
+
+    // Compatibility path for shallow planes: retain the historic Z-height band
+    // selection and only fall back when it cannot produce a valid shallow fit.
+    constexpr float heightBin=0.5f;
+    std::unordered_map<qint64,int> histogram;histogram.reserve(size_t(sample.size()/4));
+    qint64 dominantBin=0;int dominantCount=0;
+    for(const Point3D &point:sample){const qint64 bin=qint64(std::floor(point.z/heightBin));const int count=++histogram[bin];if(count>dominantCount){dominantCount=count;dominantBin=bin;}}
+    if(std::isfinite(preferredHeight)){
+        float bestDifference=std::numeric_limits<float>::max();const int minimumPeakCount=qMax(100,dominantCount/10);
+        for(const auto &entry:histogram)if(entry.second>=minimumPeakCount){const float height=(float(entry.first)+.5f)*heightBin;const float difference=std::abs(height-preferredHeight);if(difference<bestDifference){bestDifference=difference;dominantBin=entry.first;}}
     }
-    if(result.normal.lengthSquared()<=1.0e-8f||std::abs(result.normal.z())<.8f)return result;
-    if(result.normal.z()<0)result.normal=-result.normal;
-    result.centroid=mean;result.offset=QVector3D::dotProduct(mean,result.normal);result.height=dominantHeight;result.valid=true;return result;
+    const float dominantHeight=(float(dominantBin)+.5f)*heightBin;
+    const float heightBand=fitOptions?qMax(1.0f,fitOptions->planeFitHeightBandMm):1.5f;
+    QVector<Point3D> planePoints;planePoints.reserve(dominantCount*4);
+    for(const Point3D &point:sample)if(std::abs(point.z-dominantHeight)<=heightBand)planePoints.push_back(point);
+    PlaneDiagnostic shallow=finalize(planePoints,QStringLiteral("z_height_band"),dominantHeight);
+    const float shallowBandRatio = float(dominantCount) / float(sample.size());
+    if(shallow.valid&&shallow.tiltDegrees<=36.9f&&shallowBandRatio>=0.35f)return shallow;
+
+    // Deterministic voxel-sampled RANSAC for arbitrary plane orientation.
+    PlaneDiagnostic best;const int hypotheses=fitOptions?qMax(1,fitOptions->planeFitRansacHypotheses):256;
+    const int n=sample.size();quint32 state=0x9e3779b9u;
+    for(int hypothesis=0;hypothesis<hypotheses;++hypothesis){
+        state=state*1664525u+1013904223u;const int ia=int(state%quint32(n));
+        state=state*1664525u+1013904223u;const int ib=int(state%quint32(n));
+        state=state*1664525u+1013904223u;const int ic=int(state%quint32(n));
+        if(ia==ib||ia==ic||ib==ic)continue;
+        const QVector3D a=vectorOf(sample[ia]),b=vectorOf(sample[ib]),c=vectorOf(sample[ic]);
+        QVector3D normal=QVector3D::crossProduct(b-a,c-a);if(normal.lengthSquared()<1.0e-8f)continue;normal.normalize();if(normal.z()<0)normal=-normal;
+        QVector<Point3D> inliers;inliers.reserve(sample.size());const float offset=QVector3D::dotProduct(a,normal);
+        for(const Point3D &point:sample)if(std::abs(QVector3D::dotProduct(vectorOf(point),normal)-offset)<=inlierDistance)inliers.push_back(point);
+        PlaneDiagnostic candidate=finalize(inliers,QStringLiteral("ransac_pca"),offset);
+        if(candidate.inlierCount>best.inlierCount||(candidate.inlierCount==best.inlierCount&&candidate.rms<best.rms))best=candidate;
+    }
+    if(!best.valid){
+        if (best.inlierCount >= shallow.inlierCount && best.inlierCount > 0) return best;
+        if(shallow.inlierCount>0){
+            shallow.method=QStringLiteral("z_height_band_rejected");
+            shallow.valid=false;
+            if (shallow.rejectionReason.isEmpty()) shallow.rejectionReason=QStringLiteral("plane_fit_orientation_ambiguous");
+            return shallow;
+        }
+        return best;
+    }
+    return best;
+}
+
+QVector<Point3D> cropCloud(const QVector<Point3D> &points, const Bounds &bounds) {
+    QVector<Point3D> result;
+    result.reserve(points.size());
+    for (const Point3D &point : points)
+        if (insideBounds(vectorOf(point), bounds)) result.push_back(point);
+    return result;
 }
 
 QVector<PlanePeak> planePeakCandidates(const QVector<Point3D> &points) {
@@ -760,6 +977,33 @@ bool trackPlaneIdentity(const QVector<ConvertedCloud> &clouds,
     return true;
 }
 
+bool trackSteepPlaneIdentity(const QVector<ConvertedCloud> &clouds,
+                             const IcpOptions &options,
+                             QString *reason)
+{
+    if (!options.planeIdentityTrackingEnabled || clouds.isEmpty()) return false;
+    QVector<PlaneDiagnostic> planes;
+    planes.reserve(clouds.size());
+    for (const ConvertedCloud &cloud : clouds)
+        planes.push_back(pcaPlane(cloud.sample, std::numeric_limits<float>::quiet_NaN(), &options));
+    const PlaneDiagnostic &anchor = planes.first();
+    if (!anchor.valid || anchor.tiltDegrees <= 36.9f) return false;
+    for (int index = 1; index < planes.size(); ++index) {
+        if (!planes[index].valid) return false;
+        const float normalDifference = qRadiansToDegrees(std::acos(qBound(-1.0f,
+            std::abs(QVector3D::dotProduct(anchor.normal, planes[index].normal)), 1.0f)));
+        const float offsetDifference = std::abs(anchor.offset - planes[index].offset);
+        if (normalDifference > options.planeIdentityNormalToleranceDegrees
+            || offsetDifference > options.planeIdentityOffsetToleranceMm) {
+            if (reason) *reason = QStringLiteral("陡峭主平面身份不一致：normal=%1 deg, offset=%2 mm")
+                .arg(normalDifference,0,'f',3).arg(offsetDifference,0,'f',3);
+            return false;
+        }
+    }
+    if (reason) *reason = QStringLiteral("陡峭主平面按法向/平面偏移连续匹配");
+    return true;
+}
+
 struct PairInitialData {
     int sourceCropCount = 0;
     int targetCropCount = 0;
@@ -790,6 +1034,11 @@ PairInitialData computePairInitialData(const QVector<Point3D> &sourceCrop,
     if(data.sourcePlane.valid&&data.targetPlane.valid&&QVector3D::dotProduct(data.sourcePlane.normal,data.targetPlane.normal)<0){
         data.targetPlane.normal=-data.targetPlane.normal;data.targetPlane.offset=-data.targetPlane.offset;
     }
+    if (data.targetPlane.valid) assignPlaneAxes(&data.targetPlane, stitchAxis);
+    if (data.sourcePlane.valid) {
+        const QVector3D preferred = data.targetPlane.valid ? data.targetPlane.axisU : stitchAxis;
+        assignPlaneAxes(&data.sourcePlane, preferred);
+    }
     return data;
 }
 
@@ -810,6 +1059,10 @@ void stampPairInitialData(IcpDiagnostics *diagnostic,
     diagnostic->trackedSourcePlaneHeight=preferredSourceHeight;
     diagnostic->trackedTargetPlaneHeight=preferredTargetHeight;
     diagnostic->planeIdentityReason=planeIdentityReason;
+    if (!data.sourcePlane.valid && !data.sourcePlane.rejectionReason.isEmpty())
+        diagnostic->steepPlaneRejectionReason = data.sourcePlane.rejectionReason;
+    if (!data.targetPlane.valid && !data.targetPlane.rejectionReason.isEmpty())
+        diagnostic->steepPlaneRejectionReason = data.targetPlane.rejectionReason;
     if(data.sourcePlane.valid&&data.targetPlane.valid){
         diagnostic->planeDiagnosticValid=true;
         diagnostic->planeNormalAngleDegrees=qRadiansToDegrees(std::acos(qBound(-1.0f,QVector3D::dotProduct(data.sourcePlane.normal,data.targetPlane.normal),1.0f)));
@@ -817,6 +1070,21 @@ void stampPairInitialData(IcpDiagnostics *diagnostic,
         diagnostic->sourcePlaneHeight=data.sourcePlane.height;
         diagnostic->targetPlaneHeight=data.targetPlane.height;
         diagnostic->planeOffsetDifference=data.sourcePlane.height-data.targetPlane.height;
+        diagnostic->planeFitMethod=data.targetPlane.method;
+        diagnostic->sourcePlaneNormal=data.sourcePlane.normal;
+        diagnostic->targetPlaneNormal=data.targetPlane.normal;
+        diagnostic->sourcePlaneTiltDegrees=data.sourcePlane.tiltDegrees;
+        diagnostic->targetPlaneTiltDegrees=data.targetPlane.tiltDegrees;
+        diagnostic->sourcePlaneFitRms=data.sourcePlane.rms;
+        diagnostic->targetPlaneFitRms=data.targetPlane.rms;
+        diagnostic->sourcePlaneInlierCount=data.sourcePlane.inlierCount;
+        diagnostic->targetPlaneInlierCount=data.targetPlane.inlierCount;
+        diagnostic->sourcePlaneInlierRatio=data.sourcePlane.inlierRatio;
+        diagnostic->targetPlaneInlierRatio=data.targetPlane.inlierRatio;
+        diagnostic->steepPlaneDetected=qMax(data.sourcePlane.tiltDegrees,data.targetPlane.tiltDegrees)>36.9f;
+        diagnostic->steepPlaneObservableDof=diagnostic->observableDof;
+        diagnostic->planeIdentityNormalDifferenceDegrees=diagnostic->planeNormalAngleDegrees;
+        diagnostic->planeIdentityOffsetDifferenceMm=std::abs(data.sourcePlane.offset-data.targetPlane.offset);
     }
 }
 
@@ -914,7 +1182,7 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
     QVector3D low, high;
     QVector<Point3D> sourceCrop, targetCrop;
     PlaneDiagnostic sourcePlane, targetPlane;
-    if (cache && cache->built) {
+    if (cache && cache->built && !options.applyWideStructureCandidate) {
         // Relaxed retry: the attempt-invariant preprocessing (bounding boxes,
         // overlap crops, plane fits, initial distance statistics) is reused.
         sourceBounds = cache->sourceBounds;
@@ -944,8 +1212,37 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
         }
         sourceCrop=cropCloud(source,low,high);
         targetCrop=cropCloud(target,low,high);
-        const PairInitialData initialData=computePairInitialData(sourceCrop,targetCrop,stitchAxis,options,
+        bool candidateSteepPlane = false;
+        PairInitialData initialData=computePairInitialData(sourceCrop,targetCrop,stitchAxis,options,
             preferredSourcePlaneHeight,preferredTargetPlaneHeight,planeIdentityTracked);
+        // A steep support plane is not reliably bounded by a global XYZ
+        // intersection.  Once a valid tilted plane is visible, rebuild the
+        // preparation from complete frames; the common local plane UVN overlap
+        // below becomes the single crop/acceptance definition.
+        if (initialData.sourcePlane.valid && initialData.targetPlane.valid
+            && qMax(initialData.sourcePlane.tiltDegrees, initialData.targetPlane.tiltDegrees) > 36.9f) {
+            candidateSteepPlane = true;
+            sourceCrop = source;
+            targetCrop = target;
+            initialData = computePairInitialData(sourceCrop,targetCrop,stitchAxis,options,
+                preferredSourcePlaneHeight,preferredTargetPlaneHeight,planeIdentityTracked);
+        }
+        if (!candidateSteepPlane && (!initialData.sourcePlane.valid || !initialData.targetPlane.valid)
+            && (!initialData.sourcePlane.rejectionReason.isEmpty()
+                || !initialData.targetPlane.rejectionReason.isEmpty())) {
+            // The fixed XYZ crop can contain only a narrow fragment of a
+            // steep plane.  Retry fitting on full frames before treating an
+            // orientation-independent RANSAC rejection as final.
+            const PairInitialData fullData=computePairInitialData(source,target,stitchAxis,options,
+                preferredSourcePlaneHeight,preferredTargetPlaneHeight,planeIdentityTracked);
+            if (fullData.sourcePlane.valid && fullData.targetPlane.valid
+                && qMax(fullData.sourcePlane.tiltDegrees, fullData.targetPlane.tiltDegrees) > 36.9f) {
+                candidateSteepPlane = true;
+                sourceCrop = source;
+                targetCrop = target;
+                initialData = fullData;
+            }
+        }
         sourcePlane=initialData.sourcePlane;
         targetPlane=initialData.targetPlane;
         stampPairInitialData(&diagnostic, initialData, planeIdentityTracked,
@@ -959,6 +1256,15 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             cache->sourceCrop=sourceCrop;
             cache->targetCrop=targetCrop;
             cache->initial=initialData;
+        }
+    }
+    if (!sourcePlane.valid || !targetPlane.valid) {
+        const QString planeReason = !sourcePlane.rejectionReason.isEmpty()
+            ? sourcePlane.rejectionReason : targetPlane.rejectionReason;
+        if (planeReason == QStringLiteral("plane_tilt_exceeds_limit")) {
+            diagnostic.reason = planeReason;
+            diagnostic.steepPlaneRejectionReason = planeReason;
+            return diagnostic;
         }
     }
     if(sourceCrop.size()<100||targetCrop.size()<100){diagnostic.reason=QStringLiteral("重叠区抽样点少于 100");return diagnostic;}
@@ -987,22 +1293,45 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
         applyTransform(&overlapAlignedSource, candidateCorrection);
         overlapAlignedFull = source;
         applyTransform(&overlapAlignedFull, candidateCorrection);
-        const Bounds candidateSourceBounds = cloudBounds(overlapAlignedFull);
-        actualOverlap.minimum = QVector3D(
-            qMax(candidateSourceBounds.minimum.x(), alignedTargetBounds.minimum.x()),
-            qMax(candidateSourceBounds.minimum.y(), alignedTargetBounds.minimum.y()),
-            qMax(candidateSourceBounds.minimum.z(), alignedTargetBounds.minimum.z()));
-        actualOverlap.maximum = QVector3D(
-            qMin(candidateSourceBounds.maximum.x(), alignedTargetBounds.maximum.x()),
-            qMin(candidateSourceBounds.maximum.y(), alignedTargetBounds.maximum.y()),
-            qMin(candidateSourceBounds.maximum.z(), alignedTargetBounds.maximum.z()));
-        actualOverlap.valid = actualOverlap.maximum.x() > actualOverlap.minimum.x()
-            && actualOverlap.maximum.y() > actualOverlap.minimum.y()
-            && actualOverlap.maximum.z() > actualOverlap.minimum.z();
+        const bool steepPlane = sourcePlane.valid && targetPlane.valid
+            && qMax(sourcePlane.tiltDegrees, targetPlane.tiltDegrees) > 36.9f;
+        if (steepPlane) {
+            const QVector3D origin = targetPlane.centroid;
+            const QVector3D axisU = targetPlane.axisU;
+            const QVector3D axisV = targetPlane.axisV;
+            const QVector3D axisN = targetPlane.normal;
+            const Bounds sourceLocal = projectedBounds(overlapAlignedFull, origin, axisU, axisV, axisN);
+            const Bounds targetLocal = projectedBounds(target, origin, axisU, axisV, axisN);
+            actualOverlap = intersectBounds(sourceLocal, targetLocal);
+            actualOverlap.minimum -= QVector3D(options.overlapMargin, options.overlapMargin, options.overlapMargin);
+            actualOverlap.maximum += QVector3D(options.overlapMargin, options.overlapMargin, options.overlapMargin);
+            actualOverlap.valid = actualOverlap.maximum.x() > actualOverlap.minimum.x()
+                && actualOverlap.maximum.y() > actualOverlap.minimum.y()
+                && actualOverlap.maximum.z() > actualOverlap.minimum.z();
+            diagnostic.overlapCoordinateSystem = QStringLiteral("plane_uvn");
+            diagnostic.overlapLocalMinimum = actualOverlap.minimum;
+            diagnostic.overlapLocalMaximum = actualOverlap.maximum;
+        } else {
+            const Bounds candidateSourceBounds = cloudBounds(overlapAlignedFull);
+            actualOverlap.minimum = QVector3D(
+                qMax(candidateSourceBounds.minimum.x(), alignedTargetBounds.minimum.x()),
+                qMax(candidateSourceBounds.minimum.y(), alignedTargetBounds.minimum.y()),
+                qMax(candidateSourceBounds.minimum.z(), alignedTargetBounds.minimum.z()));
+            actualOverlap.maximum = QVector3D(
+                qMin(candidateSourceBounds.maximum.x(), alignedTargetBounds.maximum.x()),
+                qMin(candidateSourceBounds.maximum.y(), alignedTargetBounds.maximum.y()),
+                qMin(candidateSourceBounds.maximum.z(), alignedTargetBounds.maximum.z()));
+            actualOverlap.valid = actualOverlap.maximum.x() > actualOverlap.minimum.x()
+                && actualOverlap.maximum.y() > actualOverlap.minimum.y()
+                && actualOverlap.maximum.z() > actualOverlap.minimum.z();
+            diagnostic.overlapCoordinateSystem = QStringLiteral("robot_xyz");
+        }
         diagnostic.actualOverlapSourceCount = actualOverlap.valid
             ? countInsideBounds(overlapAlignedSource, actualOverlap) : 0;
         diagnostic.actualOverlapTargetCount = actualOverlap.valid
             ? countInsideBounds(targetCrop, actualOverlap) : 0;
+        diagnostic.localOverlapSourcePoints = diagnostic.actualOverlapSourceCount;
+        diagnostic.localOverlapTargetPoints = diagnostic.actualOverlapTargetCount;
         return actualOverlap.valid
             && diagnostic.actualOverlapSourceCount >= 100
             && diagnostic.actualOverlapTargetCount >= 100;
@@ -1012,6 +1341,59 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             ?QStringLiteral("实际相邻帧重叠区任一侧抽样点少于 100")
             :QStringLiteral("主平面预对齐后相邻帧无实际三维重叠区");
         return diagnostic;
+    }
+    const auto followCandidateCrop = [&](const QMatrix4x4 &candidateCorrection) {
+        if (!actualOverlap.valid) return false;
+        QVector<Point3D> aligned = source;
+        applyTransform(&aligned, candidateCorrection);
+        QVector<Point3D> croppedAligned = cropCloud(aligned, actualOverlap);
+        bool invertible = false;
+        const QMatrix4x4 inverse = candidateCorrection.inverted(&invertible);
+        if (!invertible || croppedAligned.isEmpty()) return false;
+        applyTransform(&croppedAligned, inverse);
+        QVector<Point3D> candidateTargetCrop = cropCloud(target, actualOverlap);
+        if (croppedAligned.size() < 100 || candidateTargetCrop.size() < 100) return false;
+        sourceCrop = std::move(croppedAligned);
+        targetCrop = std::move(candidateTargetCrop);
+        diagnostic.sourceCropCount = sourceCrop.size();
+        diagnostic.targetCropCount = targetCrop.size();
+        if (cache) {
+            cache->movingLevelBase[0].clear();
+            cache->movingLevelBase[1].clear();
+            cache->movingLevelBase[2].clear();
+            for (PairPreprocessCache::LevelTargetEntry &entry : cache->levelTarget)
+                entry = PairPreprocessCache::LevelTargetEntry{};
+            cache->sourceCrop = sourceCrop;
+            cache->targetCrop = targetCrop;
+            cache->initial.sourceCropCount = sourceCrop.size();
+            cache->initial.targetCropCount = targetCrop.size();
+        }
+        return true;
+    };
+    const bool steepPlane = sourcePlane.valid && targetPlane.valid
+        && qMax(sourcePlane.tiltDegrees, targetPlane.tiltDegrees) > 36.9f;
+    if (steepPlane) {
+        QVector<Point3D> alignedSource = overlapAlignedSource;
+        PlaneDiagnostic alignedPlane = sourcePlane;
+        alignedPlane.normal = correction->mapVector(sourcePlane.normal).normalized();
+        alignedPlane.offset = QVector3D::dotProduct(alignedPlane.normal,
+                                                     correction->map(sourcePlane.centroid));
+        const QVector<Point3D> sourceFeatures = structuralPoints(
+            alignedSource, alignedPlane, options.structuralPlaneExclusionMm, actualOverlap);
+        const QVector<Point3D> targetFeatures = structuralPoints(
+            targetCrop, targetPlane, options.structuralPlaneExclusionMm, actualOverlap);
+        diagnostic.steepPlaneFeatureCountSource = voxelDownsample(sourceFeatures, 2.0f).size();
+        diagnostic.steepPlaneFeatureCountTarget = voxelDownsample(targetFeatures, 2.0f).size();
+        if (diagnostic.steepPlaneFeatureCountSource < options.minimumStructuralPoints
+            || diagnostic.steepPlaneFeatureCountTarget < options.minimumStructuralPoints) {
+            diagnostic.steepPlaneRejectionReason = QStringLiteral(
+                "steep_plane_feature_insufficient: feature points %1/%2 < %3")
+                .arg(diagnostic.steepPlaneFeatureCountSource)
+                .arg(diagnostic.steepPlaneFeatureCountTarget)
+                .arg(options.minimumStructuralPoints);
+            diagnostic.reason = diagnostic.steepPlaneRejectionReason;
+            return diagnostic;
+        }
     }
     bool runTangentCoarse = options.tangentCoarseAlignmentEnabled;
     if (runTangentCoarse || (options.tangentCoarseAlignmentAuto && sourcePlane.valid && targetPlane.valid)) {
@@ -1056,6 +1438,11 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
                 *correction=candidateCorrection;
                 coarseAccepted=true;
                 acceptedFactor=factor;
+                if (!followCandidateCrop(*correction)) {
+                    coarseAccepted=false;
+                    *correction=correctionBeforeCoarse;
+                    rebuildActualOverlap(*correction);
+                }
                 break;
             }
             if(!coarseAccepted){
@@ -1090,7 +1477,13 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             if(translationLength(candidateCorrection)<=options.maximumCorrectionTranslation
                 &&rotationAngle(candidateCorrection)<=options.maximumCorrectionAngleDegrees
                 &&rebuildActualOverlap(candidateCorrection)){
-                *correction=candidateCorrection;
+                if (!followCandidateCrop(candidateCorrection)) {
+                    diagnostic.wideStructureDiagnosticReason = QStringLiteral(
+                        "大范围结构候选重裁剪后点数不足，未应用");
+                    rebuildActualOverlap(correctionBeforeWide);
+                } else {
+                    *correction=candidateCorrection;
+                }
             }else{
                 diagnostic.wideStructureDiagnosticReason=QStringLiteral("大范围结构候选超出修正预算或实际重叠点不足，未应用");
                 *correction=correctionBeforeWide;
@@ -1127,15 +1520,20 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
         if (!referenceCached) {
             RegionTimer targetPrepClock;
             if (stageTimes) targetPrepClock.start(&stageTimes->targetLevelCacheMs);
-            reference=voxelDownsample(cropCloud(targetCrop,actualOverlap.minimum,actualOverlap.maximum),voxel);
+            reference=voxelDownsample(cropCloud(targetCrop,actualOverlap),voxel);
             if(moving.size()<100||reference.size()<100){diagnostic.reason=QStringLiteral("%1 mm 层点数少于 100").arg(voxel);return diagnostic;}
             applyTransform(&moving,*correction);
             if(options.structuralIcpEnabled&&sourcePlane.valid&&targetPlane.valid){
                 PlaneDiagnostic alignedSourcePlane=sourcePlane;
                 alignedSourcePlane.normal=(*correction).mapVector(sourcePlane.normal).normalized();
                 alignedSourcePlane.offset=QVector3D::dotProduct(alignedSourcePlane.normal,(*correction).map(sourcePlane.centroid));
-                const QVector<Point3D> structuralMoving=structureWeightedPoints(moving,alignedSourcePlane,options.structuralPlaneExclusionMm,options.supportPlaneSampleStride);
-                const QVector<Point3D> structuralReference=structureWeightedPoints(reference,targetPlane,options.structuralPlaneExclusionMm,options.supportPlaneSampleStride);
+                if (steepPlane) {
+                    alignedSourcePlane.centroid=targetPlane.centroid;
+                    alignedSourcePlane.axisU=targetPlane.axisU;
+                    alignedSourcePlane.axisV=targetPlane.axisV;
+                }
+                const QVector<Point3D> structuralMoving=structureWeightedPoints(moving,alignedSourcePlane,options.structuralPlaneExclusionMm,options.supportPlaneSampleStride,steepPlane);
+                const QVector<Point3D> structuralReference=structureWeightedPoints(reference,targetPlane,options.structuralPlaneExclusionMm,options.supportPlaneSampleStride,steepPlane);
                 if(structuralMoving.size()>=options.minimumStructuralPoints&&structuralReference.size()>=options.minimumStructuralPoints){
                     moving=voxelDownsample(structuralMoving,voxel);reference=voxelDownsample(structuralReference,voxel);
                     structuralUsed=true;
@@ -1168,13 +1566,30 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
                 PlaneDiagnostic alignedSourcePlane=sourcePlane;
                 alignedSourcePlane.normal=(*correction).mapVector(sourcePlane.normal).normalized();
                 alignedSourcePlane.offset=QVector3D::dotProduct(alignedSourcePlane.normal,(*correction).map(sourcePlane.centroid));
-                const QVector<Point3D> structuralMoving=structureWeightedPoints(moving,alignedSourcePlane,options.structuralPlaneExclusionMm,options.supportPlaneSampleStride);
+                if (steepPlane) {
+                    alignedSourcePlane.centroid=targetPlane.centroid;
+                    alignedSourcePlane.axisU=targetPlane.axisU;
+                    alignedSourcePlane.axisV=targetPlane.axisV;
+                }
+                const QVector<Point3D> structuralMoving=structureWeightedPoints(moving,alignedSourcePlane,options.structuralPlaneExclusionMm,options.supportPlaneSampleStride,steepPlane);
                 moving=voxelDownsample(structuralMoving,voxel);
                 diagnostic.structuralIcpUsed=true;
                 diagnostic.structuralIcpReason=QStringLiteral("ICP 保留全部结构点，主支撑平面每 %1 点保留 1 点").arg(options.supportPlaneSampleStride);
             }else diagnostic.structuralIcpReason=options.structuralIcpEnabled?QStringLiteral("未检测到可用主平面，ICP 保留重叠点集"):QStringLiteral("结构点 ICP 已禁用");
             baselineInside=countInsideBounds(moving,actualOverlap);
             if(baselineInside<100){diagnostic.reason=QStringLiteral("%1 mm 层实际重叠区源点少于 100").arg(voxel);return diagnostic;}
+        }
+        FeatureResidualOptions featureResiduals;
+        if (steepPlane && structuralUsed && targetPlane.valid) {
+            featureResiduals.enabled=true;
+            featureResiduals.normal=targetPlane.normal;
+            featureResiduals.origin=targetPlane.centroid;
+            featureResiduals.axisU=targetPlane.axisU;
+            featureResiduals.axisV=targetPlane.axisV;
+            featureResiduals.offset=targetPlane.offset;
+            featureResiduals.planeExclusion=options.structuralPlaneExclusionMm;
+            featureResiduals.boundaryBounds=projectedBounds(reference,targetPlane.centroid,
+                targetPlane.axisU,targetPlane.axisV,targetPlane.normal);
         }
         const int minimumInside=qMax(100,int(std::ceil(double(baselineInside)*diagnostic.minimumOverlapRetention)));
         Increment last;
@@ -1191,7 +1606,7 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             if(cancelled()){diagnostic.reason=QStringLiteral("已取消");return diagnostic;}
             if (stageTimes) correspondenceClock.start(&stageTimes->correspondenceMs);
             last=estimateIncrement(moving,reference,index,distance,actualOverlap,
-                &correspondenceScratch,&uniqueReferenceScratch);
+                &correspondenceScratch,&uniqueReferenceScratch,&featureResiduals);
             if (stageTimes) correspondenceClock.stop();
             if(!last.ok){diagnostic.reason=QStringLiteral("%1 mm 层有效对应少于 100").arg(voxel);return diagnostic;}
             if(!degeneracyBasisLocked){
@@ -1284,12 +1699,24 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
     if (stageTimes) stageClock.start(&stageTimes->structuralValidationMs);
     if(options.structuralValidationEnabled){
         const auto validateStructural = [&](float exclusion,
-                                            QVector<Point3D> *sourceOutput,
-                                            QVector<Point3D> *targetOutput) {
-            *sourceOutput=structuralPoints(sourceCrop,sourcePlane,exclusion,
-                Bounds{sourceBounds.minimum,sourceBounds.maximum,true});
-            applyTransform(sourceOutput,*correction);
-            *sourceOutput=cropCloud(*sourceOutput,actualOverlap.minimum,actualOverlap.maximum);
+                                             QVector<Point3D> *sourceOutput,
+                                             QVector<Point3D> *targetOutput) {
+            const bool steepPlane = sourcePlane.valid && targetPlane.valid
+                && qMax(sourcePlane.tiltDegrees, targetPlane.tiltDegrees) > 36.9f;
+            if (steepPlane) {
+                QVector<Point3D> alignedSource = sourceCrop;
+                applyTransform(&alignedSource, *correction);
+                PlaneDiagnostic alignedPlane = sourcePlane;
+                alignedPlane.normal = correction->mapVector(sourcePlane.normal).normalized();
+                alignedPlane.offset = QVector3D::dotProduct(alignedPlane.normal,
+                                                             correction->map(sourcePlane.centroid));
+                *sourceOutput = structuralPoints(alignedSource, alignedPlane, exclusion, actualOverlap);
+            } else {
+                *sourceOutput=structuralPoints(sourceCrop,sourcePlane,exclusion,
+                    Bounds{sourceBounds.minimum,sourceBounds.maximum,true});
+                applyTransform(sourceOutput,*correction);
+            }
+            *sourceOutput=cropCloud(*sourceOutput,actualOverlap);
             *targetOutput=structuralPoints(targetCrop,targetPlane,exclusion,actualOverlap);
         };
         QVector<Point3D> sourceStructural,targetStructural;
@@ -1314,12 +1741,30 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
         diagnostic.structuralTargetToSourceCoverage10mm=targetToSource.within10;
         diagnostic.structuralBidirectionalCoverage3mm=qMin(sourceToTarget.within3,targetToSource.within3);
         diagnostic.structuralBidirectionalCoverage5mm=qMin(sourceToTarget.within5,targetToSource.within5);
+        diagnostic.steepPlaneDetected = sourcePlane.valid && targetPlane.valid
+            && qMax(sourcePlane.tiltDegrees, targetPlane.tiltDegrees) > 36.9f;
+        diagnostic.steepPlaneFeatureCountSource = sourceToTarget.total;
+        diagnostic.steepPlaneFeatureCountTarget = targetToSource.total;
+        diagnostic.steepPlaneObservableDof = diagnostic.observableDof;
+        if (diagnostic.steepPlaneDetected
+            && (diagnostic.observableDof < options.steepPlaneMinimumObservableDof
+                || sourceToTarget.total < options.minimumStructuralPoints
+                || targetToSource.total < options.minimumStructuralPoints)) {
+            diagnostic.steepPlaneRejectionReason = diagnostic.observableDof < options.steepPlaneMinimumObservableDof
+                ? QStringLiteral("steep_plane_feature_insufficient: observableDof=%1 < %2")
+                    .arg(diagnostic.observableDof).arg(options.steepPlaneMinimumObservableDof)
+                : QStringLiteral("steep_plane_feature_insufficient: feature points %1/%2 < %3")
+                    .arg(sourceToTarget.total).arg(targetToSource.total).arg(options.minimumStructuralPoints);
+            diagnostic.structuralValidationReason = diagnostic.steepPlaneRejectionReason;
+            diagnostic.reason = diagnostic.steepPlaneRejectionReason;
+            return diagnostic;
+        }
         bool enoughStructure=sourceToTarget.total>=options.minimumStructuralPoints
             &&targetToSource.total>=options.minimumStructuralPoints;
         bool enoughCoverage=false;
         if(enoughStructure){
             const int minimumStructure=qMin(sourceToTarget.total,targetToSource.total);
-            if(options.relaxedStructuralValidation && minimumStructure<500){
+            if(options.relaxedStructuralValidation && minimumStructure<500 && !diagnostic.steepPlaneDetected){
                 enoughCoverage=diagnostic.structuralBidirectionalCoverage3mm>=options.minimumLowCountStructuralCoverage3mm
                     &&diagnostic.structuralBidirectionalCoverage5mm>=options.minimumLowCountStructuralCoverage5mm;
             }else{
@@ -1347,8 +1792,10 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             enoughStructure=diagnostic.structuralSourcePoints>=options.minimumStructuralPoints
                 &&diagnostic.structuralTargetPoints>=options.minimumStructuralPoints;
             enoughCoverage=enoughStructure
-                &&diagnostic.structuralBidirectionalCoverage3mm>=options.minimumLowCountStructuralCoverage3mm
-                &&diagnostic.structuralBidirectionalCoverage5mm>=options.minimumLowCountStructuralCoverage5mm;
+                && (diagnostic.steepPlaneDetected
+                    ? diagnostic.structuralBidirectionalCoverage3mm>=options.minimumDegenerateStructuralCoverage3mm
+                    : diagnostic.structuralBidirectionalCoverage3mm>=options.minimumLowCountStructuralCoverage3mm
+                      &&diagnostic.structuralBidirectionalCoverage5mm>=options.minimumLowCountStructuralCoverage5mm);
         }
         if(!enoughStructure||!enoughCoverage){
             diagnostic.structuralValidationReason=!enoughStructure
@@ -1389,6 +1836,8 @@ QString classifyBlocking(const IcpDiagnostics &diagnostic)
 {
     if (diagnostic.accepted) return QStringLiteral("accepted");
     if (diagnostic.reason == QStringLiteral("已取消")) return QStringLiteral("cancelled");
+    if (diagnostic.reason == QStringLiteral("plane_tilt_exceeds_limit")) return QStringLiteral("plane_tilt_exceeds_limit");
+    if (diagnostic.reason.contains(QStringLiteral("steep_plane_feature_insufficient"))) return QStringLiteral("steep_plane_feature_insufficient");
     if (diagnostic.stoppedAtSafetyBoundary || diagnostic.safetyConstrainedStepReductions > 0
         || diagnostic.reason.contains(QStringLiteral("安全范围")))
         return QStringLiteral("safety_boundary");
@@ -1503,6 +1952,17 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
     result.registrationCorrections.resize(inputs.size());
     result.planeIdentityTrackingValid=trackPlaneIdentity(clouds,icp,&result.trackedPlaneHeights,
         &result.planeIdentityConsensusHeight,&result.planeIdentityDiagnostics);
+    if (!result.planeIdentityTrackingValid) {
+        QString steepReason;
+        if (trackSteepPlaneIdentity(clouds, icp, &steepReason)) {
+            result.planeIdentityTrackingValid = true;
+            result.planeIdentityDiagnostics = steepReason;
+            result.trackedPlaneHeights.fill(0.0f, clouds.size());
+            result.planeIdentityConsensusHeight = 0.0f;
+        } else if (!steepReason.isEmpty()) {
+            result.planeIdentityDiagnostics += QStringLiteral("；%1").arg(steepReason);
+        }
+    }
     result.diagnostics+=QStringLiteral("Plane identity: %1\n").arg(result.planeIdentityDiagnostics);
     for(QMatrix4x4 &matrix:result.registrationCorrections)matrix.setToIdentity();
     result.registrationCorrections[0].setToIdentity();
@@ -1538,6 +1998,12 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
     result.parallelEnabled = icp.parallelEnabled && actualParallelTasks > 1;
     result.requestedParallelTasks = requestedParallelTasks;
     result.actualParallelTasks = result.parallelEnabled ? actualParallelTasks : 1;
+    // Read-only view of the converted clouds. Workers must never reach the
+    // mutable container: a non-const clouds[index] would detach the shared
+    // buffer while another worker is still reading it. Every worker returns a
+    // private OverlapDiagnostic and the join loop below commits it in scan
+    // order, so the overlap results stay order-independent.
+    const QVector<ConvertedCloud> *const cloudView = &clouds;
     QVector<MultiFrameRegistrationResult::OverlapDiagnostic> preparedOverlaps(pairCount);
     if (icp.enabled && result.parallelEnabled) {
         QThreadPool pool;
@@ -1545,16 +2011,23 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
         QVector<QFuture<MultiFrameRegistrationResult::OverlapDiagnostic>> futures;
         futures.reserve(pairCount);
         for (int index = 1; index < inputs.size(); ++index)
-            futures.push_back(QtConcurrent::run(&pool, [&, index] {
-                return overlapDiagnostic(index, clouds[index].sample, clouds[index - 1].sample);
+            futures.push_back(QtConcurrent::run(&pool, [cloudView, index] {
+                return overlapDiagnostic(index, cloudView->at(index).sample,
+                                         cloudView->at(index - 1).sample);
             }));
+        // Explicit join barrier: no worker outlives this block.
         for (int index = 0; index < futures.size(); ++index)
             preparedOverlaps[index] = futures[index].result();
     } else if (icp.enabled) {
         for (int index = 1; index < inputs.size(); ++index)
-            preparedOverlaps[index - 1] = overlapDiagnostic(index, clouds[index].sample,
-                                                            clouds[index - 1].sample);
+            preparedOverlaps[index - 1] = overlapDiagnostic(index, cloudView->at(index).sample,
+                                                            cloudView->at(index - 1).sample);
     }
+    // The per-pair ICP loop stays strictly serial and in scan order: each
+    // accepted correction is composed onto the previous frame's global
+    // correction and applied to that frame's cloud, so parallelising these
+    // commits would change the result. Only the read-only overlap
+    // precomputation above runs in parallel.
     if(icp.enabled)
     for(int index=1;index<inputs.size();++index){
         const float pairStart=0.15f+(0.85f*float(index-1)/float(pairCount));

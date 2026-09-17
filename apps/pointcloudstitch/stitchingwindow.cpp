@@ -94,6 +94,36 @@ QVector<pointcloud::Point3D> deterministicPreview(const QVector<pointcloud::Poin
     return preview;
 }
 
+QString registrationPairStatus(const pointcloud::IcpDiagnostics &diagnostic)
+{
+    if (diagnostic.accepted)
+        return diagnostic.steepPlaneDetected
+            ? QObject::tr("陡峭平面恢复通过") : QObject::tr("严格通过");
+    if (diagnostic.reason == QStringLiteral("plane_tilt_exceeds_limit"))
+        return QObject::tr("平面拟合不足：倾角超过 75 deg");
+    if (diagnostic.reason.contains(QStringLiteral("steep_plane_feature_insufficient")))
+        return QObject::tr("结构特征不足");
+    if (diagnostic.overlapCoordinateSystem == QStringLiteral("plane_uvn")
+        && (diagnostic.localOverlapSourcePoints < 100
+            || diagnostic.localOverlapTargetPoints < 100))
+        return QObject::tr("局部重叠不足");
+    if (diagnostic.planePrealignmentAttempted && !diagnostic.planePrealignmentAccepted)
+        return QObject::tr("坐标链风险或平面预对齐超限");
+    return QObject::tr("配准未通过");
+}
+
+QString registrationFailureSummary(const QVector<pointcloud::IcpDiagnostics> &diagnostics)
+{
+    QStringList lines;
+    for (int index = 1; index < diagnostics.size(); ++index) {
+        const pointcloud::IcpDiagnostics &diagnostic = diagnostics[index];
+        if (!diagnostic.accepted)
+            lines.push_back(QObject::tr("scan %1：%2 (%3)")
+                .arg(index + 1).arg(registrationPairStatus(diagnostic)).arg(diagnostic.reason));
+    }
+    return lines.join(QLatin1Char('\n'));
+}
+
 bool writeReport(const QString &path, const StitchTaskResult &result, QString *error)
 {
     QJsonObject root;
@@ -170,6 +200,12 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
     registration.insert(QStringLiteral("wide_structure_yaw_radius_deg"), result.icpOptions.wideStructureYawRadiusDegrees);
     registration.insert(QStringLiteral("wide_structure_yaw_step_deg"), result.icpOptions.wideStructureYawStepDegrees);
     registration.insert(QStringLiteral("tangent_coarse_minimum_coverage_gain"), result.icpOptions.tangentCoarseMinimumCoverageGain);
+    registration.insert(QStringLiteral("maximum_plane_tilt_deg"), result.icpOptions.maximumPlaneTiltDegrees);
+    registration.insert(QStringLiteral("plane_fit_ransac_hypotheses"), result.icpOptions.planeFitRansacHypotheses);
+    registration.insert(QStringLiteral("minimum_plane_inlier_ratio"), result.icpOptions.minimumPlaneInlierRatio);
+    registration.insert(QStringLiteral("plane_identity_normal_tolerance_deg"), result.icpOptions.planeIdentityNormalToleranceDegrees);
+    registration.insert(QStringLiteral("plane_identity_offset_tolerance_mm"), result.icpOptions.planeIdentityOffsetToleranceMm);
+    registration.insert(QStringLiteral("steep_plane_minimum_observable_dof"), result.icpOptions.steepPlaneMinimumObservableDof);
     QJsonArray finalCorrections;
     for (const QMatrix4x4 &matrix : result.merge.registrationCorrections) {
         QJsonArray values;
@@ -388,6 +424,29 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
         item.insert(QStringLiteral("source_plane_height_mm"), diagnostic.sourcePlaneHeight);
         item.insert(QStringLiteral("target_plane_height_mm"), diagnostic.targetPlaneHeight);
         item.insert(QStringLiteral("plane_offset_difference_mm"), diagnostic.planeOffsetDifference);
+        item.insert(QStringLiteral("plane_fit_method"), diagnostic.planeFitMethod);
+        item.insert(QStringLiteral("source_plane_normal"), QJsonArray{diagnostic.sourcePlaneNormal.x(), diagnostic.sourcePlaneNormal.y(), diagnostic.sourcePlaneNormal.z()});
+        item.insert(QStringLiteral("target_plane_normal"), QJsonArray{diagnostic.targetPlaneNormal.x(), diagnostic.targetPlaneNormal.y(), diagnostic.targetPlaneNormal.z()});
+        item.insert(QStringLiteral("source_plane_tilt_deg"), diagnostic.sourcePlaneTiltDegrees);
+        item.insert(QStringLiteral("target_plane_tilt_deg"), diagnostic.targetPlaneTiltDegrees);
+        item.insert(QStringLiteral("source_plane_fit_rms_mm"), diagnostic.sourcePlaneFitRms);
+        item.insert(QStringLiteral("target_plane_fit_rms_mm"), diagnostic.targetPlaneFitRms);
+        item.insert(QStringLiteral("source_plane_inlier_count"), diagnostic.sourcePlaneInlierCount);
+        item.insert(QStringLiteral("target_plane_inlier_count"), diagnostic.targetPlaneInlierCount);
+        item.insert(QStringLiteral("source_plane_inlier_ratio"), diagnostic.sourcePlaneInlierRatio);
+        item.insert(QStringLiteral("target_plane_inlier_ratio"), diagnostic.targetPlaneInlierRatio);
+        item.insert(QStringLiteral("plane_identity_normal_difference_deg"), diagnostic.planeIdentityNormalDifferenceDegrees);
+        item.insert(QStringLiteral("plane_identity_offset_difference_mm"), diagnostic.planeIdentityOffsetDifferenceMm);
+        item.insert(QStringLiteral("steep_plane_detected"), diagnostic.steepPlaneDetected);
+        item.insert(QStringLiteral("steep_plane_feature_count_source"), diagnostic.steepPlaneFeatureCountSource);
+        item.insert(QStringLiteral("steep_plane_feature_count_target"), diagnostic.steepPlaneFeatureCountTarget);
+        item.insert(QStringLiteral("steep_plane_observable_dof"), diagnostic.steepPlaneObservableDof);
+        item.insert(QStringLiteral("steep_plane_rejection_reason"), diagnostic.steepPlaneRejectionReason);
+        item.insert(QStringLiteral("overlap_coordinate_system"), diagnostic.overlapCoordinateSystem);
+        item.insert(QStringLiteral("overlap_local_minimum"), QJsonArray{diagnostic.overlapLocalMinimum.x(), diagnostic.overlapLocalMinimum.y(), diagnostic.overlapLocalMinimum.z()});
+        item.insert(QStringLiteral("overlap_local_maximum"), QJsonArray{diagnostic.overlapLocalMaximum.x(), diagnostic.overlapLocalMaximum.y(), diagnostic.overlapLocalMaximum.z()});
+        item.insert(QStringLiteral("local_overlap_source_points"), diagnostic.localOverlapSourcePoints);
+        item.insert(QStringLiteral("local_overlap_target_points"), diagnostic.localOverlapTargetPoints);
         item.insert(QStringLiteral("plane_prealignment_attempted"), diagnostic.planePrealignmentAttempted);
         item.insert(QStringLiteral("plane_prealignment_accepted"), diagnostic.planePrealignmentAccepted);
         item.insert(QStringLiteral("plane_prealignment_translation_mm"), diagnostic.planePrealignmentTranslation);
@@ -713,8 +772,8 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
     } else if (result.registrationAccepted && result.ok) {
         reportProgress(100, QObject::tr("点云配准和全部输出完成"));
     } else if (!result.registrationAccepted) {
-        result.error = QObject::tr("至少一组相邻点云未通过参考 ICP 流程；未生成正式合并文件。诊断点云：%1\n报告：%2")
-            .arg(result.mergedFile, result.reportFile);
+        result.error = QObject::tr("至少一组相邻点云未通过参考 ICP 流程；未生成正式合并文件。\n%1\n诊断点云：%2\n报告：%3")
+            .arg(registrationFailureSummary(result.merge.icpDiagnostics), result.mergedFile, result.reportFile);
         reportProgress(100, QObject::tr("配准失败，诊断文件已生成"));
     }
     return result;
@@ -1065,6 +1124,10 @@ void StitchingWindow::stitchingFinished()
                   .arg(result.merge.crossCloudDuplicateCount)
                   .arg(result.previewCount)
                   .arg(result.mergedFile, result.reportFile));
+    for (int index = 1; index < result.merge.icpDiagnostics.size(); ++index) {
+        const pointcloud::IcpDiagnostics &diagnostic = result.merge.icpDiagnostics[index];
+        appendLog(tr("scan %1：%2").arg(index + 1).arg(registrationPairStatus(diagnostic)));
+    }
     statusBar()->showMessage(result.transformOnly
         ? tr("手眼坐标转换和输出完成") : tr("点云配准和输出完成"));
     QMessageBox::information(this, tr("完成"), result.transformOnly

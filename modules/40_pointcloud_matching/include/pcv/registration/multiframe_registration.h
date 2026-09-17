@@ -60,6 +60,15 @@ struct IcpOptions {
     float planeFitHeightBandMm = 3.0f;
     float planeFitInlierDistanceMm = 0.8f;
     int planeFitIterations = 3;
+    // Direction-independent fallback for planes whose normal is not close to
+    // the robot-base Z axis.  The legacy height-band path remains the default
+    // for shallow planes to preserve existing results.
+    float maximumPlaneTiltDegrees = 75.0f;
+    int planeFitRansacHypotheses = 256;
+    float minimumPlaneInlierRatio = 0.15f;
+    float planeIdentityNormalToleranceDegrees = 3.0f;
+    float planeIdentityOffsetToleranceMm = 5.0f;
+    int steepPlaneMinimumObservableDof = 3;
     float maximumCorrectionTranslation = 10.0f;
     float maximumCorrectionAngleDegrees = 1.0f;
     bool structuralValidationEnabled = true;
@@ -205,6 +214,29 @@ struct IcpDiagnostics {
     float sourcePlaneHeight = 0.0f;
     float targetPlaneHeight = 0.0f;
     float planeOffsetDifference = 0.0f;
+    QString planeFitMethod;
+    QVector3D sourcePlaneNormal;
+    QVector3D targetPlaneNormal;
+    float sourcePlaneTiltDegrees = 0.0f;
+    float targetPlaneTiltDegrees = 0.0f;
+    float sourcePlaneFitRms = 0.0f;
+    float targetPlaneFitRms = 0.0f;
+    int sourcePlaneInlierCount = 0;
+    int targetPlaneInlierCount = 0;
+    float sourcePlaneInlierRatio = 0.0f;
+    float targetPlaneInlierRatio = 0.0f;
+    float planeIdentityNormalDifferenceDegrees = 0.0f;
+    float planeIdentityOffsetDifferenceMm = 0.0f;
+    bool steepPlaneDetected = false;
+    int steepPlaneFeatureCountSource = 0;
+    int steepPlaneFeatureCountTarget = 0;
+    int steepPlaneObservableDof = 0;
+    QString steepPlaneRejectionReason;
+    QString overlapCoordinateSystem;
+    QVector3D overlapLocalMinimum;
+    QVector3D overlapLocalMaximum;
+    int localOverlapSourcePoints = 0;
+    int localOverlapTargetPoints = 0;
     bool planePrealignmentAttempted = false;
     bool planePrealignmentAccepted = false;
     float planePrealignmentTranslation = 0.0f;

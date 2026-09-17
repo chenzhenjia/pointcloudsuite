@@ -79,6 +79,33 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 
 ## 8. 变更记录
 
+### 2026-09-15（PointCloudStitch 间歇 0xc0000005：并行路径 Qt 隐式共享容器并发 detach）
+
+- 登记主模块 `30_pointcloud_stitch`，同步审计 `40_pointcloud_matching`；未提交、未推送、未删除任何旧构建目录，陡峭平面相关未提交修改（`apps/pointcloudstitch/*`、`docs/modules/40_pointcloud_matching.md`、`modules/40_pointcloud_matching/{include,src}`、`tests/unit/registration/multiframe_registration_tests.cpp`）全部保留。
+- 根因一（已动态复现）：`applyTrajectorySeamFusionKernel` 用 `merge.points = *points` 与调用方共享容器（GUI 入口 `apps/pointcloudstitch/seamfusion.cpp` 即此路径），并行 worker 随后以非 `const` 的 `merge->points[...]`、`merge->cloudIds[...]`、`buckets[i]`、`centers[i]`、`directions[i]` 读取；Qt 非 `const operator[]` 会 `detach()`，多个 worker 并发 detach 同一 refcount > 1 缓冲时并发改写同一指针成员并重复 deref 旧缓冲，造成堆破坏，随后在任意分配点（表面为 `QVector<SeamFusionDiagnostic>` 扩容）表现为 `0xc0000005`。在未修复源码上运行新增用例，100 次中第 34 次以 `-1073741819`（`0xC0000005`）退出。
+- 根因二（ABI 风险，已量化并排除）：工作区在 `IcpOptions` **结构体中部**插入 6 个字段、在 `IcpDiagnostics` 中部插入 23 个字段，实测 `sizeof(IcpOptions)` 280 → 304、`offsetof(maximumCorrectionTranslation)` 96 → 120、`sizeof(IcpDiagnostics)` 896 → 1080、`offsetof(planePrealignmentAttempted)` 500 → 688。若沿用 `NMake Makefiles JOM` 这类不跟踪头文件依赖的增量构建，旧 object 与新 object 会按不同布局访问同一结构体（与 2026-09-01 记录同类）。本轮全部使用**全新**源码树外构建目录 + `NMake Makefiles`（CMake 自带依赖扫描），构建脚本的头文件依赖检查通过，不存在新旧对象混用。
+- 修复行为：seam fusion 引入只读 `SeamWorkerView`（const 指针集合）与稳定 const 视图，worker 只调用 const API、只返回私有 `SeamBandTask`/`CoreChunk`，共享结果与诊断在显式 join 屏障后按确定顺序串行提交，`merge->*` 仅在所有 future 结束后改写；registration 并行 overlap 改为 `cloudView->at()` 只读访问与显式捕获，ICP 修正矩阵累计保持串行。`result.diagnostics.reserve(...)` 仅作确定性/防御性措施，不作为根因修复。
+- 行为与契约不变：输入长度、`cloudId` 范围、取消语义、失败回滚、输出点序与来源映射、串并行结果一致性、`IcpOptions/IcpDiagnostics/SeamFusionDiagnostic` 字段与 JSON schema、共享 `CancellationToken` 生命周期均未改变；未引入对 GUI 对象或临时 lambda 的悬空引用。
+- 验证：
+  - Debug 清洁构建（新目录 `C:\pcv-build\stitch-crash-debug-clean-caf0b46`，`NMake Makefiles`，MSVC 19.51.36252.0 / 14.51.36231，SDK 10.0.28000.0，全 target 100%，退出码 0）。修复后另用全新目录 `C:\pcv-build\stitch-crash-debug-clean-v2-caf0b46` 全量重建（100%，退出码 0）。
+  - `ctest --test-dir <debug-v2> -C Debug -R "seam_fusion_tests|multiframe_registration_tests|stitching_interface_tests" --repeat until-fail:100 --output-on-failure` → 3/3 通过，0 失败，用时 344.32 s，退出码 0（无 `0xc0000005`）。
+  - `ctest --test-dir <debug-v2> -C Debug --output-on-failure` → 14/14 通过，0 失败，退出码 0。
+  - Release 全量构建（`C:\pcv-build\stitch-crash-release-caf0b46`，100%，退出码 0）后 `ctest -C Release -R "seam_fusion_tests|multiframe_registration_tests|stitching_interface_tests"` → 3/3 通过，退出码 0。
+- 未验证项（不得视为已通过）：
+  - 真实夹具重放**未验证**。`D:\stitch_test` 下 `1/2/3/4_30/5_40/6_50` 只有 PLY、`hand_eye_convert.xml` 与上一次运行的输出；驱动 `registration_diagnostic stitch` / GUI 所必需的 `--pose-info`（`A<n> Start … ; END …`）位姿 TXT 不存在，且 PLY 文件名（如 `4_X565.ply`）不含工具要求的 `A<n>` 扫描编号，因此本轮**没有**以任何合成姿态替代真实夹具验收。
+  - GUI 人工复测（PointCloudStitch 走 30° 数据并观察不崩溃）未执行。
+  - PageHeap / Application Verifier / WinDbg 首次堆损坏捕获未执行：本机 `D:\Windows Kits\10\Debuggers\x64` 为空，未安装调试器；改用“未修复版本 100 次复现 + 修复版本 100 次通过 + 事件日志故障偏移”作为证据。
+  - 用户旧的 `build\Desktop_Qt_6_8_3_MSVC2022_64bit_Debug` 目录已不存在，无法核对其生成器与 `.obj.d` 是否为空，因此“用户 GUI 崩溃是否由 JOM 陈旧对象引起”仍属未证实假设。
+- 剩余风险：`isCancelled` 回调在并行 worker 中会被多线程调用，调用方必须保证其线程安全（`CancellationToken` 为原子量，安全）；新增测试中的取消回调已改用 `std::atomic`。
+
+### 2026-09-15（PointCloudStitch 陡峭平面配准修正）
+
+- 登记主模块 `40_pointcloud_matching`，配套报告/状态字段位于 `apps/pointcloudstitch`；未修改坐标链、手眼矩阵、原始 PLY、`workpiece_list.json` 或窗口生命周期。
+- 主平面拟合保留浅倾角 Z 高度带兼容路径；当该路径不适用时采用 1 mm 采样、固定候选序列的方向无关 RANSAC + PCA 精化。正式上限为相对 robot-base Z 轴 75 deg，超过上限按 `plane_tilt_exceeds_limit` 拒绝。
+- 陡峭面使用目标平面的 `u/v/n` 局部重叠框，统一用于重叠计数、三层 ICP、步进保留、宽候选后的重建及结构验收。非平面结构和局部 `u/v` 边界点提供 Point-to-Point 辅助残差，主平面继续使用 Point-to-Plane。陡峭面必须具备两侧至少 100 个非平面结构特征点、`observableDof >= 3`、三层完成以及既有双向 3 mm 覆盖率阈值；纯平面/低特征情形按 `steep_plane_feature_insufficient` fail-closed。
+- `stitching_report.json` 记录平面拟合方式、法向/倾角/RMS/内点、局部重叠、可观测性及陡峭面拒绝原因；坐标链异常继续只报警。
+- 验证：Debug 构建 `multiframe_registration_tests`、`stitching_interface_tests`、`seam_fusion_tests`、`pointcloudstitch` 成功；新增 60/75 deg 特征面通过、76 deg 限制拒绝、60 deg 纯平面拒绝的回归。全量 CTest、GUI 人工操作及真实 `D:\stitch_test\6_50`/陡峭夹具重放待完成。
+
 ### 2026-09-09（亮度图取流验证 GUI）
 
 - `10_pointcloud_read` 增加 `extractIntensityImage()`，并在扫描组帧中同步保留 `CameraFrame::intensityData`。

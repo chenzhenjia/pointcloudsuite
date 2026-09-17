@@ -1,6 +1,6 @@
 # PointCloudSuite Agent 工作手册
 
-适用范围：本仓库。沟通默认使用中文；代码、命令、变量名、文件名、路径和错误信息保留原文。最后核对日期：2026-09-13。
+适用范围：本仓库。沟通默认使用中文；代码、命令、变量名、文件名、路径和错误信息保留原文。最后核对日期：2026-09-15。
 
 ## 1. 真相源与安全边界
 
@@ -76,6 +76,7 @@
 - 坐标转换：控制器位姿顺序为 `[X,Y,Z,A,B,C]`，其中 `A=Rx`、`B=Ry`、`C=Rz`；旋转约定为 `Rz(C)*Ry(B)*Rx(A)`。
 - 配准和拼接：多帧流程使用统一的 `registerRobotBaseFrames()` 与 `applyTrajectorySeamFusion()`；ROI 流程使用 `pcv::matching::{RoiMatchInput,RoiMatchResult,matchRoiToRobotBase}`。取消或失败时不得发布部分结果或复用旧正式输出。
 - 长流程统一使用 `pointcloud::CancellationToken` 或等价取消回调；取消结果必须带诊断，不得当作成功结果发布。
+- 并行 worker 与 Qt 隐式共享容器：worker 只允许通过 `const` 视图（`const QVector<T>&`、`.at()`、`->at()`）读取共享容器，禁止在下标访问中使用非 `const` 的 `container[i]`。Qt 的非 `const` `operator[]` 会 `detach()`，多线程同时 detach 同一 refcount > 1 的缓冲会破坏堆（历史现象为间歇 `0xc0000005`）。捕获列表必须显式列出只读对象；worker 只返回私有任务结构，共享结果、诊断和输出容器在 future 全部汇合后由主线程按确定顺序提交。新增或修改并行路径时，回归测试必须保留额外共享副本使 refcount > 1，并覆盖 `parallelEnabled=false` 与 `maxParallelTasks=1/2/4` 的等价性。
 - seam fusion 默认值：`halfWidth=8.0f`、`mutualDistance=0.6f`、`decisionCellSize=0.5f`。
 - 平面拟合：拒绝重复、越界、非有限和共线控制点；保留 RMS、内点、阈值、planarity、连通域和取消诊断。
 - 渲染：仅 GUI 线程修改 QWidget/OpenGL；拒绝点、轮廓、坐标系中的非有限值和越界索引。
