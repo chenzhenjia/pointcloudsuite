@@ -8,7 +8,7 @@
 
 接口/测试：`PointCloudCanvas`、`pointcloud_canvas_contract_tests`；真实 Windows 桌面交互和关闭生命周期需单独验收。
 
-最后核对日期：2026-09-07。实现位于 `modules/20_pointcloud_render/src/pointcloud_canvas.cpp`。本文件历史正文中的旧名称（`modules/20_pointcloudrender`、`pcv_m20_pointcloudrender`、`05_camerainput`）为当时名称，仅用于追溯。
+最后核对日期：2026-09-17。实现位于 `modules/20_pointcloud_render/src/pointcloud_canvas.cpp`。UI 同事工作区与 adapter 边界见 v0.4 协同文档；本文件历史正文中的旧名称为当时名称，仅用于追溯。
 
 ## 变更记录
 

@@ -1,23 +1,23 @@
 # 代码构成
 
-本文档描述当前 v0.3 代码边界。详细 API 和字段以公共头、CMake 和测试为准。
+本文档描述当前 v0.4 代码边界。模块迁移和 UI 交接以 `module_ui_integration_v0.4.md` 为准；详细 API 和字段以公共头、CMake 和测试为准，v0.3 文档只保留数据契约。
 
 ## 规范模块
 
 | target | 主要职责 | 依赖边界 |
 |---|---|---|
-| `pcv_m10_pointcloud_read` | PLY 读写、缓存；相机帧数据类型、帧转换、Mock 源；可选 Mv3dLp 实现（05 已并入） | `pcv_core`、`pcv_infrastructure`、Qt Core |
+| `pcv_m10_pointcloud_io` | PLY 读写、缓存、相机帧、过滤、PNG/PLY/JSON writer、`ArtifactTransaction`（05/80/filtering 已并入） | `pcv_core`、`pcv_infrastructure`、Qt Core/Gui |
 | `pcv_m20_pointcloud_render` | OpenGL context、VBO/FBO、绘制和点选 | `pcv_core`、Qt GUI/Widgets/OpenGL |
-| `pcv_m30_pointcloud_stitch` | 多帧输入组织与 PLY 读取、坐标转换/多帧匹配调用、seam fusion、拼接诊断、正式输出（唯一拼接编排） | 10、40、50、80 |
-| `pcv_m40_pointcloud_matching` | ICP、结构校验等底层能力；平面/ROI 点匹配接口 `pcv::matching` 与 `robot_base` 完整回传 | `pcv_core`、`pcv_filtering`、50、Qt Core/Gui |
+| `pcv_m30_pointcloud_stitch` | 多帧输入、ICP/多帧配准、坐标转换调用、seam fusion、诊断和 manifest（唯一拼接编排） | 10、50、Qt Core/Gui/Concurrent |
+| `pcv_m40_pointcloud_matching` | 规划中的工件位置确认占位；当前为 30/60 的 `INTERFACE` 兼容聚合 | 30、60 |
 | `pcv_m50_coordinate_conversion` | XML 标定、位姿插值、坐标转换（唯一数学实现） | `pcv_core`、Qt Core/Gui |
-| `pcv_m60_plane_fitting` | 三点/n 点拟合、RANSAC/PCA、连通域、几何诊断 | `pcv_core`、Qt Core/Gui |
-| `pcv_m70_roi_template` | 临时扫描、ROI、模板和 Mask；ROI 匹配改调 40 统一接口 | 10、40、50、80 |
-| `pcv_m80_plane_output` | PNG、PLY、JSON 成套输出和回滚 | `pcv_core`、`pcv_infrastructure`、10、Qt Core/Gui |
+| `pcv_m60_geometry_workpiece` | 平面/边缘几何、ROI、WObj、临时工件流程和诊断 | 10、50、Qt Core/Gui |
 
-实验相机能力由 `PCV_BUILD_EXPERIMENTAL_CAMERA` 控制，位于 `pcv_m10_pointcloud_read`
+实验相机能力由 `PCV_BUILD_EXPERIMENTAL_CAMERA` 控制，位于 `pcv_m10_pointcloud_io`
 （`pcv::camera` 头与实现）。无 SDK 时仍可构建纯函数转换与 Mock 源；真实 Mv3dLp 编译
-仅在 SDK 存在时启用。相机取流不属于 v0.3 稳定发布基线。
+仅在 SDK 存在时启用。相机取流不属于 v0.4 稳定发布基线。
+
+`pcv::io::ArtifactTransaction` 是 PNG、PLY、JSON 和 manifest 的唯一提交边界。30/60 只返回领域结果和 manifest，不直接写最终目录。
 
 历史目录名 `05_camerainput`、`10_pointcloudread`、`20_pointcloudrender`、
 `30_pointcloudstitch`、`40_pointcloudregistration`、`50_coordinateconversion`、
@@ -41,4 +41,4 @@
 header 在迁移期保留，只做 target/header 转发，不再增加新功能。删除前必须完成引用审计、
 全量构建、CTest、GUI 和真实夹具验收，并单独提交。
 
-最后核对日期：2026-09-13（CLI PLY 读取、运行数据目录与便携部署同步后）。
+最后核对日期：2026-09-17（v0.4 模块聚合与事务输出边界同步后）。

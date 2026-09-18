@@ -1,10 +1,10 @@
 # PointCloudSuite Agent 工作手册
 
-适用范围：本仓库。沟通默认使用中文；代码、命令、变量名、文件名、路径和错误信息保留原文。最后核对日期：2026-09-15。
+适用范围：本仓库。沟通默认使用中文；代码、命令、变量名、文件名、路径和错误信息保留原文。最后核对日期：2026-09-17。
 
 ## 1. 真相源与安全边界
 
-- 当前源码、CMake 和测试是事实来源；历史文档只用于追溯。
+- 当前源码、CMake 和测试是事实来源；v0.4 模块/UI 协同真相源为 `docs/architecture/module_ui_integration_v0.4.md`，历史文档只用于追溯。
 - 只修改用户明确指定的文件和模块，保留其他未提交修改。
 - 删除、覆盖、批量重命名、外部上传、账号或数据库操作前必须获得明确授权。
 - 禁止写入 password、secret、token、API key、private key。
@@ -15,7 +15,7 @@
 
 ## 2. 当前项目基线
 
-- 项目基线：PointCloudSuite v0.3；当前工作区已完成规范模块目录迁移和 30/40 职责重划，发布验收仍未完成。
+- 项目基线：PointCloudSuite v0.4 模块重整；数据字段和 PLY/JSON 契约继续沿用 v0.3，发布验收仍未完成。
 - 语言和工具：C++17、CMake 3.19+、Qt 6.5+、Windows/MSVC。
 - 根选项：
   - `PCV_BUILD_POINTCLOUDVIEW`
@@ -25,7 +25,7 @@
   - `PCV_BUILD_TESTS`
   - `PCV_BUILD_EXPERIMENTAL_CAMERA`（CMake 默认 `ON`；构建脚本默认关闭）
 - 外部算法依赖：不依赖 Python、Open3D、PCL、VTK 或 CUDA。
-- 当前统筹需求文档：`docs/requirements/pointcloudview_v0.3.md`。
+- 当前架构与交接文档：`docs/architecture/module_ui_integration_v0.4.md`；数据契约文档：`docs/requirements/pointcloudview_v0.3.md`。
 - 模块详细记录：`docs/modules/<module>.md`。
 
 ## 3. 模块与 target
@@ -34,20 +34,18 @@
 
 | 编号 | 模块 | 规范目录 | 规范 target |
 |---|---|---|---|
-| 10 | 点云读写与相机帧输入 | `modules/10_pointcloud_read` | `pcv_m10_pointcloud_read` |
+| 10 | 点云读写、相机帧输入、过滤与事务输出 | `modules/10_pointcloud_io` | `pcv_m10_pointcloud_io` |
 | 20 | 点云渲染 | `modules/20_pointcloud_render` | `pcv_m20_pointcloud_render` |
 | 30 | 点云拼接与 seam fusion | `modules/30_pointcloud_stitch` | `pcv_m30_pointcloud_stitch` |
-| 40 | 点云匹配与配准底层能力 | `modules/40_pointcloud_matching` | `pcv_m40_pointcloud_matching` |
+| 40 | 工件位置确认规划占位 | `modules/40_pointcloud_matching` | `pcv_m40_pointcloud_matching`（`INTERFACE`） |
 | 50 | 坐标转换 | `modules/50_coordinate_conversion` | `pcv_m50_coordinate_conversion` |
-| 60 | 平面拟合 | `modules/60_plane_fitting` | `pcv_m60_plane_fitting` |
-| 70 | ROI/模板 | `modules/70_roi_template` | `pcv_m70_roi_template` |
-| 80 | 工具平面输出 | `modules/80_plane_output` | `pcv_m80_plane_output` |
+| 60 | 平面、边缘、ROI、WObj、临时工件 | `modules/60_geometry_workpiece` | `pcv_m60_geometry_workpiece` |
 | 90 | `90_interferenceplane` 干涉平面检查 | 仅文档占位 | 未实现 |
 | 100 | `100_qualityreport` 质量报告 | 仅文档占位 | 未实现 |
 
-迁移期兼容 target 包括旧模块名 `pcv_m05_camerainput`、`pcv_m10_pointcloudread`、
+迁移期兼容 target 包括旧模块名 `pcv_m05_camerainput`、`pcv_m10_pointcloud_read`、`pcv_m10_pointcloudread`、
 `pcv_m20_pointcloudrender`、`pcv_m30_pointcloudstitch`、`pcv_m40_pointcloudregistration`、
-`pcv_m50_coordinateconversion`、`pcv_m60_planefitting`、`pcv_m80_planeoutput`，以及
+`pcv_m50_coordinateconversion`、`pcv_m60_plane_fitting`、`pcv_m60_planefitting`、`pcv_m70_roi_template`、`pcv_m80_plane_output`、`pcv_m80_planeoutput`，以及
 `pcv_io`、`pcv_registration`、`pcv_interface`、`pcv_output`。它们只能做 target/header
 转发，不得新增与规范模块重复的实现；只有在所有调用方迁移、弃用周期结束并完成独立
 评审后才能删除。
@@ -58,34 +56,34 @@
 - 共享模块不得依赖 `apps/`。
 - `20_pointcloud_render` 是唯一允许依赖 Qt Widgets/OpenGL 的共享模块；其他算法模块不得反向依赖 UI。
 - `30_pointcloud_stitch` 是唯一拼接编排边界，负责输入读取、坐标转换/匹配调用、seam fusion、诊断、正式输出和失败回滚。
-- `40_pointcloud_matching` 负责平面/ROI 点匹配、覆盖校验、`robot_base` 完整回传，并保留 ICP、相邻帧配准和结构校验底层能力；seam fusion 的实现与公共类型归属 30。
-- `50_coordinate_conversion` 是坐标转换唯一数学实现来源；`60_plane_fitting` 只负责纯几何拟合和诊断。
-- `70_roi_template` 的 ROI 匹配必须调用 `pcv::matching::matchRoiToRobotBase`，不得保留第二套匹配实现。
-- `modules/10_pointcloud_read` 同时承载原 `05_camerainput` 的相机帧转换、Mock、组帧和可选 Mv3dLp 实现；相机能力受 `PCV_BUILD_EXPERIMENTAL_CAMERA` 控制。
+- `40_pointcloud_matching` 是规划中的工件位置确认占位；当前不实现基准比较、移动阈值或 6DoF 判定。兼容聚合入口将现有多帧配准/ICP 转发到 30、ROI/临时工件几何转发到 60。
+- `50_coordinate_conversion` 是坐标转换唯一数学实现来源；`60_geometry_workpiece` 负责纯几何拟合、ROI、WObj 和临时工件。
+- `60_geometry_workpiece` 的正式输出必须通过 10 的 `pcv::io::ArtifactTransaction`，不得直接提交最终文件。
+- `modules/10_pointcloud_io` 同时承载原 `05_camerainput`、根 `src/filtering` 和 80 writer 的实现；相机能力受 `PCV_BUILD_EXPERIMENTAL_CAMERA` 控制。
 - `20_pointcloud_render` 的 `PointCloudCanvas` 实现位于 `modules/20_pointcloud_render/src/pointcloud_canvas.cpp`；应用只负责业务状态、异步生命周期和渲染 DTO 转换。
 - Qt Designer 文件位于 `apps/pointcloudview/ui/`、`apps/pointcloudstitch/ui/` 和实验性 `apps/intensity_viewer/ui/`，不得把生成头文件提交为手工 UI 源。
 - `pointcloudcli` 提供 `--help`、`--version`、`inspect ply`、`read ply` 和 `temp-workpiece run`；仅依赖 Qt Core/Gui/Concurrent，不接入 QWidget、OpenGL 或 GUI 事件循环。前两个 PLY 命令只读输入，不写出新文件；`--data-dir` 只用于临时工件命令，按 CLI 参数、`PCV_DATA_DIR`、exe 同级 `data`、`%LOCALAPPDATA%\\PointCloudSuite\\data` 顺序选择可写运行目录。
-- `registration_diagnostic` 仅通过 `pcv::interface::stitchRawLineProfiles` 调用统一拼接流水线。
+- `registration_diagnostic` 仅通过 30 的统一拼接接口调用流水线；新代码使用 `pcv::interface::StitchingRequest` / `stitch()`，`stitchRawLineProfiles` 仅为兼容入口。
 - 应用 wrapper 只能做参数转换和结果映射，不得保留第二套算法。
 
 ## 5. 稳定契约
 
-修改公共类型、输出格式、坐标约定或错误码前，先阅读 v0.3 需求文档和对应模块文档。
+修改公共类型、输出格式、坐标约定或错误码前，先阅读 v0.4 协同文档、v0.3 数据契约和对应模块文档。
 
 - PLY 读写：按属性名读取坐标和法向，支持 ASCII、binary little-endian、binary big-endian；保留点序、source index、bounds、取消和错误语义。
 - 坐标转换：控制器位姿顺序为 `[X,Y,Z,A,B,C]`，其中 `A=Rx`、`B=Ry`、`C=Rz`；旋转约定为 `Rz(C)*Ry(B)*Rx(A)`。
-- 配准和拼接：多帧流程使用统一的 `registerRobotBaseFrames()` 与 `applyTrajectorySeamFusion()`；ROI 流程使用 `pcv::matching::{RoiMatchInput,RoiMatchResult,matchRoiToRobotBase}`。取消或失败时不得发布部分结果或复用旧正式输出。
+- 配准和拼接：多帧流程由 30 的 `registerRobotBaseFrames()` 与 `applyTrajectorySeamFusion()` 统一编排；60 负责 ROI/临时工件几何。取消或失败时不得发布部分结果或复用旧正式输出。
 - 长流程统一使用 `pointcloud::CancellationToken` 或等价取消回调；取消结果必须带诊断，不得当作成功结果发布。
 - 并行 worker 与 Qt 隐式共享容器：worker 只允许通过 `const` 视图（`const QVector<T>&`、`.at()`、`->at()`）读取共享容器，禁止在下标访问中使用非 `const` 的 `container[i]`。Qt 的非 `const` `operator[]` 会 `detach()`，多线程同时 detach 同一 refcount > 1 的缓冲会破坏堆（历史现象为间歇 `0xc0000005`）。捕获列表必须显式列出只读对象；worker 只返回私有任务结构，共享结果、诊断和输出容器在 future 全部汇合后由主线程按确定顺序提交。新增或修改并行路径时，回归测试必须保留额外共享副本使 refcount > 1，并覆盖 `parallelEnabled=false` 与 `maxParallelTasks=1/2/4` 的等价性。
 - seam fusion 默认值：`halfWidth=8.0f`、`mutualDistance=0.6f`、`decisionCellSize=0.5f`。
 - 平面拟合：拒绝重复、越界、非有限和共线控制点；保留 RMS、内点、阈值、planarity、连通域和取消诊断。
 - 渲染：仅 GUI 线程修改 QWidget/OpenGL；拒绝点、轮廓、坐标系中的非有限值和越界索引。
-- 平面输出：PNG、PLY、JSON 必须成套提交；任一写入失败整体失败并回滚。PNG 使用 `Grayscale8` 和 0/255；平面 PLY 使用 binary little-endian。
+- 平面输出：由 10 的 `ArtifactTransaction` 成套提交 PNG、PLY、JSON；任一写入失败整体失败并回滚。PNG 使用 `Grayscale8` 和 0/255；平面 PLY 使用 binary little-endian。
 - 共享库不弹窗、不访问 QWidget；通过 Result 状态、错误码、取消标记和诊断返回结果。
 - 应用层负责用户提示、窗口生命周期和线程结果发布。
 
 详细字段、JSON schema、错误码和测试矩阵以：
-`docs/requirements/pointcloudview_v0.3.md`、`docs/modules/<module>.md`、公共头文件和测试源码为准。
+`docs/architecture/module_ui_integration_v0.4.md`、`docs/requirements/pointcloudview_v0.3.md`、`docs/modules/<module>.md`、公共头文件和测试源码为准。
 
 ## 6. 单模块开发流程
 
@@ -97,7 +95,7 @@
 4. 只修改目标模块及必要的跨模块接口、测试和文档。
 5. 先运行目标模块测试，再构建直接依赖和应用。
 6. 涉及公共头、CMake、processor、UI 或输出契约时执行完整 Debug 构建和全量 CTest；发布相关改动补充 Release。
-7. 更新 `AGENTS.md`、`docs/modules/<module>.md` 和 v0.3 需求追踪，记录日期、需求、文件、行为、验证和风险；目录或 target 迁移时同步更新索引、架构和历史说明。
+7. 更新 `AGENTS.md`、`docs/modules/<module>.md` 和 v0.4 协同文档；数据契约仍在 v0.3 需求文档中追踪。记录日期、需求、文件、行为、验证和风险；目录或 target 迁移时同步更新索引、架构和历史说明。
 8. 提交前执行 `git diff --check` 和 `git status --short`。
 
 跨模块修改必须在提交说明中列出影响模块、依赖变更和回归测试。未实现模块不得写入功能成功记录。

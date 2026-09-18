@@ -12,4 +12,4 @@ PNG、PLY、JSON 成套输出。输出 Grayscale8 PNG、binary little-endian rob
 
 主要接口为 `writePlaneOutput`。主要测试为 `plane_output_tests`。输出路径、错误码和 JSON 字段以 v0.3 契约为准。
 
-最后核对日期：2026-09-07（模块重命名后复核）。
+最后核对日期：2026-09-17（兼容入口同步；规范 writer 与事务归 10）。

@@ -6,7 +6,7 @@
 
 接口/测试：`loadHandEyeCalibration`、`transformLineScanToRobotBase`；`handeye_transform_tests`。
 
-最后核对日期：2026-09-07。本文件历史正文中的旧名称（`modules/50_coordinateconversion`、`pcv_m50_coordinateconversion`）为当时名称，仅用于追溯。
+最后核对日期：2026-09-17。本模块仍是 v0.4 坐标转换唯一实现；历史正文中的旧名称仅用于追溯。
 
 ## 变更记录
 

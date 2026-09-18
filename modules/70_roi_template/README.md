@@ -12,4 +12,4 @@
 
 主要接口为 `generateTempWorkpiece` 和临时工件相关接口。主要测试为 `temp_workpiece_interface_tests`、`roi_matching_tests` 及几何回归测试。
 
-最后核对日期：2026-09-07（模块重命名后 target 引用同步，ROI 匹配统一到模块 40）。
+最后核对日期：2026-09-17（兼容入口同步；规范实现归 60，事务输出归 10）。

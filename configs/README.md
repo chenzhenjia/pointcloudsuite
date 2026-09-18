@@ -13,4 +13,6 @@
 
 默认数据目录由模板和程序默认值定义，运行数据应包含 `runtime_data`、`cache`、`logs` 和 `exports`，不得写入源码树。JSON 配置不支持注释。
 
-最后核对日期：2026-09-04。
+模块路径、target 和 UI 交接边界以 `docs/architecture/module_ui_integration_v0.4.md` 为准；配置字段与数据目录契约不因模块重整改变。
+
+最后核对日期：2026-09-17。

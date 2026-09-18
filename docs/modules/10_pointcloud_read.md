@@ -1,12 +1,12 @@
-# 10_pointcloud_read：点云输入（PLY 读写缓存与相机采集转换）
+# 10_pointcloud_io：点云读写、相机输入与事务输出
 
 公共接口 `pcv::detail::io::inspectPlyHeader()` 仅读取 PLY header 至 `end_header`，返回格式、版本、vertex 数量和 header 错误，不解析点数据；供 `pointcloudcli inspect ply` 和 `registration_diagnostic inspect` 使用。`pcv::detail::io::readPly()` 供 `pointcloudcli read ply` 输出完整点云摘要，保留 ASCII、binary little-endian/big-endian、Bounds、intensity 和取消语义。
 
-状态：已实现。规范实现位于 `modules/10_pointcloud_read/{include,src}`，模块 target 为 `pcv_m10_pointcloud_read`；旧 target `pcv_m10_pointcloudread`、`pcv_m05_camerainput` 与 `pcv_io` 为迁移期兼容入口（仅转发）。
+状态：已实现。规范实现位于 `modules/10_pointcloud_io/{include,src}`，模块 target 为 `pcv_m10_pointcloud_io`；旧 target `pcv_m10_pointcloud_read`、`pcv_m10_pointcloudread`、`pcv_m05_camerainput`、`pcv_io`、`pcv_filtering` 和 `pcv_m80_plane_output` 为迁移期兼容入口（仅转发）。本文件文件名保留旧名称以避免历史链接失效。
 
-相机能力（原 05 已并入）：2026-09-06 起原 `05_camerainput` 并入本模块，历史记录见 [05_camerainput.md](05_camerainput.md)。并入内容含相机公共头 `pcv/camera/*`、帧转换、`LatestFrameSlot`、Mock 源、扫描组帧与可选 Mv3dLp 实现；相机为 `PCV_BUILD_EXPERIMENTAL_CAMERA` 可选实验能力，无 SDK 仍可构建纯函数转换与 Mock 源，真实 Mv3dLp 编译需 SDK。相机取流不属于 v0.3 稳定发布基线。
+相机能力（原 05 已并入）：2026-09-06 起原 `05_camerainput` 并入本模块，历史记录见 [05_camerainput.md](05_camerainput.md)。并入内容含相机公共头 `pcv/camera/*`、帧转换、`LatestFrameSlot`、Mock 源、扫描组帧与可选 Mv3dLp 实现；相机为 `PCV_BUILD_EXPERIMENTAL_CAMERA` 可选实验能力，无 SDK 仍可构建纯函数转换与 Mock 源，真实 Mv3dLp 编译需 SDK。相机取流不属于 v0.4 稳定发布基线。
 
-职责：兼容读取 PLY ASCII/binary LE/BE，并在成功读取后强制生成 `binary_little_endian` canonical PLY；缓存、诊断和后续落盘 PLY 统一为 Binary LE。canonical 写入或回读校验失败时主流程失败。不得依赖应用或 Qt Widgets。相机帧数据类型、帧转换与 Mock 源（原 05）亦归属本模块。
+职责：兼容读取 PLY ASCII/binary LE/BE，并在成功读取后强制生成 `binary_little_endian` canonical PLY；缓存、诊断和后续落盘 PLY 统一为 Binary LE。canonical 写入或回读校验失败时主流程失败。过滤、PNG/PLY/JSON writer 和 `pcv::io::ArtifactTransaction` 也归属本模块；30/60 不直接提交最终文件。
 
 `pointcloudcli inspect ply` 仅调用 Header 检查接口，不读取 payload；`pointcloudcli read ply` 调用完整读取接口并输出点数、Bounds、intensity 和取消状态摘要。CLI 的缓存根目录由应用层通过 `pcv::runtime::configureDataDirectory()` 注入，GUI 仍使用自身既有数据目录配置。
 
@@ -14,7 +14,7 @@
 
 亮度图验证：`CameraFrame::intensityData` 保存与深度/点云栅格一一对应的 `Mono8` 数据；`extractIntensityImage()` 仅接受有效完整扫描并严格校验 `width * height` 字节。独立验证 GUI `intensity_viewer` 在实验相机开关开启时构建，使用 `Range_Image=7`、`MV3D_LP_RegisterImageDataCallBack`，实时预览并手动保存 PNG；不提供 Mock，不保存高度文件。
 
-最后核对日期：2026-09-13。当前状态以源码、CMake 和测试为准。本文件历史正文中的旧目录名/旧 target（`modules/10_pointcloudread`、`pcv_m10_pointcloudread`）为当时名称，仅用于追溯。
+最后核对日期：2026-09-17。当前状态以源码、CMake 和测试为准。本文件历史正文中的旧目录名/旧 target 为当时名称，仅用于追溯。
 
 ### 2026-09-09（亮度图取流验证 GUI）
 

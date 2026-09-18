@@ -2,7 +2,7 @@
 
 状态：已实现 `inspect ply`、`read ply` 和 `temp-workpiece run` 业务入口。target 为 `pointcloudcli`，仅在 `PCV_BUILD_CLI=ON` 时生成；默认 `OFF`，不改变 `pointcloudview` 或 `pointcloudstitch` 的构建行为。
 
-该 target 使用 C++17 和 Qt Core/Gui/Concurrent 访问已有业务模块，不链接 `Qt::Widgets`、`Qt::OpenGL`、`PointCloudCanvas` 或 GUI application target。CLI-only 组合仍可独立配置。
+该 target 使用 C++17 和 Qt Core/Gui/Concurrent，规范依赖为 `pcv_m10_pointcloud_io`、`pcv_m50_coordinate_conversion` 和 `pcv_m60_geometry_workpiece`；不链接 `Qt::Widgets`、`Qt::OpenGL`、`PointCloudCanvas` 或 GUI application target。CLI-only 组合仍可独立配置。
 
 ## 命令契约
 
@@ -40,4 +40,4 @@ Release 便携目录可由 `scripts\build_windows.ps1 -CliOnly -Config Release -
 
 - 新增 `inspect ply`、`read ply`、`--data-dir` 可写目录回退和 15 项 CLI CTest；补充 `-CliOnly` Release 便携部署。
 
-最后核对日期：2026-09-13。
+最后核对日期：2026-09-17。本轮文档同步未运行 CTest。

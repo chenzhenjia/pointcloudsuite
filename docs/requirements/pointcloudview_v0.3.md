@@ -1,12 +1,12 @@
 # PointCloudSuite 点云处理项目需求文档
 
 版本：v0.3  
-最后核对日期：2026-09-13
-状态：核心模块稳定（模块重命名与 30/40 职责重划完成），相机扩展实验中，发布验收待完成
+最后核对日期：2026-09-17
+状态：数据契约基线（v0.3）；架构和 UI 交接已进入 v0.4，发布验收待完成
 
 ## 1. 目标和事实来源
 
-v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号模块治理；源码、CMake 和测试优先于历史文档。
+v0.3 继续作为 JSON、PLY、坐标、错误码和默认数值的数据契约基线；模块职责、目录、target 和 UI 交接以 `docs/architecture/module_ui_integration_v0.4.md` 为准。源码、CMake 和测试优先于历史文档。
 
 当前未实现模块为 `90_interferenceplane` 和 `100_qualityreport`。本版本不为这两个模块建立功能 target，也不报告虚假成功。
 
@@ -14,15 +14,15 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 
 | 模块 | 职责 | 规范 target | 状态 |
 |---|---|---|---|
-| `10_pointcloud_read` | 点云输入（PLY 读写、缓存、校验）；相机帧采集与转换（原 05 已并入） | `pcv_m10_pointcloud_read` | 已实现；相机为可选实验能力 |
+| `10_pointcloud_io` | PLY/缓存、相机输入、过滤、PNG/PLY/JSON writer、`ArtifactTransaction` | `pcv_m10_pointcloud_io` | 已实现；相机为可选实验能力 |
 | `20_pointcloud_render` | Qt/OpenGL 画布、VBO、点选 | `pcv_m20_pointcloud_render` | 已实现，桌面验收待完成 |
-| `30_pointcloud_stitch` | 多帧拼接唯一编排：读取、坐标转换/匹配调用、seam fusion、正式输出与回滚 | `pcv_m30_pointcloud_stitch` | 已实现 |
-| `40_pointcloud_matching` | 平面/ROI 点匹配、覆盖校验、`robot_base` 完整回传；保留 ICP/结构校验底层能力 | `pcv_m40_pointcloud_matching` | 已实现 |
+| `30_pointcloud_stitch` | 多帧拼接唯一编排：读取、ICP/多帧配准、坐标转换调用、seam fusion、manifest 与事务提交 | `pcv_m30_pointcloud_stitch` | 已实现 |
+| `40_pointcloud_matching` | 工件位置确认规划占位；本版不实现移动判定或新输出闭环 | `pcv_m40_pointcloud_matching`（`INTERFACE`） | 规划中，未实现 |
 | `50_coordinate_conversion` | 手眼标定、位姿插值、坐标转换（唯一数学实现） | `pcv_m50_coordinate_conversion` | 已实现 |
-| `60_plane_fitting` | 三点/n 点平面算法和诊断 | `pcv_m60_plane_fitting` | 已实现 |
-| `70_roi_template` | ROI、模板、临时工件接口（ROI 匹配改调 40 统一接口） | `pcv_m70_roi_template` | 已实现，部分 UI 编排保留 |
-| `80_plane_output` | PNG、PLY、JSON 成套输出 | `pcv_m80_plane_output` | 已实现 |
-| 相机能力（原 `05_camerainput`） | 海康相机取流（实验扩展），已并入 `10_pointcloud_read` | 同 `pcv_m10_pointcloud_read` | 实验中，不纳入 v0.3 发布基线 |
+| `60_geometry_workpiece` | 平面、边缘、ROI、WObj、临时工件流程 | `pcv_m60_geometry_workpiece` | 已实现 |
+| 历史 `70_roi_template` | 实现已并入 60，保留兼容转发 | `pcv_m70_roi_template` | 兼容入口 |
+| 历史 `80_plane_output` | writer/事务已并入 10，保留兼容转发 | `pcv_m80_plane_output` | 兼容入口 |
+| 相机能力（原 `05_camerainput`） | 海康相机取流（实验扩展），已并入 `10_pointcloud_io` | 同 `pcv_m10_pointcloud_io` | 实验中，不纳入发布基线 |
 | `90_interferenceplane` | 干涉平面检查 | 无 | 未实现 |
 | `100_qualityreport` | 质量报告 | 无 | 未实现 |
 
@@ -31,22 +31,24 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 ## 3. 数据流程
 
 ```text
-10 输入/相机采集
+10 输入/相机采集/预处理
     ↓
 20 渲染与交互
     ↓
-60 平面拟合
+60 平面、边缘与工件几何
     ↓
-70 ROI 生成
+60 ROI/WObj/临时工件
     ↓
-40 ROI 点匹配并完整回传 robot_base
+50 坐标转换与 60 领域结果
     ↓
-30 多帧拼接、seam fusion、正式输出
+30 多帧拼接、ICP、seam fusion、manifest
+    ↓
+10 ArtifactTransaction 成套提交
 ```
 
-单帧处理：输入校验 → `10` 读取/缓存 → `20` 渲染和点选 → `60` 平面拟合 → `70` ROI/模板 → `40` ROI 匹配（`robot_base` 完整回传，fail-closed）→ `80` 成套输出。
+单帧处理：输入校验 → `10` 读取/缓存/预处理 → `20` 渲染和点选 → `50` 坐标转换 → `60` 平面/边缘/ROI/WObj/临时工件 → `10` 事务成套输出。
 
-多帧处理：`30` 是唯一拼接编排：组织输入并读取 PLY，调用 `50` 转换与 `40` 多帧匹配，执行 seam fusion，成功后提交正式 PLY。取消或失败时不得发布部分结果或复用旧正式输出。
+多帧处理：`30` 是唯一拼接编排：组织输入并读取 PLY，调用 `50` 转换，执行 ICP/多帧配准和 seam fusion，生成 manifest 后由 `10` 提交正式文件。取消或失败时不得发布部分结果或复用旧正式输出。
 
 ## 4. 稳定契约
 
@@ -57,7 +59,8 @@ v0.3 是 PointCloudSuite 当前唯一统筹基线。项目按十个固定编号�
 - PNG、PLY、JSON 先写入 staging 目录，全部成功后成套提交；任一失败必须回滚。
 - 共享库不弹窗、不访问 QWidget；应用负责提示和线程生命周期。
 - `PointCloudCanvas` 实现位于 `modules/20_pointcloud_render/src/pointcloud_canvas.cpp`。
-- 诊断工具通过 `pcv::interface::stitchRawLineProfiles` 使用统一拼接接口。
+- 诊断工具优先通过 `pcv::interface::StitchingRequest` / `stitch()` 使用统一拼接接口；`stitchRawLineProfiles` 仅为兼容入口。
+- 40 的正式目标是生成含 `robot_base` 的平面点云和坐标元数据以支持未来移动比较；当前不实现模板持久化、比较、阈值、机器人下发或新闭环。
 
 详细字段和错误码以模块公共头、模块文档和测试源码为准。
 

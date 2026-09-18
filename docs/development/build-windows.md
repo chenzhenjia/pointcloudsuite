@@ -103,8 +103,19 @@ CLI 运行数据目录按 `--data-dir`、`PCV_DATA_DIR`、exe 同级 `data`、`%
 
 **修改公共头（尤其是新增结构体字段）后，必须使用能跟踪依赖的构建树，或执行 `-Clean` / Qt Creator 的“重新构建项目”。旧构建目录需要重新配置一次以应用新的 `VSLANG` 和依赖护栏。**
 
+## v0.4 模块构建边界
+
+规范 target 为 `pcv_m10_pointcloud_io`、`pcv_m20_pointcloud_render`、`pcv_m30_pointcloud_stitch`、`pcv_m40_pointcloud_matching`（兼容 `INTERFACE`）、`pcv_m50_coordinate_conversion` 和 `pcv_m60_geometry_workpiece`。旧 target 只做转发。构建目录必须位于源码树外且可写；UI 同事只构建其 `features/**`、UI 资源和 adapter 工作区，不直接链接模块 `src/`。
+
+本轮文档同步按用户要求暂不运行 CTest。下列命令仍是后续验收命令，不代表本轮已执行：
+
+```powershell
+cmake --build <DebugBuildDir> --config Debug
+ctest --test-dir <DebugBuildDir> -C Debug --output-on-failure
+```
+
 ## 验收原则
 
 修改公共头、CMake、UI、processor 或输出契约后，必须重新配置并构建受影响应用，必要时执行 Debug/Release 全量 CTest。GUI 人工验收和真实生产夹具验收必须单独记录。
 
-最后核对日期：2026-09-13。
+最后核对日期：2026-09-17。

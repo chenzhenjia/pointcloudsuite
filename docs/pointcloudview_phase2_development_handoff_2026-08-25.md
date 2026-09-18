@@ -1,6 +1,6 @@
 # PointCloudView 第二阶段开发交接记录
 
-> 状态：历史交接归档。本文记录阶段性状态；当前实现、构建和验收以 v0.3 文档及源码为准。最后核对日期：2026-09-04。
+> 状态：历史交接归档。本文记录阶段性状态；当前模块、UI 交接和回滚边界以 `docs/architecture/module_ui_integration_v0.4.md` 为准，数据契约以 v0.3 文档及源码为准。最后核对日期：2026-09-17。
 
 更新时间：2026-08-25  
 工作区：`D:\workpiece\pointcloudview\pointcloudview`  

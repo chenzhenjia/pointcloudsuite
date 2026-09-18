@@ -1,12 +1,12 @@
 # 30_pointcloud_stitch：多帧拼接（唯一编排模块）
 
-状态：已实现。本模块为多帧拼接的唯一编排模块：读取（10）、坐标转换调用（50）、多帧匹配调用（40）、seam fusion、拼接诊断、正式输出与失败回滚均在此收敛；`40_pointcloud_matching` 不再负责 seam fusion 编排与最终拼接输出。规范实现位于 `modules/30_pointcloud_stitch`，模块 target 为 `pcv_m30_pointcloud_stitch`；旧 target `pcv_m30_pointcloudstitch` 保留为迁移期兼容入口（仅转发）。
+状态：已实现。本模块为多帧拼接的唯一编排模块：读取（10）、坐标转换调用（50）、多帧 ICP/结构校验、seam fusion、拼接诊断和 manifest 均在此收敛；最终文件统一通过 10 的 `pcv::io::ArtifactTransaction` 提交。规范实现位于 `modules/30_pointcloud_stitch`，模块 target 为 `pcv_m30_pointcloud_stitch`；旧 target `pcv_m30_pointcloudstitch` 保留为迁移期兼容入口（仅转发）。
 
 seam fusion 实现与公共类型位于本模块 `include/pcv/stitching/`（`seam_fusion.h/.cpp`、`seam_fusion_kernel.h`、`seam_fusion_types.h`）；模块 40 的 `include/pcv/registration/seam_fusion*.h` 仅为转发头。
 
-接口：`pcv::interface::stitchRawLineProfiles`、`applyTrajectorySeamFusion`。测试：`stitching_interface_tests`、`seam_fusion_tests`。应用只负责输入组织、进度、窗口状态和结果展示。
+接口：分组式 `pcv::interface::StitchingRequest`（`input`、`registration`、`seam`、`artifacts`）、`StitchingResult`、`stitch()` 和 `applyTrajectorySeamFusion`。旧 `StitchingOptions` / `stitchRawLineProfiles` 为弃用兼容入口。测试：`stitching_interface_tests`、`multiframe_registration_tests`、`seam_fusion_tests` 和并行等价测试。应用只负责输入组织、进度、窗口状态和结果展示。
 
-最后核对日期：2026-09-06。本文件历史正文中出现的旧名称与旧职责表述（如 `modules/30_pointcloudstitch`、`pcv_m30_pointcloudstitch`、seam fusion 由 40 承载等）为当时名称与当时职责，仅用于追溯。
+最后核对日期：2026-09-17。本文件历史正文中出现的旧名称与旧职责表述为当时状态，仅用于追溯。2026-09-17 之后的验证结论必须单独记录；本轮文档同步未运行 CTest。
 
 ### 2026-09-17（配准新选项透传与失败信息细化）
 

@@ -2,9 +2,9 @@
 
 本目录包含非生产配置和输出示例，用于说明文件结构和契约，不代表生产数据、精度基准或性能基准。
 
-- `configs/pointcloud_2d_output.example.jsonc`：平面输出配置示例；当前字段以 v0.3 需求和输出模块为准。
+- `configs/pointcloud_2d_output.example.jsonc`：平面输出配置示例；当前字段以 v0.3 数据契约和 v0.4 的 10 `ArtifactTransaction` 输出边界为准。
 - `jobs/minimal_plane_output_v0.1/`：历史版本的最小 PNG、JSON、robot_base 平面 PLY 示例。
 
 示例不得包含构建输出、运行缓存、日志、凭据或大体积回归点云。历史示例保留原始版本标识，不作为当前版本输入模板。
 
-最后核对日期：2026-09-04。
+最后核对日期：2026-09-17。

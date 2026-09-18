@@ -3,6 +3,8 @@
 日期：2026-09
 状态：实验实现；核心单测与构建通过，尚未接入生产 JSON pipeline，真实相机验收待完成。
 
+当前归属：相机输入、帧转换、Mock、组帧和亮度图能力已归入 v0.4 `modules/10_pointcloud_io` / `pcv_m10_pointcloud_io`；下文出现的 `10_pointcloud_read`、`pcv_m10_pointcloud_read` 为历史名称，仅用于追溯。实验能力仍受 `PCV_BUILD_EXPERIMENTAL_CAMERA` 控制。
+
 ## 1. 调研结论（开发指南 V1.3.2，Python 版 CHM 为权威流程参考）
 
 > 项目基线为 C++17/Qt6/MSVC 且不依赖 Python，最终实现以 C++ 直接链接 Mv3dLp.lib。Python 版指南与 C 版 API 完全同构（ctypes 封装同一 Mv3dLp.dll），用于权威确认回调流程、数据结构与解析公式。

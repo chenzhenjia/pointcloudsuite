@@ -1,6 +1,6 @@
 # minimal plane output v0.1
 
-> 状态：历史示例归档。该示例用于说明 v0.1 文件结构，不代表当前生产输入或完整 v0.3 验收。当前契约请参阅 `docs/requirements/pointcloudview_v0.3.md`。最后核对日期：2026-09-04。
+> 状态：历史示例归档。该示例用于说明 v0.1 文件结构，不代表当前生产输入或 v0.4 验收。当前模块/输出边界请参阅 `docs/architecture/module_ui_integration_v0.4.md`，字段契约请参阅 `docs/requirements/pointcloudview_v0.3.md`。最后核对日期：2026-09-17。
 
 这是 `sr2026-temp-workpiece-info-mvp-2` 契约的最小非生产示例。
 

@@ -1,12 +1,12 @@
 # 80_plane_output：工具平面输出
 
-状态：已实现。本模块负责 PNG、PLY、JSON 成套输出。规范实现位于 `modules/80_plane_output/{include,src}`，模块 target 为 `pcv_m80_plane_output`；旧 target `pcv_m80_planeoutput` 与 `pcv_output` 为迁移期兼容入口（仅转发）。
+状态：兼容入口。PNG、PLY、JSON writer 与事务提交实现已迁入 `modules/10_pointcloud_io` / `pcv_m10_pointcloud_io`；`modules/80_plane_output`、`pcv_m80_plane_output`、`pcv_m80_planeoutput` 与 `pcv_output` 仅转发，不得新增重复实现。
 
-契约：Grayscale8 PNG（0/255）、binary little-endian XYZ PLY、`sr2026-temp-workpiece-info-mvp-2` JSON；三件套 staging 后原子提交并失败回滚。
+契约：Grayscale8 PNG（0/255）、binary little-endian XYZ PLY、`sr2026-temp-workpiece-info-mvp-2` JSON；通过 `pcv::io::ArtifactTransaction` staging 后成套提交并在失败时回滚。
 
 接口/测试：`writePlaneOutput`；`plane_output_tests`。
 
-最后核对日期：2026-09-07。本文件历史正文中的旧名称（`modules/80_planeoutput`、`pcv_m80_planeoutput`）为当时名称，仅用于追溯。
+最后核对日期：2026-09-17。本文件历史正文中的旧名称与旧实现位置为当时状态，仅用于追溯。
 
 ## 变更记录
 

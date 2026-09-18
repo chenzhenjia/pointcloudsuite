@@ -12,4 +12,4 @@ PLY/缓存、相机帧采集转换、过滤预处理、PNG/PLY/JSON writer 和�
 
 不得依赖应用或 Qt Widgets。主要测试为 `ply_reader_tests`、`cloud_cache_tests`，以及相机侧 `frame_converter_tests`、`frame_source_tests`。
 
-最后核对日期：2026-09-07（模块重命名与 05 并入后复核）。
+最后核对日期：2026-09-17（过滤、writer、事务输出和 UI 交接边界同步后复核）。

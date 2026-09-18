@@ -1,10 +1,10 @@
 # 70_roi_template：ROI/模板
 
-状态：接口已实现，部分 UI 编排保留在应用。规范实现位于 `modules/70_roi_template`，模块 target 为 `pcv_m70_roi_template`，负责工件坐标系、矩形 ROI、平面映射、模板点云和 Mask。
+状态：兼容入口。ROI、模板、Mask、WObj 和临时工件实现已迁入 `modules/60_geometry_workpiece` / `pcv_m60_geometry_workpiece`；`modules/70_roi_template`、`pcv_m70_roi_template` 和旧 header 只做转发，不得新增重复实现。正式输出事务归 10。
 
-接口/测试：`extractPlaneImage`、`generateTempWorkpiece`；ROI 匹配调用 `pcv::matching::matchRoiToRobotBase`；`temp_workpiece_interface_tests`、`roi_matching_tests` 和几何回归测试。
+接口/测试：`pcv::workpiece` 下的 ROI 与临时工件接口；`temp_workpiece_interface_tests`、`roi_matching_tests` 和几何回归测试。
 
-最后核对日期：2026-09-07。
+最后核对日期：2026-09-17。以下变更记录保留 70 仍为实现模块时的历史事实。
 
 ## 变更记录
 

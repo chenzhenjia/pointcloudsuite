@@ -1,6 +1,6 @@
 # PointCloudSuite v0.4 模块与 UI 交接中间文档
 
-状态：架构冻结草案（2026-09-17）。本文件是模块重整、UI 同事接入和后续交接的协同真相源；源码、CMake、公共头和测试优先级高于历史文档。
+状态：架构冻结草案（2026-09-17）。本文件是模块重整、UI 同事接入和后续交接的协同真相源；源码、CMake、公共头和测试优先级高于历史文档。本轮优先完成开发计划与文档同步，按用户要求暂不运行 CTest。
 
 ## 1. 六模块职责与数据流
 
@@ -36,6 +36,15 @@
 
 重命名按三批执行：公共边界 → 应用/UI → 历史兼容清理。每批均需维护映射和编译验证，不允许无记录批量替换。
 
+### 命名与弃用规则
+
+- 目录和文件：`lower_snake_case`；target：`pcv_mNN_lower_snake_case`；namespace：`pcv::<domain>`。
+- 类型：`PascalCase`；函数和局部变量：`lowerCamelCase`；常量：`kPascalCase`。
+- JSON 字段：`snake_case`，单位写入字段名，例如 `_mm`、`_deg`、`_ms`。
+- 新公共 API 使用 `pcv::io`、`pcv::stitching`、`pcv::coordinates`、`pcv::geometry`、`pcv::workpiece`。
+- 旧 `pointcloud::`、`pcv::detail::*`、旧 target 和旧 header 保留一个版本周期，并以 `[[deprecated]]` 或 forwarding 入口标记；兼容层不得新增实现。
+- 每批重命名必须更新本映射表、直接依赖构建结果和回滚点，禁止无记录的全文批量替换。
+
 ## 4. 公共 API 与数据约定
 
 - 30 提供分组式 `pcv::interface::StitchingRequest`（`input`、`registration`、`seam`、`artifacts`）和 `stitch()`；旧 `StitchingOptions` 标记 `[[deprecated]]` 并映射到新接口。
@@ -48,7 +57,7 @@
 
 主线维护：`modules/**`、`src/**`、`apps/pointcloudview/mainwindow.*`、根 CMake、稳定公共头、模块测试和本文件。
 
-UI 同事限定：`apps/pointcloudview/features/**`、UI 专属 `.ui`、资源和样式、UI 测试与交互说明。主线持有 `MainWindow` 壳、生命周期、模块依赖和稳定 API。现有 `pointcloudstitch` 视觉本轮不纳入统一。
+UI 同事限定：`apps/pointcloudview/features/**`、`apps/pointcloudview/ui/` 中经交接登记的 UI 专属 `.ui`、UI 专属资源/样式文件、UI 测试与交互说明。主线持有 `MainWindow` 壳、生命周期、模块依赖和稳定 API。现有 `pointcloudstitch` 视觉本轮不纳入统一。
 
 临时 adapter 只能位于 `apps/pointcloudview/adapters/**`，文件头必须标记 `Experimental` 或 `Deprecated`，并注明 owner、创建日期、替代 API、删除条件和截止版本；不得成为模块间长期依赖。
 
@@ -60,10 +69,21 @@ UI 同事限定：`apps/pointcloudview/features/**`、UI 专属 `.ui`、资源�
 
 交接包必须包含：文件白名单、API 依赖表、页面截图或交互说明、构建命令、测试结果、已知问题、临时 adapter 替代 API、owner、创建日期、删除条件、回滚点。
 
-验收：Debug/Release 新构建目录可配置；全量 CTest；`pointcloudview` 主窗口和新页面 GUI smoke；JSON/PLY schema、文件名、坐标约定、错误码和默认数值不变；高倾角配准基线判定及漂移在预算内；真实相机、机器人夹具、40 移动判定和刀路算法明确标记为未验收。
+建议交接目录清单：
+
+```text
+handoff/
+  ownership.md          文件白名单、owner、创建日期
+  api_dependencies.md   稳定 API、DTO 版本、临时 adapter 与替代 API
+  interaction.md        页面截图或交互说明、错误/取消行为
+  verification.md       构建命令、实际测试结果、未验证项
+  risks_and_rollback.md 已知问题、删除条件、回滚点
+```
+
+验收门禁（后续执行）：Debug/Release 新构建目录可配置；全量 CTest；`pointcloudview` 主窗口和新页面 GUI smoke；JSON/PLY schema、文件名、坐标约定、错误码和默认数值不变；高倾角配准基线判定及漂移在预算内。真实相机、机器人夹具、40 移动判定和刀路算法明确标记为未验收。本轮没有执行 CTest，不得把历史测试结果当作本轮通过。
 
 ## 8. 已知问题与回滚点
 
-- 当前工作区的 8 个用户未提交文件作为迁移基线保留；不执行远程提交、上传、删除旧兼容层或真实机器人联调。
+- 当前工作区原有用户未提交修改作为迁移基线保留；不执行远程提交、上传、删除旧兼容层或真实机器人联调。文件数量以实时 `git status --short` 为准，不在文档中冻结。
 - 既有构建目录权限不足，本轮使用新的源码树外可写目录；GUI smoke 和真实夹具未在本次自动化验证中执行。
 - 回滚以本文件映射表和三批迁移边界为准：优先恢复对应模块目录/CMake/转发 header，保留用户原有 8 个文件，不使用破坏性 reset/checkout。

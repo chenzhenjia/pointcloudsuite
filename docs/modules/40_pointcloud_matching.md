@@ -1,14 +1,14 @@
-# 40_pointcloud_matching：平面/ROI 点匹配（robot_base 完整回传）
+# 40_pointcloud_matching：工件位置确认（规划占位）
 
-状态：已实现。本模块为平面/ROI 点匹配与 `robot_base` 完整回传模块。新正式接口：`pcv::matching::{RoiMatchInput, RoiMatchResult, matchRoiToRobotBase(...)}`，位于 `include/pcv/matching/roi_matching.h`：校验 ROI 索引、平面来源、点数量与有限性；经 50 坐标转换生成 `robot_base` 点并保留原始点索引；fail-closed（任一 ROI 点无法合法回传则不发布不完整结果）；返回完整性统计、丢失点数、覆盖率、取消状态与失败原因。
+状态：**规划目标，未实现**。正式声明：对经过点云处理和平面/坐标转换后的数据，生成含 `robot_base` 坐标信息的平面点云数据和坐标元数据，用于确定机器人坐标系中的工件信息；后续可通过基准模板或参考扫描比较，判断工件是否被挪动。
 
-规范目录：`modules/40_pointcloud_matching/{include,src}`；模块 target：`pcv_m40_pointcloud_matching`；旧 target `pcv_m40_pointcloudregistration` 与 `pcv_registration` 保留为迁移期兼容入口（仅转发）。`registerRobotBaseFrames()`/ICP/结构校验等底层能力保留（兼容接口，内部逐步转向 matching API）；`multiframe_registration` 现位于本模块 `include/pcv/registration/multiframe_registration.h`。
+规范目录：`modules/40_pointcloud_matching`；模块 target：`pcv_m40_pointcloud_matching`。当前 target 与旧 `pcv_m40_pointcloudregistration`、`pcv_registration` 均为 `INTERFACE` 聚合/转发入口。多帧 ICP、相邻帧配准和结构校验的规范实现已迁入 30；ROI 匹配和临时工件几何的规范实现已迁入 60。
 
-本模块不再负责 seam fusion 编排与最终拼接输出：seam fusion 实现与公共类型位于 30 模块 `include/pcv/stitching/`，本模块 `include/pcv/registration/seam_fusion*.h` 仅为转发头。
+本版不实现：基准模板持久化、当前扫描与基准扫描比较、移动阈值和 6DoF 偏差判定、机器人执行/坐标修正下发、新的正式输出闭环。
 
-接口/测试：`pcv::matching`（`roi_matching.h`）、`multiframe_registration`、`seam_fusion`（转发头）；`roi_matching_tests`、`multiframe_registration_tests`、`seam_fusion_tests`。
+测试归属：`multiframe_registration_tests`、`seam_fusion_tests` 归 30；`roi_matching_tests` 归 60。40 的未来位置确认能力尚无功能验收结论。
 
-最后核对日期：2026-09-17。历史正文中“点云配准/seam fusion 编排”职责及旧名称（`40_pointcloudregistration`、`pcv_m40_pointcloudregistration`、`modules/40_pointcloudregistration`）为当时名称与当时职责，仅用于追溯；当前 seam fusion 实现与编排归属 30 模块，本模块保留 ICP/结构校验等底层兼容能力。
+最后核对日期：2026-09-17。下方记录描述迁移前 40 承载配准/ROI 实现时的历史事实，仅用于追溯；不得据此把 40 的工件移动判定写为已实现。
 
 ### 2026-09-17（结构点验收改为命中口径；粗对齐 trimmed 目标；ICP 内并行与提速）
 

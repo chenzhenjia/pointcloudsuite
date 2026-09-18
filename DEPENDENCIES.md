@@ -27,4 +27,6 @@ Windows 构建会使用 Qt 的 `windeployqt` 部署运行库和插件。构建�
 
 项目不要求 Python、PCL、Open3D、VTK、CUDA、数据库或云服务。
 
-最后核对日期：2026-09-13。
+v0.4 模块重整未增加外部依赖；模块与 UI 交接边界见 `docs/architecture/module_ui_integration_v0.4.md`。
+
+最后核对日期：2026-09-17。

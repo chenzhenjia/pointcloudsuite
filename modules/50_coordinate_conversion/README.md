@@ -12,4 +12,4 @@
 
 主要接口为 `loadHandEyeCalibration`、`transformLineScanToRobotBase`。主要测试为 `handeye_transform_tests`。
 
-最后核对日期：2026-09-07（模块重命名后复核）。
+最后核对日期：2026-09-17（v0.4 唯一坐标转换实现边界复核）。

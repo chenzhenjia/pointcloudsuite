@@ -6,10 +6,10 @@
 
 ## 职责
 
-多帧拼接唯一编排：读取、坐标转换调用、多帧匹配调用、seam fusion、拼接诊断、正式输出与失败回滚。seam fusion 实现与公共类型位于本模块 `include/pcv/stitching/`（`seam_fusion.h/.cpp`、`seam_fusion_kernel.h`、`seam_fusion_types.h`）；多帧匹配/底层配准由 `pcv_m40_pointcloud_matching` 提供，模块 40 不再负责 seam fusion 编排与最终拼接输出。
+多帧拼接唯一编排：读取、坐标转换调用、ICP/多帧配准、seam fusion、拼接诊断和 manifest。seam fusion 与多帧配准实现均位于本模块 `pcv::stitching`；最终文件通过 10 的 `pcv::io::ArtifactTransaction` 提交。40 仅为规划占位和兼容聚合入口。
 
 ## 接口与测试
 
-统一接口为 `pcv::interface::stitchRawLineProfiles`。主要测试为 `stitching_interface_tests`、`seam_fusion_tests`。应用只负责 UI、输入组织、进度和结果展示。
+统一接口为分组式 `pcv::interface::StitchingRequest` / `StitchingResult` 和 `stitch()`；旧 `StitchingOptions` / `stitchRawLineProfiles` 为弃用兼容入口。主要测试为 `stitching_interface_tests`、`multiframe_registration_tests`、`seam_fusion_tests` 和并行等价测试。应用只负责 UI、输入组织、进度和结果展示。
 
-最后核对日期：2026-09-07（模块重命名与 30/40 职责重划后复核）。
+最后核对日期：2026-09-17（ICP 归属、分组接口和事务输出边界复核）。

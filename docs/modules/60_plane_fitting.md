@@ -1,10 +1,10 @@
-# 60_plane_fitting：平面拟合
+# 60_geometry_workpiece：工件几何
 
-状态：已实现，兼容入口保留。本模块为平面拟合与几何诊断模块。规范实现位于 `modules/60_plane_fitting/{include,src}`，模块 target 为 `pcv_m60_plane_fitting`；旧 target `pcv_m60_planefitting` 保留为迁移期兼容入口（仅转发）。应用入口仅负责参数转换和结果映射。
+状态：已实现，兼容入口保留。规范实现位于 `modules/60_geometry_workpiece/{include,src}`，模块 target 为 `pcv_m60_geometry_workpiece`；`pcv_m60_plane_fitting`、`pcv_m60_planefitting` 和 `pcv_m70_roi_template` 仅转发。职责包括平面拟合与诊断、平面/边缘几何、ROI、WObj 和临时工件流程；正式文件通过 10 的事务 API 提交。应用入口仅负责参数转换、生命周期和结果映射。本文件文件名保留旧名称以避免历史链接失效。
 
-接口/测试：`pcv::planefitting::fit`、一致性校验；`plane_fitting_tests`。ROI/Mask 测试归入对应接口和应用测试。
+接口/测试：`pcv::geometry`、`pcv::workpiece`，以及兼容的 `pcv::planefitting::fit`；`plane_fitting_tests`、`roi_matching_tests`、`temp_workpiece_interface_tests` 和几何回归测试。
 
-最后核对日期：2026-09-07。纯算法实现不得依赖 `apps/` 或 Qt Widgets。本文件历史正文中的旧名称（`modules/60_planefitting`、`pcv_m60_planefitting`）为当时名称，仅用于追溯。
+最后核对日期：2026-09-17。纯算法实现不得依赖 `apps/` 或 Qt Widgets。本文件历史正文中的旧名称与旧职责为当时状态，仅用于追溯。
 
 ## 变更记录
 

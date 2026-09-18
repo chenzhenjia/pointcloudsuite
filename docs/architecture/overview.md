@@ -13,7 +13,7 @@ apps/
 modules/
   10_pointcloud_io      点云 IO、缓存、相机、过滤、writer、事务提交
   20_pointcloud_render  Qt/OpenGL 点云画布
-  30_pointcloud_stitch  多帧拼接、seam fusion、正式输出（唯一拼接编排）
+  30_pointcloud_stitch  多帧拼接、ICP、seam fusion、manifest（唯一拼接编排）
   40_pointcloud_matching 工件位置确认规划占位（移动判定未实现）
   50_coordinate_conversion 手眼标定、位姿插值、坐标变换（唯一数学实现）
   60_geometry_workpiece 平面、边缘、ROI、WObj、临时工件
@@ -30,7 +30,7 @@ tools/                可选诊断工具
 - 共享算法放在模块 `src/`，公共头放在模块 `include/`。
 - `20_pointcloud_render` 是唯一允许依赖 Qt Widgets/OpenGL 的共享模块。
 - `30_pointcloud_stitch` 是多帧拼接的唯一编排边界：读取、坐标转换调用、
-  多帧匹配调用、seam fusion、拼接诊断和正式输出均由其收敛。
+  ICP/多帧配准、seam fusion、拼接诊断和 manifest 均由其收敛；最终文件通过 10 的事务 API 提交。
 - `40_pointcloud_matching` 是规划中的工件位置确认占位，当前仅为 30/60 的兼容聚合。
 - seam fusion 实现与公共类型位于 `30_pointcloud_stitch` 的 stitching 目录。
 - `50_coordinate_conversion` 是旋转、位姿插值和手眼变换的唯一数学实现来源。
@@ -49,26 +49,25 @@ tools/                可选诊断工具
 
 ## 当前入口
 
-`pointcloudview` 使用 `pcv_m10_pointcloud_read`、`pcv_m20_pointcloud_render`、
-`pcv_m60_plane_fitting`、`pcv_m70_roi_template`、`pcv_m30_pointcloud_stitch` 和
-`pcv_m80_plane_output` 等模块。
+`pointcloudview` 使用 `pcv_m10_pointcloud_io`、`pcv_m20_pointcloud_render`、
+`pcv_m60_geometry_workpiece` 和按需使用的 `pcv_m30_pointcloud_stitch`。UI 新页面限定在
+`apps/pointcloudview/features/**`，临时 adapter 限定在 `apps/pointcloudview/adapters/**`。
 
-`pointcloudstitch` 使用 `pcv_m10_pointcloud_read`、`pcv_m30_pointcloud_stitch`、
-`pcv_m40_pointcloud_matching`、`pcv_m50_coordinate_conversion` 和
-`pcv_m80_plane_output` 等模块。
+`pointcloudstitch` 使用 `pcv_m10_pointcloud_io`、`pcv_m30_pointcloud_stitch` 和
+`pcv_m50_coordinate_conversion`；生产链统一调用 30 的 `StitchingRequest`/`stitch()`，不直接维护 ICP、seam fusion 或最终 PLY writer。
 
-`registration_diagnostic` 通过 `pcv::interface::stitchRawLineProfiles` 调用统一拼接接口。
+`registration_diagnostic` 通过 30 的统一拼接接口调用流水线；新调用使用 `pcv::interface::StitchingRequest` / `stitch()`，旧 `stitchRawLineProfiles` 仅兼容。
 
-`intensity_viewer` 仅在 `PCV_BUILD_EXPERIMENTAL_CAMERA=ON` 且至少构建一个桌面应用时生成；它使用 `pcv_m10_pointcloud_read` 和 Qt Widgets 预览有效完整扫描的亮度图，属于实验性相机能力。
+`intensity_viewer` 仅在 `PCV_BUILD_EXPERIMENTAL_CAMERA=ON` 且至少构建一个桌面应用时生成；它使用 `pcv_m10_pointcloud_io` 和 Qt Widgets 预览有效完整扫描的亮度图，属于实验性相机能力。
 
 `pointcloudcli` 仅在 `PCV_BUILD_CLI=ON` 时生成，当前提供 `--help`、`--version`、`inspect ply`、`read ply` 和 `temp-workpiece run`。它依赖 Qt Core/Gui/Concurrent 与所需共享模块，但不链接 Widgets、OpenGL 或 GUI application target。
 
 ## 兼容层
 
-旧 target（`pcv_m05_camerainput`、`pcv_m10_pointcloudread`、`pcv_m20_pointcloudrender`、
+旧 target（`pcv_m05_camerainput`、`pcv_m10_pointcloud_read`、`pcv_m10_pointcloudread`、`pcv_m20_pointcloudrender`、
 `pcv_m30_pointcloudstitch`、`pcv_m40_pointcloudregistration`、`pcv_m50_coordinateconversion`、
-`pcv_m60_planefitting`、`pcv_m80_planeoutput`，以及 `pcv_io`、`pcv_registration`、
+`pcv_m60_plane_fitting`、`pcv_m60_planefitting`、`pcv_m70_roi_template`、`pcv_m80_plane_output`、`pcv_m80_planeoutput`，以及 `pcv_io`、`pcv_filtering`、`pcv_registration`、
 `pcv_interface`、`pcv_output`）保留为迁移期兼容入口，只做 target/header 转发。
 新代码一律使用规范 target；删除旧入口前需完成引用审计、全量构建、CTest、GUI 和真实夹具验收。
 
-最后核对日期：2026-09-13（CLI PLY 读取、运行数据目录与便携部署同步后）。
+最后核对日期：2026-09-17（v0.4 模块、应用入口和 UI 交接边界同步后）。
