@@ -17,6 +17,14 @@
      </layout>
     </item>
     <item>
+     <layout class="QHBoxLayout" name="laserLayout">
+      <item><widget class="QCheckBox" name="chk_camera_laser"><property name="enabled"><bool>false</bool></property><property name="checked"><bool>true</bool></property><property name="text"><string>启用相机内置激光</string></property></widget></item>
+      <item><widget class="QLabel" name="lbl_laser_mode"><property name="text"><string>相机内置激光</string></property></widget></item>
+      <item><widget class="QLabel" name="lbl_laser_hint"><property name="text"><string>关闭后使用外设激光（外设由外部控制）</string></property></widget></item>
+      <item><spacer name="laserSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
+     </layout>
+    </item>
+    <item>
      <widget class="QLabel" name="lbl_preview">
       <property name="minimumSize"><size><width>800</width><height>560</height></size></property>
       <property name="frameShape"><enum>QFrame::Box</enum></property>

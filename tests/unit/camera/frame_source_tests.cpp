@@ -2,6 +2,7 @@
 #include <pcv/camera/intensity_image.h>
 #include <pcv/camera/mock_frame_source.h>
 
+#include "laser_enable_policy.h"
 #include "live_frame_policy.h"
 #include "scan_frame_assembler.h"
 #include "trigger_mode_policy.h"
@@ -359,6 +360,57 @@ int main(int argc, char **argv)
                      "software trigger must reject missing TriggerMode")) return 1;
         if (!require(!continuousTriggerProbeMayContinue(0x80060003u),
                      "call-order errors must not be ignored")) return 1;
+    }
+
+    // The camera built-in laser is enabled by default and "LaserEnable" is a
+    // pre-streaming setting: the request is honored only while the camera is
+    // stopped, and start() fails closed unless the SDK reads back exactly the
+    // requested value.
+    {
+        using pcv::camera::detail::kLaserEnableKey;
+        using pcv::camera::detail::laserEnableProbeError;
+        using pcv::camera::detail::laserEnableReadbackError;
+        using pcv::camera::detail::laserEnableReadbackMatches;
+        using pcv::camera::detail::laserEnableSetError;
+        using pcv::camera::detail::laserRequestApplicable;
+        if (!require(pcv::camera::detail::kDefaultLaserEnabled,
+                     "the camera built-in laser must default to enabled")) return 1;
+        if (!require(QString::fromLatin1(kLaserEnableKey) == QStringLiteral("LaserEnable"),
+                     "the vendor parameter key must stay LaserEnable")) return 1;
+        if (!require(laserRequestApplicable(false) && !laserRequestApplicable(true),
+                     "LaserEnable may only be requested while streaming is stopped")) return 1;
+        if (!require(laserEnableReadbackMatches(true, true)
+                         && laserEnableReadbackMatches(false, false),
+                     "a matching LaserEnable readback must pass")) return 1;
+        if (!require(!laserEnableReadbackMatches(true, false)
+                         && !laserEnableReadbackMatches(false, true),
+                     "a LaserEnable readback mismatch must fail")) return 1;
+
+        const QString setError = laserEnableSetError(
+            false, QStringLiteral("0x80060004 (MV3D_LP_E_PARAMETER)"));
+        if (!require(setError.contains(QStringLiteral("LaserEnable"))
+                         && setError.contains(QStringLiteral("LaserEnable=0"))
+                         && setError.contains(QStringLiteral("MV3D_LP_E_PARAMETER")),
+                     "a LaserEnable write failure must name the parameter, the request and the SDK status")) return 1;
+
+        const QString mismatchError = laserEnableReadbackError(
+            true, false, QStringLiteral("0x00000000 (MV3D_LP_OK)"));
+        if (!require(mismatchError.contains(QStringLiteral("LaserEnable"))
+                         && mismatchError.contains(QStringLiteral("requested 1 (enabled)"))
+                         && mismatchError.contains(QStringLiteral("effective 0 (disabled)")),
+                     "a LaserEnable readback mismatch must report requested and effective values")) return 1;
+
+        const QString missingReadback = laserEnableReadbackError(
+            false, std::nullopt, QStringLiteral("0x80060001 (MV3D_LP_E_SUPPORT)"));
+        if (!require(missingReadback.contains(QStringLiteral("LaserEnable"))
+                         && missingReadback.contains(QStringLiteral("MV3D_LP_E_SUPPORT")),
+                     "an unreadable LaserEnable readback must fail with the SDK status")) return 1;
+
+        const QString probeError = laserEnableProbeError(
+            QStringLiteral("0x80060001 (MV3D_LP_E_SUPPORT)"));
+        if (!require(probeError.contains(QStringLiteral("LaserEnable"))
+                         && probeError.contains(QStringLiteral("MV3D_LP_E_SUPPORT")),
+                     "an unsupported LaserEnable parameter must be reported explicitly")) return 1;
     }
 
     std::cout << "frame_source_tests: PASS\n";

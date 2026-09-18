@@ -59,6 +59,18 @@ public:
     void requestSoftwareTrigger(bool enabled);
     std::optional<ImageMode> activeImageMode() const;
 
+    // Requests the camera built-in laser state (SDK parameter "LaserEnable").
+    // The value is applied by the next start(), which probes, writes and reads
+    // the parameter back before MV3D_LP_StartMeasure; the default request is
+    // enabled. The request is only honored while the camera is stopped, and
+    // stop(), disconnect and exit never restore the device state, so an
+    // operator switched to an externally controlled laser stays switched.
+    // Called from the UI thread.
+    void requestLaserEnabled(bool enabled);
+    // Value the SDK read back from "LaserEnable" during the current streaming
+    // session. Empty before start(), after a failed start() and after stop().
+    std::optional<bool> activeLaserEnabled() const;
+
     // Triggers one frame in software-trigger mode (MV3D_LP_SoftTrigger).
     // One reconnect attempt: stop, close, reopen by serial, re-register
     // callbacks and restart measurement. Returns OK when streaming resumed.

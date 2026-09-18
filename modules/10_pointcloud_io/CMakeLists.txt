@@ -28,6 +28,7 @@ add_library(pcv_m10_pointcloud_io STATIC
     src/mock_frame_source.cpp
     src/ply_reader.cpp
     src/ply_writer.cpp
+    src/laser_enable_policy.h
     src/live_frame_policy.h
     src/scan_frame_assembler.h
     src/trigger_mode_policy.h

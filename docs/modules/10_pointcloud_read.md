@@ -14,7 +14,27 @@
 
 亮度图验证：`CameraFrame::intensityData` 保存与深度/点云栅格一一对应的 `Mono8` 数据；`extractIntensityImage()` 仅接受有效完整扫描并严格校验 `width * height` 字节。独立验证 GUI `intensity_viewer` 在实验相机开关开启时构建，使用 `Range_Image=7`、`MV3D_LP_RegisterImageDataCallBack`，实时预览并手动保存 PNG；不提供 Mock，不保存高度文件。
 
-最后核对日期：2026-09-17。当前状态以源码、CMake 和测试为准。本文件历史正文中的旧目录名/旧 target 为当时名称，仅用于追溯。
+相机内置激光：`Mv3dLpCamera::requestLaserEnabled()` / `activeLaserEnabled()` 通过 SDK 参数 `LaserEnable`（`ParamType_Bool`）在 `start()` 内、`MV3D_LP_StartMeasure` 之前完成 GetParam 探测 → SetParam → GetParam 读回；默认请求开启，读回值与请求不一致时 `start()` 失败并清理设备。`intensity_viewer` 的 `chk_camera_laser` 默认勾选，关闭后为外设激光模式（外设由外部控制器或人工控制，本程序不控制外设），停止/断开/退出不恢复设备激光状态。
+
+最后核对日期：2026-09-18。当前状态以源码、CMake 和测试为准。本文件历史正文中的旧目录名/旧 target 为当时名称，仅用于追溯。
+
+### 2026-09-18（相机内置激光开关 LaserEnable）
+
+- 登记主模块 10_pointcloud_io，配套应用 `apps/intensity_viewer`；只改相机封装、亮度图验证 GUI、相机测试和文档，未改动回调、亮度深拷贝、`ScanFrameAssembler`、`LatestFrameSlot` 及输出契约。
+- `Mv3dLpCamera` 新增 `void requestLaserEnabled(bool)` 与 `std::optional<bool> activeLaserEnabled() const`：请求默认开启，只在 `start()` 前生效（取流中调用被忽略并记录警告，运行期不修改设备）；`activeLaserEnabled()` 返回本次取流会话中 SDK 成功读回并确认的 `LaserEnable` 状态，未启动、启动失败或停止后为空 `optional`。
+- 启动顺序：`MV3D_LP_Initialize` → `MV3D_LP_OpenDeviceBySN` → `LaserEnable` 配置 → `ImageMode=Range_Image(7)` → `Height/Trigger` → `MV3D_LP_RegisterImageDataCallBack` → `MV3D_LP_RegisterExceptionCallBack` → `MV3D_LP_StartMeasure`。
+- `Impl::configureLaserEnabled()` 使用 `MV3D_LP_PARAM{}`、`enParamType=ParamType_Bool` 和固定键 `"LaserEnable"`，完成 GetParam 探测 → SetParam → GetParam 读回；任一步失败或读回值与请求不一致时 `start()` 返回失败并复用既有 `shutdown()` 清理设备，不进入取流。`LaserEnable` 只在 GUI 主线程配置，回调线程不访问该参数。
+- 错误信息包含 `LaserEnable`、请求值、实际值和 SDK `statusText`；文本与判定规则由纯逻辑策略 `modules/10_pointcloud_io/src/laser_enable_policy.h` 提供（`kLaserEnableKey`、`kDefaultLaserEnabled`、`laserRequestApplicable`、`laserEnableReadbackMatches`、`laserEnableProbeError`/`laserEnableSetError`/`laserEnableReadbackError`）。
+- `intensity_viewer` 新增 `chk_camera_laser`（默认勾选）、`lbl_laser_mode` 和说明文字「关闭后使用外设激光（外设由外部控制）」：未连接禁用、已连接未取流可修改、取流中禁用；`toggleStreaming()` 在 `start()` 前把勾选值传给 `requestLaserEnabled()`，启动成功后用 `activeLaserEnabled()` 显示 SDK 实际读回值；启动失败时保持非取流状态、显示明确错误并保留用户选择；停止/断开只清除读回显示，不恢复设备状态。
+- 边界：外设激光由人工或现有外部控制器控制，本程序不接 PLC、串口或 GPIO；第一版仍只输出 `Mono8` 亮度图和 PNG，不增加高度文件，也不把高度有效性作为验收条件；不提供 Mock SDK，SDK 未编译时维持现有不可用状态。
+- 验证（构建目录 `D:\pcv-build-intensity-debug`，Debug / NMake Makefiles / Qt 6.8.3 / MSVC 19.51.36252.0，`PCV_BUILD_TESTS=ON`、`PCV_BUILD_EXPERIMENTAL_CAMERA=ON`、`PCV_CAMERA_HAVE_HIKSDK=1`）：
+  - `cmake --build D:\pcv-build-intensity-debug --config Debug --target intensity_viewer` 退出码 0；全量 Debug 构建退出码 0。
+  - `ctest --test-dir D:\pcv-build-intensity-debug -C Debug --output-on-failure` → 20/20 通过，0 失败（含新增激光策略断言的 `frame_source_tests`）。
+  - `QT_QPA_PLATFORM=offscreen` 启动 `intensity_viewer.exe` 烟测通过：进程运行 6 秒无崩溃、无 stderr 输出。
+  - 3DMVS 虚拟 DP 系列设备（`Vir6663020`，`MV-DP3020-01H`）端到端验证（临时探针驱动真实 `Mv3dLpCamera`，不进入仓库）：`requestLaserEnabled(false)` 后 `start()` 成功且 `activeLaserEnabled()==false`；取流中调用 `requestLaserEnabled(true)` 被忽略并记录警告，下一次 `start()` 仍写入 `false`；`requestLaserEnabled(true)` 后读回 `true`（设备恢复默认开启）；停止后 `activeLaserEnabled()` 为空。SDK 侧 `GetParam/SetParam/GetParam` 均返回 `MV3D_LP_OK`，`enParamType=1 (ParamType_Bool)`。
+  - DP2240 真实设备现场验收通过：`LaserEnable=true/false` 均可设置并读回；连续模式下 `Range_Image=7` 回调取流正常；`Mono8` 亮度图可实时预览并保存为 PNG；关闭相机内置激光后，外设激光模式仍可完成亮度图取流验证；停止、断开和退出不自动恢复设备激光状态。
+  - 现场验收范围不包含高度文件、点云文件或外设激光器通信控制；外设激光由人工或现有外部控制器控制。
+- 未验证项：`PCV_BUILD_EXPERIMENTAL_CAMERA=ON` 但无 SDK 的配置本轮未重新构建；本次文档不扩展高度输出或外部设备通信协议的验收结论。
 
 ### 2026-09-09（亮度图取流验证 GUI）
 
