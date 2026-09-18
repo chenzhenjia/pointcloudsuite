@@ -6,12 +6,10 @@
 #include <QImage>
 
 #include <memory>
-#include <optional>
 
 class QLabel;
 class QPushButton;
 class QComboBox;
-class QCheckBox;
 class QCloseEvent;
 class QShowEvent;
 class QPixmap;
@@ -35,9 +33,6 @@ private:
     void saveCurrentImage();
     void stopSourceSafely();
     void setStatus(const QString &text);
-    void onLaserToggled();
-    void updateLaserControls();
-    QString laserModeText() const;
 
     Ui::IntensityViewerWindow *ui = nullptr;
     QComboBox *m_deviceList = nullptr;
@@ -45,8 +40,6 @@ private:
     QPushButton *m_connect = nullptr;
     QPushButton *m_start = nullptr;
     QPushButton *m_save = nullptr;
-    QCheckBox *m_cameraLaser = nullptr;
-    QLabel *m_laserMode = nullptr;
     QLabel *m_preview = nullptr;
     QLabel *m_status = nullptr;
     QLabel *m_frameInfo = nullptr;
@@ -54,10 +47,6 @@ private:
     QVector<pcv::camera::DeviceInfo> m_devices;
     QImage m_currentImage;
     std::uint32_t m_currentFrameNumber = 0;
-    // Value the SDK read back for "LaserEnable" in the current streaming
-    // session; empty while stopped, so the label falls back to the operator
-    // selection. The selection itself is kept across stop/disconnect.
-    std::optional<bool> m_laserActiveReadback;
     bool m_connected = false;
     bool m_streaming = false;
     bool m_closing = false;

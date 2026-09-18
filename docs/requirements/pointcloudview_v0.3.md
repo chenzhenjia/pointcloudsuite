@@ -1,7 +1,7 @@
 # PointCloudSuite 点云处理项目需求文档
 
 版本：v0.3  
-最后核对日期：2026-09-18
+最后核对日期：2026-09-17
 状态：数据契约基线（v0.3）；架构和 UI 交接已进入 v0.4，发布验收待完成
 
 ## 1. 目标和事实来源
@@ -112,16 +112,6 @@ v0.3 继续作为 JSON、PLY、坐标、错误码和默认数值的数据契约�
   - PageHeap / Application Verifier / WinDbg 首次堆损坏捕获未执行：本机 `D:\Windows Kits\10\Debuggers\x64` 为空，未安装调试器；改用“未修复版本 100 次复现 + 修复版本 100 次通过 + 事件日志故障偏移”作为证据。
   - 用户旧的 `build\Desktop_Qt_6_8_3_MSVC2022_64bit_Debug` 目录已不存在，无法核对其生成器与 `.obj.d` 是否为空，因此“用户 GUI 崩溃是否由 JOM 陈旧对象引起”仍属未证实假设。
 - 剩余风险：`isCancelled` 回调在并行 worker 中会被多线程调用，调用方必须保证其线程安全（`CancellationToken` 为原子量，安全）；新增测试中的取消回调已改用 `std::atomic`。
-
-### 2026-09-18（相机内置激光开关）
-
-- 实验相机能力（`Mv3dLpCamera`）新增 SDK 参数 `LaserEnable` 配置：默认请求相机内置激光开启，在 `OpenDeviceBySN` 之后、`RegisterImageDataCallBack`/`StartMeasure` 之前完成 GetParam → SetParam → GetParam 读回；SDK 不支持、写入失败或读回值不一致时 `start()` 失败并清理设备，阻止开始取流。
-- `intensity_viewer` 新增「启用相机内置激光」勾选框（默认勾选）与激光模式标签：未连接禁用、已连接未取流可修改、取流中禁用；关闭后界面显示「外设激光模式（外设由外部控制）」。外设激光由人工或现有外部控制器控制，本程序不接 PLC、串口或 GPIO，也不承诺控制外设激光。
-- 取流仍为连续模式、`Range_Image=7` 和 `MV3D_LP_RegisterImageDataCallBack`；第一版仍只输出 `Mono8` 亮度图和 PNG，不增加高度文件，高度有效性不作为验收条件。
-- 停止、断开和退出不恢复设备激光状态，设备保留最后一次成功写入的值；不提供 Mock SDK。
-- 验证（Debug 构建目录 `D:\pcv-build-intensity-debug`，`PCV_BUILD_TESTS=ON`、`PCV_BUILD_EXPERIMENTAL_CAMERA=ON` 且 SDK 已找到）：目标 `intensity_viewer` 构建退出码 0；全量 CTest 20/20 通过；`intensity_viewer.exe` 在 `QT_QPA_PLATFORM=offscreen` 下启动烟测通过；虚拟 DP 系列设备（`Vir6663020`）补充验证了 `LaserEnable` 关闭/开启写入与读回、取流中请求被忽略、停止后读回为空。
-- DP2240 真实设备现场验收通过：`LaserEnable=true/false` 均可设置并读回；连续模式下 `Range_Image=7` 回调取流正常；`Mono8` 亮度图可实时预览并保存为 PNG；关闭相机内置激光后，外设激光模式仍可完成亮度图取流验证；停止、断开和退出不自动恢复设备激光状态。
-- 现场验收范围不包含高度文件、点云文件或外设激光器通信控制；外设激光由人工或现有外部控制器控制。本次不新增高度输出或外部设备通信协议的验收结论。
 
 ### 2026-09-15（PointCloudStitch 陡峭平面配准修正）
 
@@ -252,7 +242,7 @@ v0.3 继续作为 JSON、PLY、坐标、错误码和默认数值的数据契约�
 - 外部输入兼容 ASCII、binary little-endian 和 binary big-endian；所有成功输入必须生成并校验 binary little-endian canonical PLY，失败时主流程停止。正式、预览、诊断、平面和临时工件 PLY 均通过共享 Binary writer 输出。
 
 - 核心门槛：实验开关 OFF/ON 均可配置，Debug/Release 全量 CTest 通过；Windows 使用 `NMake Makefiles` 并验证公共头依赖，JOM/Ninja 不作为当前支持生成器；
-- 相机门槛：本次 DP2240 实机的 `LaserEnable` 开关、连续亮度图回调、`Mono8` 预览/PNG 保存及外设激光模式验收已通过；Mock 连接/首帧/停止/断开/重开、`POINTCLOUDVIEW_SELFTEST_CLOSE=1` smoke，以及坐标映射、软触发和断线重连等其他相机门槛仍需单独验收；
+- 相机门槛：Mock 连接/首帧/停止/断开/重开、`POINTCLOUDVIEW_SELFTEST_CLOSE=1` smoke 及 DP2240 实机 GUI/坐标/重连证据；当前未完成；
 - 不将 `live_pipeline` 单测或 DLL 部署视为生产链路验收。
 
 ### 2026-09-01（扫描 JSON 主线路崩溃修复：构建依赖跟踪）

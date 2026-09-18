@@ -7,7 +7,6 @@
 #include <pcv/camera/mv3d_lp_camera.h>
 #endif
 
-#include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QFileDialog>
@@ -29,8 +28,6 @@ IntensityViewerWindow::IntensityViewerWindow(QWidget *parent)
     m_connect = ui->btn_connect;
     m_start = ui->btn_start;
     m_save = ui->btn_save;
-    m_cameraLaser = ui->chk_camera_laser;
-    m_laserMode = ui->lbl_laser_mode;
     m_preview = ui->lbl_preview;
     m_status = ui->lbl_status;
     m_frameInfo = ui->lbl_frame;
@@ -39,8 +36,6 @@ IntensityViewerWindow::IntensityViewerWindow(QWidget *parent)
     connect(m_connect, &QPushButton::clicked, this, &IntensityViewerWindow::toggleConnection);
     connect(m_start, &QPushButton::clicked, this, &IntensityViewerWindow::toggleStreaming);
     connect(m_save, &QPushButton::clicked, this, &IntensityViewerWindow::saveCurrentImage);
-    connect(m_cameraLaser, &QCheckBox::toggled, this, &IntensityViewerWindow::onLaserToggled);
-    updateLaserControls();
     refreshDevices();
 }
 
@@ -94,9 +89,6 @@ void IntensityViewerWindow::toggleConnection()
         m_connect->setText(QStringLiteral("连接"));
         m_start->setEnabled(false);
         m_save->setEnabled(false);
-        // The device keeps its last LaserEnable value; only the GUI state is
-        // cleared, the operator selection stays as chosen.
-        updateLaserControls();
         setStatus(QStringLiteral("未连接"));
         return;
     }
@@ -104,16 +96,13 @@ void IntensityViewerWindow::toggleConnection()
     const int index = m_deviceList->currentIndex();
     if (index < 0 || index >= m_devices.size()) return;
 #ifdef PCV_CAMERA_HAVE_HIKSDK
-    auto *camera = new pcv::camera::Mv3dLpCamera(m_devices.at(index).serialNumber);
-    m_source = std::unique_ptr<pcv::camera::FrameSource>(camera);
-    camera->requestImageMode(pcv::camera::ImageMode::RangeImage);
-    // The connect-time selection is applied by start(); the SDK only accepts
-    // "LaserEnable" before measurement starts.
-    camera->requestLaserEnabled(m_cameraLaser->isChecked());
+    m_source = std::make_unique<pcv::camera::Mv3dLpCamera>(
+        m_devices.at(index).serialNumber);
+    static_cast<pcv::camera::Mv3dLpCamera *>(m_source.get())
+        ->requestImageMode(pcv::camera::ImageMode::RangeImage);
     m_connected = true;
     m_connect->setText(QStringLiteral("断开"));
     m_start->setEnabled(true);
-    updateLaserControls();
     setStatus(QStringLiteral("已连接，等待开始取流"));
 #else
     setStatus(QStringLiteral("未编译 Mv3dLp SDK，无法连接真实相机"));
@@ -127,20 +116,9 @@ void IntensityViewerWindow::toggleStreaming()
         stopSourceSafely();
         m_streaming = false;
         m_start->setText(QStringLiteral("开始取流"));
-        // Stopping never restores the device laser state; the selection is kept
-        // so the next start() applies the same request.
-        updateLaserControls();
         setStatus(QStringLiteral("已停止取流"));
         return;
     }
-
-#ifdef PCV_CAMERA_HAVE_HIKSDK
-    // The checkbox is the request for the next start(); it may only be changed
-    // while stopped, and requestLaserEnabled() ignores a late call.
-    if (auto *camera = static_cast<pcv::camera::Mv3dLpCamera *>(m_source.get())) {
-        camera->requestLaserEnabled(m_cameraLaser->isChecked());
-    }
-#endif
 
     m_source->frameSlot().setFramePublishedCallback([this]() {
         QMetaObject::invokeMethod(this, [this]() { onFrameAvailable(); },
@@ -148,24 +126,13 @@ void IntensityViewerWindow::toggleStreaming()
     });
     const auto error = m_source->start();
     if (!error.ok()) {
-        // start() fails closed when the SDK cannot probe, write or read back
-        // "LaserEnable"; the window stays out of streaming and keeps the
-        // operator selection.
         m_source->frameSlot().clearFramePublishedCallback();
-        m_laserActiveReadback.reset();
-        updateLaserControls();
         setStatus(QStringLiteral("启动失败：%1").arg(error.message));
         return;
     }
-#ifdef PCV_CAMERA_HAVE_HIKSDK
-    if (auto *camera = static_cast<pcv::camera::Mv3dLpCamera *>(m_source.get())) {
-        m_laserActiveReadback = camera->activeLaserEnabled();
-    }
-#endif
     m_streaming = true;
     m_start->setText(QStringLiteral("停止取流"));
-    updateLaserControls();
-    setStatus(QStringLiteral("取流中（%1）").arg(laserModeText()));
+    setStatus(QStringLiteral("取流中"));
 }
 
 void IntensityViewerWindow::onFrameAvailable()
@@ -223,46 +190,9 @@ void IntensityViewerWindow::stopSourceSafely()
     m_source->frameSlot().clearFramePublishedCallback();
     m_source->stop();
     m_streaming = false;
-    // The confirmed LaserEnable readback belongs to the finished session. The
-    // device itself keeps the last written value; this program never restores
-    // the camera laser on stop, disconnect or exit.
-    m_laserActiveReadback.reset();
 }
 
 void IntensityViewerWindow::setStatus(const QString &text)
 {
     if (m_status) m_status->setText(text);
-}
-
-void IntensityViewerWindow::onLaserToggled()
-{
-    // The request is applied by the next start(). Clearing the readback keeps
-    // the label honest: no value is confirmed while the camera is stopped.
-    m_laserActiveReadback.reset();
-    updateLaserControls();
-}
-
-void IntensityViewerWindow::updateLaserControls()
-{
-    if (m_cameraLaser) {
-        // Configurable only while a camera is connected and not streaming; the
-        // SDK accepts "LaserEnable" before measurement only. The checked state
-        // is never overwritten here so the operator selection survives
-        // stop/disconnect.
-        m_cameraLaser->setEnabled(m_connected && !m_streaming);
-    }
-    if (m_laserMode) m_laserMode->setText(laserModeText());
-}
-
-QString IntensityViewerWindow::laserModeText() const
-{
-    if (m_laserActiveReadback.has_value()) {
-        // Show what the SDK actually read back, not what was requested.
-        return *m_laserActiveReadback
-            ? QStringLiteral("相机内置激光（SDK 读回：开启）")
-            : QStringLiteral("外设激光模式（外设由外部控制）（SDK 读回：关闭）");
-    }
-    return m_cameraLaser && m_cameraLaser->isChecked()
-        ? QStringLiteral("相机内置激光")
-        : QStringLiteral("外设激光模式（外设由外部控制）");
 }

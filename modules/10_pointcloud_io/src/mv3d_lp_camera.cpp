@@ -3,7 +3,6 @@
 #include <pcv/camera/frame_converter.h>
 #include <pcv/camera/frame_data.h>
 
-#include "laser_enable_policy.h"
 #include "live_frame_policy.h"
 #include "scan_frame_assembler.h"
 #include "trigger_mode_policy.h"
@@ -429,12 +428,6 @@ struct Mv3dLpCamera::Impl {
     LatestFrameSlot slot;
     std::optional<ImageMode> requestedMode;
     std::optional<ImageMode> activeMode;
-    // Camera built-in laser. The request defaults to enabled and is applied by
-    // configureLaserEnabled() on the next start(); activeLaserEnabled holds the
-    // value the SDK read back for the current streaming session only. Both are
-    // touched from the UI thread, never from the SDK callback thread.
-    bool requestedLaserEnabled = detail::kDefaultLaserEnabled;
-    std::optional<bool> activeLaserEnabled;
     bool softwareTriggerRequested = false;
     bool softTriggerSupported = false;
     bool sdkLeaseHeld = false;
@@ -444,61 +437,6 @@ struct Mv3dLpCamera::Impl {
     std::uint32_t matchingFrameDiagnosticCount = 0;
     QString lastFrameError;
     std::uint32_t matchingFrameErrorCount = 0;
-
-    // LaserEnable is a pre-streaming device setting: the SDK is asked for the
-    // parameter, the requested value is written, and the device must read the
-    // same value back before measurement starts. Any probe/write/readback
-    // failure stops start() instead of streaming with an unknown laser state.
-    // The value is never restored on stop/disconnect/exit, so an operator who
-    // switched to an externally controlled laser stays switched.
-    CameraError configureLaserEnabled()
-    {
-        activeLaserEnabled.reset();
-
-        MV3D_LP_PARAM probe;
-        std::memset(&probe, 0, sizeof(probe));
-        probe.enParamType = ParamType_Bool;
-        const MV3D_LP_STATUS probeStatus = MV3D_LP_GetParam(
-            handle, detail::kLaserEnableKey, &probe);
-        if (probeStatus != MV3D_LP_OK) {
-            return {detail::laserEnableProbeError(statusText(probeStatus))};
-        }
-        const bool previousValue = probe.ParamInfo.bBoolParam != 0;
-
-        MV3D_LP_PARAM setParam;
-        std::memset(&setParam, 0, sizeof(setParam));
-        setParam.enParamType = ParamType_Bool;
-        setParam.ParamInfo.bBoolParam = requestedLaserEnabled ? 1 : 0;
-        const MV3D_LP_STATUS setStatus = MV3D_LP_SetParam(
-            handle, detail::kLaserEnableKey, &setParam);
-        if (setStatus != MV3D_LP_OK) {
-            return {detail::laserEnableSetError(requestedLaserEnabled,
-                                                statusText(setStatus))};
-        }
-
-        MV3D_LP_PARAM verify;
-        std::memset(&verify, 0, sizeof(verify));
-        verify.enParamType = ParamType_Bool;
-        const MV3D_LP_STATUS verifyStatus = MV3D_LP_GetParam(
-            handle, detail::kLaserEnableKey, &verify);
-        if (verifyStatus != MV3D_LP_OK) {
-            return {detail::laserEnableReadbackError(requestedLaserEnabled,
-                                                     std::nullopt,
-                                                     statusText(verifyStatus))};
-        }
-        const bool effective = verify.ParamInfo.bBoolParam != 0;
-        if (!detail::laserEnableReadbackMatches(requestedLaserEnabled, effective)) {
-            return {detail::laserEnableReadbackError(requestedLaserEnabled, effective,
-                                                     statusText(verifyStatus))};
-        }
-
-        activeLaserEnabled = effective;
-        qInfo() << "Mv3dLpCamera: LaserEnable requested=" << requestedLaserEnabled
-                << "previous=" << previousValue
-                << "readback=" << effective
-                << "paramType=" << std::uint32_t(verify.enParamType);
-        return {};
-    }
 
     CameraError configureRequestedImageMode()
     {
@@ -750,9 +688,6 @@ struct Mv3dLpCamera::Impl {
         waitForCallbacks();
         callbackContext.slot = nullptr;
         callbackContext.resetAssembly();
-        // The confirmed laser readback belongs to one streaming session; the
-        // device itself keeps whatever LaserEnable value was written last.
-        activeLaserEnabled.reset();
         if (running.load() && handle != nullptr) {
             MV3D_LP_StopMeasure(handle);
         }
@@ -838,15 +773,6 @@ CameraError Mv3dLpCamera::start()
                     .arg(m_impl->serialNumber)};
     }
     m_impl->deviceOpen.store(true);
-
-    // LaserEnable is written before ImageMode/Trigger and before any callback
-    // is registered; a device that cannot confirm the requested value aborts
-    // start() through the shared shutdown() path.
-    const CameraError laserError = m_impl->configureLaserEnabled();
-    if (!laserError.ok()) {
-        m_impl->shutdown();
-        return laserError;
-    }
 
     const CameraError modeError = m_impl->configureRequestedImageMode();
     if (!modeError.ok()) {
@@ -955,23 +881,6 @@ void Mv3dLpCamera::requestImageMode(ImageMode mode)
 void Mv3dLpCamera::requestSoftwareTrigger(bool enabled)
 {
     m_impl->softwareTriggerRequested = enabled;
-}
-
-void Mv3dLpCamera::requestLaserEnabled(bool enabled)
-{
-    if (!detail::laserRequestApplicable(m_impl->running.load())) {
-        // The GUI disables the control while streaming; a late request must not
-        // silently apply to the running acquisition.
-        qWarning() << "Mv3dLpCamera: ignoring LaserEnable request while streaming;"
-                   << "stop the device before changing the camera built-in laser";
-        return;
-    }
-    m_impl->requestedLaserEnabled = enabled;
-}
-
-std::optional<bool> Mv3dLpCamera::activeLaserEnabled() const
-{
-    return m_impl->activeLaserEnabled;
 }
 
 std::optional<ImageMode> Mv3dLpCamera::activeImageMode() const
