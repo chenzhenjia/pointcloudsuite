@@ -251,6 +251,164 @@ QByteArray metadataJson(const TempWorkpieceFinalizeOptions &options,
     return text.toUtf8();
 }
 
+bool resolveAbsoluteFile(const QString &input, QString *resolved, QString *error)
+{
+    const QString text = input.trimmed();
+    if (text.isEmpty()) return fail(error, QStringLiteral("file path is empty"));
+    const QFileInfo fileInfo(text);
+    if (!fileInfo.isAbsolute())
+        return fail(error, QStringLiteral("path must be absolute: %1").arg(input));
+    if (resolved) *resolved = QDir::cleanPath(fileInfo.absoluteFilePath());
+    return true;
+}
+
+// Plain-PLY line: the UI builds the scan descriptor in memory because a bare
+// PLY carries no scanning JSON metadata. The rules mirror the JSON contract so
+// both entries reject the same malformed descriptions.
+bool validateInMemoryScan(const TempScanningInfo &scan, QString *error)
+{
+    if (scan.scanId.trimmed().isEmpty())
+        return fail(error, QStringLiteral("scan_id is required"));
+    if (scan.createdAtIso8601.trimmed().isEmpty()
+        || !QDateTime::fromString(scan.createdAtIso8601, Qt::ISODate).isValid())
+        return fail(error, QStringLiteral("created_at is not a valid ISO 8601 timestamp"));
+    if (scan.coordinateFrame != QStringLiteral("camera"))
+        return fail(error, QStringLiteral("scan coordinate_frame must be camera"));
+    if (scan.calibrationSourceFrame != QStringLiteral("camera")
+        || scan.calibrationTargetFrame != QStringLiteral("robot_base"))
+        return fail(error, QStringLiteral("calibration frames must be camera -> robot_base"));
+    if (scan.pointCloudLayout != pointcloud::DepthPointLayout::LineProfileXz)
+        return fail(error, QStringLiteral(
+            "unsupported point_cloud_layout: only LineProfileXz is supported"));
+    if (scan.pointCloudFile.trimmed().isEmpty())
+        return fail(error, QStringLiteral("point_cloud_file is required"));
+    if (scan.calibrationFile.trimmed().isEmpty())
+        return fail(error, QStringLiteral("calibration_file is required"));
+    const pointcloud::RobotPose *poses[2] = {&scan.robotPoseStart, &scan.robotPoseEnd};
+    const char *const poseNames[2] = {"robot_pose_start", "robot_pose_end"};
+    for (int poseIndex = 0; poseIndex < 2; ++poseIndex) {
+        const double values[6] = {poses[poseIndex]->x, poses[poseIndex]->y, poses[poseIndex]->z,
+                                  poses[poseIndex]->rx, poses[poseIndex]->ry, poses[poseIndex]->rz};
+        for (const double value : values) {
+            if (!std::isfinite(value))
+                return fail(error, QStringLiteral("%1 contains non-finite number")
+                                       .arg(QString::fromLatin1(poseNames[poseIndex])));
+        }
+    }
+    return true;
+}
+
+// Shared conversion tail for both entries: cached PLY read, hand-eye load and
+// the single coordinate-conversion implementation from module 50. The caller
+// supplies the already-resolved file paths.
+TempWorkpiecePreparation transformScanToRobotBase(
+    const TempScanningInfo &scan,
+    const QString &resolvedPly,
+    const QString &resolvedCalibration,
+    const std::function<bool()> &isCancelled,
+    QString *error)
+{
+    pcv::detail::io::PlyReadOptions readOptions;
+    readOptions.isCancelled = isCancelled;
+    const auto cached = pcv::detail::io::readPlyCached(resolvedPly, {}, readOptions);
+    if (!cached.ok) {
+        TempWorkpiecePreparation failure = failedPreparation(
+            QString::fromLatin1(kErrorInputUnsupported), cached.error, error);
+        failure.cancelled = cached.cancelled;
+        return failure;
+    }
+    pointcloud::HandEyeCalibration calibration;
+    QString detail;
+    if (!pointcloud::loadHandEyeCalibration(resolvedCalibration, &calibration, &detail))
+        return failedPreparation(QString::fromLatin1(kErrorTransformInvalid), detail, error);
+    pointcloud::CloudTransformOptions transformOptions;
+    transformOptions.layout = scan.pointCloudLayout;
+    transformOptions.sampleStride = 1;
+    transformOptions.interpolateRotation = true;
+    transformOptions.isCancelled = isCancelled;
+    pointcloud::RobotCloudResult cloud = pointcloud::transformLineScanToRobotBase(
+        cached.points, calibration, scan.robotPoseStart, scan.robotPoseEnd, transformOptions);
+    if (!cloud.ok) {
+        TempWorkpiecePreparation failure = failedPreparation(
+            QString::fromLatin1(kErrorTransformInvalid), cloud.error, error);
+        failure.declaredPointCount = cached.points.size();
+        failure.cancelled = cloud.cancelled;
+        return failure;
+    }
+    TempWorkpiecePreparation result;
+    result.success = true;
+    result.declaredPointCount = cached.points.size();
+    result.convertedPointCount = cloud.points.size();
+    result.rejectedInvalidPointCount = cloud.rejectedInvalid;
+    result.rejectedRangePointCount = cloud.rejectedRange;
+    result.inputYMinimum = cloud.inputYMinimum;
+    result.inputYMaximum = cloud.inputYMaximum;
+    result.signedTravel = cloud.signedTravel;
+    result.dominantTravelAxis = cloud.dominantTravelAxis;
+    result.robotBasePoints = std::move(cloud.points);
+    result.sourceIndices = std::move(cloud.sourceIndices);
+    return result;
+}
+
+// Plain-PLY preparation: no runtime job directory and no scanning JSON, the
+// output directory comes from the user-selected absolute path.
+TempWorkpiecePreparation prepareInMemoryTempWorkpiece(const TempWorkpieceOptions &options,
+                                                      const QString &runtimeRoot,
+                                                      QString *error)
+{
+    QString detail;
+    if (!validateInMemoryScan(options.scanInfo, &detail))
+        return failedPreparation(inputErrorCode(detail), detail, error);
+    if (options.outputDirectory.trimmed().isEmpty())
+        return failedPreparation(QString::fromLatin1(kErrorContract),
+                                 QStringLiteral("outputDirectory is required"), error);
+    const QFileInfo outputInfo(options.outputDirectory);
+    if (!outputInfo.isAbsolute())
+        return failedPreparation(QString::fromLatin1(kErrorContract),
+                                 QStringLiteral("outputDirectory must be absolute"), error);
+    const QString outputDirectory = QDir::cleanPath(outputInfo.absoluteFilePath());
+    QString resolvedPly;
+    if (!resolveAbsoluteFile(options.scanInfo.pointCloudFile, &resolvedPly, &detail))
+        return failedPreparation(QString::fromLatin1(kErrorContract), detail, error);
+    if (!QFileInfo::exists(resolvedPly))
+        return failedPreparation(QString::fromLatin1(kErrorInputMissing),
+                                 QStringLiteral("point cloud file is missing"), error);
+    const QString calibrationInput = options.calibrationOverridePath.trimmed().isEmpty()
+        ? options.scanInfo.calibrationFile : options.calibrationOverridePath;
+    QString resolvedCalibration;
+    if (!resolveAbsoluteFile(calibrationInput, &resolvedCalibration, &detail))
+        return failedPreparation(QString::fromLatin1(kErrorContract), detail, error);
+    if (!QFileInfo::exists(resolvedCalibration))
+        return failedPreparation(QString::fromLatin1(kErrorInputMissing),
+                                 QStringLiteral("calibration file is missing"), error);
+    TempWorkpiecePreparation result = transformScanToRobotBase(
+        options.scanInfo, resolvedPly, resolvedCalibration, options.isCancelled, error);
+    if (!result.success) return result;
+    result.success = true;
+    result.runtimeRoot = runtimeRoot;
+    result.jobId = options.jobId;
+    result.interfaceDirectory = outputDirectory;
+    // The plain-PLY line never writes a temp_scanning_info.json artifact.
+    result.scanningInfoPath.clear();
+    result.outputDirectory = outputDirectory;
+    result.scanId = options.scanInfo.scanId;
+    result.schemaVersion = options.scanInfo.schemaVersion;
+    result.kind = options.scanInfo.kind;
+    result.sourceFrame = options.scanInfo.coordinateFrame;
+    result.targetFrame = options.scanInfo.calibrationTargetFrame;
+    result.coordinateFrame = QStringLiteral("robot_base");
+    result.createdAtIso8601 = options.scanInfo.createdAtIso8601;
+    result.calibrationSourceFrame = options.scanInfo.calibrationSourceFrame;
+    result.calibrationTargetFrame = options.scanInfo.calibrationTargetFrame;
+    result.robotPoseStart = options.scanInfo.robotPoseStart;
+    result.robotPoseEnd = options.scanInfo.robotPoseEnd;
+    result.warning = options.scanInfo.warning;
+    result.resolvedPointCloudFile = resolvedPly;
+    result.resolvedCalibrationFile = resolvedCalibration;
+    result.pointCloudLayout = options.scanInfo.pointCloudLayout;
+    return result;
+}
+
 } // namespace
 
 QString defaultRuntimeRoot()
@@ -325,8 +483,22 @@ bool parseTempScanningInfo(const QString &filePath, TempScanningInfo *info, QStr
 
 TempWorkpiecePreparation prepareTempWorkpiece(const TempWorkpieceOptions &options, QString *error)
 {
-    if (options.isCancelled && options.isCancelled())
-        return failedPreparation(QStringLiteral("PCV_CANCELLED"), QStringLiteral("cancelled"), error);
+    if (options.isCancelled && options.isCancelled()) {
+        TempWorkpiecePreparation cancelled =
+            failedPreparation(QStringLiteral("PCV_CANCELLED"), QStringLiteral("cancelled"), error);
+        cancelled.cancelled = true;
+        return cancelled;
+    }
+    // The plain-PLY line has no scanning JSON and no runtime job directory: the
+    // descriptor and the absolute output directory come from the parameter
+    // dialog. The JSON entry keeps the original behaviour below.
+    if (options.useInMemoryScan) {
+        return prepareInMemoryTempWorkpiece(
+            options,
+            options.runtimeRoot.trimmed().isEmpty()
+                ? defaultRuntimeRoot() : QDir::cleanPath(options.runtimeRoot),
+            error);
+    }
     const bool explicitPath = !options.scanningInfoPath.trimmed().isEmpty();
     const QString runtimeRoot = options.runtimeRoot.trimmed().isEmpty()
         ? defaultRuntimeRoot() : QDir::cleanPath(options.runtimeRoot);
@@ -378,21 +550,9 @@ TempWorkpiecePreparation prepareTempWorkpiece(const TempWorkpieceOptions &option
     if (!QFileInfo::exists(resolvedCalibration))
         return failedPreparation(QString::fromLatin1(kErrorInputMissing),
                                  QStringLiteral("calibration file is missing"), error);
-    const auto cached = pcv::detail::io::readPlyCached(resolvedPly);
-    if (!cached.ok)
-        return failedPreparation(QString::fromLatin1(kErrorInputUnsupported), cached.error, error);
-    pointcloud::HandEyeCalibration calibration;
-    if (!pointcloud::loadHandEyeCalibration(resolvedCalibration, &calibration, &detail))
-        return failedPreparation(QString::fromLatin1(kErrorTransformInvalid), detail, error);
-    pointcloud::CloudTransformOptions transformOptions;
-    transformOptions.layout = scan.pointCloudLayout;
-    transformOptions.sampleStride = 1;
-    transformOptions.isCancelled = options.isCancelled;
-    auto cloud = pointcloud::transformLineScanToRobotBase(
-        cached.points, calibration, scan.robotPoseStart, scan.robotPoseEnd, transformOptions);
-    if (!cloud.ok)
-        return failedPreparation(QString::fromLatin1(kErrorTransformInvalid), cloud.error, error);
-    TempWorkpiecePreparation result;
+    TempWorkpiecePreparation result = transformScanToRobotBase(
+        scan, resolvedPly, resolvedCalibration, options.isCancelled, error);
+    if (!result.success) return result;
     result.success = true;
     result.runtimeRoot = runtimeRoot; result.jobId = options.jobId;
     result.interfaceDirectory = jsonDirectory; result.scanningInfoPath = scanningInfoPath;
@@ -407,11 +567,6 @@ TempWorkpiecePreparation prepareTempWorkpiece(const TempWorkpieceOptions &option
     result.warning = scan.warning; result.resolvedPointCloudFile = resolvedPly;
     result.resolvedCalibrationFile = resolvedCalibration;
     result.pointCloudLayout = scan.pointCloudLayout;
-    result.declaredPointCount = cached.points.size(); result.convertedPointCount = cloud.points.size();
-    result.rejectedInvalidPointCount = cloud.rejectedInvalid;
-    result.rejectedRangePointCount = cloud.rejectedRange;
-    result.robotBasePoints = std::move(cloud.points);
-    result.sourceIndices = std::move(cloud.sourceIndices);
     return result;
 }
 

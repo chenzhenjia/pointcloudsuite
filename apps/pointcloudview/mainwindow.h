@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pcv/core/cancellation.h>
 #include <pcv/infrastructure/application_config.h>
 
 #include <QMainWindow>
@@ -26,6 +27,7 @@ class PointCloudCanvas;
 namespace Ui { class MainWindow; }
 namespace pointcloud { struct LoadResult; }
 namespace pcv::interface {
+struct TempWorkpieceOptions;
 struct TempWorkpiecePreparation;
 struct TempWorkpieceResult;
 }
@@ -77,8 +79,38 @@ private slots:
     void cancelSecondPlanePointSelection();
 
 private:
+    // Behavioural state of the single temporary-workpiece workflow. Both data
+    // sources (scanning JSON and plain PLY) share it; it gates new data-source
+    // opens and keeps cancelled or stale sessions from publishing results.
+    // The preparation worker performs ReadingPly and Transforming in one
+    // phase, so the observable states are ReadingPly (worker running) and
+    // ValidatingPrimaryPlane / FinalizingArtifacts for the later stages.
+    enum class WorkflowState {
+        Idle,
+        ReadingPly,
+        Transforming,
+        SelectingPrimaryPlanePoints,
+        ValidatingPrimaryPlane,
+        SelectingSecondaryPlanePoints,
+        ValidatingSecondaryPlane,
+        FinalizingArtifacts,
+        Completed,
+        Failed,
+        Cancelled
+    };
     void closeEvent(QCloseEvent *event) override;
     void buildUi();
+    bool workflowBlocksNewSource() const;
+    QString workflowStateName() const;
+    void setWorkflowState(WorkflowState state, const QString &statusText = QString());
+    void startPlyLinePreparation(const pcv::interface::TempWorkpieceOptions &options);
+    void reportPlyLinePreparation(const pcv::interface::TempWorkpiecePreparation &prepared);
+    enum class TempWorkpieceSource { None, Json, Ply };
+    bool hasTempWorkpieceSession() const;
+    bool confirmReplaceTempWorkpieceSession();
+    void invalidateTempWorkpieceSession();
+    void failAutomaticTempWorkpieceStage(const QString &stage, const QString &detail);
+    void appendTempWorkpieceOutput(const QString &text);
     void applyDepthRenderRange(const QVector<pointcloud::Point3D> &points);
     void publishCanvasCache(QVector<pointcloud::Point3D> points,
                             bool preserveTempWorkpieceSession = false);
@@ -184,12 +216,18 @@ private:
     pointcloud::AutomaticAxisPointSelection m_automaticAxisPointSelection;
     bool m_planeCandidateConfirmed = false;
     bool m_planeFinalizationPending = false;
-    bool m_tempWorkpieceSessionActive = false;
     QString m_tempWorkpieceScanId;
     QString m_tempWorkpieceOutputDirectory;
     QString m_tempWorkpieceCreatedAtIso8601;
     QVector<qsizetype> m_tempWorkpieceSourceIndices;
     bool m_closing = false;
+    WorkflowState m_workflowState = WorkflowState::Idle;
+    // The active source is the single source of truth for temporary-workpiece
+    // session ownership. A pending source exists only while preparation runs.
+    TempWorkpieceSource m_tempWorkpieceSource = TempWorkpieceSource::None;
+    TempWorkpieceSource m_pendingTempWorkpieceSource = TempWorkpieceSource::None;
+    // Cancellation callback handed to the long-running preparation worker.
+    pointcloud::CancellationToken m_prepareCancelToken;
     pcv::config::PointCloudViewDefaults m_defaults;
     Ui::MainWindow *ui = nullptr;
 };

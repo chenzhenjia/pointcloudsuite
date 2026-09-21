@@ -59,6 +59,13 @@ struct TempWorkpieceOptions {
     // Optional UI-selected calibration override. It never modifies the input JSON.
     QString calibrationOverridePath;
     QString outputDirectory;
+    // Plain-PLY line: when set, no temp_scanning_info.json is read. The
+    // descriptor below then supplies scan_id, created_at, layout, poses and
+    // the absolute point_cloud_file / calibration_file paths entered in the
+    // "打开 PLY" parameter dialog. The JSON entry keeps using
+    // scanningInfoPath and leaves this flag false.
+    bool useInMemoryScan = false;
+    TempScanningInfo scanInfo;
     std::function<bool()> isCancelled;
 };
 
@@ -94,6 +101,17 @@ struct TempWorkpiecePreparation {
     qsizetype convertedPointCount = 0;
     qsizetype rejectedInvalidPointCount = 0;
     qsizetype rejectedRangePointCount = 0;
+    // Scan travel diagnostics reported by
+    // pointcloud::transformLineScanToRobotBase(); the plain-PLY line displays
+    // them together with the hand-eye validation state.
+    float inputYMinimum = 0.0f;
+    float inputYMaximum = 0.0f;
+    float signedTravel = 0.0f;
+    int dominantTravelAxis = -1;
+    // Set when the worker stopped on the caller's cancellation callback. The
+    // error code stays unchanged for compatibility; callers must never publish
+    // a cancelled preparation as a successful session.
+    bool cancelled = false;
     QVector<pointcloud::Point3D> robotBasePoints;
     QVector<qsizetype> sourceIndices;
 };

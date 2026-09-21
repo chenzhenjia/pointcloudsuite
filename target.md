@@ -97,5 +97,38 @@
 | 日期 | 状态 | 说明 |
 |---|---|---|
 | 2026-09-18 | 目标基线已建立 | 已确认两条业务流程、双方职责、统一展示入口、契约内现场数据验收口径；外部项目接入形态待共同决策。 |
+| 2026-09-20 | PLY 线路已实现（代码级） | 现有“打开 PLY”入口改造为手眼转换 + 临时工件线路，两组三点后自动生成四件套；未执行构建、CTest 与 GUI 验收，详见第九节。 |
+
+## 八、2.5D 高程图配准迭代记录
+
+| 日期 | 主模块 | 变更与验证 | 风险/未完成 |
+|---|---|---|---|
+| 2026-09-18 | `30_pointcloud_stitch`（同步 `40_pointcloud_matching`） | 新增默认关闭的 2.5D 高程图路径、受限 coarse-to-fine 搜索、有效掩膜/去趋势/网格诊断、legacy 回退与 `visibility_hard_rejected`；应用 JSON/GUI 状态透传。Debug 全量 CTest 15/15，Debug/Release 定向测试各 2/2。源码树外真实回放：`1/test_1` 2.5D 退化后回退 `legacy_icp` 并生成正式 PLY；`5_40/test` 可见比例 `0.2246`，来源 `none`，硬拒绝且不生成正式合并 PLY。 | 未实现 pose graph、硬件时间戳、`Δt`、40 的工件移动判定；GUI 人工冒烟、PageHeap、现场夹具和便携 Release 部署未完成。Release 环境未找到 Visual Studio redist 子目录。 |
 
 重大目标、职责、数据契约或验收口径发生变化时，应在本节追加日期和简短说明，并同步更新受影响的架构、模块或接口文档。
+
+## 九、PLY 临时工件线路迭代记录
+
+主模块：`60_geometry_workpiece`；协作模块：`50_coordinate_conversion`、`10_pointcloud_io`；UI 编排：`apps/pointcloudview`。
+
+| 日期 | 主模块 | 变更与验证 | 风险/未完成 |
+|---|---|---|---|
+| 2026-09-20 | `60_geometry_workpiece`（协作 `50_coordinate_conversion`、`10_pointcloud_io`、`apps/pointcloudview`） | 现有“打开 PLY”入口改造为 PLY 临时工件线路：PLY 线路参数对话框（手眼 XML、Start/End 各 6 个位姿、输出目录、只读 LineProfileXz、手眼矩阵校验状态）→ 按 LineProfileXz 转换到 `robot_base` → 人工第一组三点后自动平面拟合 → 人工第二组三点同面校验 → 自动建立 WObj1、边缘分割、ROI、Mask → 由 `ArtifactTransaction` 一次性提交四件套。模块 60 新增内存扫描描述符路径并合并共享转换尾段，坐标数学完全复用模块 50，正式输出仍只经模块 10。 | 未执行 Debug/Release 构建、全量 CTest 与 GUI 人工验收；真实线扫 PLY、手眼 XML 和生产夹具未验证；Start/End 插值方向、标定方向与 WObj1 朝向仍需真实样件确认。 |
+| 2026-09-21 | `apps/pointcloudview`（PLY/JSON 临时工件状态机） | 修复参数对话框取消后状态锁死、自动链同步失败悬空、旧会话串线和 JSON 位姿摘要顺序；新增 `None/Json/Ply` 单一会话来源、替换确认、统一会话失效和自动失败出口；文件夹扫描、多帧配准等新画布入口也遵循确认后失效旧临时工件会话的规则。源码树外 Debug/Release 全量构建成功，Debug/Release CTest 均为 `15/15` 通过。 | GUI smoke、真实线扫 PLY/XML 与生产夹具仍待执行。 |
+
+新增行为要点：
+
+- “打开单个 PLY”进入 PLY 线路；文件夹扫描 PLY 仍是只读预览入口，行为不变。
+- 每次打开 PLY 都要求重新选择手眼标定 XML，并在选择/变更时立即执行 `loadHandEyeCalibration()` 与 `validateRigidTransform()`。
+- 输出目录在流程开始前校验：非空、非盘符根目录、非构建/缓存/源码树目录、且不存在四件套同名冲突；PLY 线路固定 `allowOverwrite = false`，不在自动执行中途询问覆盖。
+- 两组三点是 PLY 线路唯一的人工步骤；第一组三点选满后自动拟合平面并自动进入第二组，第二组校验通过后自动完成剩余步骤。
+- 现有扫描 JSON 入口、公共 JSON schema、四件套文件名与输出格式保持兼容。
+
+本轮交接记录（纯文本、含未验证项与接手建议）：`docs/pointcloudview_ply_line_handoff_2026-09-20.txt`。
+
+### 2026-09-21（代码验收与发布准备）
+
+- 验收范围：PLY/JSON 会话状态机、手眼转换成功/取消语义、PLY 读取取消透传、两组三点及自动 WObj1/边缘/ROI/Mask/四件套失败出口、JSON 位姿摘要顺序。
+- 自动化结果：源码树外 Debug/Release 构建成功；Debug 和 Release 全量 CTest 均为 `15/15`；`git diff --check` 通过。
+- 发布边界：本次仅提交上述 PLY/JSON 排错修复、相关测试和 Markdown 文档；工作区既有 `30_pointcloud_stitch`、PointCloudStitch、临时脚本和其他未提交修改不纳入本次提交。
+- 未完成验收：GUI smoke、真实线扫 PLY/手眼 XML、机器人运动方向、WObj1 朝向和生产夹具现场数据仍需人工确认。

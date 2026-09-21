@@ -30,6 +30,14 @@ v0.3 继续作为 JSON、PLY、坐标、错误码和默认数值的数据契约�
 
 ## 3. 数据流程
 
+### 2026-09-18：2.5D 高程图配准增量契约
+
+- `30_pointcloud_stitch` 新增可选 2.5D 高程图配准路径，`IcpOptions.heightMapRegistrationEnabled` 默认 `false`；关闭时旧 ICP 行为和输出保持不变。
+- 新路径只允许受限 `Δx/Δy` 与小范围 `Δz/yaw`，网格分辨率自动估计并限制 `0.5~2.0 mm`，有效掩膜缺失网格不参与评分。`IcpDiagnostics` 和回归/GUI JSON 透传网格、有效比例/点数、评分前后、改善率、受限 ICP 层数、来源和拒绝原因。
+- 选择规则固定为：2.5D 全部验收通过选 `heightmap_restricted_icp`；2.5D 失败且旧 ICP 通过选 `legacy_icp`；两者失败选 `none`。最终有效可见比例 `<0.25` 时设置 `visibility_hard_rejected` 并阻止正式输出，不能用命中点内覆盖率绕过。
+- 本增量不改变手眼矩阵、机器人位姿语义、PLY 编码、`robot_base` 坐标约定，也不实现 pose graph、硬件时间戳、`Δt` 估计或 40 的工件移动判定。
+- 验证记录：Debug 全量 CTest 15/15；Debug/Release 定向 `multiframe_registration_tests` 与 `stitching_interface_tests` 各 2/2。源码树外回放中 `1/test_1` 成功并回退 `legacy_icp`；`5_40/test` 以可见比例 `0.2246` 硬拒绝且无正式合并 PLY。GUI 人工、生产夹具和便携 Release 部署尚未验收。
+
 ```text
 10 输入/相机采集/预处理
     ↓
@@ -81,6 +89,28 @@ v0.3 继续作为 JSON、PLY、坐标、错误码和默认数值的数据契约�
 当前状态为“迁移完成，发布验收待完成”。未完成真实 GUI 验收和生产夹具逐字段比对前，不标记为 Release Candidate。
 
 ## 8. 变更记录
+
+### 2026-09-20（PLY 临时工件线路接入：打开 PLY → robot_base → 四件套）
+
+- 登记主模块 `60_geometry_workpiece`；协作 `50_coordinate_conversion`（唯一坐标转换实现）、`10_pointcloud_io`（`ArtifactTransaction` 与 PLY 读写）、`apps/pointcloudview`（参数收集、状态编排与结果展示）。
+- 数据契约不变：四件套文件名 `baseline_robot_base.ply`、`roi_template_robot_base.ply`、`plane_mask.png`、`temp_workpiece_info.json`；binary little-endian PLY；Grayscale8 PNG 且像素只取 0/255；JSON 仍为 `sr2026-temp-workpiece-info-mvp-2`，字段名、精度（WObj1 六元组保留 3 位小数）与错误码未变化；未创建新的 PLY 专用 schema。
+- 位姿与坐标约定不变：`[X,Y,Z,A,B,C]`，`A=Rx`、`B=Ry`、`C=Rz`，旋转 `Rz(C)*Ry(B)*Rx(A)`，长度 mm、角度 deg；PLY 线路固定按 `LineProfileXz` 解释，不提供 `FullXyz` 切换。
+- 新增行为：现有“打开单个 PLY”入口改为 PLY 线路（文件夹扫描 PLY 仍是只读预览）。参数对话框强制选择手眼 XML、手工输入 Start/End，并显示标定绝对路径、有效性、`camera -> robot_base` 方向与失败原因；输出目录在流程开始前校验（非空、非盘符根、非构建/缓存/源码树目录、无四件套同名冲突），PLY 线路固定 `allowOverwrite = false`。第一组三点选满后自动平面拟合并自动进入第二组，第二组同面校验通过后自动建立 WObj1、边缘分割、ROI、Mask 并一次性提交四件套。
+- 模块 60 新增 `TempWorkpieceOptions::useInMemoryScan` / `scanInfo` 与 `TempWorkpiecePreparation` 的转换诊断字段；JSON 入口行为、公共头既有字段和 `temp_scanning_info.json` 读取逻辑保持兼容。
+- 验证：仅完成代码级与测试代码级修改和静态检查；本轮未执行 Debug/Release 构建、CTest 和 GUI 人工验收，不得把上述功能记为已通过验收。
+
+### 2026-09-21（PLY/JSON 临时工件状态机排错修复）
+
+- 根因：参数对话框取消或 JSON 解析失败会遗留 `WaitingForParameters`；自动链同步前置失败只返回；`m_tempWorkpieceSessionActive` 与 PLY 来源标记分离维护，可能让旧会话和覆盖策略串线；JSON 位姿摘要显示顺序错误。
+- 修复：应用层改用 `None/Json/Ply` 单一来源状态，参数确认后才启动新任务；旧会话替换需确认，统一失效不删除磁盘文件；主动放弃取点保留会话，自动链失败统一进入 `Failed` 并允许重试/切换；JSON 显示改为 `[X,Y,Z,Rx,Ry,Rz]`。
+- 契约：JSON schema、四件套文件名/格式、坐标转换数学和阶段错误码保持不变，取消由 `cancelled=true` 区分。
+- 验证：源码树外 Debug/Release 全量构建成功，Debug/Release CTest 均为 `15/15` 通过；GUI smoke、真实线扫 PLY/XML 和生产夹具未验证。
+
+### 2026-09-21（代码验收与发布边界）
+
+- PLY/JSON 临时工件状态机和底层取消/成功语义完成代码验收：Debug/Release 构建成功，双配置全量 CTest 均为 `15/15`。
+- JSON schema、四件套文件名/格式、坐标旋转约定和阶段错误码保持不变。
+- GUI smoke、真实线扫 PLY/XML、机器人运动方向和生产夹具验收仍待执行。
 
 ### 2026-09-17（PointCloudStitch 高倾角配准修复第一轮：命中口径 + 鲁棒粗对齐 + 提速）
 

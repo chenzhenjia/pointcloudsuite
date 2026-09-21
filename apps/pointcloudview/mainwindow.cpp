@@ -7,6 +7,7 @@
 #include "ui_mainwindow.h"
 #include <pcv/interface/temp_workpiece_interface.h>
 #include <pcv/output/plane_output.h>
+#include <pcv/registration/handeye_transform.h>
 #include <pcv/render/pointcloud_canvas.h>
 #include <pcv/render/pointcloud_canvas_contract.h>
 
@@ -64,13 +65,16 @@
 #include <QDialog>
 #include <QSignalBlocker>
 #include <QtMath>
+#include <QDateTime>
 #include <QDir>
+#include <QGridLayout>
 #include <QPixmap>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
+#include <atomic>
 #include <limits>
 #include <cmath>
 #include <functional>
@@ -107,6 +111,286 @@ QVector<pcv::render::Contour> toRenderContours(
     }
     return result;
 }
+
+// Plain-PLY line: values collected by the "PLY 线路参数" dialog.
+struct PlyLineParameters {
+    QString pointCloudFile;
+    QString calibrationFile;
+    QString outputDirectory;
+    pointcloud::RobotPose startPose;
+    pointcloud::RobotPose endPose;
+};
+
+QString normalizedAbsolutePath(const QString &path) {
+    return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+}
+
+QStringList workpieceArtifactNames() {
+    return {QStringLiteral("baseline_robot_base.ply"),
+            QStringLiteral("roi_template_robot_base.ply"),
+            QStringLiteral("plane_mask.png"),
+            QStringLiteral("temp_workpiece_info.json")};
+}
+
+// Returns the names of the formal four-artifact files that already exist in
+// the selected directory. The plain-PLY line refuses to continue instead of
+// asking per file during the automatic run.
+QStringList existingWorkpieceArtifacts(const QString &directory) {
+    QStringList existing;
+    const QDir dir(normalizedAbsolutePath(directory));
+    for (const QString &name : workpieceArtifactNames()) {
+        if (QFileInfo::exists(dir.filePath(name))) existing.push_back(name);
+    }
+    return existing;
+}
+
+// The output directory must be a real user directory: never a drive root, a
+// cache/build tree or the source tree itself.
+QString plyLineOutputDirectoryIssue(const QString &directory) {
+    const QString clean = normalizedAbsolutePath(directory);
+    if (clean.isEmpty()) return QObject::tr("请选择输出目录");
+    const QFileInfo info(clean);
+    if (info.exists() && !info.isDir())
+        return QObject::tr("输出目录不是文件夹：%1").arg(clean);
+    if (QDir(clean).isRoot())
+        return QObject::tr("输出目录不能是盘符根目录：%1").arg(clean);
+    const QStringList components = clean.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (const QString &component : components) {
+        const QString lower = component.toLower();
+        const bool reserved = lower.startsWith(QStringLiteral("build"))
+            || lower.startsWith(QStringLiteral("cmake-build"))
+            || lower.startsWith(QStringLiteral(".pcv"))
+            || lower == QStringLiteral("cache") || lower == QStringLiteral(".cache")
+            || lower == QStringLiteral("cmakefiles")
+            || lower == QStringLiteral("runtime_data");
+        if (reserved)
+            return QObject::tr("输出目录不能位于缓存或构建目录中：%1").arg(clean);
+    }
+    if (QFileInfo::exists(QDir(clean).filePath(QStringLiteral("CMakeCache.txt"))))
+        return QObject::tr("输出目录是 CMake 构建目录：%1").arg(clean);
+    QDir ancestor(clean);
+    while (true) {
+        if (QFileInfo::exists(ancestor.filePath(QStringLiteral("CMakeLists.txt")))
+            && QDir(ancestor.filePath(QStringLiteral("modules"))).exists()
+            && QDir(ancestor.filePath(QStringLiteral("apps"))).exists())
+            return QObject::tr("输出目录位于源码树中：%1").arg(clean);
+        if (!ancestor.cdUp()) break;
+    }
+    return QString();
+}
+
+bool poseIsFinite(const pointcloud::RobotPose &pose) {
+    const double values[6] = {pose.x, pose.y, pose.z, pose.rx, pose.ry, pose.rz};
+    for (const double value : values) {
+        if (!std::isfinite(value)) return false;
+    }
+    return true;
+}
+
+// Collects the plain-PLY hand-eye parameters. The dialog validates the
+// calibration XML (load + rigid transform check) and the output directory on
+// every change and only enables OK when the whole parameter set is usable.
+bool collectPlyLineParameters(QWidget *parent, const QString &plyPath,
+                              PlyLineParameters *parameters) {
+    if (!parameters) return false;
+    const QFileInfo plyInfo(plyPath);
+    if (!plyInfo.exists() || !plyInfo.isFile()) {
+        QMessageBox::warning(parent, QObject::tr("PLY 线路参数"),
+                             QObject::tr("PLY 文件不存在：%1").arg(plyPath));
+        return false;
+    }
+    const QString plyAbsolute = normalizedAbsolutePath(plyPath);
+    QDialog dialog(parent);
+    dialog.setWindowTitle(QObject::tr("PLY 线路参数"));
+    dialog.setModal(true);
+    auto *form = new QFormLayout(&dialog);
+
+    auto *plyValue = new QLabel(plyAbsolute, &dialog);
+    plyValue->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    plyValue->setWordWrap(true);
+    form->addRow(QObject::tr("点云 PLY"), plyValue);
+
+    auto *xmlRow = new QWidget(&dialog);
+    auto *xmlLayout = new QHBoxLayout(xmlRow);
+    xmlLayout->setContentsMargins(0, 0, 0, 0);
+    auto *xmlValue = new QLabel(QObject::tr("未选择"), xmlRow);
+    xmlValue->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    xmlValue->setWordWrap(true);
+    auto *chooseXml = new QPushButton(QObject::tr("选择 XML..."), xmlRow);
+    xmlLayout->addWidget(xmlValue, 1);
+    xmlLayout->addWidget(chooseXml);
+    form->addRow(QObject::tr("手眼标定 XML"), xmlRow);
+
+    constexpr double kLinearLimit = 1.0e7;
+    constexpr double kAngularLimit = 3.6e4;
+    const auto makeSpin = [&dialog](double minimum, double maximum, int decimals) {
+        auto *spin = new QDoubleSpinBox(&dialog);
+        spin->setRange(minimum, maximum);
+        spin->setDecimals(decimals);
+        spin->setSingleStep(decimals > 4 ? 0.1 : 1.0);
+        spin->setKeyboardTracking(false);
+        return spin;
+    };
+    const auto makePoseRow = [&](const QString &title, QVector<QDoubleSpinBox *> *values) {
+        auto *row = new QWidget(&dialog);
+        auto *grid = new QGridLayout(row);
+        grid->setContentsMargins(0, 0, 0, 0);
+        const QStringList names{QStringLiteral("X"), QStringLiteral("Y"), QStringLiteral("Z"),
+                                QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C")};
+        for (int index = 0; index < 6; ++index) {
+            const bool linear = index < 3;
+            auto *spin = makeSpin(linear ? -kLinearLimit : -kAngularLimit,
+                                  linear ? kLinearLimit : kAngularLimit,
+                                  linear ? 4 : 6);
+            grid->addWidget(new QLabel(names.at(index), row), index / 3, (index % 3) * 2);
+            grid->addWidget(spin, index / 3, (index % 3) * 2 + 1);
+            values->push_back(spin);
+        }
+        form->addRow(title, row);
+    };
+    QVector<QDoubleSpinBox *> startValues;
+    QVector<QDoubleSpinBox *> endValues;
+    makePoseRow(QObject::tr("Start 位姿 [X,Y,Z,A,B,C]"), &startValues);
+    makePoseRow(QObject::tr("End 位姿 [X,Y,Z,A,B,C]"), &endValues);
+
+    auto *poseHint = new QLabel(QObject::tr("单位：X/Y/Z mm，A/B/C deg；A=Rx、B=Ry、C=Rz；R = Rz(C) × Ry(B) × Rx(A)"),
+                                &dialog);
+    poseHint->setWordWrap(true);
+    form->addRow(QString(), poseHint);
+
+    form->addRow(QObject::tr("点云布局"),
+                 new QLabel(QStringLiteral("LineProfileXz"), &dialog));
+    form->addRow(QObject::tr("坐标方向"),
+                 new QLabel(QStringLiteral("camera -> robot_base"), &dialog));
+    auto *matrixValue = new QLabel(&dialog);
+    matrixValue->setWordWrap(true);
+    matrixValue->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    form->addRow(QObject::tr("手眼矩阵校验"), matrixValue);
+
+    QString outputDirectory = plyInfo.absolutePath();
+    auto *outputRow = new QWidget(&dialog);
+    auto *outputLayout = new QHBoxLayout(outputRow);
+    outputLayout->setContentsMargins(0, 0, 0, 0);
+    auto *outputValue = new QLabel(outputDirectory, outputRow);
+    outputValue->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    outputValue->setWordWrap(true);
+    auto *chooseOutput = new QPushButton(QObject::tr("选择目录..."), outputRow);
+    outputLayout->addWidget(outputValue, 1);
+    outputLayout->addWidget(chooseOutput);
+    form->addRow(QObject::tr("输出目录"), outputRow);
+
+    auto *issueValue = new QLabel(&dialog);
+    issueValue->setWordWrap(true);
+    form->addRow(QObject::tr("校验结果"), issueValue);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    buttons->button(QDialogButtonBox::Ok)->setText(QObject::tr("确认并转换"));
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    form->addRow(buttons);
+
+    QString calibrationPath;
+    const auto currentPose = [](const QVector<QDoubleSpinBox *> &values) {
+        pointcloud::RobotPose pose;
+        pose.x = values.at(0)->value();
+        pose.y = values.at(1)->value();
+        pose.z = values.at(2)->value();
+        pose.rx = values.at(3)->value();
+        pose.ry = values.at(4)->value();
+        pose.rz = values.at(5)->value();
+        return pose;
+    };
+    const auto refresh = [&]() {
+        QString problem;
+        // Every XML change runs loadHandEyeCalibration() and
+        // validateRigidTransform() before the parameters may be accepted.
+        if (calibrationPath.isEmpty()) {
+            matrixValue->setText(QObject::tr("未校验：请选择手眼标定 XML"));
+            matrixValue->setStyleSheet(QStringLiteral("color:#a06000;"));
+            problem = QObject::tr("请选择手眼标定 XML 文件");
+        } else if (!QFileInfo::exists(calibrationPath)) {
+            const QString detail = QObject::tr("文件不存在：%1").arg(calibrationPath);
+            matrixValue->setText(QObject::tr("无效：%1").arg(detail));
+            matrixValue->setStyleSheet(QStringLiteral("color:#a00000;"));
+            problem = QObject::tr("手眼标定 XML 无效：%1").arg(detail);
+        } else {
+            pointcloud::HandEyeCalibration calibration;
+            QString calibrationError;
+            if (!pointcloud::loadHandEyeCalibration(calibrationPath, &calibration,
+                                                    &calibrationError)) {
+                matrixValue->setText(QObject::tr("无效：%1；%2")
+                                         .arg(calibrationPath, calibrationError));
+                matrixValue->setStyleSheet(QStringLiteral("color:#a00000;"));
+                problem = QObject::tr("手眼标定 XML 无效：%1").arg(calibrationError);
+            } else {
+                QString rigidError;
+                if (!pointcloud::validateRigidTransform(calibration.flangeFromDepth,
+                                                        &rigidError)) {
+                    matrixValue->setText(QObject::tr("无效（非刚体变换）：%1；%2")
+                                             .arg(calibrationPath, rigidError));
+                    matrixValue->setStyleSheet(QStringLiteral("color:#a00000;"));
+                    problem = QObject::tr("手眼矩阵不是有效刚体变换：%1").arg(rigidError);
+                } else {
+                    matrixValue->setText(QObject::tr("有效（camera -> robot_base）：%1")
+                                             .arg(calibrationPath));
+                    matrixValue->setStyleSheet(QStringLiteral("color:#206020;"));
+                }
+            }
+        }
+        if (problem.isEmpty()
+            && (!poseIsFinite(currentPose(startValues)) || !poseIsFinite(currentPose(endValues))))
+            problem = QObject::tr("Start/End 位姿必须全部为有限数值");
+        if (problem.isEmpty()) problem = plyLineOutputDirectoryIssue(outputDirectory);
+        if (problem.isEmpty()) {
+            const QStringList existing = existingWorkpieceArtifacts(outputDirectory);
+            if (!existing.isEmpty())
+                problem = QObject::tr("输出目录已存在正式文件，请更换目录：%1")
+                              .arg(existing.join(QStringLiteral("、")));
+        }
+        issueValue->setText(problem.isEmpty()
+            ? QObject::tr("参数校验通过：可以执行 PLY -> robot_base 手眼转换")
+            : problem);
+        issueValue->setStyleSheet(problem.isEmpty() ? QStringLiteral("color:#206020;")
+                                                    : QStringLiteral("color:#a00000;"));
+        if (buttons->button(QDialogButtonBox::Ok))
+            buttons->button(QDialogButtonBox::Ok)->setEnabled(problem.isEmpty());
+    };
+
+    QObject::connect(chooseXml, &QPushButton::clicked, &dialog, [&]() {
+        const QString selected = QFileDialog::getOpenFileName(
+            &dialog, QObject::tr("选择手眼标定 XML"),
+            calibrationPath.isEmpty() ? plyInfo.absolutePath() : calibrationPath,
+            QObject::tr("XML 文件 (*.xml);;所有文件 (*.*)"));
+        if (selected.isEmpty()) return;
+        calibrationPath = normalizedAbsolutePath(selected);
+        xmlValue->setText(calibrationPath);
+        refresh();
+    });
+    QObject::connect(chooseOutput, &QPushButton::clicked, &dialog, [&]() {
+        const QString selected = QFileDialog::getExistingDirectory(
+            &dialog, QObject::tr("选择四件套输出目录"), outputDirectory);
+        if (selected.isEmpty()) return;
+        outputDirectory = normalizedAbsolutePath(selected);
+        outputValue->setText(outputDirectory);
+        refresh();
+    });
+    for (QDoubleSpinBox *spin : startValues)
+        QObject::connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), &dialog,
+                         [&refresh](double) { refresh(); });
+    for (QDoubleSpinBox *spin : endValues)
+        QObject::connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), &dialog,
+                         [&refresh](double) { refresh(); });
+
+    refresh();
+    dialog.resize(760, dialog.sizeHint().height());
+    if (dialog.exec() != QDialog::Accepted) return false;
+    parameters->pointCloudFile = plyAbsolute;
+    parameters->calibrationFile = calibrationPath;
+    parameters->outputDirectory = normalizedAbsolutePath(outputDirectory);
+    parameters->startPose = currentPose(startValues);
+    parameters->endPose = currentPose(endValues);
+    return true;
+}
 } // namespace
 
 MainWindow::MainWindow(QWidget *parent) : MainWindow(pcv::config::PointCloudViewDefaults{}, parent) {}
@@ -122,6 +406,7 @@ MainWindow::~MainWindow() {
     // to run during teardown can access vectors/widgets whose lifetime has
     // already ended.
     m_closing = true;
+    if (m_prepareCancelToken) m_prepareCancelToken->store(true);
     if (m_loadWatcher) disconnect(m_loadWatcher, nullptr, this, nullptr);
     if (m_noiseWatcher) disconnect(m_noiseWatcher, nullptr, this, nullptr);
     if (m_threePlaneWatcher) disconnect(m_threePlaneWatcher, nullptr, this, nullptr);
@@ -395,8 +680,9 @@ void MainWindow::openCameraStream() {
 #endif
 
 void MainWindow::openPointCloudSource() {
-    if (pointTaskRunning()) {
-        statusBar()->showMessage(tr("点云处理任务正在运行"));
+    if (workflowBlocksNewSource()) {
+        statusBar()->showMessage(tr("当前流程正在执行（%1），请先结束或取消后再打开新的数据源")
+                                     .arg(workflowStateName()));
         return;
     }
     QMessageBox dialog(QMessageBox::Question, tr("打开点云"),
@@ -417,6 +703,11 @@ void MainWindow::openPointCloudSource() {
                                      tr("所选文件夹中没有 .ply 文件"));
             return;
         }
+        // Folder scanning publishes a new canvas and therefore replaces any
+        // active temporary-workpiece session. Keep the old session untouched
+        // when the operator declines that replacement.
+        if (!confirmReplaceTempWorkpieceSession()) return;
+        invalidateTempWorkpieceSession();
         m_sourceDirectory = directory;
         m_sourceFiles.clear();
         for (const QString &name : files) m_sourceFiles.push_back(dir.absoluteFilePath(name));
@@ -462,32 +753,123 @@ void MainWindow::loadSelectedSource() {
 }
 
 void MainWindow::openPointCloud() {
-    if (pointTaskRunning()) {
-        statusBar()->showMessage(tr("点云处理任务正在运行"));
+    if (workflowBlocksNewSource()) {
+        statusBar()->showMessage(tr("当前流程正在执行（%1），请先结束或取消后再打开新的 PLY")
+                                     .arg(workflowStateName()));
         return;
     }
     const QString path = QFileDialog::getOpenFileName(
-        this, tr("打开 PLY"), QString(), tr("PLY 文件 (*.ply);;所有文件 (*.*)"));
+        this, tr("打开 PLY"),
+        m_sourceDirectory.isEmpty() ? QString() : m_sourceDirectory,
+        tr("PLY 文件 (*.ply);;所有文件 (*.*)"));
     if (path.isEmpty()) return;
 
-    // A direct single-file open starts a new data-source session. Folder
-    // scans keep their complete source list for quick preview switching.
-    m_sourceFiles = {path};
-    m_sourceDirectory = QFileInfo(path).absolutePath();
+    // "打开 PLY" is the plain-PLY entry of the temporary-workpiece line. The
+    // selected PLY is converted from the depth-camera frame to robot_base with
+    // a hand-eye XML and manually entered Start/End poses before anything is
+    // published; cancelling the dialog must leave the canvas, the point cloud
+    // and any running temporary-workpiece session untouched.
+    PlyLineParameters parameters;
+    if (!collectPlyLineParameters(this, path, &parameters)) return;
+    if (!confirmReplaceTempWorkpieceSession()) return;
+    invalidateTempWorkpieceSession();
 
-    m_loading = true;
+    pcv::interface::TempWorkpieceOptions options;
+    options.useInMemoryScan = true;
+    options.outputDirectory = parameters.outputDirectory;
+    pcv::interface::TempScanningInfo &scan = options.scanInfo;
+    scan.schemaVersion = QString::fromLatin1(pcv::interface::kTempScanningSchema);
+    scan.kind = QString::fromLatin1(pcv::interface::kTempScanningKind);
+    // A bare PLY carries no scanning metadata: scan_id, created_at, layout and
+    // frames follow the fixed plain-PLY rules of the temporary workpiece line.
+    scan.createdAtIso8601 = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+    scan.scanId = QFileInfo(parameters.pointCloudFile).completeBaseName();
+    scan.pointCloudFile = parameters.pointCloudFile;
+    scan.pointCloudLayout = pointcloud::DepthPointLayout::LineProfileXz;
+    scan.coordinateFrame = QStringLiteral("camera");
+    scan.calibrationFile = parameters.calibrationFile;
+    scan.calibrationSourceFrame = QStringLiteral("camera");
+    scan.calibrationTargetFrame = QStringLiteral("robot_base");
+    scan.robotPoseStart = parameters.startPose;
+    scan.robotPoseEnd = parameters.endPose;
+
+    startPlyLinePreparation(options);
+}
+
+void MainWindow::startPlyLinePreparation(const pcv::interface::TempWorkpieceOptions &options) {
+    m_pendingTempWorkpieceSource = TempWorkpieceSource::Ply;
+    m_prepareCancelToken = std::make_shared<std::atomic_bool>(false);
+    const pointcloud::CancellationToken token = m_prepareCancelToken;
+
+    pcv::interface::TempWorkpieceOptions prepared = options;
+    prepared.isCancelled = [token]() { return token && token->load(); };
+
+    if (!m_tempWorkpieceWatcher) {
+        m_tempWorkpieceWatcher =
+            new QFutureWatcher<pcv::interface::TempWorkpiecePreparation>(this);
+        connect(m_tempWorkpieceWatcher,
+                &QFutureWatcher<pcv::interface::TempWorkpiecePreparation>::finished,
+                this, &MainWindow::tempWorkpieceFinished);
+    }
+
     m_progress->show();
     m_progress->setRange(0, 0);
-    statusBar()->showMessage(tr("正在加载 PLY..."));
-    m_pendingPath = path;
-    if (!m_loadWatcher) {
-        m_loadWatcher = new QFutureWatcher<pointcloud::LoadResult>(this);
-        connect(m_loadWatcher, &QFutureWatcher<pointcloud::LoadResult>::finished,
-                this, &MainWindow::loadFinished);
-    }
-    m_loadWatcher->setFuture(QtConcurrent::run([path]() {
-        return pointcloud::loadPlyResult(path);
+    setWorkflowState(WorkflowState::ReadingPly,
+                     tr("正在读取 PLY 并转换为 robot_base（LineProfileXz）..."));
+    m_tempWorkpieceWatcher->setFuture(QtConcurrent::run([prepared]() {
+        QString workerError;
+        return pcv::interface::prepareTempWorkpiece(prepared, &workerError);
     }));
+}
+
+void MainWindow::reportPlyLinePreparation(
+    const pcv::interface::TempWorkpiecePreparation &prepared) {
+    const auto axisName = [](int axis) {
+        switch (axis) {
+        case 0: return QStringLiteral("X");
+        case 1: return QStringLiteral("Y");
+        case 2: return QStringLiteral("Z");
+        default: return QStringLiteral("-");
+        }
+    };
+    QStringList lines;
+    lines << tr("PLY 线路手眼转换完成（camera -> robot_base）")
+          << tr("scan_id：%1").arg(prepared.scanId)
+          << tr("PLY：%1").arg(QFileInfo(prepared.resolvedPointCloudFile).absoluteFilePath())
+          << tr("手眼 XML：%1").arg(QFileInfo(prepared.resolvedCalibrationFile).absoluteFilePath())
+          << tr("坐标方向：%1 -> %2").arg(prepared.calibrationSourceFrame,
+                                          prepared.calibrationTargetFrame)
+          << tr("点云布局：LineProfileXz")
+          << tr("created_at：%1").arg(prepared.createdAtIso8601)
+          << tr("输出目录（四件套提交目标）：%1").arg(QFileInfo(prepared.outputDirectory).absoluteFilePath())
+          << QString()
+          << tr("输入点数：%1").arg(QLocale().toString(prepared.declaredPointCount))
+          << tr("转换成功点数：%1").arg(QLocale().toString(prepared.convertedPointCount))
+          << tr("rejectedInvalid：%1").arg(QLocale().toString(prepared.rejectedInvalidPointCount))
+          << tr("rejectedRange：%1").arg(QLocale().toString(prepared.rejectedRangePointCount))
+          << tr("inputYMinimum：%1 mm").arg(prepared.inputYMinimum, 0, 'f', 4)
+          << tr("inputYMaximum：%1 mm").arg(prepared.inputYMaximum, 0, 'f', 4)
+          << tr("signedTravel：%1 mm").arg(prepared.signedTravel, 0, 'f', 4)
+          << tr("dominantTravelAxis：%1").arg(axisName(prepared.dominantTravelAxis));
+    appendTempWorkpieceOutput(lines.join(QLatin1Char('\n')));
+    m_fileInfo->setText(
+        tr("PLY 线路\nscan_id  %1\nlayout  LineProfileXz\n输入点数  %2\n转换点数  %3\n"
+           "输入 Y 范围  %4 ~ %5 mm\n扫描行程  %6 mm（主轴 %7）\nPLY\n%8\nXML\n%9\n"
+           "输出目录（四件套目标）\n%10")
+            .arg(prepared.scanId)
+            .arg(QLocale().toString(prepared.declaredPointCount))
+            .arg(QLocale().toString(prepared.convertedPointCount))
+            .arg(prepared.inputYMinimum, 0, 'f', 3)
+            .arg(prepared.inputYMaximum, 0, 'f', 3)
+            .arg(prepared.signedTravel, 0, 'f', 3)
+            .arg(axisName(prepared.dominantTravelAxis))
+            .arg(QFileInfo(prepared.resolvedPointCloudFile).absoluteFilePath())
+            .arg(QFileInfo(prepared.resolvedCalibrationFile).absoluteFilePath())
+            .arg(QFileInfo(prepared.outputDirectory).absoluteFilePath()));
+    statusBar()->showMessage(
+        tr("PLY 已转换为 robot_base：输入 %1 点，有效 %2 点；请依次人工选择第一组 P1、P2、P3")
+            .arg(QLocale().toString(prepared.declaredPointCount))
+            .arg(QLocale().toString(prepared.convertedPointCount)));
 }
 
 void MainWindow::loadFinished() {
@@ -711,12 +1093,12 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points,
     // operation. A temporarily unavailable OpenGL widget must never discard a
     // successfully loaded cloud or leave the UI reporting zero displayed
     // points while m_rawPoints is populated.
-    if (!preserveTempWorkpieceSession && m_tempWorkpieceSessionActive) {
-        m_tempWorkpieceSessionActive = false;
-        m_tempWorkpieceSourceIndices.clear();
-        m_tempWorkpieceOutputDirectory.clear();
-        m_tempWorkpieceCreatedAtIso8601.clear();
-        m_tempWorkpieceScanId.clear();
+    if (!preserveTempWorkpieceSession && hasTempWorkpieceSession()) {
+        invalidateTempWorkpieceSession();
+        // A canvas change also ends the plain-PLY session: its older points,
+        // planes and ROI indices must not be reused. Existing formal output on
+        // disk is never touched here.
+        setWorkflowState(WorkflowState::Idle);
     }
     m_points = std::move(points);
     ++m_canvasRevision;
@@ -764,6 +1146,99 @@ bool MainWindow::pointTaskRunning() const {
         || (m_planeImageWatcher && m_planeImageWatcher->isRunning());
 }
 
+QString MainWindow::workflowStateName() const {
+    switch (m_workflowState) {
+    case WorkflowState::Idle: return tr("空闲");
+    case WorkflowState::ReadingPly: return tr("读取 PLY");
+    case WorkflowState::Transforming: return tr("坐标转换");
+    case WorkflowState::SelectingPrimaryPlanePoints: return tr("第一组三点选点");
+    case WorkflowState::ValidatingPrimaryPlane: return tr("第一组平面校验");
+    case WorkflowState::SelectingSecondaryPlanePoints: return tr("第二组三点选点");
+    case WorkflowState::ValidatingSecondaryPlane: return tr("第二组同面校验");
+    case WorkflowState::FinalizingArtifacts: return tr("自动输出四件套");
+    case WorkflowState::Completed: return tr("已完成");
+    case WorkflowState::Failed: return tr("失败");
+    case WorkflowState::Cancelled: return tr("已取消");
+    }
+    return tr("空闲");
+}
+
+// Automatic or worker-driven phases must not be replaced by a second
+// data-source open. The interactive point-selection phases stay re-enterable so
+// a user can restart a source without leaving the dialog.
+bool MainWindow::workflowBlocksNewSource() const {
+    if (pointTaskRunning()) return true;
+    switch (m_workflowState) {
+    case WorkflowState::ReadingPly:
+    case WorkflowState::Transforming:
+    case WorkflowState::ValidatingPrimaryPlane:
+    case WorkflowState::ValidatingSecondaryPlane:
+    case WorkflowState::FinalizingArtifacts:
+        return true;
+    default:
+        break;
+    }
+    return false;
+}
+
+void MainWindow::setWorkflowState(WorkflowState state, const QString &statusText) {
+    m_workflowState = state;
+    if (!statusText.isEmpty()) statusBar()->showMessage(statusText);
+    const char *source = "none";
+    if (m_tempWorkpieceSource == TempWorkpieceSource::Json
+        || m_pendingTempWorkpieceSource == TempWorkpieceSource::Json)
+        source = "json";
+    else if (m_tempWorkpieceSource == TempWorkpieceSource::Ply
+             || m_pendingTempWorkpieceSource == TempWorkpieceSource::Ply)
+        source = "ply";
+    qInfo() << "Temporary workpiece workflow state:" << workflowStateName()
+            << "source=" << source;
+}
+
+bool MainWindow::hasTempWorkpieceSession() const {
+    return m_tempWorkpieceSource != TempWorkpieceSource::None
+        && m_tempWorkpieceSessionRevision != 0
+        && !m_tempWorkpieceScanId.isEmpty()
+        && !m_tempWorkpieceOutputDirectory.isEmpty();
+}
+
+bool MainWindow::confirmReplaceTempWorkpieceSession() {
+    if (!hasTempWorkpieceSession()) return true;
+    const auto answer = QMessageBox::question(
+        this, tr("替换当前临时工件会话"),
+        tr("当前临时工件会话尚未完成，仍可继续取点或重试。\n"
+           "打开新的数据源会使当前会话失效，但保留当前画布供查看。\n\n"
+           "是否放弃当前会话并打开新的数据源？"),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    return answer == QMessageBox::Yes;
+}
+
+void MainWindow::invalidateTempWorkpieceSession() {
+    m_tempWorkpieceSource = TempWorkpieceSource::None;
+    m_pendingTempWorkpieceSource = TempWorkpieceSource::None;
+    m_tempWorkpieceSessionRevision = 0;
+    m_tempWorkpieceSourceIndices.clear();
+    m_tempWorkpieceScanId.clear();
+    m_tempWorkpieceOutputDirectory.clear();
+    m_tempWorkpieceCreatedAtIso8601.clear();
+    updatePlaneEdgeUi();
+}
+
+void MainWindow::failAutomaticTempWorkpieceStage(const QString &stage,
+                                                  const QString &detail) {
+    const QString message = tr("自动流程失败阶段：%1：%2").arg(stage, detail);
+    appendTempWorkpieceOutput(message);
+    setWorkflowState(WorkflowState::Failed, message);
+    updatePlaneExtractionUi();
+    updatePlaneEdgeUi();
+}
+
+void MainWindow::appendTempWorkpieceOutput(const QString &text) {
+    if (!m_threeOutput || text.isEmpty()) return;
+    if (!m_threeOutput->toPlainText().isEmpty()) m_threeOutput->appendPlainText(QString());
+    m_threeOutput->appendPlainText(text);
+}
+
 void MainWindow::resetSecondPlaneVerification() {
     m_secondPlanePointIndices.clear();
     m_secondPlaneSelectionActive = false;
@@ -802,6 +1277,7 @@ void MainWindow::startPlanePointSelection() {
     m_canvas->setSelectionMode(true);
     updatePlaneExtractionUi();
     updatePlaneEdgeUi();
+    setWorkflowState(WorkflowState::SelectingPrimaryPlanePoints);
     statusBar()->showMessage(tr("请选择第 1 个平面控制点（至少 3 个）"));
 }
 
@@ -831,7 +1307,10 @@ void MainWindow::abandonPlanePointSelection() {
     if (m_threeOutput) m_threeOutput->clear();
     updatePlaneExtractionUi();
     updatePlaneEdgeUi();
-    statusBar()->showMessage(tr("已放弃取点"));
+    setWorkflowState(WorkflowState::Cancelled);
+    statusBar()->showMessage(hasTempWorkpieceSession()
+        ? tr("已放弃本轮取点，当前临时工件会话保留，可重新开始取点")
+        : tr("已放弃取点"));
 }
 
 void MainWindow::undoPlanePointSelection() {
@@ -860,6 +1339,7 @@ void MainWindow::undoPlanePointSelection() {
     m_canvas->setSelectionMode(true);
     updatePlaneExtractionUi();
     updatePlaneEdgeUi();
+    setWorkflowState(WorkflowState::SelectingPrimaryPlanePoints);
     statusBar()->showMessage(tr("请选择第 %1 个平面控制点").arg(m_selectedPointIndices.size() + 1));
 }
 
@@ -934,7 +1414,7 @@ void MainWindow::updatePlaneEdgeUi() {
         m_savePlaneImageButton->setEnabled(planeImageSaveReady());
     if (m_finalizeTempWorkpieceButton) {
         QString finalizeError;
-        const bool visible = m_tempWorkpieceSessionActive;
+        const bool visible = hasTempWorkpieceSession();
         m_finalizeTempWorkpieceButton->setVisible(visible);
         m_finalizeTempWorkpieceButton->setEnabled(
             visible && tempWorkpieceFinalizeReady(&finalizeError));
@@ -956,6 +1436,8 @@ void MainWindow::openMultiFrameRegistration()
         QMessageBox::critical(this, tr("多帧配准失败"), tr("正式输出不包含可发布的点云"));
         return;
     }
+    if (!confirmReplaceTempWorkpieceSession()) return;
+    invalidateTempWorkpieceSession();
     m_rawPoints = std::move(points);
     m_pendingPath = dialog.outputPly();
     m_sourceFiles = {m_pendingPath};
@@ -976,11 +1458,11 @@ void MainWindow::openMultiFrameRegistration()
 }
 
 void MainWindow::openTempScanningInfo() {
-    if (pointTaskRunning()) {
-        statusBar()->showMessage(tr("点云处理任务正在运行"));
+    if (workflowBlocksNewSource()) {
+        statusBar()->showMessage(tr("当前流程正在执行（%1），请先结束或取消后再打开扫描 JSON")
+                                     .arg(workflowStateName()));
         return;
     }
-
     const QString path = QFileDialog::getOpenFileName(
         this, tr("打开扫描 JSON"), QString(),
         tr("扫描 JSON (*.json);;所有文件 (*.*)"));
@@ -1004,7 +1486,7 @@ void MainWindow::openTempScanningInfo() {
     const auto poseText = [](const pointcloud::RobotPose &pose) {
         return QStringLiteral("[%1, %2, %3, %4, %5, %6]")
             .arg(pose.x, 0, 'g', 12).arg(pose.y, 0, 'g', 12).arg(pose.z, 0, 'g', 12)
-            .arg(pose.rz, 0, 'g', 12).arg(pose.ry, 0, 'g', 12).arg(pose.rx, 0, 'g', 12);
+            .arg(pose.rx, 0, 'g', 12).arg(pose.ry, 0, 'g', 12).arg(pose.rz, 0, 'g', 12);
     };
     const QString layoutName = QStringLiteral("LineProfileXz");
     QDialog inputDialog(this);
@@ -1053,11 +1535,13 @@ void MainWindow::openTempScanningInfo() {
     connect(buttons, &QDialogButtonBox::rejected, &inputDialog, &QDialog::reject);
     form->addRow(buttons);
     inputDialog.resize(760, inputDialog.sizeHint().height());
-    if (inputDialog.exec() != QDialog::Accepted) {
-        statusBar()->showMessage(tr("已取消扫描 JSON 转换"));
-        return;
-    }
+    if (inputDialog.exec() != QDialog::Accepted) return;
+    if (!confirmReplaceTempWorkpieceSession()) return;
+    invalidateTempWorkpieceSession();
 
+    // The JSON entry never uses the in-memory scan descriptor of the plain-PLY
+    // line; it keeps reading temp_scanning_info.json unchanged.
+    m_pendingTempWorkpieceSource = TempWorkpieceSource::Json;
     pcv::interface::TempWorkpieceOptions options;
     options.scanningInfoPath = absolutePath;
     options.calibrationOverridePath = calibrationOverridePath;
@@ -1072,7 +1556,7 @@ void MainWindow::openTempScanningInfo() {
 
     m_progress->show();
     m_progress->setRange(0, 0);
-    statusBar()->showMessage(tr("正在处理扫描 JSON..."));
+    setWorkflowState(WorkflowState::ReadingPly, tr("正在处理扫描 JSON..."));
     const auto capturedOptions = options;
     m_tempWorkpieceWatcher->setFuture(QtConcurrent::run([capturedOptions]() {
         QString workerError;
@@ -1088,19 +1572,36 @@ void MainWindow::tempWorkpieceFinished() {
         return;
     }
 
+    const bool plyLine = m_pendingTempWorkpieceSource == TempWorkpieceSource::Ply;
     m_progress->hide();
     if (!result.success) {
         const QString detail = result.errorCode.isEmpty()
             ? result.message
             : QStringLiteral("%1: %2").arg(result.errorCode, result.message);
+        const QString title = plyLine ? tr("PLY 线路处理失败") : tr("扫描 JSON 处理失败");
+        if (result.cancelled) {
+            // A cancelled conversion must never create a session, publish a
+            // canvas, start point selection or produce output.
+            m_pendingTempWorkpieceSource = TempWorkpieceSource::None;
+            setWorkflowState(WorkflowState::Cancelled, detail);
+            appendTempWorkpieceOutput(tr("坐标转换已取消：%1").arg(detail));
+            return;
+        }
         const bool inputFailure = result.errorCode == QStringLiteral("PCV_INPUT_001")
             || result.errorCode == QStringLiteral("PCV_INPUT_002")
             || result.errorCode == QStringLiteral("PCV_CONTRACT_001");
         if (inputFailure)
-            QMessageBox::warning(this, tr("扫描 JSON 处理失败"), detail);
+            QMessageBox::warning(this, title, detail);
         else
-            QMessageBox::critical(this, tr("扫描 JSON 处理失败"), detail);
-        statusBar()->showMessage(detail);
+            QMessageBox::critical(this, title, detail);
+        if (plyLine) {
+            // Keep the previous canvas and the previous (finished) output: a
+            // failed conversion never replaces the last successful result.
+            m_pendingTempWorkpieceSource = TempWorkpieceSource::None;
+            appendTempWorkpieceOutput(
+                tr("自动流程失败阶段：PLY 读取与手眼转换：%1").arg(detail));
+        }
+        setWorkflowState(WorkflowState::Failed, detail);
         return;
     }
 
@@ -1115,10 +1616,17 @@ void MainWindow::tempWorkpieceFinished() {
     m_sourceDirectory = QFileInfo(m_pendingPath).absolutePath();
     publishCanvasCache(std::move(result.robotBasePoints), true);
     applyDepthRenderRange(m_points);
-    m_tempWorkpieceSessionActive = true;
+    m_tempWorkpieceSource = m_pendingTempWorkpieceSource;
+    m_pendingTempWorkpieceSource = TempWorkpieceSource::None;
     m_tempWorkpieceSessionRevision = m_canvasRevision;
     ui->tw_main->setCurrentWidget(ui->wgt_plane);
     startPlanePointSelection();
+    if (plyLine) {
+        // Plain-PLY diagnostics are appended after startPlanePointSelection()
+        // because the plane pane is rewritten by the selection UI refresh.
+        reportPlyLinePreparation(result);
+        return;
+    }
     m_fileInfo->setText(
         tr("扫描 JSON\nscan_id  %1\nlayout  %2\n转换点数  %3\nPLY\n%4\nXML\n%5\n后续输出目录（本阶段未写入）\n%6\n请在平面提取页人工选择 P1、P2、P3")
             .arg(result.scanId, layoutName)
@@ -1167,7 +1675,7 @@ bool MainWindow::tempWorkpieceFinalizeReady(QString *error) const {
         if (error) *error = message;
         return false;
     };
-    if (!m_tempWorkpieceSessionActive)
+    if (!hasTempWorkpieceSession())
         return fail(QStringLiteral("当前不是临时扫描会话"));
     if (m_tempWorkpieceSessionRevision != m_canvasRevision)
         return fail(QStringLiteral("临时扫描会话已过期，请重新打开扫描 JSON"));
@@ -1257,7 +1765,11 @@ void MainWindow::planeImageExtractionFinished() {
         m_planeImagePreview->setPixmap({});
         m_planeImagePreview->setText(tr("画布或工件坐标系已变化，请重新生成平面图像"));
         m_edgeOutput->setPlainText(tr("画布缓存已变化，旧平面图像已丢弃。"));
-        updatePlaneEdgeUi();
+        if (hasTempWorkpieceSession())
+            failAutomaticTempWorkpieceStage(tr("ROI/Mask 结果发布"),
+                                             tr("画布或工件坐标系已变化"));
+        else
+            updatePlaneEdgeUi();
         return;
     }
     m_planeImageResult = result;
@@ -1266,6 +1778,7 @@ void MainWindow::planeImageExtractionFinished() {
         m_planeImagePreview->setText(result.error);
         m_edgeOutput->setPlainText(result.error);
         updatePlaneEdgeUi();
+        failAutomaticTempWorkpieceStage(tr("ROI/Mask 生成"), result.error);
         return;
     }
     m_planeImagePreview->setPixmap(QPixmap::fromImage(result.image).scaled(
@@ -1280,7 +1793,7 @@ void MainWindow::planeImageExtractionFinished() {
         .arg(QLocale().toString(result.rejectedOutsideRectangleCount))
         .arg(result.edgeMask ? tr("边缘 Mask") : tr("填充平面 Mask")));
     updatePlaneEdgeUi();
-    if (m_tempWorkpieceSessionActive && result.edgeMask) {
+    if (hasTempWorkpieceSession() && result.edgeMask) {
         statusBar()->showMessage(tr("边缘 PNG 已生成，正在提交临时工件四件套"));
         finalizeTempWorkpiece();
     }
@@ -1289,7 +1802,10 @@ void MainWindow::planeImageExtractionFinished() {
 void MainWindow::finalizeTempWorkpiece() {
     QString validationError;
     if (!tempWorkpieceFinalizeReady(&validationError)) {
-        statusBar()->showMessage(validationError);
+        if (hasTempWorkpieceSession())
+            failAutomaticTempWorkpieceStage(tr("四件套提交前置校验"), validationError);
+        else
+            statusBar()->showMessage(validationError);
         return;
     }
     const QStringList outputNames{
@@ -1297,18 +1813,33 @@ void MainWindow::finalizeTempWorkpiece() {
         QStringLiteral("roi_template_robot_base.ply"),
         QStringLiteral("plane_mask.png"),
         QStringLiteral("temp_workpiece_info.json")};
-    QStringList existingOutputs;
-    for (const QString &name : outputNames) {
-        if (QFileInfo::exists(QDir(m_tempWorkpieceOutputDirectory).filePath(name)))
-            existingOutputs.push_back(name);
-    }
-    if (!existingOutputs.isEmpty()) {
-        const QString question = tr("输出目录中已存在以下正式文件：\n%1\n\n是否覆盖？")
-            .arg(existingOutputs.join(QStringLiteral("\n")));
-        if (QMessageBox::question(this, tr("确认覆盖正式输出"), question,
-                                  QMessageBox::Yes | QMessageBox::No,
-                                  QMessageBox::No) != QMessageBox::Yes) {
-            statusBar()->showMessage(tr("已取消覆盖，人工确认结果仍保留在当前会话"));
+    // The plain-PLY line blocks any existing target in the parameter dialog and
+    // keeps the transaction fail-closed (allowOverwrite = false). The JSON entry
+    // keeps its existing explicit overwrite confirmation.
+    const bool plyLine = m_tempWorkpieceSource == TempWorkpieceSource::Ply;
+    bool allowOverwrite = !plyLine;
+    if (!plyLine) {
+        QStringList existingOutputs;
+        for (const QString &name : outputNames) {
+            if (QFileInfo::exists(QDir(m_tempWorkpieceOutputDirectory).filePath(name)))
+                existingOutputs.push_back(name);
+        }
+        if (!existingOutputs.isEmpty()) {
+            const QString question = tr("输出目录中已存在以下正式文件：\n%1\n\n是否覆盖？")
+                .arg(existingOutputs.join(QStringLiteral("\n")));
+            if (QMessageBox::question(this, tr("确认覆盖正式输出"), question,
+                                      QMessageBox::Yes | QMessageBox::No,
+                                      QMessageBox::No) != QMessageBox::Yes) {
+                statusBar()->showMessage(tr("已取消覆盖，人工确认结果仍保留在当前会话"));
+                return;
+            }
+        }
+    } else {
+        const QStringList existingOutputs = existingWorkpieceArtifacts(m_tempWorkpieceOutputDirectory);
+        if (!existingOutputs.isEmpty()) {
+            const QString detail = tr("输出目录已存在正式文件，请更换目录：%1")
+                .arg(existingOutputs.join(QStringLiteral("、")));
+            failAutomaticTempWorkpieceStage(tr("四件套提交前检查"), detail);
             return;
         }
     }
@@ -1324,7 +1855,7 @@ void MainWindow::finalizeTempWorkpiece() {
     prepared.sourceIndices = m_tempWorkpieceSourceIndices;
     pcv::interface::TempWorkpieceFinalizeOptions options;
     options.outputDirectory = m_tempWorkpieceOutputDirectory;
-    options.allowOverwrite = true;
+    options.allowOverwrite = allowOverwrite;
     options.planeIndices = m_threePlaneResult.planeIndices;
     options.roiIndices = roiIndices;
     options.planeMask = m_planeImageResult.image;
@@ -1348,7 +1879,8 @@ void MainWindow::finalizeTempWorkpiece() {
     }
     m_progress->show();
     m_progress->setRange(0, 0);
-    statusBar()->showMessage(tr("正在事务性提交临时工件四件套..."));
+    setWorkflowState(WorkflowState::FinalizingArtifacts,
+                     tr("正在事务性提交临时工件四件套..."));
     updatePlaneEdgeUi();
     m_tempWorkpieceFinalizeWatcher->setFuture(QtConcurrent::run([prepared, options]() {
         QString workerError;
@@ -1364,20 +1896,21 @@ void MainWindow::tempWorkpieceFinalizeFinished() {
     if (!result.success) {
         const QString detail = result.errorCode.isEmpty()
             ? result.message : QStringLiteral("%1: %2").arg(result.errorCode, result.message);
+        // No partial formal result was published; the converted cloud and the
+        // confirmed plane stay available for inspection or a retry.
+        appendTempWorkpieceOutput(tr("自动流程失败阶段：四件套事务提交：%1").arg(detail));
+        setWorkflowState(WorkflowState::Failed, detail);
         QMessageBox::critical(this, tr("临时工件输出失败"), detail);
-        statusBar()->showMessage(detail);
         updatePlaneEdgeUi();
         return;
     }
-    m_tempWorkpieceSessionActive = false;
-    m_tempWorkpieceSessionRevision = 0;
-    m_tempWorkpieceSourceIndices.clear();
-    m_tempWorkpieceScanId.clear();
-    m_tempWorkpieceOutputDirectory.clear();
-    m_tempWorkpieceCreatedAtIso8601.clear();
+    invalidateTempWorkpieceSession();
     updatePlaneExtractionUi();
     updatePlaneEdgeUi();
-    statusBar()->showMessage(tr("临时工件四件套已提交：%1\n%2\n%3\n%4")
+    appendTempWorkpieceOutput(tr("临时工件四件套已提交：\n%1\n%2\n%3\n%4")
+        .arg(result.tempWorkpieceInfoPath, result.baselineRobotBasePly,
+             result.roiTemplateRobotBasePly, result.planeMaskPng));
+    setWorkflowState(WorkflowState::Completed, tr("临时工件四件套已提交：%1\n%2\n%3\n%4")
         .arg(result.tempWorkpieceInfoPath, result.baselineRobotBasePly,
              result.roiTemplateRobotBasePly, result.planeMaskPng));
 }
@@ -1425,6 +1958,13 @@ void MainWindow::handleCanvasPointPicked(int index) {
     }
 
     updatePlaneExtractionUi();
+    if (m_tempWorkpieceSource == TempWorkpieceSource::Ply) {
+        // The plain-PLY line runs the plane fit as soon as P1/P2/P3 are
+        // selected; the operator never has to click the extraction button.
+        // Esc/Backspace still abort or rewind the selection.
+        runPlaneExtraction(false);
+        return;
+    }
     statusBar()->showMessage(tr("已选择 %1 个平面控制点，可继续取点或点击“确定平面”")
                              .arg(m_selectedPointIndices.size()));
 }
@@ -1448,6 +1988,7 @@ void MainWindow::startSecondPlanePointSelection() {
     m_canvas->setSelectedIndices(m_selectedPointIndices);
     m_secondPlaneSelectionActive = true;
     m_canvas->setSelectionMode(true);
+    setWorkflowState(WorkflowState::SelectingSecondaryPlanePoints);
     statusBar()->showMessage(tr("请在同一平面上选择第二组三点"));
     updatePlaneExtractionUi();
 }
@@ -1459,12 +2000,14 @@ void MainWindow::cancelSecondPlanePointSelection() {
         m_canvas->setSelectionMode(false);
         m_canvas->setSelectedIndices(m_selectedPointIndices);
     }
+    setWorkflowState(WorkflowState::SelectingSecondaryPlanePoints);
     statusBar()->showMessage(tr("已取消第二组三点校验"));
     updatePlaneExtractionUi();
 }
 
 void MainWindow::validateSecondPlaneSelection() {
     if (m_secondPlanePointIndices.size() != 3 || !m_threePlaneResult.ok) return;
+    setWorkflowState(WorkflowState::ValidatingSecondaryPlane);
     const float angleTolerance = float(m_defaults.planeAngleToleranceDeg);
     const float distanceTolerance = float(m_defaults.planeDistanceToleranceMm);
     bool autoConfirmJsonFrame = false;
@@ -1480,9 +2023,10 @@ void MainWindow::validateSecondPlaneSelection() {
     if (validation.status == pointcloud::PlaneConsistencyStatus::Passed) {
         m_secondPlaneValidated = true;
         m_secondPlaneSamePlane = true;
-        autoConfirmJsonFrame = m_tempWorkpieceSessionActive;
-        statusBar()->showMessage(m_tempWorkpieceSessionActive
-            ? tr("第二组三点确认属于同一平面，JSON 流程将自动建立 WObj1")
+        autoConfirmJsonFrame = hasTempWorkpieceSession();
+        if (hasTempWorkpieceSession()) setWorkflowState(WorkflowState::FinalizingArtifacts);
+        statusBar()->showMessage(hasTempWorkpieceSession()
+            ? tr("第二组三点确认属于同一平面，将自动建立 WObj1 并生成四件套")
             : tr("第二组三点确认属于同一平面，系统将按机器人基坐标轴自动建立 WObj1"));
     } else if (validation.status == pointcloud::PlaneConsistencyStatus::Collinear
                || validation.status == pointcloud::PlaneConsistencyStatus::InvalidInput
@@ -1490,6 +2034,7 @@ void MainWindow::validateSecondPlaneSelection() {
         const QString error = validation.error;
         resetSecondPlaneVerification();
         m_canvas->setSelectedIndices(m_selectedPointIndices);
+        setWorkflowState(WorkflowState::SelectingSecondaryPlanePoints);
         QMessageBox::warning(this, tr("第二组三点无效"), error);
         statusBar()->showMessage(tr("第二组三点已清除，请重新选择"));
     } else {
@@ -1517,6 +2062,7 @@ void MainWindow::validateSecondPlaneSelection() {
                 .arg(validation.normalAngleDegrees, 0, 'f', 3).arg(angleTolerance, 0, 'f', 1)
                 .arg(validation.maximumDistanceMm, 0, 'f', 4).arg(distanceTolerance, 0, 'f', 2));
         m_threeOutput->appendPlainText(error);
+        setWorkflowState(WorkflowState::SelectingPrimaryPlanePoints);
         statusBar()->showMessage(tr("当前候选已清除，请重新选择第一组平面控制点"));
     }
     updatePlaneExtractionUi();
@@ -1584,6 +2130,7 @@ void MainWindow::runPlaneExtraction(bool deferFinalClassification) {
     m_canvas->setSelectionMode(false);
     m_progress->show();
     m_progress->setRange(0, 0);
+    setWorkflowState(WorkflowState::ValidatingPrimaryPlane);
     statusBar()->showMessage(deferFinalClassification
         ? tr("快速拟合候选平面...") : tr("正在完成平面分类和连通域处理..."));
     updatePlaneExtractionUi();
@@ -1611,6 +2158,7 @@ void MainWindow::planeExtractionFinished() {
         m_threeOutput->appendPlainText(QStringLiteral("\n") + result.error);
         m_threeOutput->appendPlainText(tr("已保留当前控制点；可继续取点或撤销后重试"));
         updatePlaneExtractionUi();
+        setWorkflowState(WorkflowState::SelectingPrimaryPlanePoints);
         statusBar()->showMessage(result.error);
         return;
     }
@@ -1625,6 +2173,7 @@ void MainWindow::planeExtractionFinished() {
         m_canvas->clearPlaneResult();
         m_threeOutput->appendPlainText(QStringLiteral("\n") + center.error);
         updatePlaneExtractionUi();
+        setWorkflowState(WorkflowState::SelectingPrimaryPlanePoints);
         statusBar()->showMessage(center.error);
         return;
     }
@@ -1671,6 +2220,13 @@ void MainWindow::planeExtractionFinished() {
     m_threeOutput->setPlainText(lines.join(QLatin1Char('\n')));
     updatePlaneExtractionUi();
     updatePlaneEdgeUi();
+    setWorkflowState(WorkflowState::SelectingSecondaryPlanePoints);
+    if (m_tempWorkpieceSource == TempWorkpieceSource::Ply && !result.deferred) {
+        // The plain-PLY line chains the second triplet automatically: the two
+        // groups of three points are its only manual steps.
+        startSecondPlanePointSelection();
+        return;
+    }
     if (!result.deferred) {
         statusBar()->showMessage(tr("平面已生成"));
     } else {
@@ -1679,21 +2235,34 @@ void MainWindow::planeExtractionFinished() {
 }
 
 void MainWindow::confirmPlaneCandidate() {
-    if (!m_threePlaneResult.ok || pointTaskRunning()) return;
+    if (!m_threePlaneResult.ok || pointTaskRunning()) {
+        if (hasTempWorkpieceSession())
+            failAutomaticTempWorkpieceStage(
+                tr("WObj1 前置校验"),
+                pointTaskRunning() ? tr("已有点云处理任务正在运行")
+                                   : tr("当前没有有效的拟合平面"));
+        return;
+    }
     if (m_planeFinalizationPending) {
         runPlaneExtraction(false);
         return;
     }
     if (!m_secondPlaneValidated || !m_secondPlaneSamePlane) {
-        statusBar()->showMessage(tr("请先完成并通过第二组三点平面验证"));
+        const QString detail = tr("请先完成并通过第二组三点平面验证");
+        if (hasTempWorkpieceSession()) failAutomaticTempWorkpieceStage(tr("WObj1 前置校验"), detail);
+        else statusBar()->showMessage(detail);
         return;
     }
     if (!m_planeCenterValid) {
-        statusBar()->showMessage(tr("当前平面包围盒中心无效，无法建立 WObj1"));
+        const QString detail = tr("当前平面包围盒中心无效，无法建立 WObj1");
+        if (hasTempWorkpieceSession()) failAutomaticTempWorkpieceStage(tr("WObj1 前置校验"), detail);
+        else statusBar()->showMessage(detail);
         return;
     }
     if (m_selectedPointIndices.size() < 3) {
-        statusBar()->showMessage(tr("建立 WObj1 需要有效的第一组平面控制点"));
+        const QString detail = tr("建立 WObj1 需要有效的第一组平面控制点");
+        if (hasTempWorkpieceSession()) failAutomaticTempWorkpieceStage(tr("WObj1 前置校验"), detail);
+        else statusBar()->showMessage(detail);
         return;
     }
     pointcloud::WorkpieceCoordinateSystem frame;
@@ -1709,6 +2278,7 @@ void MainWindow::confirmPlaneCandidate() {
             .arg(m_automaticAxisPointSelection.error);
         statusBar()->showMessage(error);
         m_threeOutput->appendPlainText(QStringLiteral("\n") + error);
+        failAutomaticTempWorkpieceStage(tr("WObj1 自动辅助点选择"), error);
         return;
     }
     frame = pointcloud::buildWorkpieceCoordinateSystemFromThreePoints(
@@ -1716,6 +2286,7 @@ void MainWindow::confirmPlaneCandidate() {
     if (!frame.valid) {
         statusBar()->showMessage(frame.error);
         m_threeOutput->appendPlainText(QStringLiteral("\n") + frame.error);
+        failAutomaticTempWorkpieceStage(tr("WObj1 坐标系构造"), frame.error);
         return;
     }
     m_workpieceCoordinate = frame;
@@ -1808,7 +2379,7 @@ void MainWindow::confirmPlaneCandidate() {
                                    + frameLines.join(QLatin1Char('\n')));
     updatePlaneExtractionUi();
     updatePlaneEdgeUi();
-    if (m_tempWorkpieceSessionActive) {
+    if (hasTempWorkpieceSession()) {
         statusBar()->showMessage(tr("WObj1 已自动建立，正在执行工件坐标系下的边缘分割"));
         applyPlaneEdgeSegmentation();
         return;
@@ -1847,11 +2418,15 @@ void MainWindow::cancelPlaneCandidate() {
 
 void MainWindow::applyPlaneEdgeSegmentation() {
     if (pointTaskRunning()) {
-        statusBar()->showMessage(tr("已有点云处理任务正在运行"));
+        const QString detail = tr("已有点云处理任务正在运行");
+        if (hasTempWorkpieceSession()) failAutomaticTempWorkpieceStage(tr("边缘分割前置校验"), detail);
+        else statusBar()->showMessage(detail);
         return;
     }
     if (!m_planeCandidateConfirmed || !m_threePlaneResult.ok) {
-        statusBar()->showMessage(tr("请先在平面提取页确定候选平面"));
+        const QString detail = tr("请先在平面提取页确定候选平面");
+        if (hasTempWorkpieceSession()) failAutomaticTempWorkpieceStage(tr("边缘分割前置校验"), detail);
+        else statusBar()->showMessage(detail);
         return;
     }
     pointcloud::PlaneEdgeOptions options;
@@ -1889,15 +2464,22 @@ void MainWindow::planeEdgeSegmentationFinished() {
     m_progress->hide();
     if (m_edgeInputRevision != m_canvasRevision) {
         m_edgeOutput->setPlainText(tr("画布缓存已变化，旧边缘结果已丢弃。"));
-        updatePlaneEdgeUi();
-        statusBar()->showMessage(tr("画布缓存已变化，已丢弃旧边缘结果"));
+        if (hasTempWorkpieceSession())
+            failAutomaticTempWorkpieceStage(tr("边缘分割结果发布"),
+                                             tr("画布缓存已变化，已丢弃旧边缘结果"));
+        else {
+            updatePlaneEdgeUi();
+            statusBar()->showMessage(tr("画布缓存已变化，已丢弃旧边缘结果"));
+        }
         return;
     }
     if (!result.ok) {
         m_planeEdgeResult = {};
         m_edgeOutput->setPlainText(result.error);
         updatePlaneEdgeUi();
-        statusBar()->showMessage(tr("边缘分割失败"));
+        // The automatic chain stops here; the converted cloud and the confirmed
+        // plane stay available, and no partial formal result is produced.
+        failAutomaticTempWorkpieceStage(tr("边缘分割"), result.error);
         return;
     }
     m_planeEdgeResult = result;
@@ -2124,6 +2706,9 @@ void MainWindow::closeEvent(QCloseEvent *event) {
                << "loadRunning="
                << (m_loadWatcher && m_loadWatcher->isRunning());
     setEnabled(false);
+    // Stop the long-running plain-PLY preparation worker through the shared
+    // cancellation token before waiting for it below.
+    if (m_prepareCancelToken) m_prepareCancelToken->store(true);
     if (m_canvas) {
         m_canvas->setUpdatesEnabled(false);
         m_canvas->hide();

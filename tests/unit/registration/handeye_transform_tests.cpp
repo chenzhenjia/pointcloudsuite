@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <limits>
 
 namespace {
 
@@ -94,6 +95,78 @@ int main(int argc, char **argv) {
     if (!require(near(rotatingResult.points[0].nx, halfSqrtTwo, 2.0e-3f)
                  && near(rotatingResult.points[0].ny, halfSqrtTwo, 2.0e-3f),
                  "normal rotation interpolation is incorrect")) return 1;
+
+    // Scan travel diagnostics used by the plain-PLY line.
+    if (!require(near(result.signedTravel, 10.0f) && result.dominantTravelAxis == 1,
+                 "scan travel diagnostics changed")) return 1;
+    if (!require(near(result.inputYMinimum, 0.0f) && near(result.inputYMaximum, 10.0f),
+                 "input profile range diagnostics changed")) return 1;
+
+    // Incomplete calibration XML is rejected and stays invalid.
+    QTemporaryFile incompleteXml;
+    if (!require(incompleteXml.open(), "temporary incomplete XML creation failed")) return 1;
+    const QByteArray incomplete = "<ArithConfig><Other>1</Other></ArithConfig>";
+    if (!require(incompleteXml.write(incomplete) == incomplete.size(),
+                 "incomplete XML write failed")) return 1;
+    incompleteXml.flush();
+    pointcloud::HandEyeCalibration incompleteCalibration;
+    QString incompleteError;
+    if (!require(!pointcloud::loadHandEyeCalibration(incompleteXml.fileName(),
+                                                     &incompleteCalibration, &incompleteError),
+                 "calibration XML without RTmatDepth2robot must be rejected")) return 1;
+    if (!require(!incompleteCalibration.valid && !incompleteError.isEmpty(),
+                 "rejected calibration must report a reason")) return 1;
+
+    // A non-rigid rotation matrix must be rejected before any conversion.
+    QTemporaryFile nonRigidXml;
+    if (!require(nonRigidXml.open(), "temporary non-rigid XML creation failed")) return 1;
+    const QByteArray nonRigid = R"(<ArithConfig><RTmatDepth2robot>
+        <RotMat r00="2" r01="0" r02="0" r10="0" r11="1" r12="0" r20="0" r21="0" r22="1"/>
+        <TVec t0="0" t1="0" t2="0"/>
+        </RTmatDepth2robot></ArithConfig>)";
+    if (!require(nonRigidXml.write(nonRigid) == nonRigid.size(),
+                 "non-rigid XML write failed")) return 1;
+    nonRigidXml.flush();
+    pointcloud::HandEyeCalibration nonRigidCalibration;
+    QString nonRigidError;
+    if (!require(!pointcloud::loadHandEyeCalibration(nonRigidXml.fileName(),
+                                                     &nonRigidCalibration, &nonRigidError),
+                 "a non-rigid matrix must be rejected")) return 1;
+
+    // Start == End has no scanning travel for a line profile.
+    const pointcloud::RobotCloudResult noTravel = pointcloud::transformLineScanToRobotBase(
+        source, calibration, start, start, options);
+    if (!require(!noTravel.ok && !noTravel.error.isEmpty(),
+                 "Start == End must be rejected for LineProfileXz")) return 1;
+
+    // Non-finite poses are rejected.
+    pointcloud::RobotPose nonFiniteEnd = end;
+    nonFiniteEnd.z = std::numeric_limits<double>::infinity();
+    const pointcloud::RobotCloudResult nonFinite = pointcloud::transformLineScanToRobotBase(
+        source, calibration, start, nonFiniteEnd, options);
+    if (!require(!nonFinite.ok, "a non-finite pose must be rejected")) return 1;
+
+    // Every point rejected by the travel window.
+    const QVector<pointcloud::Point3D> outsideTravel = {
+        {1.0f, 500.0f, 3.0f, 0.0f, 0.0f, 0.0f}};
+    const pointcloud::RobotCloudResult allRejected = pointcloud::transformLineScanToRobotBase(
+        outsideTravel, calibration, start, end, options);
+    if (!require(!allRejected.ok && allRejected.points.isEmpty()
+                 && allRejected.rejectedRange > 0,
+                 "points outside the travel range must be rejected")) return 1;
+
+    // Empty input cloud.
+    const pointcloud::RobotCloudResult emptyCloud = pointcloud::transformLineScanToRobotBase(
+        QVector<pointcloud::Point3D>(), calibration, start, end, options);
+    if (!require(!emptyCloud.ok, "an empty input cloud must be rejected")) return 1;
+
+    // Cancellation is reported and never becomes a successful result.
+    pointcloud::CloudTransformOptions cancelledOptions = options;
+    cancelledOptions.isCancelled = []() { return true; };
+    const pointcloud::RobotCloudResult cancelled = pointcloud::transformLineScanToRobotBase(
+        source, calibration, start, end, cancelledOptions);
+    if (!require(!cancelled.ok && cancelled.cancelled,
+                 "cancellation must be reported as cancelled")) return 1;
 
     std::cout << "Hand-eye transform tests passed.\n";
     return 0;

@@ -15,6 +15,7 @@
 #include <cassert>
 #include <cmath>
 #include <iostream>
+#include <limits>
 
 namespace {
 
@@ -73,6 +74,39 @@ bool writeCalibrationWithTranslation(const QString &path, int x, int y, int z)
         .replace("%1", QByteArray::number(x))
         .replace("%2", QByteArray::number(y))
         .replace("%3", QByteArray::number(z)));
+}
+
+bool writeNonRigidCalibration(const QString &path)
+{
+    return writeFile(path, QByteArrayLiteral(
+        "<ArithConfig><RTmatDepth2robot>"
+        "<RotMat r00=\"2\" r01=\"0\" r02=\"0\" r10=\"0\" r11=\"1\" r12=\"0\" r20=\"0\" r21=\"0\" r22=\"1\"/>"
+        "<TVec t0=\"0\" t1=\"0\" t2=\"0\"/>"
+        "</RTmatDepth2robot></ArithConfig>"));
+}
+
+// Plain-PLY line: the scan descriptor is built in memory by the UI parameter
+// dialog; no temp_scanning_info.json exists for a bare PLY.
+pcv::interface::TempScanningInfo inMemoryScan(const QString &plyPath,
+                                              const QString &xmlPath,
+                                              const pointcloud::RobotPose &start,
+                                              const pointcloud::RobotPose &end,
+                                              const QString &scanId = QStringLiteral("plain_ply_scan"))
+{
+    pcv::interface::TempScanningInfo scan;
+    scan.schemaVersion = QString::fromLatin1(pcv::interface::kTempScanningSchema);
+    scan.kind = QString::fromLatin1(pcv::interface::kTempScanningKind);
+    scan.createdAtIso8601 = QStringLiteral("2026-09-20T10:15:30.000+08:00");
+    scan.scanId = scanId;
+    scan.pointCloudFile = plyPath;
+    scan.pointCloudLayout = pointcloud::DepthPointLayout::LineProfileXz;
+    scan.coordinateFrame = QStringLiteral("camera");
+    scan.calibrationFile = xmlPath;
+    scan.calibrationSourceFrame = QStringLiteral("camera");
+    scan.calibrationTargetFrame = QStringLiteral("robot_base");
+    scan.robotPoseStart = start;
+    scan.robotPoseEnd = end;
+    return scan;
 }
 
 QJsonObject inputJson(const QString &layout, const QString &ply, const QString &xml)
@@ -318,6 +352,209 @@ int main(int argc, char **argv)
     finalize.allowOverwrite = false;
     const auto refused = pcv::interface::finalizeTempWorkpiece(prepared, finalize, &error);
     assert(!refused.success && refused.errorCode == QStringLiteral("PCV_OUTPUT_002"));
+
+    // ------------------------------------------------------------------
+    // Plain-PLY line: in-memory scan descriptor, no scanning JSON artifact.
+    // ------------------------------------------------------------------
+    const QString plyOutput = QDir(root.path()).filePath(QStringLiteral("ply_output"));
+    const QString nonRigidXml = QDir(dir).filePath(QStringLiteral("non_rigid.xml"));
+    const QString emptyPly = QDir(dir).filePath(QStringLiteral("empty.ply"));
+    const QString rejectedPly = QDir(dir).filePath(QStringLiteral("rejected.ply"));
+    const QString cancelledPly = QDir(dir).filePath(QStringLiteral("cancelled.ply"));
+    assert(writeNonRigidCalibration(nonRigidXml));
+    assert(writeFile(emptyPly, QByteArrayLiteral(
+        "ply\nformat ascii 1.0\nelement vertex 0\nproperty float x\nproperty float y\n"
+        "property float z\nend_header\n")));
+    assert(writeFile(rejectedPly, QByteArrayLiteral(
+        "ply\nformat ascii 1.0\nelement vertex 2\nproperty float x\nproperty float y\n"
+        "property float z\nend_header\n1 900 1\n2 950 1\n")));
+    assert(writeFile(cancelledPly, QByteArrayLiteral(
+        "ply\nformat ascii 1.0\nelement vertex 4\nproperty float x\nproperty float y\n"
+        "property float z\nend_header\n0 0 1\n1 3 1\n2 7 1\n3 10 1\n")));
+
+    const pointcloud::RobotPose plyStart{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    const pointcloud::RobotPose plyEnd{0.0, 10.0, 0.0, 0.0, 0.0, 0.0};
+    const QString plyAbsolute = QFileInfo(ply).absoluteFilePath();
+    const QString xmlAbsolute = QFileInfo(xml).absoluteFilePath();
+
+    pcv::interface::TempWorkpieceOptions plyOptions;
+    plyOptions.useInMemoryScan = true;
+    plyOptions.scanInfo = inMemoryScan(plyAbsolute, xmlAbsolute, plyStart, plyEnd);
+    plyOptions.outputDirectory = plyOutput;
+    const auto plyPrepared = pcv::interface::prepareTempWorkpiece(plyOptions, &error);
+    assert(plyPrepared.success);
+    assert(plyPrepared.scanId == QStringLiteral("plain_ply_scan"));
+    assert(plyPrepared.createdAtIso8601 == QStringLiteral("2026-09-20T10:15:30.000+08:00"));
+    assert(plyPrepared.pointCloudLayout == pointcloud::DepthPointLayout::LineProfileXz);
+    assert(plyPrepared.coordinateFrame == QStringLiteral("robot_base"));
+    assert(plyPrepared.calibrationSourceFrame == QStringLiteral("camera"));
+    assert(plyPrepared.calibrationTargetFrame == QStringLiteral("robot_base"));
+    assert(plyPrepared.resolvedPointCloudFile == plyAbsolute);
+    assert(plyPrepared.resolvedCalibrationFile == xmlAbsolute);
+    assert(plyPrepared.outputDirectory == QDir::cleanPath(plyOutput));
+    assert(plyPrepared.scanningInfoPath.isEmpty());
+    assert(plyPrepared.robotBasePoints.size() == 4);
+    assert(plyPrepared.sourceIndices == QVector<qsizetype>({0, 1, 2, 3}));
+    assert(plyPrepared.declaredPointCount == 4 && plyPrepared.convertedPointCount == 4);
+    assert(plyPrepared.rejectedInvalidPointCount == 0 && plyPrepared.rejectedRangePointCount == 0);
+    assert(std::abs(plyPrepared.inputYMinimum - 0.0f) < 1.0e-4f);
+    assert(std::abs(plyPrepared.inputYMaximum - 10.0f) < 1.0e-4f);
+    assert(std::abs(plyPrepared.signedTravel - 10.0f) < 1.0e-4f);
+    assert(plyPrepared.dominantTravelAxis == 1);
+    assert(!plyPrepared.cancelled);
+    assert(!QFileInfo::exists(QDir(plyOutput).filePath(QStringLiteral("baseline_robot_base.ply"))));
+
+    const auto inMemoryFailureCode = [&](const pcv::interface::TempScanningInfo &scan,
+                                         const QString &output) {
+        pcv::interface::TempWorkpieceOptions failing;
+        failing.useInMemoryScan = true;
+        failing.scanInfo = scan;
+        failing.outputDirectory = output;
+        return pcv::interface::prepareTempWorkpiece(failing, &error).errorCode;
+    };
+
+    // Invalid XML and a non-rigid rotation matrix stay on the module-50 codes.
+    assert(inMemoryFailureCode(inMemoryScan(plyAbsolute,
+                                            QDir(dir).filePath(QStringLiteral("missing.xml")),
+                                            plyStart, plyEnd), plyOutput)
+           == QStringLiteral("PCV_INPUT_001"));
+    assert(inMemoryFailureCode(inMemoryScan(plyAbsolute, nonRigidXml, plyStart, plyEnd), plyOutput)
+           == QStringLiteral("PCV_TRANSFORM_001"));
+
+    // Start == End has no scanning travel, so the line-profile conversion fails
+    // before any point is published.
+    assert(inMemoryFailureCode(inMemoryScan(plyAbsolute, xmlAbsolute, plyStart, plyStart), plyOutput)
+           == QStringLiteral("PCV_TRANSFORM_001"));
+    // A PLY without a usable vertex declaration is an unsupported input, and a
+    // cloud whose profile coordinates all miss the travel range is rejected by
+    // the module-50 conversion.
+    assert(inMemoryFailureCode(inMemoryScan(emptyPly, xmlAbsolute, plyStart, plyEnd), plyOutput)
+           == QStringLiteral("PCV_INPUT_002"));
+    assert(inMemoryFailureCode(inMemoryScan(rejectedPly, xmlAbsolute, plyStart, plyEnd), plyOutput)
+           == QStringLiteral("PCV_TRANSFORM_001"));
+
+    // Non-finite poses and a relative path are rejected as input/contract errors.
+    pointcloud::RobotPose nonFinite = plyEnd;
+    nonFinite.y = std::numeric_limits<double>::quiet_NaN();
+    assert(inMemoryFailureCode(inMemoryScan(plyAbsolute, xmlAbsolute, plyStart, nonFinite), plyOutput)
+           == QStringLiteral("PCV_TRANSFORM_002"));
+    assert(inMemoryFailureCode(inMemoryScan(QStringLiteral("relative.ply"), xmlAbsolute,
+                                            plyStart, plyEnd), plyOutput)
+           == QStringLiteral("PCV_CONTRACT_001"));
+    assert(inMemoryFailureCode(inMemoryScan(plyAbsolute, xmlAbsolute, plyStart, plyEnd), QString())
+           == QStringLiteral("PCV_CONTRACT_001"));
+
+    // The cancellation callback stops the worker and is reported separately from
+    // a successful preparation.
+    {
+        pcv::interface::TempWorkpieceOptions cancelledOptions;
+        cancelledOptions.useInMemoryScan = true;
+        cancelledOptions.scanInfo = inMemoryScan(plyAbsolute, xmlAbsolute, plyStart, plyEnd);
+        cancelledOptions.outputDirectory = plyOutput;
+        cancelledOptions.isCancelled = []() { return true; };
+        const auto cancelledPrepare = pcv::interface::prepareTempWorkpiece(cancelledOptions, &error);
+        assert(!cancelledPrepare.success);
+        assert(cancelledPrepare.cancelled);
+        assert(!QFileInfo::exists(QDir(plyOutput).filePath(QStringLiteral("baseline_robot_base.ply"))));
+    }
+
+    // Cancellation raised by the PLY reader after preparation has started is
+    // propagated as cancellation instead of being presented as an input error.
+    {
+        int cancellationChecks = 0;
+        pcv::interface::TempWorkpieceOptions cancelledOptions;
+        cancelledOptions.useInMemoryScan = true;
+        cancelledOptions.scanInfo = inMemoryScan(cancelledPly, xmlAbsolute, plyStart, plyEnd);
+        cancelledOptions.outputDirectory = plyOutput;
+        cancelledOptions.isCancelled = [&cancellationChecks]() {
+            return ++cancellationChecks >= 2;
+        };
+        const auto cancelledDuringRead =
+            pcv::interface::prepareTempWorkpiece(cancelledOptions, &error);
+        assert(!cancelledDuringRead.success);
+        assert(cancelledDuringRead.cancelled);
+        assert(cancelledDuringRead.errorCode == QStringLiteral("PCV_INPUT_002"));
+        assert(!QFileInfo::exists(QDir(plyOutput).filePath(QStringLiteral("baseline_robot_base.ply"))));
+    }
+
+    // ------------------------------------------------------------------
+    // Plain-PLY four-artifact contract (fail-closed overwrite, no staging left)
+    // ------------------------------------------------------------------
+    pcv::interface::TempWorkpieceFinalizeOptions plyFinalize;
+    plyFinalize.outputDirectory = plyOutput;
+    plyFinalize.planeIndices = {0, 1, 2, 3};
+    plyFinalize.roiIndices = {0, 1, 2, 3};
+    plyFinalize.planeMask = QImage(4, 4, QImage::Format_Grayscale8);
+    plyFinalize.planeMask.fill(0);
+    for (int index = 0; index < 4; ++index) plyFinalize.planeMask.setPixel(index, index, 255);
+    plyFinalize.planeModel = QVector4D(0, 0, 1, 0);
+    plyFinalize.originInRobotBase = QVector3D(0.5f, 0.25f, 1.0f);
+    plyFinalize.abcDeg = QVector3D(0.0f, 0.0f, 0.0f);
+    plyFinalize.TBaseWorkpiece.setToIdentity();
+    plyFinalize.TWorkpieceBase.setToIdentity();
+    const auto plyGenerated = pcv::interface::finalizeTempWorkpiece(plyPrepared, plyFinalize, &error);
+    assert(plyGenerated.success);
+    assert(QFileInfo(plyGenerated.baselineRobotBasePly).fileName()
+           == QStringLiteral("baseline_robot_base.ply"));
+    assert(QFileInfo(plyGenerated.roiTemplateRobotBasePly).fileName()
+           == QStringLiteral("roi_template_robot_base.ply"));
+    assert(QFileInfo(plyGenerated.planeMaskPng).fileName() == QStringLiteral("plane_mask.png"));
+    assert(QFileInfo(plyGenerated.tempWorkpieceInfoPath).fileName()
+           == QStringLiteral("temp_workpiece_info.json"));
+    assert(readFile(plyGenerated.baselineRobotBasePly).startsWith(
+        QByteArrayLiteral("ply\nformat binary_little_endian 1.0\n")));
+    assert(readFile(plyGenerated.roiTemplateRobotBasePly).startsWith(
+        QByteArrayLiteral("ply\nformat binary_little_endian 1.0\n")));
+    assertPureXyzPly(plyGenerated.baselineRobotBasePly, plyPrepared.robotBasePoints.size());
+    assertPureXyzPly(plyGenerated.roiTemplateRobotBasePly, plyFinalize.roiIndices.size());
+    const QImage plyMask(plyGenerated.planeMaskPng);
+    assert(plyMask.format() == QImage::Format_Grayscale8);
+    for (int y = 0; y < plyMask.height(); ++y) {
+        for (int x = 0; x < plyMask.width(); ++x) {
+            const int value = plyMask.constScanLine(y)[x];
+            assert(value == 0 || value == 255);
+        }
+    }
+    const QJsonObject plyJson = QJsonDocument::fromJson(
+        readFile(plyGenerated.tempWorkpieceInfoPath)).object();
+    assertMinimalWorkpieceJson(plyJson);
+    assert(plyJson.value(QStringLiteral("schema_version")).toString()
+           == QString::fromLatin1(pcv::interface::kTempWorkpieceSchema));
+    assert(plyJson.value(QStringLiteral("kind")).toString()
+           == QString::fromLatin1(pcv::interface::kTempWorkpieceKind));
+    assert(plyJson.value(QStringLiteral("created_at")).toString()
+           == QStringLiteral("2026-09-20T10:15:30.000+08:00"));
+    assert(QDir(plyOutput).entryList(QDir::Files, QDir::Name)
+           == QStringList({QStringLiteral("baseline_robot_base.ply"),
+                           QStringLiteral("plane_mask.png"),
+                           QStringLiteral("roi_template_robot_base.ply"),
+                           QStringLiteral("temp_workpiece_info.json")}));
+    // allowOverwrite keeps its default false: an existing artifact set is refused.
+    const auto plyRefused = pcv::interface::finalizeTempWorkpiece(plyPrepared, plyFinalize, &error);
+    assert(!plyRefused.success && plyRefused.errorCode == QStringLiteral("PCV_OUTPUT_002"));
+
+    // A cancelled finalize produces no formal output at all.
+    const QString cancelOutput = QDir(root.path()).filePath(QStringLiteral("ply_cancel_output"));
+    pcv::interface::TempWorkpieceFinalizeOptions cancelFinalize = plyFinalize;
+    cancelFinalize.outputDirectory = cancelOutput;
+    cancelFinalize.isCancelled = []() { return true; };
+    const auto cancelledFinalize =
+        pcv::interface::finalizeTempWorkpiece(plyPrepared, cancelFinalize, &error);
+    assert(!cancelledFinalize.success
+           && cancelledFinalize.errorCode == QStringLiteral("PCV_CANCELLED"));
+    assert(!QFileInfo::exists(QDir(cancelOutput).filePath(QStringLiteral("baseline_robot_base.ply"))));
+
+    // A failed staging/commit step fails as a whole and leaves no formal file.
+    const QString blockedOutput = QDir(root.path()).filePath(QStringLiteral("blocked_output"));
+    assert(writeFile(blockedOutput, QByteArrayLiteral("not a directory")));
+    pcv::interface::TempWorkpieceFinalizeOptions blockedFinalize = plyFinalize;
+    blockedFinalize.outputDirectory = blockedOutput;
+    const auto blockedResult =
+        pcv::interface::finalizeTempWorkpiece(plyPrepared, blockedFinalize, &error);
+    assert(!blockedResult.success
+           && blockedResult.errorCode == QStringLiteral("PCV_OUTPUT_001"));
+    assert(QFileInfo(blockedOutput).isFile());
+
     std::cout << "temp_workpiece_interface_tests: PASS\n";
     return 0;
 }

@@ -182,3 +182,25 @@ IO/输出/接口测试，以及实验相机开关开启时的 `frame_converter_t
 风险/未验证项：
 - ...
 ```
+
+## 10. 变更记录（追加，不修改以上规则）
+
+### 2026-09-20（PLY 线路：打开 PLY → robot_base → 四件套）
+
+- 主模块 `60_geometry_workpiece`；协作 `50_coordinate_conversion`、`10_pointcloud_io`；UI 编排 `apps/pointcloudview`。
+- 现有“打开 PLY”入口接入临时工件流程：手眼 XML + 手工 Start/End 位姿 → 转换到 `robot_base` → 第一组三点自动平面拟合 → 第二组三点同面校验 → 自动 WObj1、边缘分割、ROI、Mask → `ArtifactTransaction` 一次性提交四件套。两组三点是唯一人工步骤。
+- 模块 60 追加 `TempWorkpieceOptions::useInMemoryScan` / `scanInfo` 与 `TempWorkpiecePreparation` 诊断字段（`inputYMinimum`、`inputYMaximum`、`signedTravel`、`dominantTravelAxis`、`cancelled`），JSON 入口行为与公共 JSON schema、四件套文件名/格式、错误码均未变化；兼容 target 与 forwarding header 未改动。
+- 本轮未执行 Git 操作、未执行 Debug/Release 构建、未执行 CTest 和 GUI 验收；结论仅覆盖代码级与静态检查。
+
+### 2026-09-21（PLY/JSON 临时工件状态机排错修复）
+
+- `apps/pointcloudview` 新增 `None/Json/Ply` 单一临时工件来源状态、统一会话失效、旧会话替换确认和自动链失败出口；参数对话框取消或 JSON 解析失败不再遗留 `WaitingForParameters` 锁死状态。
+- 主动放弃取点保留转换点云和会话，可重新取点；WObj1、边缘、ROI/Mask、四件套前置校验等同步失败统一进入 `Failed`，保留结果并允许重试；打开新源前确认是否放弃旧会话。
+- JSON 位姿摘要统一显示 `[X,Y,Z,Rx,Ry,Rz]`，与 `[X,Y,Z,A,B,C]`、`A=Rx/B=Ry/C=Rz` 契约一致；公共 schema、四件套格式和错误码未改动。
+- 验证：源码树外 Debug/Release 全量构建成功，Debug/Release CTest 均为 `15/15` 通过；GUI smoke、真实 PLY/XML 和生产夹具未验证。
+
+### 2026-09-21（代码验收与发布边界）
+
+- 代码验收通过：源码树外 Debug/Release 构建成功，双配置全量 CTest 均为 `15/15`，`git diff --check` 通过。
+- 本次发布只包含 PLY/JSON 临时工件线路修复、模块 60 接口/实现、对应回归测试和文档；已有 `30_pointcloud_stitch`、PointCloudStitch、临时脚本等工作区修改保留，不混入提交。
+- GUI smoke、真实 PLY/XML 和生产夹具现场验收仍未完成，不能以自动化测试替代。
