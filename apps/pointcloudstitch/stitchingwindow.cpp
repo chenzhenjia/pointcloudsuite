@@ -97,6 +97,18 @@ QVector<pointcloud::Point3D> deterministicPreview(const QVector<pointcloud::Poin
 
 QString registrationPairStatus(const pointcloud::IcpDiagnostics &diagnostic)
 {
+    // 2.5D height-map status first: the operator must be able to tell the new
+    // acceptance口径 apart from the legacy structural acceptance.
+    if (diagnostic.visibilityHardRejected)
+        return QObject::tr("低可见性拒绝");
+    if (diagnostic.selectedRegistrationSource == QStringLiteral("heightmap_restricted_icp"))
+        return QObject::tr("2.5D配准通过");
+    if (diagnostic.heightMapRestrictedIcpDegenerate)
+        return QObject::tr("受限ICP退化");
+    if (diagnostic.heightMapRejectReason == QStringLiteral("heightmap_candidate_ambiguous"))
+        return QObject::tr("2.5D候选歧义");
+    if (diagnostic.heightMapFallbackToIcp)
+        return QObject::tr("2.5D失败，回退旧ICP");
     if (diagnostic.accepted)
         return diagnostic.steepPlaneDetected
             ? QObject::tr("陡峭平面恢复通过") : QObject::tr("严格通过");
@@ -316,7 +328,12 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
         if (hasFrame) {
             const auto &first = result.merge.frameMetadata.first();
             frameSource = first.sourceFile;
-            const QMatrix4x4 net = first.startBaseFromFlange * first.flangeFromDepth;
+            // Module 50 is the only place that composes T_base_flange * T_flange_depth.
+            pointcloud::HandEyeCalibration calibration;
+            calibration.flangeFromDepth = first.flangeFromDepth;
+            calibration.valid = true;
+            const QMatrix4x4 net =
+                pointcloud::composeBaseFromDepth(first.startBaseFromFlange, calibration);
             zCoefficient = net(2, 2);
         }
         orientation.insert(QStringLiteral("frame_source"), frameSource);
@@ -492,6 +509,41 @@ bool writeReport(const QString &path, const StitchTaskResult &result, QString *e
         item.insert(QStringLiteral("correspondences"), diagnostic.correspondences);
         item.insert(QStringLiteral("unique_reference_ratio"), diagnostic.uniqueReferenceRatio);
         item.insert(QStringLiteral("correction_xyz_mm"), QJsonArray{diagnostic.correctionX,diagnostic.correctionY,diagnostic.correctionZ});
+        // 2.5D height-map registration (controlled iteration). The block is
+        // written for every pair so the report always states which path produced
+        // the formal output, why the other one was rejected and how visible the
+        // pair really was.
+        item.insert(QStringLiteral("heightmap_registration_enabled"),
+                    result.icpOptions.heightMapRegistrationEnabled);
+        item.insert(QStringLiteral("heightmap_registration_attempted"), diagnostic.heightMapAttempted);
+        item.insert(QStringLiteral("heightmap_registration_accepted"), diagnostic.heightMapAccepted);
+        item.insert(QStringLiteral("heightmap_fallback_to_legacy_icp"), diagnostic.heightMapFallbackToIcp);
+        item.insert(QStringLiteral("heightmap_grid_resolution_mm"), diagnostic.heightMapGridResolutionMm);
+        item.insert(QStringLiteral("heightmap_width"), diagnostic.heightMapWidth);
+        item.insert(QStringLiteral("heightmap_height"), diagnostic.heightMapHeight);
+        item.insert(QStringLiteral("heightmap_valid_ratio_source"), diagnostic.heightMapSourceValidRatio);
+        item.insert(QStringLiteral("heightmap_valid_ratio_target"), diagnostic.heightMapTargetValidRatio);
+        item.insert(QStringLiteral("heightmap_valid_points_source"), diagnostic.heightMapSourceValidPoints);
+        item.insert(QStringLiteral("heightmap_valid_points_target"), diagnostic.heightMapTargetValidPoints);
+        item.insert(QStringLiteral("heightmap_score_before"), diagnostic.heightMapScoreBefore);
+        item.insert(QStringLiteral("heightmap_score_after"), diagnostic.heightMapScoreAfter);
+        item.insert(QStringLiteral("heightmap_relative_improvement"), diagnostic.heightMapRelativeImprovement);
+        item.insert(QStringLiteral("heightmap_delta_xyz_mm"), QJsonArray{
+            diagnostic.heightMapTranslationX, diagnostic.heightMapTranslationY, diagnostic.heightMapTranslationZ});
+        item.insert(QStringLiteral("heightmap_delta_yaw_deg"), diagnostic.heightMapYawDegrees);
+        item.insert(QStringLiteral("heightmap_normalized_correlation"), diagnostic.heightMapNormalizedCorrelation);
+        item.insert(QStringLiteral("heightmap_restricted_icp_levels"), diagnostic.heightMapRestrictedIcpCompletedLevels);
+        item.insert(QStringLiteral("heightmap_restricted_icp_degenerate"), diagnostic.heightMapRestrictedIcpDegenerate);
+        item.insert(QStringLiteral("heightmap_reject_reason"), diagnostic.heightMapRejectReason);
+        item.insert(QStringLiteral("trajectory_diagnostic_reason"), diagnostic.trajectoryDiagnosticReason);
+        item.insert(QStringLiteral("selected_registration_source"), diagnostic.selectedRegistrationSource);
+        item.insert(QStringLiteral("visibility_hard_rejected"), diagnostic.visibilityHardRejected);
+        item.insert(QStringLiteral("legacy_icp_comparison"), QJsonObject{
+            {QStringLiteral("available"), diagnostic.legacyIcpComparisonAvailable},
+            {QStringLiteral("accepted"), diagnostic.legacyIcpAccepted},
+            {QStringLiteral("coverage_3mm"), diagnostic.legacyIcpComparisonCoverage3mm},
+            {QStringLiteral("p95_mm"), diagnostic.legacyIcpComparisonP95},
+            {QStringLiteral("reject_reason"), diagnostic.legacyIcpRejectReason}});
         QJsonArray levels;
         for (int level = 0; level < diagnostic.levelFitness.size(); ++level) {
             QJsonObject levelItem;

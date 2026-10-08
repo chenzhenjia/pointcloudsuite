@@ -1,5 +1,8 @@
 #include <pcv/interface/temp_workpiece_interface.h>
 #include <pcv/io/ply_reader.h>
+#if defined(PCV_TEST_HAS_M30_STITCHING)
+#include <pcv/interface/stitching_interface.h>
+#endif
 
 #include <QBuffer>
 #include <QCoreApplication>
@@ -554,6 +557,64 @@ int main(int argc, char **argv)
     assert(!blockedResult.success
            && blockedResult.errorCode == QStringLiteral("PCV_OUTPUT_001"));
     assert(QFileInfo(blockedOutput).isFile());
+
+#if defined(PCV_TEST_HAS_M30_STITCHING)
+    // ------------------------------------------------------------------
+    // Cross-path consistency: the scanning JSON entry is the hand-eye golden
+    // reference, the multi-frame stitching entry must return the very same
+    // robot_base coordinates for the same PLY, XML and Start/End. Both entries
+    // call module 50's transformLineScanToRobotBase(); this test fails if a
+    // second conversion implementation is ever reintroduced.
+    // ------------------------------------------------------------------
+    {
+        const QString crossPly = QDir(dir).filePath(QStringLiteral("cross.ply"));
+        const QString crossJson = QDir(dir).filePath(QStringLiteral("cross_scanning_info.json"));
+        assert(writeFile(crossPly, QByteArrayLiteral(
+            "ply\nformat ascii 1.0\nelement vertex 6\n"
+            "property float x\nproperty float y\nproperty float z\nend_header\n"
+            "1 0 1\n2 2 1\n3 4 1\n4 6 1\n5 8 1\n6 10 1\n")));
+        QJsonObject cross = inputJson(QStringLiteral("LineProfileXz"),
+                                      QStringLiteral("cross.ply"),
+                                      QStringLiteral("calibration.xml"));
+        QJsonObject crossScan = cross.value(QStringLiteral("scan")).toObject();
+        crossScan.insert(QStringLiteral("robot_pose_start"), QJsonArray{100, 0, 0, 0, 0, 0});
+        crossScan.insert(QStringLiteral("robot_pose_end"), QJsonArray{100, 10, 0, 0, 0, 0});
+        cross.insert(QStringLiteral("scan"), crossScan);
+        assert(writeFile(crossJson, QJsonDocument(cross).toJson(QJsonDocument::Compact)));
+
+        pcv::interface::TempWorkpieceOptions crossOptions;
+        crossOptions.scanningInfoPath = crossJson;
+        const auto jsonPrepared = pcv::interface::prepareTempWorkpiece(crossOptions, &error);
+        assert(jsonPrepared.success);
+        assert(jsonPrepared.robotBasePoints.size() == 6);
+
+        pcv::interface::StitchingOptions stitchingOptions;
+        stitchingOptions.calibrationPath = xml;
+        stitchingOptions.outputDirectory = QDir(root.path()).filePath(QStringLiteral("cross_output"));
+        stitchingOptions.sampleStride = 1;
+        stitchingOptions.seamEnabled = false;
+        stitchingOptions.useRegistrationOptions = true;
+        stitchingOptions.registrationOptions.enabled = false;
+        pcv::interface::StitchingFrameInput frame;
+        frame.plyPath = crossPly;
+        frame.startPose = pointcloud::RobotPose{100.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+        frame.endPose = pointcloud::RobotPose{100.0, 10.0, 0.0, 0.0, 0.0, 0.0};
+        stitchingOptions.frames.push_back(frame);
+        const auto stitched = pcv::interface::stitchRawLineProfiles(stitchingOptions);
+        assert(stitched.success);
+        assert(stitched.points.size() == jsonPrepared.robotBasePoints.size());
+        for (qsizetype index = 0; index < stitched.points.size(); ++index) {
+            const pointcloud::Point3D &expected = jsonPrepared.robotBasePoints.at(index);
+            const pointcloud::Point3D &actual = stitched.points.at(index);
+            assert(std::abs(expected.x - actual.x) < 1.0e-4f);
+            assert(std::abs(expected.y - actual.y) < 1.0e-4f);
+            assert(std::abs(expected.z - actual.z) < 1.0e-4f);
+            assert(std::abs(expected.nx - actual.nx) < 1.0e-4f);
+            assert(std::abs(expected.ny - actual.ny) < 1.0e-4f);
+            assert(std::abs(expected.nz - actual.nz) < 1.0e-4f);
+        }
+    }
+#endif
 
     std::cout << "temp_workpiece_interface_tests: PASS\n";
     return 0;

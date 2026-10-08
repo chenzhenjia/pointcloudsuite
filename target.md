@@ -99,7 +99,48 @@
 | 2026-09-18 | 目标基线已建立 | 已确认两条业务流程、双方职责、统一展示入口、契约内现场数据验收口径；外部项目接入形态待共同决策。 |
 | 2026-09-20 | PLY 线路已实现（代码级） | 现有“打开 PLY”入口改造为手眼转换 + 临时工件线路，两组三点后自动生成四件套；未执行构建、CTest 与 GUI 验收，详见第九节。 |
 
+### 2026-09-22（删除全局扫描，仅保留局部 ROI）
+
+- 主模块 `60_geometry_workpiece`，UI 编排 `apps/pointcloudview`；删除 `ScanPlanningMode`、全局中心和人工 ABC 输入，扫描 API 始终使用当前 ROI。
+- ROI 三维质心投影到 WObj1 XY 后沿 `+Z` 偏移生成中心 XYZ，P 点 ABC 直接取 WObj1 `poseA/poseB/poseC`；JSON 固定 `mode=local_roi`，不再提供全局分支或全局回退。
+- 更新扫描单元测试、模块/架构/需求文档和 UI 参数转换；保留后台取消、revision 门禁、P 点显示和 `ArtifactTransaction` 导出。
+- 本轮验证待执行；风险仍包括真实机器人可达性、相机有效宽度、安全距离、碰撞/干涉和真实 ROI GUI 流程。
+
 ## 八、2.5D 高程图配准迭代记录
+
+### 2026-09-22（60 扫描路径规划修订与 UI 接入）
+
+- 主模块 `60_geometry_workpiece`，UI 编排 `apps/pointcloudview`，事务输出复用 `10_pointcloud_io`；修订 `pcv::scan::planScanTrajectory()`、`scanTrajectoryToJson()` 及尚未发布的 `scan_trajectory_v1`。
+- WObj1 X/Y 固定为横向/行程轴；全局采用人工中心 `XYZABC`，局部采用 ROI 三维质心投影与 `+Z` 高度并继承 ABC；输入人工目标尺寸、相机宽度和毫米重叠距离。扫描线按 `-X → +X` 编号，全部使用选定的同一 Y 方向，输出 `P0→P1`、`P2→P3` 独立线段。
+- `pointcloudview` 新增第五步“扫描规划”，后台执行、逐行显示 P 点、revision 变化自动失效，默认导出 `scan_trajectory.json`；覆盖前确认，写入由 `ArtifactTransaction` 原子提交。
+- 文件：`modules/60_geometry_workpiece/include/pcv/scan/scan_planner.h`、`modules/60_geometry_workpiece/src/scan_planner.cpp`、`modules/60_geometry_workpiece/CMakeLists.txt`、`apps/pointcloudview/mainwindow.h/.cpp`、`tests/unit/scan/scan_planner_tests.cpp`、`tests/CMakeLists.txt`、模块/架构/需求文档、`AGENTS.md`。
+- 验证：源码树外 `scan-ui-debug-20260922` / `scan-ui-release-20260922` 构建成功；Debug/Release 全量 CTest 均 `16/16`，扫描/平面/ROI/事务定向测试通过；`POINTCLOUDVIEW_SELFTEST_CLOSE=1` Debug/Release 启动冒烟通过；`git diff --check` 通过。Release `windeployqt` 提示本机缺少 Visual Studio release redistributable，便携部署未验收。
+- 风险：真实相机有效宽度、机器人可达性、现场安全距离、碰撞和干涉未验证；未用真实点云/ROI 完成人工 GUI 全流程（全局/局部/导出/旧结果失效）冒烟。
+
+### 2026-09-30（扫描规划参数与 P.json 契约修订）
+
+- 主模块：`60_geometry_workpiece`；UI：`apps/pointcloudview`；事务输出：`10_pointcloud_io::ArtifactTransaction`。
+- 保留 `Global`/`LocalRoi`，UI 默认 LocalRoi；LocalRoi 直接使用当前 ROI 索引，不重新拟合。默认 `scanHeightMm=50`、`cameraWidthMm=100`、`overlapMm=50`、两端 `travelExtensionMm=50`，固定 `-X→+X` 线序和 `+Y→-Y` 行程，首尾覆盖贴合 ROI X 边界。
+- 增加原始/最终 Y 行程、延长距离、请求/实际重叠、实际间距、线数结果字段；限制 P.json 最多 9990 个点，来源字段为 `temp_workpiece_info.json`，点号从 `P[10]` 连续递增，姿态为 `[X,Y,Z,RZ,RY,RX]`，不调用控制器 API。
+- UI 删除方向下拉框，增加重叠输入和固定延长提示，显示内部 P0/P1 与 P.json P[10]/P[11] 区别；点云、WObj1、ROI 或参数 revision 变化立即取消并清空旧结果，导出继续使用 ArtifactTransaction 和覆盖确认。
+- 文件：`modules/60_geometry_workpiece/include/pcv/scan/scan_planner.h`、`modules/60_geometry_workpiece/src/scan_planner.cpp`、`apps/pointcloudview/mainwindow.h`、`apps/pointcloudview/mainwindow.cpp`、`tests/unit/scan/scan_planner_tests.cpp`、相关模块/架构/需求文档与 `AGENTS.md`。
+- 验证：本轮 `scan_planner_tests` 通过；完整构建、全量 CTest、启动冒烟和 GUI 手工验证以最终汇报的实际结果为准。机器人可达性、碰撞/干涉、控制器导入和真实工件 GUI 全流程仍需现场验证。
+
+### 2026-09-30（扫描规划最终验证）
+
+- 补充 `scan_planner_tests`：固定 Y 延长和最终行程、实际重叠下限、倾斜 WObj1 P.json 局部坐标、无效 WObj1/退化投影、P[10] 到 P[9999] 边界及无 `wobj` 字段。
+- 验证：源码树外 Debug/Release 构建成功，双配置全量 CTest 均 `16/16`；双配置定向扫描测试通过；`POINTCLOUDVIEW_SELFTEST_CLOSE=1` 启动冒烟双配置退出码均为 `0`；`git diff --check` 通过。
+- GUI 人工验证未完成：computer-use connector 报 `unsupported Codex auth method: apikey`；真实 ROI、相机视野、机器人可达性、安全距离、碰撞/干涉和控制器导入仍需现场验证。
+
+### 2026-09-22（全局与局部扫描路径规划统一）
+
+- 主模块：`60_geometry_workpiece`；UI 编排：`apps/pointcloudview`；输出复用 `10_pointcloud_io::ArtifactTransaction`。
+- 修改：恢复 `Global`/`LocalRoi` 双模式；两种模式均从平面或 ROI 有效点的 WObj1 XY 投影包围盒计算中心、X 宽度和 Y 行程，沿 WObj1 `+Z` 使用统一 `scanHeightMm`，固定 50% 带间重叠并输出同向 `P0→P1...`。
+- 接口/文件：修订 `scan_planner.h/.cpp`、双 JSON 序列化（项目 `scan_trajectory_v1` 与 InoRobot `sr2026-p-json-mvp-2`）、`mainwindow.h/.cpp` 双模式 UI 与两个原子导出按钮；扫描测试改为覆盖全局/局部、倾斜 WObj1、方向、编号、错误和 JSON 契约。
+- 验证：源码树外 Debug 扫描测试构建与 `scan_planner_tests` 通过；`pointcloudview` Debug 目标编译通过；`git diff --check`、Release 全量 CTest、GUI 全流程本轮尚未完成。
+- 风险：未验证真实相机有效宽度、机器人可达性、控制器写入、现场安全距离、碰撞和干涉；现有无关 `30_pointcloud_stitch` 修改保留。
+
+补充验证：完成源码树外 Debug/Release `pointcloudview` 目标构建、双配置全量 CTest（均 `16/16`）、双配置扫描规划定向测试和 `POINTCLOUDVIEW_SELFTEST_CLOSE=1` 启动冒烟；扫描测试另补充 WObj1 ABC 继承、空 ROI 拒绝和 InoRobot 局部 XYZ 转换断言。真实点云 GUI 全流程及机器人现场验收仍未完成。
 
 | 日期 | 主模块 | 变更与验证 | 风险/未完成 |
 |---|---|---|---|
@@ -132,3 +173,71 @@
 - 自动化结果：源码树外 Debug/Release 构建成功；Debug 和 Release 全量 CTest 均为 `15/15`；`git diff --check` 通过。
 - 发布边界：本次仅提交上述 PLY/JSON 排错修复、相关测试和 Markdown 文档；工作区既有 `30_pointcloud_stitch`、PointCloudStitch、临时脚本和其他未提交修改不纳入本次提交。
 - 未完成验收：GUI smoke、真实线扫 PLY/手眼 XML、机器人运动方向、WObj1 朝向和生产夹具现场数据仍需人工确认。
+
+## 十、手眼标定统一与点云倒转修复迭代记录（2026-09-24）
+
+主模块：`50_coordinate_conversion`；调用方清理：`apps/pointcloudstitch/regressionrunner.cpp`、`apps/pointcloudview/pointcloudprocessor.cpp`；复用入口核对：`apps/pointcloudview`（扫描 JSON、PLY 临时工件）、`modules/60_geometry_workpiece`、`modules/30_pointcloud_stitch`、`apps/pointcloudstitch` UI 与回归。
+
+- **黄金基准**：扫描 JSON 路径（`prepareTempWorkpiece()` → `transformLineScanToRobotBase()`）是手眼标定黄金基准；离线 JSON、PLY、多帧和拼接路径必须与它逐点一致。
+- **根因**：点云上下/法向反转风险来自“重复实现 + LineProfileXz 语义不一致”，不是矩阵方向问题：回归工具自带 XML 解析与 `poseMatrix()`，view 应用自带刚体校验、SLERP 插值、进度轴/`EmbeddedMotion` 启发式和内联 `baseFromFlange * flangeFromDepth`，旧合并路径还把输入 Y 当相机坐标保留。
+- **修复**：模块 50 成为唯一数学实现（`composeBaseFromDepth()`、`computeScanTravel()`、`lineProfileCameraPoint()`、`lineProfileScanRatio()`、`RobotCloudStatus` 状态码）；两个调用方的重复解析、重复插值和内联矩阵乘法删除并改调模块 50。未使用矩阵求逆、Z 翻转或镜像作为修复手段。
+- **契约**：`RTmatDepth2robot` = `T_flange_depth`；坐标链 `p_robot_base = T_base_flange(Start/End 插值) * T_flange_depth * p_camera`；位姿 `[X,Y,Z,A,B,C]`、`A=Rx/B=Ry/C=Rz`、`Rz(C)*Ry(B)*Rx(A)`、mm/deg、PLY/PNG/JSON 格式与既有错误码均未变化。
+- **测试**：`handeye_transform_tests` 覆盖 12 项契约（乘法方向、黄金链路、LineProfileXz 的 `[X,0,Z]` 与 Y 语义、正负行程与反向扫描、FullXyz、法向同旋转不平移、位姿往返、非法矩阵拒绝、无行程/空点云/全无效/超范围/取消、状态码）；`temp_workpiece_interface_tests` 增加 JSON 入口与多帧入口的 robot_base 逐点一致性断言。
+- **验证**：源码树外 Debug/Release 构建成功；Debug/Release 全量 CTest 均 `16/16`；`handeye_transform_tests`、`temp_workpiece_interface_tests`、`stitching_interface_tests`、`multiframe_registration_tests` 定向运行 `4/4`；`pointcloudview` Debug/Release 自关闭启动冒烟均 `ExitCode=0`。真实样本共声明 `6,300,000` 点、有效转换 `4,389,670` 点、无进度越界点；JSON robot_base 与历史 baseline、多帧入口逐点比对的最大绝对误差和 RMS 均为 `0`。Release `windeployqt` 因本机缺少 Visual Studio release redistributable 发出警告，未完成便携部署验收。
+- **风险/未验证**：真实手眼 XML 的物理方向、机器人 A/B/C 与现场控制器定义、相机实际安装方向、实时相机预览统一、真实机器人安全/可达性/碰撞与干涉均未验证；本轮所有结论只来自源码树外构建、单元/接口回归和启动冒烟。
+
+### 2026-10-06（离线 PLY + 亮度图纹理点云）
+
+- 主模块：`60_geometry_workpiece`；渲染模块：`20_pointcloud_render`；UI 编排：`apps/pointcloudview`。
+- 新增 `pcv::texture::mapPlaneBrightness()`：读取同次扫描 PNG/JPG/BMP，转换 `QImage::Format_Grayscale8`，按原始 PLY `sourceIndex` 的左上角 row-major 像素直接采样；只为现有 `planeIndices` 点生成灰度/有效标记，严格校验原始点数、source index 和过滤统计，不执行局部坐标投影或裁剪。
+- `PointCloudCanvas` 新增 per-point 颜色覆盖与“纹理灰度”模式；有效纹理点使用灰度，非平面点/无效点回退当前颜色模式；点云、平面和坐标系更新会清理旧纹理缓存，切换其他颜色模式后可复用缓存。
+- `pointcloudview` 增加“选择亮度图并贴到平面”入口，后台映射、取消/revision 门禁、替换保护和状态栏统计；不生成网格、UV、纹理文件、带颜色 PLY 或项目 JSON。
+- 文件：`modules/60_geometry_workpiece/include/pcv/texture/texture_mapping.h`、`modules/60_geometry_workpiece/src/texture_mapping.cpp`、`tests/unit/texture/texture_mapping_tests.cpp`、渲染契约/画布、`apps/pointcloudview/mainwindow.*`、对应 CMake/UI 和文档。
+- 验证：源码树外 `C:\pcv-build\texture-full-debug` Debug 构建成功，CTest `17/17` 通过；`C:\pcv-build\texture-full-release` Release 构建成功，CTest `17/17` 通过；纹理映射和渲染契约定向测试均通过。
+- 风险/未完成：真实 PLY + 亮度图 GUI 方向、中心裁剪视觉效果、无 WObj1 回退轴和大点云性能未人工验收；Release `windeployqt` 提示缺少本机 Visual Studio release redistributable；未接入实时相机取流。
+
+### 2026-10-06（严格 PLY 栅格索引亮度纹理修正）
+
+- 将亮度纹理从局部坐标覆盖整张图改为严格 `sourceIndex -> image pixel` 映射。仅支持单个 PLY 临时工件流程；亮度图必须与原始 PLY 同次扫描、同尺寸、同 row-major 点序。
+- 映射只读取 `planeIndices` 对应的原图像素，使用原始 PLY 点数校验图像像素数，拒绝过滤点、缺失/重复/越界 source index、点数变化和当前点序回退；不再执行局部坐标投影、包围盒覆盖、中心裁剪、缩放、翻转或配准。
+- WObj1 不参与纹理采样；WObj1 建立/修改不会清除已有纹理。点云、平面索引或 source provenance 变化仍会清除纹理；边缘结果在平面索引不变时保留纹理。
+- 验证：源码树外 `C:\pcv-build\texture-raster-debug` Debug 构建成功，CTest `17/17` 通过；`C:\pcv-build\texture-raster-release` Release 构建成功，CTest `17/17` 通过；两配置 `texture_mapping_tests.exe` 均退出码 `0`；两配置 `pointcloudview.exe` 在 `POINTCLOUDVIEW_SELFTEST_CLOSE=1` 下启动冒烟均退出码 `0`；`git diff --check` 通过。
+- 统计修正：映射结果的 `skippedPointCount` 按平面点总数减成功映射数报告；严格栅格校验失败时不发布覆盖。
+- 风险/未完成：未使用真实 PLY 与同次扫描亮度图进行人工 GUI 视觉验收，无法在本轮确认现场图像与 PLY 的 row-major 起点/点序确实一致；未接入实时相机取流；Release `windeployqt` 仍提示缺少本机 Visual Studio release redistributable。
+
+### 2026-10-07（点云预览工作台 UI 简化）
+
+- 主模块：`apps/pointcloudview` UI 编排；不修改模块 10、30、50、60 的算法和公共 API。
+- 主窗口删除左侧常驻总控中心、步骤导航和文件列表可见布局，顶部保留“打开点云”“打开扫描 JSON”和“工具”菜单；深色 3D 画布占据主体，文件名、点数和任务状态通过状态栏显示。
+- 现有 Designer 控件被迁移到五个独立、无模式且可同时打开的工具窗口：数据源、点云清理、平面与 WObj1、边缘与输出、扫描规划；窗口关闭只隐藏，参数、结果和后台任务仍由 `MainWindow` 保留。渲染设置继续复用 `RenderDialog`，相机和多帧配准保留原业务入口。
+- 取点或边缘选择时自动隐藏对应工具窗口，主窗口底部显示状态、计数、撤销、取消和确认/完成操作条；Esc、Backspace 及自动 PLY/扫描 JSON 流程继续使用原状态机和 revision 门禁。
+- 验证：`C:\pcv-build\ui-simplify-debug`、`C:\pcv-build\ui-simplify-release` 构建成功；Debug/Release 全量 CTest 均 `17/17`；两配置 `POINTCLOUDVIEW_SELFTEST_CLOSE=1` 启动冒烟退出码均为 `0`。
+- 风险/未完成：本轮未使用真实点云逐一人工验收多窗口布局、预览占客户区 85% 的像素比例、工具窗口关闭恢复和取点交互；真实相机、机器人可达性、碰撞/干涉及现场数据仍需验收；Release `windeployqt` 仍提示缺少本机 Visual Studio release redistributable。
+
+### 2026-10-08（PLY 原始坐标纹理实验入口）
+
+- 增加“PLY 纹理实验（原始坐标）”来源：单个 PLY 直接保留原始 XYZ、点序、`declaredPointCount` 和 identity `sourceIndex`，不读取 XML，不执行手眼转换、Start/End 位姿、WObj1 或临时工件四件套。
+- 实验模式复用两组三点和同面校验；第一组三点按任意平面方向的垂直距离拟合，第二组通过后直接选择同次扫描亮度图。
+- 复用严格 `source_raster_index` 映射：图像像素数必须等于 PLY 声明点数，固定左上角起始 row-major；仅 `planeIndices` 对应点显示灰度，失败、尺寸不符或取消不发布新纹理。
+- 新增 headless `texture_experiment_tests`，覆盖声明点数、identity source index、垂直平面、同面校验、严格像素映射、取消和尺寸错误拒绝。
+- 本轮验证：源码树外 Debug 构建成功，Debug 全量 CTest `18/18` 通过。Release 构建、Release CTest、真实 PLY/亮度图 GUI 视觉验收和现场 row-major 一致性仍待完成。
+
+### 2026-10-08（扫描规划单线误生成双线修复）
+
+- 主模块 `60_geometry_workpiece`；修改 `scan_planner.h/.cpp`、`scan_planner_tests.cpp` 和模块/架构/数据契约文档。
+- 原严格比较 `requiredWidth > cameraWidthMm` 在 ROI 投影宽度略超过视野时立即增加第二条线；新增固定 `0.1 mm` 容差，宽度不超过 `cameraWidthMm + 0.1 mm` 只输出 `P0/P1`，超过阈值仍按实际覆盖要求规划多条线。
+- 原始 `requiredWidthMm` 不截断；结果和内部 JSON 记录 `singleLineWidthToleranceMm` / `single_line_width_tolerance_mm`，不新增 UI 参数，不改变 P.json 的 schema、编号和姿态顺序；单线重叠字段沿用请求值，不表示存在相邻扫描带。
+- 测试覆盖 Global/LocalRoi 的 `99.9/100/100.099/100.1/100.1001/101 mm`、单线段数、P.json 点数/编号以及多线首尾覆盖与重叠保证；真实相机有效视野和现场 ROI 边界误差仍需验收。
+- 本轮验证：复用源码树外 `C:\pcv-build\texture-experiment-debug-v1` / `C:\pcv-build\texture-experiment-release-v1` 执行完整 Debug/Release 构建成功；Debug 扫描定向测试通过，双配置全量 CTest 均 `18/18`（Debug `82.23 s`、Release `8.36 s`），均含扫描边界与 JSON 回归；`POINTCLOUDVIEW_SELFTEST_CLOSE=1` 双配置启动冒烟退出码 `0`，`git diff --check` 通过。
+- 验证边界：未使用触发问题的真实 ROI 进行 GUI 复验；容差最多接受总宽 `0.1 mm` 的视野超出，真实相机有效宽度仍需现场确认。Release `windeployqt` 仍提示缺少本机 Visual Studio release redistributable，便携部署未验收。现有无关修改保留，未提交。
+
+### 2026-10-08（三点平面拟合等价提速 v2）
+
+- 主模块 `60_geometry_workpiece`，UI `apps/pointcloudview`；保留渲染算法、手眼转换、阈值、300 轮 RANSAC、随机种子、20000 点模型采样上限和两组三点流程。
+- `Options` 追加 `parallelEnabled=false`、`maxParallelTasks=4`，任务数限制为 1～4（含协调线程）；`Result` 追加 `cancelled` 和 `StageTimings timings`，记录候选筛选、RANSAC、PCA、分类、连通域、组装及总耗时，既有 JSON/PLY 输出格式不变。并行取消回调必须可并发调用。
+- RANSAC 依原序生成候选、评分只计数、数量相同保留最早模型；逐点分类按连续输入区间分配并按输入顺序合并。worker 仅读取 const Qt 容器、返回私有输出，全部任务汇合后才发布；PCA/RMS 累加保持串行和原浮点顺序。
+- 连通域保留原投影、自动半径、九邻格与精确距离判定；栅格只保留未访问点，发现后移除，每格预缓存九邻格指针以减少重复查找；连通域编号及最终索引仍按输入顺序生成。
+- wrapper 仅透传参数、取消和诊断；UI 在点数不少于 100000 时启用最多四个任务，输入 revision 变化、关闭和析构先取消，再等待 worker。日志记录三点索引、阶段时间、GUI 发布时间及下一次 `frameSwapped` 的总耗时；自动 PLY/原始纹理流程从第三点选中开始计时，手动入口从执行拟合开始计时。
+- 新增 `plane_fitting_equivalence_tests_v2`：密集/重复/不均匀密度、断开和临界连接、噪声倾斜、垂直、控制点跨域、非法输入与 deferred 路径；保留额外共享副本，对比串行与 1/2/4 任务完整结果，覆盖取消及 join 后生命周期。原算法 Debug/Release 生成的完整字段黄金摘要用于同工具链严格回归。
+- 基准、输入副本、优化前源码/程序和完整结果位于 `C:\pcv-build\fitbench-baseline`；6300000 点原始 PLY 的 SHA256 为 `BE0552A1ADD1D64208F53B3D0F460CF9AC6BA3087EF332998D91F22F4AF246A1`。固定测试组覆盖上表面不同位置和低平面，每组预热一次、正式五次，不计读取/转换/结果序列化耗时。
+- 验收尚未完成：用户确认实际控制点和 Start/End 参数未确定，暂不能保存真实 robot_base 测试输入或验收临时工件 PLY/JSON GUI。模块性能不能替代从第三点到完整显示的 GUI 验收；最终构建、CTest、性能数据及风险以本轮最终验证记录为准。

@@ -90,3 +90,23 @@
 - 当前实现以内联形式迁移，后续可在接口稳定后拆分为 `.cpp`；真实 GUI 点选/矩形选区验收仍待执行。
 - 验证补充：`pointcloudview`、`pointcloudstitch` Release 构建通过，Release CTest 14/14 通过。
 - UI 资源已独立存放于 `apps/pointcloudview/ui/mainwindow.ui`，可直接使用 Qt Designer 编辑；业务源码不再与 `.ui` 文件混放。
+
+### 2026-10-06（纹理灰度 per-point 覆盖）
+
+- 新增 `PointColorOverlay` 及长度、有限值、范围和有效标记校验；`PointCloudCanvas::setTextureGrayOverlay()` 只接受与当前点云等长的数据，并在 GUI 线程提交 OpenGL 缓冲。
+- 增加“纹理灰度”颜色模式：有效纹理点显示每点灰度，非平面点和无效点使用当前彩色高度、灰阶或法向量模式；切换模式保留覆盖缓存，点云/平面/坐标系更新清理覆盖。
+- 不修改 `pointcloud::Point3D`、PLY 契约或点云算法接口；纹理覆盖只用于当前画布显示。
+- 验证：`pointcloud_canvas_contract_tests` 覆盖长度不匹配、非有限颜色、有效标记和模式契约；Debug/Release 全量 CTest 均 `17/17`。
+- 未验证：真实 OpenGL 桌面上的纹理方向、点密度和大点云上传性能。
+
+### 2026-10-06（严格栅格纹理显示）
+
+- 画布继续接收等长 per-point 灰度覆盖，但覆盖来源改为原始 PLY `sourceIndex` 对应的亮度图像素；非平面点和无效标记继续回退当前颜色模式。
+- 同一 `planeIndices` 的边缘结果更新不清除纹理；点云或平面索引变化清除纹理。坐标系/WObj1 更新不影响纹理覆盖。
+- 渲染层不执行图像裁剪、缩放、翻转或空间配准，纹理缓存仅用于当前画布显示。
+
+### 2026-10-08（PLY 原始坐标纹理实验显示）
+
+- 原始坐标实验入口复用现有 per-point 灰度覆盖和“纹理灰度”模式；实验点云不建立 WObj1，渲染层只接收当前平面点对应的严格 source raster 映射结果。
+- 非平面点和无效标记继续使用当前颜色模式；映射失败、取消或尺寸不符时 GUI 不提交新的覆盖缓冲。
+- 新增 headless 应用契约测试验证覆盖输入，不把 OpenGL/真实样本视觉方向当作自动化测试结论。

@@ -331,13 +331,13 @@ TempWorkpiecePreparation transformScanToRobotBase(
     if (!cloud.ok) {
         TempWorkpiecePreparation failure = failedPreparation(
             QString::fromLatin1(kErrorTransformInvalid), cloud.error, error);
-        failure.declaredPointCount = cached.points.size();
+        failure.declaredPointCount = cached.declaredPointCount;
         failure.cancelled = cloud.cancelled;
         return failure;
     }
     TempWorkpiecePreparation result;
     result.success = true;
-    result.declaredPointCount = cached.points.size();
+    result.declaredPointCount = cached.declaredPointCount;
     result.convertedPointCount = cloud.points.size();
     result.rejectedInvalidPointCount = cloud.rejectedInvalid;
     result.rejectedRangePointCount = cloud.rejectedRange;

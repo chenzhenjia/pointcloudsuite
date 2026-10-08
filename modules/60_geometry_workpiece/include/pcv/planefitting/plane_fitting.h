@@ -32,6 +32,19 @@ struct Options {
     float minimumDisconnectedComponentRatio = 0.005f;
     bool deferFinalClassification = false;
     std::function<bool()> isCancelled;
+    bool parallelEnabled = false;
+    int maxParallelTasks = 4;
+    // When parallelEnabled is true, isCancelled must be safe for concurrent calls.
+};
+
+struct StageTimings {
+    double candidateMs = 0.0;
+    double ransacMs = 0.0;
+    double pcaMs = 0.0;
+    double classificationMs = 0.0;
+    double connectivityMs = 0.0;
+    double assemblyMs = 0.0;
+    double totalMs = 0.0;
 };
 
 struct Result {
@@ -50,6 +63,8 @@ struct Result {
     bool deferred = false;
     QString error;
     bool ok = false;
+    bool cancelled = false;
+    StageTimings timings;
 };
 
 enum class ConsistencyStatus : quint8 {

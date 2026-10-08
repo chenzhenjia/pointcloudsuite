@@ -6,6 +6,7 @@
 #include "registrationdialog.h"
 #include "ui_mainwindow.h"
 #include <pcv/interface/temp_workpiece_interface.h>
+#include <pcv/io/artifact_transaction.h>
 #include <pcv/output/plane_output.h>
 #include <pcv/registration/handeye_transform.h>
 #include <pcv/render/pointcloud_canvas.h>
@@ -177,6 +178,24 @@ QString plyLineOutputDirectoryIssue(const QString &directory) {
         if (!ancestor.cdUp()) break;
     }
     return QString();
+}
+
+pcv::roi::WorkpieceCoordinateSystem toScanCoordinateFrame(
+    const pointcloud::WorkpieceCoordinateSystem &frame) {
+    pcv::roi::WorkpieceCoordinateSystem result;
+    result.originInRobotBase = frame.originInRobotBase;
+    result.axisXInRobotBase = frame.axisXInRobotBase;
+    result.axisYInRobotBase = frame.axisYInRobotBase;
+    result.axisZInRobotBase = frame.axisZInRobotBase;
+    result.workpieceToRobotBase = frame.workpieceToRobotBase;
+    result.robotBaseToWorkpiece = frame.robotBaseToWorkpiece;
+    result.poseA = frame.poseA;
+    result.poseB = frame.poseB;
+    result.poseC = frame.poseC;
+    result.orthogonalityError = frame.orthogonalityError;
+    result.error = frame.error;
+    result.valid = frame.valid;
+    return result;
 }
 
 bool poseIsFinite(const pointcloud::RobotPose &pose) {
@@ -406,12 +425,17 @@ MainWindow::~MainWindow() {
     // to run during teardown can access vectors/widgets whose lifetime has
     // already ended.
     m_closing = true;
+    if (m_planeCancelToken) m_planeCancelToken->store(true);
     if (m_prepareCancelToken) m_prepareCancelToken->store(true);
+    if (m_scanPlanningCancelToken) m_scanPlanningCancelToken->store(true);
+    if (m_textureCancelToken) m_textureCancelToken->store(true);
     if (m_loadWatcher) disconnect(m_loadWatcher, nullptr, this, nullptr);
     if (m_noiseWatcher) disconnect(m_noiseWatcher, nullptr, this, nullptr);
     if (m_threePlaneWatcher) disconnect(m_threePlaneWatcher, nullptr, this, nullptr);
     if (m_edgeWatcher) disconnect(m_edgeWatcher, nullptr, this, nullptr);
     if (m_planeImageWatcher) disconnect(m_planeImageWatcher, nullptr, this, nullptr);
+    if (m_scanPlanningWatcher) disconnect(m_scanPlanningWatcher, nullptr, this, nullptr);
+    if (m_textureMappingWatcher) disconnect(m_textureMappingWatcher, nullptr, this, nullptr);
     if (m_loadWatcher && m_loadWatcher->isRunning()) {
         m_loadWatcher->waitForFinished();
     }
@@ -426,6 +450,12 @@ MainWindow::~MainWindow() {
     }
     if (m_planeImageWatcher && m_planeImageWatcher->isRunning()) {
         m_planeImageWatcher->waitForFinished();
+    }
+    if (m_scanPlanningWatcher && m_scanPlanningWatcher->isRunning()) {
+        m_scanPlanningWatcher->waitForFinished();
+    }
+    if (m_textureMappingWatcher && m_textureMappingWatcher->isRunning()) {
+        m_textureMappingWatcher->waitForFinished();
     }
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
     if (m_cameraDialog) {
@@ -449,6 +479,9 @@ void MainWindow::buildUi() {
     m_fileList = ui->lw_files;
     m_fileInfo = ui->lbl_device_empty;
     m_canvasInfo = ui->lbl_canvas_info;
+    ui->vbl_canvas->removeWidget(m_canvasInfo);
+    m_canvasInfo->setParent(statusBar());
+    statusBar()->addPermanentWidget(m_canvasInfo);
     m_progress = ui->pbar_progress;
     m_pointSize = ui->spb_point_size;
     m_colorMode = ui->cb_color_mode;
@@ -484,6 +517,7 @@ void MainWindow::buildUi() {
     m_selectEdgeButton = ui->btn_select_edge;
     m_clearEdgeSelectionButton = ui->btn_clear_edge;
     m_extractPlaneImageButton = ui->btn_extract_plane_image;
+    m_selectTextureImageButton = ui->btn_select_texture_image;
     m_savePlaneImageButton = ui->btn_save_plane_image;
     m_finalizeTempWorkpieceButton = ui->btn_finalize_temp_workpiece;
     m_planeImagePreview = ui->lbl_plane_image_preview;
@@ -495,6 +529,13 @@ void MainWindow::buildUi() {
             this, &MainWindow::clearWorkpieceAxisSelection);
 
     m_canvas = new PointCloudCanvas(ui->wgt_canvas_host);
+    connect(m_canvas, &QOpenGLWidget::frameSwapped, this, [this]() {
+        if (!m_planeFramePending || m_closing) return;
+        m_planeFramePending = false;
+        if (m_threePlaneInputRevision != m_canvasRevision) return;
+        qInfo() << "plane_fit_visible_ms=" << m_planeElapsed.nsecsElapsed() / 1.0e6
+                << "revision=" << m_threePlaneInputRevision;
+    });
     auto *canvasLayout = new QVBoxLayout(ui->wgt_canvas_host);
     canvasLayout->setContentsMargins(0, 0, 0, 0);
     canvasLayout->addWidget(m_canvas);
@@ -515,6 +556,8 @@ void MainWindow::buildUi() {
     connect(ui->btn_open_point_cloud, &QPushButton::clicked, this, &MainWindow::openPointCloudSource);
     connect(ui->btn_open_scanning_info, &QPushButton::clicked,
             this, &MainWindow::openTempScanningInfo);
+    ui->lbl_header_subtitle->hide();
+    ui->lbl_main_title->setStyleSheet(QStringLiteral("font-size: 12pt; font-weight: 600;"));
     connect(ui->btn_multiframe_registration, &QPushButton::clicked,
             this, &MainWindow::openMultiFrameRegistration);
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
@@ -535,37 +578,178 @@ void MainWindow::buildUi() {
             m_canvas, &PointCloudCanvas::resetView);
     connect(ui->act_render_settings, &QAction::triggered,
             this, &MainWindow::openRenderSettings);
-    // The tab pages remain the existing implementation boundary; hide the
-    // tab bar and expose a Designer-authored step navigator instead.
-    ui->tw_main->tabBar()->hide();
-    const auto updateWorkflowStep = [this](int index) {
-        index = std::clamp(index, 0, ui->tw_main->count() - 1);
-        ui->tw_main->setCurrentIndex(index);
-        ui->btn_step_acquire->setChecked(index == 0);
-        ui->btn_step_clean->setChecked(index == 1);
-        ui->btn_step_plane->setChecked(index == 2);
-        ui->btn_step_output->setChecked(index == 3);
-        ui->btn_prev_step->setEnabled(index > 0);
-        ui->btn_next_step->setEnabled(index + 1 < ui->tw_main->count());
-        ui->lbl_step_status->setText(tr("步骤 %1/4：%2").arg(index + 1)
-            .arg(index == 0 ? tr("采集与数据源")
-                 : index == 1 ? tr("点云清理")
-                 : index == 2 ? tr("平面与工件坐标")
-                               : tr("边缘分割与输出")));
+    m_scanPlanningPage = new QWidget(ui->tw_main);
+    m_scanPlanningPage->setObjectName(QStringLiteral("wgt_scan_planning"));
+    auto *scanPageLayout = new QVBoxLayout(m_scanPlanningPage);
+    auto *scanForm = new QFormLayout;
+    const auto makeScanSpin = [this](const QString &name, double minimum, double maximum,
+                                     double value, int decimals = 3) {
+        auto *spin = new QDoubleSpinBox(m_scanPlanningPage);
+        spin->setObjectName(name);
+        spin->setRange(minimum, maximum);
+        spin->setDecimals(decimals);
+        spin->setValue(value);
+        spin->setKeyboardTracking(false);
+        return spin;
     };
-    connect(ui->btn_step_acquire, &QToolButton::clicked, this,
-            [updateWorkflowStep]() { updateWorkflowStep(0); });
-    connect(ui->btn_step_clean, &QToolButton::clicked, this,
-            [updateWorkflowStep]() { updateWorkflowStep(1); });
-    connect(ui->btn_step_plane, &QToolButton::clicked, this,
-            [updateWorkflowStep]() { updateWorkflowStep(2); });
-    connect(ui->btn_step_output, &QToolButton::clicked, this,
-            [updateWorkflowStep]() { updateWorkflowStep(3); });
-    connect(ui->btn_prev_step, &QPushButton::clicked, this,
-            [this, updateWorkflowStep]() { updateWorkflowStep(ui->tw_main->currentIndex() - 1); });
-    connect(ui->btn_next_step, &QPushButton::clicked, this,
-            [this, updateWorkflowStep]() { updateWorkflowStep(ui->tw_main->currentIndex() + 1); });
-    connect(ui->tw_main, &QTabWidget::currentChanged, this, updateWorkflowStep);
+    m_scanMode = new QComboBox(m_scanPlanningPage);
+    m_scanMode->setObjectName(QStringLiteral("cb_scan_mode"));
+    m_scanMode->addItem(tr("局部 ROI 扫描"), int(pcv::scan::ScanPlanningMode::LocalRoi));
+    m_scanMode->addItem(tr("全局扫描"), int(pcv::scan::ScanPlanningMode::Global));
+    m_scanMode->setCurrentIndex(0);
+    scanForm->addRow(tr("扫描模式"), m_scanMode);
+    m_scanHeight = makeScanSpin(QStringLiteral("dsb_scan_height"), 0.0, 1.0e7, 50.0);
+    scanForm->addRow(tr("扫描高度 +Z (mm)"), m_scanHeight);
+    m_scanCenter = new QLabel(tr("规划后显示扫描中心"), m_scanPlanningPage);
+    m_scanCenter->setObjectName(QStringLiteral("lbl_scan_center"));
+    m_scanCenter->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    scanForm->addRow(tr("扫描中心 XYZ"), m_scanCenter);
+    m_scanRange = new QLabel(tr("规划后显示 WObj1 XY 范围"), m_scanPlanningPage);
+    m_scanRange->setObjectName(QStringLiteral("lbl_scan_range"));
+    m_scanRange->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    scanForm->addRow(tr("扫描范围"), m_scanRange);
+    m_scanCameraWidth = makeScanSpin(QStringLiteral("dsb_scan_camera_width"), 0.001, 1.0e7, 100.0);
+    scanForm->addRow(tr("相机扫描宽度 X (mm)"), m_scanCameraWidth);
+    m_scanOverlap = makeScanSpin(QStringLiteral("dsb_scan_overlap"), 0.0, 99.999, 50.0);
+    scanForm->addRow(tr("相邻扫描带重叠 (mm)"), m_scanOverlap);
+    m_scanOverlap->setMaximum(m_scanCameraWidth->value() - 0.001);
+    scanForm->addRow(tr("固定行程方向"), new QLabel(tr("+Y → -Y"), m_scanPlanningPage));
+    scanForm->addRow(tr("行程延长"), new QLabel(tr("两端各延长 50 mm"), m_scanPlanningPage));
+    scanPageLayout->addLayout(scanForm);
+
+    auto *scanButtonRow = new QHBoxLayout;
+    m_planScanButton = new QPushButton(tr("规划路径"), m_scanPlanningPage);
+    m_planScanButton->setObjectName(QStringLiteral("btn_plan_scan"));
+    m_exportScanButton = new QPushButton(tr("导出项目 JSON"), m_scanPlanningPage);
+    m_exportScanButton->setObjectName(QStringLiteral("btn_export_scan_json"));
+    m_exportScanButton->setEnabled(false);
+    m_exportInoRobotButton = new QPushButton(tr("导出 InoRobot P.json"), m_scanPlanningPage);
+    m_exportInoRobotButton->setObjectName(QStringLiteral("btn_export_inorobot_json"));
+    m_exportInoRobotButton->setEnabled(false);
+    scanButtonRow->addWidget(m_planScanButton);
+    scanButtonRow->addWidget(m_exportScanButton);
+    scanButtonRow->addWidget(m_exportInoRobotButton);
+    scanButtonRow->addStretch(1);
+    scanPageLayout->addLayout(scanButtonRow);
+    m_scanOutput = new QPlainTextEdit(m_scanPlanningPage);
+    m_scanOutput->setObjectName(QStringLiteral("pte_scan_output"));
+    m_scanOutput->setReadOnly(true);
+    m_scanOutput->setPlaceholderText(tr("规划成功后逐行显示 P 点"));
+    scanPageLayout->addWidget(m_scanOutput, 1);
+    ui->tw_main->addTab(m_scanPlanningPage, tr("扫描规划"));
+
+    connect(m_planScanButton, &QPushButton::clicked, this, &MainWindow::planScanTrajectory);
+    connect(m_exportScanButton, &QPushButton::clicked, this, &MainWindow::exportScanTrajectory);
+    connect(m_exportInoRobotButton, &QPushButton::clicked, this, &MainWindow::exportInoRobotTrajectory);
+    connect(m_scanMode, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int) { invalidateScanTrajectory(); });
+    const QVector<QDoubleSpinBox *> scanInputs{m_scanHeight, m_scanCameraWidth, m_scanOverlap};
+    for (QDoubleSpinBox *input : scanInputs) {
+        connect(input, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+                [this](double) { invalidateScanTrajectory(); });
+    }
+    connect(m_scanCameraWidth, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [this](double width) {
+                m_scanOverlap->setMaximum(qMax(0.0, width - 0.001));
+            });
+
+    const auto createToolDialog = [this](QDialog **dialog, const QString &title,
+                                         const QSize &size) {
+        *dialog = new QDialog(this);
+        (*dialog)->setWindowTitle(title);
+        (*dialog)->setModal(false);
+        (*dialog)->setWindowModality(Qt::NonModal);
+        (*dialog)->setAttribute(Qt::WA_DeleteOnClose, false);
+        (*dialog)->resize(size);
+        auto *layout = new QVBoxLayout(*dialog);
+        layout->setContentsMargins(10, 10, 10, 10);
+        layout->setSpacing(8);
+        return layout;
+    };
+    auto *sourceLayout = createToolDialog(&m_sourceDialog, tr("数据源"), QSize(420, 520));
+    ui->lbl_source_title->setParent(m_sourceDialog);
+    ui->lw_files->setParent(m_sourceDialog);
+    ui->lbl_device_empty->setParent(m_sourceDialog);
+    ui->btn_device_placeholder->setParent(m_sourceDialog);
+    sourceLayout->addWidget(ui->lbl_source_title);
+    sourceLayout->addWidget(ui->lw_files, 1);
+    sourceLayout->addWidget(ui->lbl_device_empty);
+    sourceLayout->addWidget(ui->btn_device_placeholder);
+    ui->wgt_source_panel->hide();
+
+    const auto detachPage = [this](QWidget *page, QDialog *dialog) {
+        const int index = ui->tw_main->indexOf(page);
+        if (index >= 0) ui->tw_main->removeTab(index);
+        page->setParent(dialog);
+        dialog->layout()->addWidget(page);
+        page->show();
+    };
+    auto *cleanLayout = createToolDialog(&m_cleanDialog, tr("点云清理"), QSize(440, 300));
+    detachPage(ui->wgt_clean, m_cleanDialog);
+    Q_UNUSED(cleanLayout);
+    auto *planeLayout = createToolDialog(&m_planeDialog, tr("平面与 WObj1"), QSize(680, 620));
+    detachPage(ui->wgt_plane, m_planeDialog);
+    Q_UNUSED(planeLayout);
+    auto *edgeLayout = createToolDialog(&m_edgeDialog, tr("边缘与输出"), QSize(720, 720));
+    detachPage(ui->wgt_edge, m_edgeDialog);
+    Q_UNUSED(edgeLayout);
+    auto *scanLayout = createToolDialog(&m_scanDialog, tr("扫描规划"), QSize(720, 700));
+    detachPage(m_scanPlanningPage, m_scanDialog);
+    Q_UNUSED(scanLayout);
+    ui->tw_main->hide();
+
+    m_operationBar = new QWidget(ui->wgt_central);
+    m_operationBar->setObjectName(QStringLiteral("operationBar"));
+    auto *operationLayout = new QHBoxLayout(m_operationBar);
+    operationLayout->setContentsMargins(10, 5, 10, 5);
+    operationLayout->setSpacing(8);
+    m_operationLabel = new QLabel(m_operationBar);
+    m_operationCount = new QLabel(m_operationBar);
+    m_operationUndo = new QPushButton(tr("撤销"), m_operationBar);
+    m_operationCancel = new QPushButton(tr("取消"), m_operationBar);
+    m_operationConfirm = new QPushButton(tr("确认"), m_operationBar);
+    operationLayout->addWidget(m_operationLabel);
+    operationLayout->addWidget(m_operationCount);
+    operationLayout->addStretch(1);
+    operationLayout->addWidget(m_operationUndo);
+    operationLayout->addWidget(m_operationCancel);
+    operationLayout->addWidget(m_operationConfirm);
+    ui->rootLayout->addWidget(m_operationBar);
+    m_operationBar->hide();
+    connect(m_operationUndo, &QPushButton::clicked, this, &MainWindow::undoPickingOperation);
+    connect(m_operationCancel, &QPushButton::clicked, this, &MainWindow::cancelPickingOperation);
+    connect(m_operationConfirm, &QPushButton::clicked, this, &MainWindow::confirmPickingOperation);
+
+    ui->toolbar_workflow->hide();
+    ui->btn_multiframe_registration->hide();
+    ui->btn_camera_device->hide();
+    ui->splitter_main->setStretchFactor(0, 0);
+    ui->splitter_main->setStretchFactor(1, 1);
+    ui->splitter_main->setSizes({0, 1});
+
+    auto *toolsMenu = menuBar()->addMenu(tr("工具"));
+    auto addToolAction = [this, toolsMenu](const QString &text, auto slot) {
+        auto *action = toolsMenu->addAction(text);
+        connect(action, &QAction::triggered, this, slot);
+        return action;
+    };
+    addToolAction(tr("数据源"), &MainWindow::showSourceDialog);
+    addToolAction(tr("点云清理"), &MainWindow::showCleanDialog);
+    addToolAction(tr("平面与 WObj1"), &MainWindow::showPlaneDialog);
+    addToolAction(tr("边缘与输出"), &MainWindow::showEdgeDialog);
+    addToolAction(tr("扫描规划"), &MainWindow::showScanDialog);
+    toolsMenu->addSeparator();
+    addToolAction(tr("渲染设置"), &MainWindow::openRenderSettings);
+    auto *resetAction = toolsMenu->addAction(tr("重置视角"));
+    connect(resetAction, &QAction::triggered, m_canvas, &PointCloudCanvas::resetView);
+    toolsMenu->addSeparator();
+#ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
+    addToolAction(tr("相机设备"), &MainWindow::openCameraStream);
+#else
+    auto *cameraToolAction = toolsMenu->addAction(tr("相机设备"));
+    cameraToolAction->setEnabled(false);
+#endif
+    addToolAction(tr("多帧配准"), &MainWindow::openMultiFrameRegistration);
     connect(m_fileList, &QListWidget::currentRowChanged, this, &MainWindow::loadSelectedSource);
     connect(m_pointSize, qOverload<int>(&QSpinBox::valueChanged), m_canvas, &PointCloudCanvas::setPointSize);
     connect(m_pointSize, qOverload<int>(&QSpinBox::valueChanged), this,
@@ -604,13 +788,11 @@ void MainWindow::buildUi() {
     connect(m_selectEdgeButton, &QPushButton::clicked, this, &MainWindow::startEdgePointSelection);
     connect(m_clearEdgeSelectionButton, &QPushButton::clicked, this, &MainWindow::clearEdgePointSelection);
     connect(m_extractPlaneImageButton, &QPushButton::clicked, this, &MainWindow::extractPlaneImage);
+    connect(m_selectTextureImageButton, &QPushButton::clicked,
+            this, &MainWindow::selectTextureImage);
     connect(m_savePlaneImageButton, &QPushButton::clicked, this, &MainWindow::savePlaneImage);
     connect(m_finalizeTempWorkpieceButton, &QPushButton::clicked,
             this, &MainWindow::finalizeTempWorkpiece);
-    ui->splitter_main->setStretchFactor(0, 0);
-    ui->splitter_main->setStretchFactor(1, 1);
-    ui->splitter_main->setStretchFactor(2, 0);
-    ui->splitter_main->setSizes({250, 860, 330});
     m_progress->setFixedHeight(3);
     m_progress->hide();
     m_canvas->pointPicked = [this](int index) {
@@ -630,7 +812,6 @@ void MainWindow::buildUi() {
     };
     updatePlaneExtractionUi();
     updatePlaneEdgeUi();
-    updateWorkflowStep(0);
     statusBar()->showMessage(tr("就绪"));
 }
 
@@ -688,9 +869,12 @@ void MainWindow::openPointCloudSource() {
     QMessageBox dialog(QMessageBox::Question, tr("打开点云"),
                        tr("请选择点云来源"), QMessageBox::Cancel, this);
     QPushButton *fileButton = dialog.addButton(tr("打开单个 PLY"), QMessageBox::AcceptRole);
+    QPushButton *textureButton = dialog.addButton(
+        tr("PLY 纹理实验（原始坐标）"), QMessageBox::AcceptRole);
     QPushButton *folderButton = dialog.addButton(tr("扫描文件夹 PLY"), QMessageBox::AcceptRole);
     dialog.exec();
     if (dialog.clickedButton() == fileButton) openPointCloud();
+    else if (dialog.clickedButton() == textureButton) openTextureExperimentPly();
     else if (dialog.clickedButton() == folderButton) {
         const QString directory = QFileDialog::getExistingDirectory(
             this, tr("选择包含 PLY 的文件夹"));
@@ -708,6 +892,7 @@ void MainWindow::openPointCloudSource() {
         // when the operator declines that replacement.
         if (!confirmReplaceTempWorkpieceSession()) return;
         invalidateTempWorkpieceSession();
+        invalidateTextureExperiment();
         m_sourceDirectory = directory;
         m_sourceFiles.clear();
         for (const QString &name : files) m_sourceFiles.push_back(dir.absoluteFilePath(name));
@@ -725,8 +910,9 @@ void MainWindow::openPointCloudSource() {
             m_fileList->selectAll();
             m_fileList->setCurrentRow(0);
         }
-        m_fileInfo->setText(tr("文件夹扫描完成\nPLY 文件数  %1\n请在左侧列表中选择要显示的文件。")
+        m_fileInfo->setText(tr("文件夹扫描完成\nPLY 文件数  %1\n请在数据源窗口中选择要显示的文件。")
                                 .arg(m_sourceFiles.size()));
+        showSourceDialog();
         statusBar()->showMessage(tr("已扫描 %1 个 PLY，正在显示第一个文件").arg(m_sourceFiles.size()));
         loadSelectedSource();
     }
@@ -735,6 +921,7 @@ void MainWindow::openPointCloudSource() {
 void MainWindow::loadSelectedSource() {
     const int row = m_fileList ? m_fileList->currentRow() : -1;
     if (row < 0 || row >= m_sourceFiles.size() || pointTaskRunning()) return;
+    if (m_textureExperimentActive) invalidateTextureExperiment();
     m_pendingPath = m_sourceFiles[row];
     m_loading = true;
     m_progress->show(); m_progress->setRange(0, 0);
@@ -773,6 +960,7 @@ void MainWindow::openPointCloud() {
     if (!collectPlyLineParameters(this, path, &parameters)) return;
     if (!confirmReplaceTempWorkpieceSession()) return;
     invalidateTempWorkpieceSession();
+    invalidateTextureExperiment();
 
     pcv::interface::TempWorkpieceOptions options;
     options.useInMemoryScan = true;
@@ -794,6 +982,40 @@ void MainWindow::openPointCloud() {
     scan.robotPoseEnd = parameters.endPose;
 
     startPlyLinePreparation(options);
+}
+
+void MainWindow::openTextureExperimentPly() {
+    if (workflowBlocksNewSource()) {
+        statusBar()->showMessage(tr("当前流程正在执行（%1），请先结束或取消后再打开新的 PLY")
+                                     .arg(workflowStateName()));
+        return;
+    }
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("选择纹理实验 PLY"),
+        m_sourceDirectory.isEmpty() ? QString() : m_sourceDirectory,
+        tr("PLY 文件 (*.ply);;所有文件 (*.*)"));
+    if (path.isEmpty()) return;
+
+    if (!confirmReplaceTempWorkpieceSession()) return;
+
+    invalidateTempWorkpieceSession();
+    invalidateTextureExperiment();
+    m_pendingTextureExperiment = true;
+    m_pendingPath = path;
+    m_folderScanOnly = false;
+    m_loading = true;
+    m_progress->show();
+    m_progress->setRange(0, 0);
+    statusBar()->showMessage(tr("正在读取纹理实验 PLY（保留原始坐标和点序）..."));
+    if (!m_loadWatcher) {
+        m_loadWatcher = new QFutureWatcher<pointcloud::LoadResult>(this);
+        connect(m_loadWatcher, &QFutureWatcher<pointcloud::LoadResult>::finished,
+                this, &MainWindow::loadFinished);
+    }
+    const QString loadPath = m_pendingPath;
+    m_loadWatcher->setFuture(QtConcurrent::run([loadPath]() {
+        return pointcloud::loadPlyResult(loadPath);
+    }));
 }
 
 void MainWindow::startPlyLinePreparation(const pcv::interface::TempWorkpieceOptions &options) {
@@ -850,7 +1072,10 @@ void MainWindow::reportPlyLinePreparation(
           << tr("inputYMinimum：%1 mm").arg(prepared.inputYMinimum, 0, 'f', 4)
           << tr("inputYMaximum：%1 mm").arg(prepared.inputYMaximum, 0, 'f', 4)
           << tr("signedTravel：%1 mm").arg(prepared.signedTravel, 0, 'f', 4)
-          << tr("dominantTravelAxis：%1").arg(axisName(prepared.dominantTravelAxis));
+          << tr("dominantTravelAxis：%1").arg(axisName(prepared.dominantTravelAxis))
+          << (m_tempWorkpieceRasterCompatible
+              ? tr("亮度栅格对应：可用（原始点序保留）")
+              : tr("亮度栅格对应：不可用（存在过滤点或点序不完整）"));
     appendTempWorkpieceOutput(lines.join(QLatin1Char('\n')));
     m_fileInfo->setText(
         tr("PLY 线路\nscan_id  %1\nlayout  LineProfileXz\n输入点数  %2\n转换点数  %3\n"
@@ -883,8 +1108,26 @@ void MainWindow::loadFinished() {
         m_loading = false;
         return;
     }
+    if (m_pendingTextureExperiment && result.ok) {
+        if (result.declaredPointCount <= 0
+            || result.declaredPointCount != result.points.size()) {
+            result.ok = false;
+            result.error = tr("PLY 声明点数无效或与读取点数不一致，无法保留完整原始点序");
+        } else {
+            const QVector<pointcloud::Point3D> &loadedPoints = result.points;
+            for (const auto &point : loadedPoints) {
+                if (!std::isfinite(point.x) || !std::isfinite(point.y)
+                    || !std::isfinite(point.z)) {
+                    result.ok = false;
+                    result.error = tr("PLY 含无效 XYZ，无法保证亮度图与有效点一一对应");
+                    break;
+                }
+            }
+        }
+    }
     if (!result.ok) {
         m_loading = false;
+        m_pendingTextureExperiment = false;
         m_progress->hide();
         QMessageBox::critical(this, tr("打开失败"), result.error);
         statusBar()->showMessage(tr("加载失败"));
@@ -892,6 +1135,7 @@ void MainWindow::loadFinished() {
     }
     if (result.points.isEmpty()) {
         m_loading = false;
+        m_pendingTextureExperiment = false;
         m_progress->hide();
         QMessageBox::warning(this, tr("打开失败"), tr("PLY 文件不包含可显示的顶点"));
         statusBar()->showMessage(tr("加载失败：点云为空"));
@@ -905,6 +1149,53 @@ void MainWindow::loadFinished() {
             << "reader_total_ms=" << result.totalElapsedMs;
     m_pendingSourcePlyEncoding = result.sourcePlyEncoding;
     m_rawPoints = std::move(result.points);
+    if (m_pendingTextureExperiment) {
+        const QFileInfo fileInfo(m_pendingPath);
+        m_sourceFiles = {m_pendingPath};
+        m_sourceDirectory = fileInfo.absolutePath();
+        {
+            const QSignalBlocker blocker(m_fileList);
+            m_fileList->clear();
+            m_fileList->addItem(fileInfo.fileName());
+            m_fileList->setCurrentRow(0);
+        }
+        m_tempWorkpieceDeclaredPointCount = result.declaredPointCount;
+        m_tempWorkpieceSourceIndices.clear();
+        m_tempWorkpieceSourceIndices.reserve(m_rawPoints.size());
+        for (qsizetype index = 0; index < m_rawPoints.size(); ++index)
+            m_tempWorkpieceSourceIndices.push_back(index);
+        m_tempWorkpieceRejectedInvalidPointCount = 0;
+        m_tempWorkpieceRejectedRangePointCount = 0;
+        m_tempWorkpieceRasterCompatible =
+            result.declaredPointCount > 0
+            && result.declaredPointCount == m_rawPoints.size();
+        publishCanvasCache(m_rawPoints);
+        // The source mode stays independent of raster eligibility.
+        m_textureExperimentActive = true;
+        m_pendingTextureExperiment = false;
+        m_fileInfo->setText(tr("纹理实验 PLY（原始坐标）\n原始点数  %1\n声明点数  %2\n"
+                               "请完成两组三点平面校验后选择同次扫描亮度图")
+                                .arg(QLocale().toString(m_rawPoints.size()))
+                                .arg(QLocale().toString(result.declaredPointCount)));
+        m_canvasInfo->setText(tr("纹理实验：当前显示 %1 个点 · 原始坐标 · 保留原始点序")
+                              .arg(QLocale().toString(m_points.size())));
+        m_progress->hide();
+        m_loading = false;
+        applyDepthRenderRange(m_points);
+        showPlaneDialog();
+        startPlanePointSelection();
+        if (!m_tempWorkpieceRasterCompatible) {
+            const QString detail = tr("PLY 声明点数无效或与读取点数不一致，已禁用严格纹理映射");
+            m_threeOutput->appendPlainText(detail);
+            statusBar()->showMessage(detail);
+        } else {
+            statusBar()->showMessage(tr("纹理实验 PLY 已加载，请选择第一组三点"));
+        }
+        for (const QString &warning : result.warnings)
+            qWarning() << "Texture experiment PLY warning:" << warning;
+        updatePlaneEdgeUi();
+        return;
+    }
     const QFileInfo fileInfo(m_pendingPath);
     const bool keepFolderSources = m_folderScanOnly && m_sourceFiles.size() > 1
         && m_sourceFiles.contains(m_pendingPath);
@@ -1021,7 +1312,7 @@ void MainWindow::refreshRenderDialogContent()
         if (std::isfinite(normalLengthSquared) && normalLengthSquared > 1.0e-8f)
             ++validNormals;
     }
-    const QStringList colorModes = {tr("彩色高度"), tr("灰阶"), tr("法向量")};
+    const QStringList colorModes = {tr("彩色高度"), tr("灰阶"), tr("法向量"), tr("纹理灰度")};
     const int colorIndex = qBound(0, m_colorMode->currentIndex(), colorModes.size() - 1);
     const auto options = m_renderDialog->overlayOptions();
     m_renderDialog->setContentText(
@@ -1100,7 +1391,13 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points,
         // disk is never touched here.
         setWorkflowState(WorkflowState::Idle);
     }
+    if (!preserveTempWorkpieceSession && m_textureExperimentActive) {
+        invalidateTextureExperiment();
+        setWorkflowState(WorkflowState::Idle);
+    }
     m_points = std::move(points);
+    if (m_planeCancelToken) m_planeCancelToken->store(true);
+    m_planeFramePending = false;
     ++m_canvasRevision;
     qInfo() << "Main display cache published, points=" << m_points.size()
             << "incoming=" << incomingCount
@@ -1115,6 +1412,7 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points,
     m_planeCenterValid = false;
     m_threePlaneResult = {};
     m_workpieceCoordinate = {};
+    invalidateTextureOverlay();
     m_threePointSelectionActive = false;
     m_planeCandidateConfirmed = false;
     m_planeFinalizationPending = false;
@@ -1143,7 +1441,9 @@ bool MainWindow::pointTaskRunning() const {
         || (m_tempWorkpieceFinalizeWatcher && m_tempWorkpieceFinalizeWatcher->isRunning())
         || (m_threePlaneWatcher && m_threePlaneWatcher->isRunning())
         || (m_edgeWatcher && m_edgeWatcher->isRunning())
-        || (m_planeImageWatcher && m_planeImageWatcher->isRunning());
+        || (m_planeImageWatcher && m_planeImageWatcher->isRunning())
+        || (m_textureMappingWatcher && m_textureMappingWatcher->isRunning())
+        || (m_scanPlanningWatcher && m_scanPlanningWatcher->isRunning());
 }
 
 QString MainWindow::workflowStateName() const {
@@ -1195,6 +1495,108 @@ void MainWindow::setWorkflowState(WorkflowState state, const QString &statusText
             << "source=" << source;
 }
 
+void MainWindow::showSourceDialog()
+{
+    if (!m_sourceDialog) return;
+    m_sourceDialog->show();
+    m_sourceDialog->raise();
+    m_sourceDialog->activateWindow();
+}
+
+void MainWindow::showCleanDialog()
+{
+    if (!m_cleanDialog) return;
+    m_cleanDialog->show();
+    m_cleanDialog->raise();
+    m_cleanDialog->activateWindow();
+}
+
+void MainWindow::showPlaneDialog()
+{
+    if (!m_planeDialog) return;
+    m_planeDialog->show();
+    m_planeDialog->raise();
+    m_planeDialog->activateWindow();
+}
+
+void MainWindow::showEdgeDialog()
+{
+    if (!m_edgeDialog) return;
+    m_edgeDialog->show();
+    m_edgeDialog->raise();
+    m_edgeDialog->activateWindow();
+}
+
+void MainWindow::showScanDialog()
+{
+    if (!m_scanDialog) return;
+    m_scanDialog->show();
+    m_scanDialog->raise();
+    m_scanDialog->activateWindow();
+}
+
+void MainWindow::setPickingOperation(const QString &text, bool visible)
+{
+    if (!m_operationBar) return;
+    m_operationBar->setVisible(visible);
+    if (!visible) return;
+    m_operationLabel->setText(text);
+    const int selectedCount = m_edgeSelectionActive ? m_selectedEdgeIndices.size()
+        : (m_secondPlaneSelectionActive ? m_secondPlanePointIndices.size()
+                                        : m_selectedPointIndices.size());
+    m_operationCount->setText(tr("已选点：%1").arg(selectedCount));
+    m_operationUndo->setEnabled(selectedCount > 0 && !pointTaskRunning());
+    m_operationCancel->setEnabled(!pointTaskRunning());
+    m_operationConfirm->setText(m_edgeSelectionActive ? tr("完成") : tr("确认"));
+    m_operationConfirm->setEnabled(
+        (m_edgeSelectionActive || (!m_secondPlaneSelectionActive
+                                   && m_selectedPointIndices.size() >= 3))
+        && !pointTaskRunning());
+}
+
+void MainWindow::undoPickingOperation()
+{
+    if (m_edgeSelectionActive) {
+        if (m_selectedEdgeIndices.isEmpty()) return;
+        m_selectedEdgeIndices.removeLast();
+        m_canvas->setSelectedEdgeIndices(m_selectedEdgeIndices);
+        updatePlaneEdgeUi();
+        setPickingOperation(tr("选择边缘真实点"), true);
+        return;
+    }
+    if (m_secondPlaneSelectionActive) {
+        if (m_secondPlanePointIndices.isEmpty()) return;
+        m_secondPlanePointIndices.removeLast();
+        QVector<int> marked = m_selectedPointIndices;
+        marked += m_secondPlanePointIndices;
+        m_canvas->setSelectedIndices(marked);
+        updatePlaneExtractionUi();
+        setPickingOperation(tr("选择第二组三点"), true);
+        return;
+    }
+    undoPlanePointSelection();
+}
+
+void MainWindow::cancelPickingOperation()
+{
+    if (m_edgeSelectionActive) {
+        clearEdgePointSelection();
+    } else if (m_secondPlaneSelectionActive) {
+        cancelSecondPlanePointSelection();
+    } else {
+        abandonPlanePointSelection();
+    }
+}
+
+void MainWindow::confirmPickingOperation()
+{
+    if (m_edgeSelectionActive) {
+        finishEdgePointSelection();
+    } else if (!m_secondPlaneSelectionActive) {
+        determinePlaneCandidate();
+    }
+}
+
 bool MainWindow::hasTempWorkpieceSession() const {
     return m_tempWorkpieceSource != TempWorkpieceSource::None
         && m_tempWorkpieceSessionRevision != 0
@@ -1218,9 +1620,25 @@ void MainWindow::invalidateTempWorkpieceSession() {
     m_pendingTempWorkpieceSource = TempWorkpieceSource::None;
     m_tempWorkpieceSessionRevision = 0;
     m_tempWorkpieceSourceIndices.clear();
+    m_tempWorkpieceDeclaredPointCount = 0;
+    m_tempWorkpieceRejectedInvalidPointCount = 0;
+    m_tempWorkpieceRejectedRangePointCount = 0;
+    m_tempWorkpieceRasterCompatible = false;
     m_tempWorkpieceScanId.clear();
     m_tempWorkpieceOutputDirectory.clear();
     m_tempWorkpieceCreatedAtIso8601.clear();
+    updatePlaneEdgeUi();
+}
+
+void MainWindow::invalidateTextureExperiment() {
+    m_textureExperimentActive = false;
+    m_pendingTextureExperiment = false;
+    m_tempWorkpieceSourceIndices.clear();
+    m_tempWorkpieceDeclaredPointCount = 0;
+    m_tempWorkpieceRejectedInvalidPointCount = 0;
+    m_tempWorkpieceRejectedRangePointCount = 0;
+    m_tempWorkpieceRasterCompatible = false;
+    invalidateTextureOverlay();
     updatePlaneEdgeUi();
 }
 
@@ -1257,6 +1675,7 @@ void MainWindow::startPlanePointSelection() {
         statusBar()->showMessage(tr("请先加载点云"));
         return;
     }
+    invalidateTextureOverlay();
     m_selectedPointIndices.clear();
     resetSecondPlaneVerification();
     m_axisSelectionActive = false;
@@ -1275,6 +1694,8 @@ void MainWindow::startPlanePointSelection() {
     m_canvas->clearWorkpieceCoordinateSystem();
     m_canvas->setSelectedIndices({});
     m_canvas->setSelectionMode(true);
+    if (m_planeDialog) m_planeDialog->hide();
+    setPickingOperation(tr("选择第一组三点"), true);
     updatePlaneExtractionUi();
     updatePlaneEdgeUi();
     setWorkflowState(WorkflowState::SelectingPrimaryPlanePoints);
@@ -1286,6 +1707,7 @@ void MainWindow::abandonPlanePointSelection() {
         statusBar()->showMessage(tr("平面提取正在运行"));
         return;
     }
+    invalidateTextureOverlay();
     m_selectedPointIndices.clear();
     resetSecondPlaneVerification();
     m_threePlaneResult = {};
@@ -1308,6 +1730,8 @@ void MainWindow::abandonPlanePointSelection() {
     updatePlaneExtractionUi();
     updatePlaneEdgeUi();
     setWorkflowState(WorkflowState::Cancelled);
+    setPickingOperation(QString(), false);
+    showPlaneDialog();
     statusBar()->showMessage(hasTempWorkpieceSession()
         ? tr("已放弃本轮取点，当前临时工件会话保留，可重新开始取点")
         : tr("已放弃取点"));
@@ -1319,6 +1743,7 @@ void MainWindow::undoPlanePointSelection() {
         return;
     }
     if (m_selectedPointIndices.isEmpty()) return;
+    invalidateTextureOverlay();
     m_selectedPointIndices.removeLast();
     resetSecondPlaneVerification();
     m_axisSelectionActive = false;
@@ -1341,6 +1766,7 @@ void MainWindow::undoPlanePointSelection() {
     updatePlaneEdgeUi();
     setWorkflowState(WorkflowState::SelectingPrimaryPlanePoints);
     statusBar()->showMessage(tr("请选择第 %1 个平面控制点").arg(m_selectedPointIndices.size() + 1));
+    setPickingOperation(tr("选择第一组三点"), true);
 }
 
 void MainWindow::updatePlaneExtractionUi() {
@@ -1400,8 +1826,12 @@ void MainWindow::updatePlaneEdgeUi() {
     const bool running = m_edgeWatcher && m_edgeWatcher->isRunning();
     const bool imageRunning = m_planeImageWatcher && m_planeImageWatcher->isRunning();
     const bool planeReady = m_planeCandidateConfirmed && m_threePlaneResult.ok;
+    QString textureError;
+    const bool textureReady = planeReady
+        && !m_threePlaneResult.planeIndices.isEmpty()
+        && textureRasterMappingReady(&textureError);
     if (m_edgeApplyButton)
-        m_edgeApplyButton->setEnabled(!running && planeReady);
+        m_edgeApplyButton->setEnabled(!running && planeReady && !m_textureExperimentActive);
     if (m_selectEdgeButton)
         m_selectEdgeButton->setEnabled(!running && m_planeEdgeResult.ok
                                        && !m_planeEdgeResult.edgeIndices.isEmpty());
@@ -1409,7 +1839,14 @@ void MainWindow::updatePlaneEdgeUi() {
         m_clearEdgeSelectionButton->setEnabled(!running && !m_selectedEdgeIndices.isEmpty());
     if (m_extractPlaneImageButton)
         m_extractPlaneImageButton->setEnabled(!running && !imageRunning
-                                               && planeReady);
+                                               && planeReady && !m_textureExperimentActive);
+    if (m_selectTextureImageButton)
+        m_selectTextureImageButton->setEnabled(!pointTaskRunning()
+                                                && textureReady);
+    if (m_selectTextureImageButton)
+        m_selectTextureImageButton->setToolTip(textureReady
+            ? tr("仅支持与当前单个 PLY 同次扫描、同点序的亮度图")
+            : (!planeReady ? tr("请先完成两组三点平面校验") : textureError));
     if (m_savePlaneImageButton)
         m_savePlaneImageButton->setEnabled(planeImageSaveReady());
     if (m_finalizeTempWorkpieceButton) {
@@ -1419,6 +1856,39 @@ void MainWindow::updatePlaneEdgeUi() {
         m_finalizeTempWorkpieceButton->setEnabled(
             visible && tempWorkpieceFinalizeReady(&finalizeError));
         m_finalizeTempWorkpieceButton->setToolTip(finalizeError);
+    }
+}
+
+bool MainWindow::textureRasterMappingReady(QString *error) const {
+    const auto fail = [error](const QString &message) {
+        if (error) *error = message;
+        return false;
+    };
+    if (!m_textureExperimentActive && m_tempWorkpieceSource != TempWorkpieceSource::Ply)
+        return fail(QStringLiteral("当前点云没有原始亮度栅格对应关系，无法进行严格纹理映射"));
+    if (!m_tempWorkpieceRasterCompatible)
+        return fail(QStringLiteral("当前单个 PLY 在转换或处理过程中已失去原始亮度栅格对应关系"));
+    if (m_tempWorkpieceDeclaredPointCount <= 0)
+        return fail(QStringLiteral("原始 PLY 点数无效，无法进行严格纹理映射"));
+    if (m_tempWorkpieceSourceIndices.size() != m_points.size())
+        return fail(QStringLiteral("当前点云没有完整的原始 PLY source index"));
+    if (m_points.size() != m_tempWorkpieceDeclaredPointCount)
+        return fail(QStringLiteral("当前点云数量已改变，无法进行严格纹理映射"));
+    if (m_tempWorkpieceRejectedInvalidPointCount > 0
+        || m_tempWorkpieceRejectedRangePointCount > 0)
+        return fail(QStringLiteral("原始 PLY 存在被过滤点，无法保证亮度图一一对应"));
+    return true;
+}
+
+void MainWindow::invalidateTextureOverlay() {
+    if (m_textureCancelToken) m_textureCancelToken->store(true);
+    m_textureImagePath.clear();
+    m_pendingTextureImagePath.clear();
+    if (m_canvas) m_canvas->clearTextureGrayOverlay();
+    if (m_colorMode && m_colorMode->currentIndex() == 3) {
+        const QSignalBlocker blocker(m_colorMode);
+        m_colorMode->setCurrentIndex(0);
+        updateRenderSettings();
     }
 }
 
@@ -1538,6 +2008,7 @@ void MainWindow::openTempScanningInfo() {
     if (inputDialog.exec() != QDialog::Accepted) return;
     if (!confirmReplaceTempWorkpieceSession()) return;
     invalidateTempWorkpieceSession();
+    invalidateTextureExperiment();
 
     // The JSON entry never uses the in-memory scan descriptor of the plain-PLY
     // line; it keeps reading temp_scanning_info.json unchanged.
@@ -1608,6 +2079,16 @@ void MainWindow::tempWorkpieceFinished() {
     const QString layoutName = QStringLiteral("LineProfileXz");
     m_rawPoints = result.robotBasePoints;
     m_tempWorkpieceSourceIndices = std::move(result.sourceIndices);
+    m_tempWorkpieceDeclaredPointCount = result.declaredPointCount;
+    m_tempWorkpieceRejectedInvalidPointCount = result.rejectedInvalidPointCount;
+    m_tempWorkpieceRejectedRangePointCount = result.rejectedRangePointCount;
+    m_tempWorkpieceRasterCompatible =
+        plyLine
+        && result.declaredPointCount > 0
+        && m_tempWorkpieceSourceIndices.size() == result.robotBasePoints.size()
+        && result.robotBasePoints.size() == result.declaredPointCount
+        && result.rejectedInvalidPointCount == 0
+        && result.rejectedRangePointCount == 0;
     m_tempWorkpieceScanId = result.scanId;
     m_tempWorkpieceOutputDirectory = result.outputDirectory;
     m_tempWorkpieceCreatedAtIso8601 = result.createdAtIso8601;
@@ -1619,7 +2100,7 @@ void MainWindow::tempWorkpieceFinished() {
     m_tempWorkpieceSource = m_pendingTempWorkpieceSource;
     m_pendingTempWorkpieceSource = TempWorkpieceSource::None;
     m_tempWorkpieceSessionRevision = m_canvasRevision;
-    ui->tw_main->setCurrentWidget(ui->wgt_plane);
+    showPlaneDialog();
     startPlanePointSelection();
     if (plyLine) {
         // Plain-PLY diagnostics are appended after startPlanePointSelection()
@@ -1705,6 +2186,8 @@ bool MainWindow::tempWorkpieceFinalizeReady(QString *error) const {
 void MainWindow::clearPlaneEdgeUi() {
     m_planeEdgeResult = {};
     m_planeImageResult = {};
+    ++m_roiRevision;
+    invalidateScanTrajectory(tr("WObj1 或 ROI 已变化，旧扫描路径已失效"));
     m_edgeSelectionActive = false;
     m_selectedEdgeIndices.clear();
     if (m_canvas) {
@@ -1717,6 +2200,195 @@ void MainWindow::clearPlaneEdgeUi() {
         m_planeImagePreview->setText(tr("确认平面后执行边缘分割"));
     }
     updatePlaneEdgeUi();
+}
+
+void MainWindow::invalidateScanTrajectory(const QString &reason) {
+    ++m_scanPlanningRequestRevision;
+    if (m_scanPlanningCancelToken) m_scanPlanningCancelToken->store(true);
+    m_scanTrajectoryResult = {};
+    if (m_exportScanButton) m_exportScanButton->setEnabled(false);
+    if (m_exportInoRobotButton) m_exportInoRobotButton->setEnabled(false);
+    if (m_scanOutput) m_scanOutput->setPlainText(reason);
+    if (m_scanCenter) m_scanCenter->setText(tr("规划后显示扫描中心"));
+    if (m_scanRange) m_scanRange->setText(tr("规划后显示 WObj1 XY 范围"));
+}
+
+void MainWindow::planScanTrajectory() {
+    if (m_closing || (m_scanPlanningWatcher && m_scanPlanningWatcher->isRunning())) return;
+    if (pointTaskRunning()) {
+        statusBar()->showMessage(tr("点云处理任务正在运行，请稍后规划扫描路径"));
+        return;
+    }
+    invalidateScanTrajectory();
+    pcv::scan::ScanPlanningOptions options;
+    options.mode = static_cast<pcv::scan::ScanPlanningMode>(m_scanMode->currentData().toInt());
+    options.workpieceCoordinateSystem = toScanCoordinateFrame(m_workpieceCoordinate);
+    options.travelDirection = pcv::scan::ScanTravelDirection::PositiveYToNegativeY;
+    options.scanHeightMm = float(m_scanHeight->value());
+    options.cameraWidthMm = float(m_scanCameraWidth->value());
+    options.overlapMm = float(m_scanOverlap->value());
+    options.travelExtensionMm = 50.0f;
+    options.points.reserve(m_points.size());
+    const QVector<pointcloud::Point3D> &currentPoints = m_points;
+    for (const pointcloud::Point3D &point : currentPoints) options.points.push_back(point);
+    if (options.mode == pcv::scan::ScanPlanningMode::Global) {
+        options.globalPlaneIndices.reserve(m_threePlaneResult.planeIndices.size());
+        const QVector<int> &currentPlane = m_threePlaneResult.planeIndices;
+        for (const int index : currentPlane) options.globalPlaneIndices.push_back(index);
+    } else {
+        options.localRoiIndices.reserve(m_planeImageResult.roiIndices.size());
+        const QVector<int> &currentRoi = m_planeImageResult.roiIndices;
+        for (const int index : currentRoi) options.localRoiIndices.push_back(index);
+    }
+    m_scanPlanningCancelToken = std::make_shared<std::atomic_bool>(false);
+    const pointcloud::CancellationToken token = m_scanPlanningCancelToken;
+    options.isCancelled = [token]() { return token && token->load(); };
+    m_scanPlanningTaskRevision = m_scanPlanningRequestRevision;
+    m_scanPlanningCanvasRevision = m_canvasRevision;
+    m_scanPlanningCoordinateRevision = m_coordinateFrameRevision;
+    m_scanPlanningPlaneRevision = m_threePlaneInputRevision;
+    m_scanPlanningRoiRevision = m_roiRevision;
+    m_planScanButton->setEnabled(false);
+    m_scanOutput->setPlainText(tr("正在规划扫描路径..."));
+    m_exportScanButton->setEnabled(false);
+    m_exportInoRobotButton->setEnabled(false);
+    if (!m_scanPlanningWatcher) {
+        m_scanPlanningWatcher = new QFutureWatcher<pcv::scan::ScanTrajectoryResult>(this);
+        connect(m_scanPlanningWatcher, &QFutureWatcher<pcv::scan::ScanTrajectoryResult>::finished,
+                this, &MainWindow::scanPlanningFinished);
+    }
+    m_scanPlanningWatcher->setFuture(QtConcurrent::run([options]() {
+        return pcv::scan::planScanTrajectory(options);
+    }));
+    statusBar()->showMessage(tr("正在后台规划扫描路径..."));
+}
+
+void MainWindow::scanPlanningFinished() {
+    if (m_planScanButton) m_planScanButton->setEnabled(true);
+    if (m_closing || !m_scanPlanningWatcher) return;
+    const pcv::scan::ScanTrajectoryResult result = m_scanPlanningWatcher->result();
+    if (m_scanPlanningTaskRevision != m_scanPlanningRequestRevision
+        || m_scanPlanningCanvasRevision != m_canvasRevision
+        || m_scanPlanningCoordinateRevision != m_coordinateFrameRevision
+        || m_scanPlanningPlaneRevision != m_threePlaneInputRevision
+        || m_scanPlanningRoiRevision != m_roiRevision) {
+        statusBar()->showMessage(tr("规划输入已变化，旧扫描路径已丢弃"));
+        return;
+    }
+    if (!result.ok) {
+        m_scanTrajectoryResult = {};
+        m_exportScanButton->setEnabled(false);
+        m_scanOutput->setPlainText(result.error);
+        statusBar()->showMessage(result.cancelled ? tr("扫描路径规划已取消")
+                                                  : tr("扫描路径规划失败：%1").arg(result.error));
+        return;
+    }
+    m_scanTrajectoryResult = result;
+    const QLocale numberLocale = QLocale::c();
+    QStringList lines;
+    lines.reserve(result.points.size());
+    for (const pcv::scan::ScanTrajectoryPoint &point : result.points) {
+        const pointcloud::RobotPose &pose = point.robotPose;
+        lines.push_back(QStringLiteral("P%1=[%2,%3,%4,%5,%6,%7]")
+            .arg(point.pointId)
+            .arg(numberLocale.toString(pose.x, 'f', 6))
+            .arg(numberLocale.toString(pose.y, 'f', 6))
+            .arg(numberLocale.toString(pose.z, 'f', 6))
+            .arg(numberLocale.toString(pose.rx, 'f', 6))
+            .arg(numberLocale.toString(pose.ry, 'f', 6))
+            .arg(numberLocale.toString(pose.rz, 'f', 6)));
+    }
+    lines.prepend(tr("内部 P0/P1...；导出 P.json 使用 P[10]/P[11]..."));
+    m_scanOutput->setPlainText(lines.join(QLatin1Char('\n')));
+    m_scanCenter->setText(QStringLiteral("[%1,%2,%3]")
+        .arg(numberLocale.toString(result.centerPose.x, 'f', 6))
+        .arg(numberLocale.toString(result.centerPose.y, 'f', 6))
+        .arg(numberLocale.toString(result.centerPose.z, 'f', 6)));
+    m_scanRange->setText(QStringLiteral("X 宽度=%1 mm，原始 Y 行程=%2 mm，最终行程=%3 mm，扫描线=%4，间距=%5 mm，实际重叠=%6 mm")
+        .arg(numberLocale.toString(result.requiredWidthMm, 'f', 3))
+        .arg(numberLocale.toString(result.requiredTravelLengthMm, 'f', 3))
+        .arg(numberLocale.toString(result.finalTravelLengthMm, 'f', 3))
+        .arg(result.scanLineCount)
+        .arg(numberLocale.toString(result.lineSpacingMm, 'f', 3))
+        .arg(numberLocale.toString(result.actualOverlapMm, 'f', 3)));
+    m_exportScanButton->setEnabled(true);
+    m_exportInoRobotButton->setEnabled(true);
+    statusBar()->showMessage(tr("扫描路径规划完成：%1 条扫描线，%2 个 P 点，实际重叠 %3 mm")
+        .arg(result.scanLineCount).arg(result.points.size())
+        .arg(result.actualOverlapMm, 0, 'f', 3));
+}
+
+void MainWindow::exportScanTrajectory() {
+    if (!m_scanTrajectoryResult.ok || !m_exportScanButton->isEnabled()
+        || m_scanPlanningCanvasRevision != m_canvasRevision
+        || m_scanPlanningCoordinateRevision != m_coordinateFrameRevision
+        || m_scanPlanningPlaneRevision != m_threePlaneInputRevision
+        || m_scanPlanningRoiRevision != m_roiRevision) {
+        invalidateScanTrajectory(tr("扫描输入已变化，请重新规划后导出"));
+        QMessageBox::warning(this, tr("导出扫描路径"), tr("请先生成有效的扫描路径"));
+        return;
+    }
+    const QString initialDirectory = m_sourceDirectory.isEmpty()
+        ? QDir::homePath() : m_sourceDirectory;
+    const QString path = QFileDialog::getSaveFileName(
+        this, tr("导出扫描路径 JSON"),
+        QDir(initialDirectory).filePath(QStringLiteral("scan_trajectory.json")),
+        tr("JSON 文件 (*.json)"), nullptr, QFileDialog::DontConfirmOverwrite);
+    if (path.isEmpty()) return;
+    const QFileInfo destination(path);
+    const bool exists = destination.exists();
+    if (exists) {
+        const auto answer = QMessageBox::question(
+            this, tr("确认覆盖"), tr("文件已存在：\n%1\n\n是否覆盖？").arg(path),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) return;
+    }
+    pcv::io::ArtifactTransaction transaction(destination.absolutePath(), exists);
+    const QByteArray json = QJsonDocument(
+        pcv::scan::scanTrajectoryToJson(m_scanTrajectoryResult)).toJson(QJsonDocument::Indented);
+    if (!transaction.stageJson(destination.fileName(), json) || !transaction.commit()) {
+        QMessageBox::warning(this, tr("导出扫描路径失败"), transaction.error());
+        statusBar()->showMessage(tr("扫描路径 JSON 未发布"));
+        return;
+    }
+    statusBar()->showMessage(tr("扫描路径已导出：%1").arg(path));
+}
+
+void MainWindow::exportInoRobotTrajectory() {
+    if (!m_scanTrajectoryResult.ok || !m_exportInoRobotButton->isEnabled()
+        || m_scanPlanningCanvasRevision != m_canvasRevision
+        || m_scanPlanningCoordinateRevision != m_coordinateFrameRevision
+        || m_scanPlanningPlaneRevision != m_threePlaneInputRevision
+        || m_scanPlanningRoiRevision != m_roiRevision) {
+        invalidateScanTrajectory(tr("扫描输入已变化，请重新规划后导出"));
+        QMessageBox::warning(this, tr("导出 InoRobot 路径"), tr("请先生成有效的扫描路径"));
+        return;
+    }
+    const QString initialDirectory = m_sourceDirectory.isEmpty()
+        ? QDir::homePath() : m_sourceDirectory;
+    const QString path = QFileDialog::getSaveFileName(
+        this, tr("导出 InoRobot P.json"),
+        QDir(initialDirectory).filePath(QStringLiteral("P.json")),
+        tr("JSON 文件 (*.json)"), nullptr, QFileDialog::DontConfirmOverwrite);
+    if (path.isEmpty()) return;
+    const QFileInfo destination(path);
+    const bool exists = destination.exists();
+    if (exists) {
+        const auto answer = QMessageBox::question(
+            this, tr("确认覆盖"), tr("文件已存在：\n%1\n\n是否覆盖？").arg(path),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) return;
+    }
+    pcv::io::ArtifactTransaction transaction(destination.absolutePath(), exists);
+    const QByteArray json = QJsonDocument(
+        pcv::scan::scanTrajectoryToInoRobotJson(
+            m_scanTrajectoryResult, toScanCoordinateFrame(m_workpieceCoordinate))).toJson(QJsonDocument::Indented);
+    if (!transaction.stageJson(destination.fileName(), json) || !transaction.commit()) {
+        QMessageBox::warning(this, tr("导出 InoRobot 路径失败"), transaction.error());
+        statusBar()->showMessage(tr("InoRobot P.json 未发布"));
+        return;
+    }
+    statusBar()->showMessage(tr("InoRobot P.json 已导出：%1").arg(path));
 }
 
 void MainWindow::extractPlaneImage() {
@@ -1762,6 +2434,8 @@ void MainWindow::planeImageExtractionFinished() {
     if (m_planeImageInputRevision != m_canvasRevision
         || m_planeImageCoordinateRevision != m_coordinateFrameRevision) {
         m_planeImageResult = {};
+        ++m_roiRevision;
+        invalidateScanTrajectory(tr("ROI 已变化，旧扫描路径已失效"));
         m_planeImagePreview->setPixmap({});
         m_planeImagePreview->setText(tr("画布或工件坐标系已变化，请重新生成平面图像"));
         m_edgeOutput->setPlainText(tr("画布缓存已变化，旧平面图像已丢弃。"));
@@ -1773,6 +2447,8 @@ void MainWindow::planeImageExtractionFinished() {
         return;
     }
     m_planeImageResult = result;
+    ++m_roiRevision;
+    invalidateScanTrajectory(tr("ROI 已更新，请重新规划扫描路径"));
     if (!result.ok) {
         m_planeImagePreview->setPixmap({});
         m_planeImagePreview->setText(result.error);
@@ -1797,6 +2473,111 @@ void MainWindow::planeImageExtractionFinished() {
         statusBar()->showMessage(tr("边缘 PNG 已生成，正在提交临时工件四件套"));
         finalizeTempWorkpiece();
     }
+}
+
+void MainWindow::selectTextureImage() {
+    QString readinessError;
+    if (pointTaskRunning() || !textureRasterMappingReady(&readinessError)
+        || !m_planeCandidateConfirmed || !m_threePlaneResult.ok
+        || m_threePlaneResult.planeIndices.isEmpty()) {
+        statusBar()->showMessage(pointTaskRunning()
+            ? tr("点云处理任务正在运行")
+            : (!readinessError.isEmpty() ? readinessError : tr("请先完成两组三点平面校验")));
+        return;
+    }
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("选择同次扫描亮度图"), QString(),
+        tr("亮度图 (*.png *.jpg *.jpeg *.bmp)"));
+    if (path.isEmpty()) return;
+    QImage image(path);
+    if (image.isNull() || image.width() < 1 || image.height() < 1) {
+        QMessageBox::warning(this, tr("亮度图无效"),
+                             tr("无法读取 PNG/JPG/BMP 亮度图：%1").arg(path));
+        return;
+    }
+    if (!m_textureMappingWatcher) {
+        m_textureMappingWatcher = new QFutureWatcher<pcv::texture::MappingResult>(this);
+        connect(m_textureMappingWatcher,
+                &QFutureWatcher<pcv::texture::MappingResult>::finished,
+                this, &MainWindow::textureMappingFinished);
+    }
+    if (m_textureCancelToken) m_textureCancelToken->store(true);
+    m_textureCancelToken = std::make_shared<std::atomic_bool>(false);
+    const QVector<pointcloud::Point3D> source = m_points;
+    const QVector<int> planeIndices = m_threePlaneResult.planeIndices;
+    const QVector<qsizetype> sourceIndices = m_tempWorkpieceSourceIndices;
+    pcv::texture::MappingOptions options;
+    options.sourceIndices = sourceIndices;
+    options.declaredPointCount = m_tempWorkpieceDeclaredPointCount;
+    options.rejectedInvalidPointCount = m_tempWorkpieceRejectedInvalidPointCount;
+    options.rejectedRangePointCount = m_tempWorkpieceRejectedRangePointCount;
+    options.isCancelled = [token = m_textureCancelToken]() {
+        return token && token->load();
+    };
+    m_textureInputRevision = m_canvasRevision;
+    m_pendingTextureImagePath = path;
+    m_progress->show();
+    m_progress->setRange(0, 0);
+    m_edgeOutput->setPlainText(tr("正在按原始 PLY source index 将同次扫描亮度图映射到拟合平面...\n图像尺寸：%1 × %2 px")
+        .arg(image.width()).arg(image.height()));
+    statusBar()->showMessage(tr("后台执行亮度图平面映射..."));
+    updatePlaneEdgeUi();
+    m_textureMappingWatcher->setFuture(QtConcurrent::run(
+        [source, planeIndices, image, options]() {
+            return pcv::texture::mapPlaneBrightness(source, planeIndices, image, options);
+        }));
+}
+
+void MainWindow::textureMappingFinished() {
+    const pcv::texture::MappingResult result = m_textureMappingWatcher->result();
+    m_progress->hide();
+    if (m_textureInputRevision != m_canvasRevision) {
+        m_pendingTextureImagePath.clear();
+        m_edgeOutput->setPlainText(tr("点云已变化，旧亮度图映射已丢弃。"));
+        updatePlaneEdgeUi();
+        statusBar()->showMessage(tr("旧亮度图映射已丢弃"));
+        return;
+    }
+    if (result.cancelled) {
+        m_pendingTextureImagePath.clear();
+        m_edgeOutput->setPlainText(tr("亮度图映射已取消。"));
+        updatePlaneEdgeUi();
+        statusBar()->showMessage(tr("亮度图映射已取消"));
+        return;
+    }
+    if (!result.ok) {
+        m_pendingTextureImagePath.clear();
+        m_edgeOutput->setPlainText(result.error);
+        updatePlaneEdgeUi();
+        statusBar()->showMessage(result.error);
+        return;
+    }
+    m_canvas->setTextureGrayOverlay(result.grayscale, result.valid);
+    m_textureImagePath = m_pendingTextureImagePath;
+    m_pendingTextureImagePath.clear();
+    {
+        const QSignalBlocker blocker(m_colorMode);
+        m_colorMode->setCurrentIndex(3);
+    }
+    updateRenderSettings();
+    m_edgeOutput->setPlainText(
+        tr("同次扫描亮度图已按原始栅格索引贴到 3D 平面点\n映射方式：%1\n图像尺寸：%2 × %3 px\n"
+           "原始 PLY 点数：%4\n当前点数：%5\n平面点总数：%6\n成功映射：%7\n跳过：%8\n"
+           "规则：左上角起始、row-major、仅使用 planeIndices 对应像素")
+            .arg(result.mappingMode)
+            .arg(result.imageWidth).arg(result.imageHeight)
+            .arg(QLocale().toString(result.sourcePointCount))
+            .arg(QLocale().toString(result.currentPointCount))
+            .arg(QLocale().toString(result.planePointCount))
+            .arg(QLocale().toString(result.mappedPointCount))
+            .arg(QLocale().toString(result.skippedPointCount)));
+    updatePlaneEdgeUi();
+    statusBar()->showMessage(tr("纹理 %1 × %2 px · PLY %3 点 · 平面 %4 点 · 映射 %5 · 跳过 %6 · %7")
+        .arg(result.imageWidth).arg(result.imageHeight)
+        .arg(QLocale().toString(result.sourcePointCount))
+        .arg(QLocale().toString(result.planePointCount))
+        .arg(QLocale().toString(result.mappedPointCount))
+        .arg(QLocale().toString(result.skippedPointCount)).arg(result.mappingMode));
 }
 
 void MainWindow::finalizeTempWorkpiece() {
@@ -1927,6 +2708,7 @@ void MainWindow::handleCanvasPointPicked(int index) {
             return;
         }
         m_secondPlanePointIndices.push_back(index);
+        setPickingOperation(tr("选择第二组三点"), true);
         QVector<int> marked = m_selectedPointIndices;
         marked += m_secondPlanePointIndices;
         m_canvas->setSelectedIndices(marked);
@@ -1949,20 +2731,25 @@ void MainWindow::handleCanvasPointPicked(int index) {
         statusBar()->showMessage(tr("该点已经被选择"));
         return;
     }
+    if (m_selectedPointIndices.size() == 2
+        && (m_tempWorkpieceSource == TempWorkpieceSource::Ply || m_textureExperimentActive))
+        m_planeElapsed.start();
     m_selectedPointIndices.push_back(index);
     m_canvas->setSelectedIndices(m_selectedPointIndices);
     updatePlaneExtractionUi();
+    setPickingOperation(m_secondPlaneSelectionActive ? tr("选择第二组三点")
+                                                       : tr("选择第一组三点"), true);
     if (m_selectedPointIndices.size() < 3) {
         statusBar()->showMessage(tr("请选择第 %1 个点").arg(m_selectedPointIndices.size() + 1));
         return;
     }
 
     updatePlaneExtractionUi();
-    if (m_tempWorkpieceSource == TempWorkpieceSource::Ply) {
+    if (m_tempWorkpieceSource == TempWorkpieceSource::Ply || m_textureExperimentActive) {
         // The plain-PLY line runs the plane fit as soon as P1/P2/P3 are
         // selected; the operator never has to click the extraction button.
         // Esc/Backspace still abort or rewind the selection.
-        runPlaneExtraction(false);
+        runPlaneExtraction(false, true);
         return;
     }
     statusBar()->showMessage(tr("已选择 %1 个平面控制点，可继续取点或点击“确定平面”")
@@ -1988,6 +2775,8 @@ void MainWindow::startSecondPlanePointSelection() {
     m_canvas->setSelectedIndices(m_selectedPointIndices);
     m_secondPlaneSelectionActive = true;
     m_canvas->setSelectionMode(true);
+    if (m_planeDialog) m_planeDialog->hide();
+    setPickingOperation(tr("选择第二组三点"), true);
     setWorkflowState(WorkflowState::SelectingSecondaryPlanePoints);
     statusBar()->showMessage(tr("请在同一平面上选择第二组三点"));
     updatePlaneExtractionUi();
@@ -2002,6 +2791,8 @@ void MainWindow::cancelSecondPlanePointSelection() {
     }
     setWorkflowState(WorkflowState::SelectingSecondaryPlanePoints);
     statusBar()->showMessage(tr("已取消第二组三点校验"));
+    setPickingOperation(QString(), false);
+    showPlaneDialog();
     updatePlaneExtractionUi();
 }
 
@@ -2010,7 +2801,7 @@ void MainWindow::validateSecondPlaneSelection() {
     setWorkflowState(WorkflowState::ValidatingSecondaryPlane);
     const float angleTolerance = float(m_defaults.planeAngleToleranceDeg);
     const float distanceTolerance = float(m_defaults.planeDistanceToleranceMm);
-    bool autoConfirmJsonFrame = false;
+    bool autoConfirmPlane = false;
     const pointcloud::PlaneConsistencyResult validation =
         pointcloud::validatePlaneConsistency(
             m_points, m_threePlaneResult.model, m_selectedPointIndices,
@@ -2023,9 +2814,11 @@ void MainWindow::validateSecondPlaneSelection() {
     if (validation.status == pointcloud::PlaneConsistencyStatus::Passed) {
         m_secondPlaneValidated = true;
         m_secondPlaneSamePlane = true;
-        autoConfirmJsonFrame = hasTempWorkpieceSession();
+        autoConfirmPlane = hasTempWorkpieceSession() || m_textureExperimentActive;
         if (hasTempWorkpieceSession()) setWorkflowState(WorkflowState::FinalizingArtifacts);
-        statusBar()->showMessage(hasTempWorkpieceSession()
+        statusBar()->showMessage(m_textureExperimentActive
+            ? tr("第二组三点同面校验通过，可以选择同次扫描亮度图")
+            : hasTempWorkpieceSession()
             ? tr("第二组三点确认属于同一平面，将自动建立 WObj1 并生成四件套")
             : tr("第二组三点确认属于同一平面，系统将按机器人基坐标轴自动建立 WObj1"));
     } else if (validation.status == pointcloud::PlaneConsistencyStatus::Collinear
@@ -2067,7 +2860,14 @@ void MainWindow::validateSecondPlaneSelection() {
     }
     updatePlaneExtractionUi();
     updatePlaneEdgeUi();
-    if (autoConfirmJsonFrame)
+    if (m_threePointSelectionActive) {
+        if (m_planeDialog) m_planeDialog->hide();
+        setPickingOperation(tr("选择第一组三点"), true);
+    } else {
+        setPickingOperation(QString(), false);
+        showPlaneDialog();
+    }
+    if (autoConfirmPlane)
         confirmPlaneCandidate();
 }
 
@@ -2093,12 +2893,14 @@ void MainWindow::clearWorkpieceAxisSelection() {
     updatePlaneExtractionUi();
 }
 
-void MainWindow::runPlaneExtraction(bool deferFinalClassification) {
+void MainWindow::runPlaneExtraction(bool deferFinalClassification, bool fromThirdPick) {
     if (pointTaskRunning()) return;
     if (m_selectedPointIndices.size() < 3) {
         statusBar()->showMessage(tr("请先在画布中指定至少三个点"));
         return;
     }
+    if (!fromThirdPick) m_planeElapsed.start();
+    m_planeFramePending = false;
     resetSecondPlaneVerification();
     m_axisSelectionActive = false;
     m_xAxisPointIndex = m_yAxisPointIndex = -1;
@@ -2115,9 +2917,14 @@ void MainWindow::runPlaneExtraction(bool deferFinalClassification) {
     options.surfaceTolerance = float(m_defaults.planeDistanceToleranceMm);
     options.ransacIterations = 300;
     options.minInliers = qMin(100, qMax(3, int(m_points.size() / 4)));
-    options.useZAxisResidual = true;
+    options.useZAxisResidual = !m_textureExperimentActive;
     options.maxNormalTiltDegrees = 45.0f;
     options.deferFinalClassification = deferFinalClassification;
+    options.parallelEnabled = m_points.size() >= 100000;
+    options.maxParallelTasks = 4;
+    m_planeCancelToken = std::make_shared<std::atomic_bool>(false);
+    const pointcloud::CancellationToken token = m_planeCancelToken;
+    options.isCancelled = [token]() { return token->load(); };
     if (!m_threePlaneWatcher) {
         m_threePlaneWatcher = new QFutureWatcher<pointcloud::ThreePointPlaneResult>(this);
         connect(m_threePlaneWatcher, &QFutureWatcher<pointcloud::ThreePointPlaneResult>::finished,
@@ -2126,6 +2933,8 @@ void MainWindow::runPlaneExtraction(bool deferFinalClassification) {
     const QVector<pointcloud::Point3D> source = m_points;
     const QVector<int> seeds = m_selectedPointIndices;
     m_threePlaneInputRevision = m_canvasRevision;
+    qInfo() << "plane_fit_start seeds=" << seeds << "points=" << source.size()
+            << "z_residual=" << options.useZAxisResidual << "parallel=" << options.parallelEnabled;
     m_threePointSelectionActive = false;
     m_canvas->setSelectionMode(false);
     m_progress->show();
@@ -2140,10 +2949,18 @@ void MainWindow::runPlaneExtraction(bool deferFinalClassification) {
 }
 
 void MainWindow::planeExtractionFinished() {
+    if (m_closing) return;
+    QElapsedTimer publishTimer;
+    publishTimer.start();
     const pointcloud::ThreePointPlaneResult result = m_threePlaneWatcher->result();
     m_progress->hide();
     if (m_threePlaneInputRevision != m_canvasRevision) {
         statusBar()->showMessage(tr("画布缓存已变化，已丢弃旧三点平面结果"));
+        return;
+    }
+    if (result.cancelled || (m_planeCancelToken && m_planeCancelToken->load())) {
+        m_threePlaneResult = {};
+        updatePlaneExtractionUi();
         return;
     }
     if (!result.ok) {
@@ -2209,8 +3026,11 @@ void MainWindow::planeExtractionFinished() {
                  .arg(QLocale().toString(result.disconnectedPlaneIndices.size()))
           << tr("PCA 平面性：%1").arg(result.planarity, 0, 'f', 6)
           << tr("PCA 精拟合轮次：%1").arg(result.pcaRefinementCount)
-          << tr("Z 方向 RMS：%1 mm").arg(result.rmsError, 0, 'g', 7)
-          << tr("平面包围盒中心（WObj1 原点 O）：X %1  Y %2  Z %3 mm")
+          << (m_textureExperimentActive ? tr("平面垂直距离 RMS：%1 mm")
+                                        : tr("Z 方向 RMS：%1 mm")).arg(result.rmsError, 0, 'g', 7)
+          << (m_textureExperimentActive
+              ? tr("平面包围盒中心（实验参考中心）：X %1  Y %2  Z %3 mm")
+              : tr("平面包围盒中心（WObj1 原点 O）：X %1  Y %2  Z %3 mm"))
                  .arg(m_planeCenter.x(), 0, 'f', 3)
                  .arg(m_planeCenter.y(), 0, 'f', 3)
                  .arg(m_planeCenter.z(), 0, 'f', 3)
@@ -2221,17 +3041,23 @@ void MainWindow::planeExtractionFinished() {
     updatePlaneExtractionUi();
     updatePlaneEdgeUi();
     setWorkflowState(WorkflowState::SelectingSecondaryPlanePoints);
-    if (m_tempWorkpieceSource == TempWorkpieceSource::Ply && !result.deferred) {
+    if ((m_tempWorkpieceSource == TempWorkpieceSource::Ply || m_textureExperimentActive)
+        && !result.deferred) {
         // The plain-PLY line chains the second triplet automatically: the two
         // groups of three points are its only manual steps.
         startSecondPlanePointSelection();
-        return;
-    }
-    if (!result.deferred) {
+    } else if (!result.deferred) {
         statusBar()->showMessage(tr("平面已生成"));
     } else {
         statusBar()->showMessage(tr("候选平面已生成"));
     }
+    const auto &timings = result.timings;
+    qInfo() << "plane_fit_phases_ms candidate=" << timings.candidateMs
+            << "ransac=" << timings.ransacMs << "pca=" << timings.pcaMs
+            << "classification=" << timings.classificationMs << "connectivity=" << timings.connectivityMs
+            << "assembly=" << timings.assemblyMs << "worker_total=" << timings.totalMs
+            << "ui_publish=" << publishTimer.nsecsElapsed() / 1.0e6;
+    m_planeFramePending = true;
 }
 
 void MainWindow::confirmPlaneCandidate() {
@@ -2251,6 +3077,20 @@ void MainWindow::confirmPlaneCandidate() {
         const QString detail = tr("请先完成并通过第二组三点平面验证");
         if (hasTempWorkpieceSession()) failAutomaticTempWorkpieceStage(tr("WObj1 前置校验"), detail);
         else statusBar()->showMessage(detail);
+        return;
+    }
+    if (m_textureExperimentActive) {
+        m_planeCandidateConfirmed = true;
+        m_threePointSelectionActive = false;
+        m_secondPlaneSelectionActive = false;
+        m_canvas->setSelectionMode(false);
+        setPickingOperation(QString(), false);
+        m_threeOutput->appendPlainText(tr("\n实验平面已确认（PLY 原始坐标），请选择同次扫描亮度图"));
+        updatePlaneExtractionUi();
+        updatePlaneEdgeUi();
+        setWorkflowState(WorkflowState::Completed);
+        showEdgeDialog();
+        statusBar()->showMessage(tr("实验平面已确认，请选择同次扫描亮度图"));
         return;
     }
     if (!m_planeCenterValid) {
@@ -2296,6 +3136,8 @@ void MainWindow::confirmPlaneCandidate() {
     m_threePointSelectionActive = false;
     m_secondPlaneSelectionActive = false;
     m_canvas->setSelectionMode(false);
+    setPickingOperation(QString(), false);
+    showPlaneDialog();
     m_canvas->setWorkpieceCoordinateSystem(toRenderCoordinateFrame(m_workpieceCoordinate));
     QVector<int> marked = m_selectedPointIndices;
     marked += m_secondPlanePointIndices;
@@ -2538,11 +3380,23 @@ void MainWindow::planeEdgeSegmentationFinished() {
 void MainWindow::startEdgePointSelection() {
     if (pointTaskRunning() || !m_planeEdgeResult.ok) return;
     m_edgeSelectionActive = true;
+    if (m_edgeDialog) m_edgeDialog->hide();
+    setPickingOperation(tr("选择边缘真实点"), true);
     m_selectedEdgeIndices.clear();
     m_canvas->setEdgeSelectionMode(true, m_planeEdgeResult.edgeIndices);
     m_canvas->setSelectedEdgeIndices({});
     updatePlaneEdgeUi();
     statusBar()->showMessage(tr("请在画布中选择边缘真实点，Esc 取消"));
+}
+
+void MainWindow::finishEdgePointSelection() {
+    if (!m_edgeSelectionActive) return;
+    m_edgeSelectionActive = false;
+    if (m_canvas) m_canvas->setEdgeSelectionMode(false, {});
+    updatePlaneEdgeUi();
+    setPickingOperation(QString(), false);
+    showEdgeDialog();
+    statusBar()->showMessage(tr("边缘点选择完成：%1 个点").arg(m_selectedEdgeIndices.size()));
 }
 
 void MainWindow::clearEdgePointSelection() {
@@ -2554,6 +3408,8 @@ void MainWindow::clearEdgePointSelection() {
     }
     updatePlaneEdgeUi();
     statusBar()->showMessage(tr("已清除边缘点选择"));
+    setPickingOperation(QString(), false);
+    showEdgeDialog();
 }
 
 void MainWindow::handleCanvasEdgePointPicked(int index) {
@@ -2566,6 +3422,7 @@ void MainWindow::handleCanvasEdgePointPicked(int index) {
         m_selectedEdgeIndices.push_back(index);
     m_canvas->setSelectedEdgeIndices(m_selectedEdgeIndices);
     updatePlaneEdgeUi();
+    setPickingOperation(tr("选择边缘真实点"), true);
     statusBar()->showMessage(tr("已选择边缘点：%1").arg(m_selectedEdgeIndices.size()));
 }
 
@@ -2700,6 +3557,8 @@ void MainWindow::noiseFinished() {
 
 void MainWindow::closeEvent(QCloseEvent *event) {
     m_closing = true;
+    if (m_planeCancelToken) m_planeCancelToken->store(true);
+    m_planeFramePending = false;
     qWarning() << "MainWindow closeEvent, spontaneous=" << event->spontaneous()
                << "visible=" << isVisible()
                << "loading=" << m_loading
@@ -2709,6 +3568,8 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     // Stop the long-running plain-PLY preparation worker through the shared
     // cancellation token before waiting for it below.
     if (m_prepareCancelToken) m_prepareCancelToken->store(true);
+    if (m_scanPlanningCancelToken) m_scanPlanningCancelToken->store(true);
+    if (m_textureCancelToken) m_textureCancelToken->store(true);
     if (m_canvas) {
         m_canvas->setUpdatesEnabled(false);
         m_canvas->hide();
@@ -2724,6 +3585,8 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     if (m_threePlaneWatcher) disconnect(m_threePlaneWatcher, nullptr, this, nullptr);
     if (m_edgeWatcher) disconnect(m_edgeWatcher, nullptr, this, nullptr);
     if (m_planeImageWatcher) disconnect(m_planeImageWatcher, nullptr, this, nullptr);
+    if (m_scanPlanningWatcher) disconnect(m_scanPlanningWatcher, nullptr, this, nullptr);
+    if (m_textureMappingWatcher) disconnect(m_textureMappingWatcher, nullptr, this, nullptr);
     if (m_loading && m_loadWatcher && m_loadWatcher->isRunning()) {
         statusBar()->showMessage(tr("正在结束后台加载，请稍候..."));
         m_loadWatcher->waitForFinished();
@@ -2752,6 +3615,14 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     if (m_planeImageWatcher && m_planeImageWatcher->isRunning()) {
         statusBar()->showMessage(tr("正在结束后台平面图像提取，请稍候..."));
         m_planeImageWatcher->waitForFinished();
+    }
+    if (m_scanPlanningWatcher && m_scanPlanningWatcher->isRunning()) {
+        statusBar()->showMessage(tr("正在结束后台扫描路径规划，请稍候..."));
+        m_scanPlanningWatcher->waitForFinished();
+    }
+    if (m_textureMappingWatcher && m_textureMappingWatcher->isRunning()) {
+        statusBar()->showMessage(tr("正在结束后台亮度图映射，请稍候..."));
+        m_textureMappingWatcher->waitForFinished();
     }
     event->accept();
 }

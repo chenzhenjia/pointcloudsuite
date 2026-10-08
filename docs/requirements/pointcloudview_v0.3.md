@@ -1,7 +1,7 @@
 # PointCloudSuite 点云处理项目需求文档
 
 版本：v0.3  
-最后核对日期：2026-09-17
+最后核对日期：2026-09-22
 状态：数据契约基线（v0.3）；架构和 UI 交接已进入 v0.4，发布验收待完成
 
 ## 1. 目标和事实来源
@@ -19,7 +19,7 @@ v0.3 继续作为 JSON、PLY、坐标、错误码和默认数值的数据契约�
 | `30_pointcloud_stitch` | 多帧拼接唯一编排：读取、ICP/多帧配准、坐标转换调用、seam fusion、manifest 与事务提交 | `pcv_m30_pointcloud_stitch` | 已实现 |
 | `40_pointcloud_matching` | 工件位置确认规划占位；本版不实现移动判定或新输出闭环 | `pcv_m40_pointcloud_matching`（`INTERFACE`） | 规划中，未实现 |
 | `50_coordinate_conversion` | 手眼标定、位姿插值、坐标转换（唯一数学实现） | `pcv_m50_coordinate_conversion` | 已实现 |
-| `60_geometry_workpiece` | 平面、边缘、ROI、WObj、临时工件流程 | `pcv_m60_geometry_workpiece` | 已实现 |
+| `60_geometry_workpiece` | 平面、边缘、ROI、WObj、临时工件流程、扫描路径规划 | `pcv_m60_geometry_workpiece` | 已实现 |
 | 历史 `70_roi_template` | 实现已并入 60，保留兼容转发 | `pcv_m70_roi_template` | 兼容入口 |
 | 历史 `80_plane_output` | writer/事务已并入 10，保留兼容转发 | `pcv_m80_plane_output` | 兼容入口 |
 | 相机能力（原 `05_camerainput`） | 海康相机取流（实验扩展），已并入 `10_pointcloud_io` | 同 `pcv_m10_pointcloud_io` | 实验中，不纳入发布基线 |
@@ -63,12 +63,29 @@ v0.3 继续作为 JSON、PLY、坐标、错误码和默认数值的数据契约�
 - 长度单位为 mm，角度单位为 deg。
 - 位姿数组固定为 `[X,Y,Z,A,B,C]`，其中 `A=Rx`、`B=Ry`、`C=Rz`。
 - 旋转矩阵约定为 `Rz(C)*Ry(B)*Rx(A)`。
+- 手眼标定方向为 `RTmatDepth2robot` = `T_flange_depth`（flange_from_depth），坐标链固定为
+  `p_robot_base = T_base_flange(Start/End 插值) * T_flange_depth * p_camera`（即 `T_base_depth = T_base_flange * T_flange_depth`）。
+  禁止默认对手眼矩阵求逆，禁止固定 Z 轴翻转、镜像或 180° 旋转补丁。
+- 扫描 JSON 路径是手眼标定的黄金基准；离线 JSON、PLY 临时工件、多帧和拼接路径必须复用模块 50 的同一实现并与它逐点一致。
+- `LineProfileXz` 的相机点为 `[X,0,Z]`，输入 Y 只表示扫描进度（`ratio = input.y / signedTravel`，负行程表示反向扫描）；
+  `FullXyz` 保留完整 XYZ。点和法向使用同一刚体旋转，法向不做平移。
 - 平面输出为 Grayscale8 PNG（背景 0、前景 255）、binary little-endian robot_base PLY 和 `sr2026-temp-workpiece-info-mvp-2` JSON。
 - PNG、PLY、JSON 先写入 staging 目录，全部成功后成套提交；任一失败必须回滚。
 - 共享库不弹窗、不访问 QWidget；应用负责提示和线程生命周期。
 - `PointCloudCanvas` 实现位于 `modules/20_pointcloud_render/src/pointcloud_canvas.cpp`。
 - 诊断工具优先通过 `pcv::interface::StitchingRequest` / `stitch()` 使用统一拼接接口；`stitchRawLineProfiles` 仅为兼容入口。
 - 40 的正式目标是生成含 `robot_base` 的平面点云和坐标元数据以支持未来移动比较；当前不实现模板持久化、比较、阈值、机器人下发或新闭环。
+
+### 4.1 扫描路径 JSON 增量契约（2026-09-30）
+
+- schema 为 `scan_trajectory_v1`，`kind=robot_scan_trajectory`，字段使用 `snake_case`。
+- 机器人位姿数组固定为 `[X,Y,Z,A,B,C]`，单位分别为 mm/deg。WObj1 X 是横向相机覆盖轴，Y 是扫描行程轴；扫描线按 `-X → +X` 编号并全部同向。全局使用拟合平面有效点，局部使用当前 ROI 有效点。
+- `center_pose` 是投影包围盒中心沿 WObj1 `+Z` 偏移 `scanHeightMm` 后的最终中心位姿；`required_area.width_mm`、`required_area.travel_length_mm` 由有效点自动计算，另有 `travel_extension_mm` 与 `final_travel_length_mm`；默认 `camera_width_mm=100`、`requested_overlap_mm=50`，`actual_overlap_mm`、`line_spacing_mm` 和 `scan_line_count` 描述扫描带。
+- `travel_direction` 产品固定为 `positive_y_to_negative_y`；每条线起点为 `vMax+50`、终点为 `vMin-50`。`points` 按 P 点顺序保存 `point_id`、`point_name`、`robot_pose`、`scan_line_index`、`line_endpoint`；`segments` 保存每条线的起止 P 点。
+- 项目 JSON 使用 `scan_trajectory_v1`；InoRobot 兼容 `P.json` 使用 `sr2026-p-json-mvp-2`、`source_workpiece_info=temp_workpiece_info.json`、`wobj_num=1`、点号从 10 开始且最多 9990 点，XYZ 转为 WObj1 局部坐标，姿态重排为 `[X,Y,Z,RZ,RY,RX]`。本期不调用控制器写入 API。
+- 两种扫描 JSON 都由 `ArtifactTransaction` 原子提交。失败、取消或 revision 过期不得发布旧结果或部分文件，覆盖必须由用户明确确认。
+
+验证记录：2026-09-30 源码树外 Debug/Release 构建成功，`scan_planner_tests` 双配置通过，全量 CTest 双配置均 `16/16`，`pointcloudview` 双配置自关闭启动冒烟退出码 `0`，`git diff --check` 通过。人工 GUI 流程因 computer-use connector 初始化错误（`unsupported Codex auth method: apikey`）未完成；真实点云 ROI 和设备现场行为仍需验收。
 
 详细字段和错误码以模块公共头、模块文档和测试源码为准。
 
@@ -89,6 +106,22 @@ v0.3 继续作为 JSON、PLY、坐标、错误码和默认数值的数据契约�
 当前状态为“迁移完成，发布验收待完成”。未完成真实 GUI 验收和生产夹具逐字段比对前，不标记为 Release Candidate。
 
 ## 8. 变更记录
+
+### 2026-10-08（扫描规划单线容差修复）
+
+- 单线判定改为 `requiredWidthMm <= cameraWidthMm + 0.1 mm`，吸收严格浮点比较造成的单线/双线边界跳变；超过阈值仍按实际宽度保证多带覆盖。
+- 内部 `scan_trajectory_v1` 增加 `single_line_width_tolerance_mm`，保留原始范围；单线时 `actual_overlap_mm` 沿用请求值，扫描线数为 1 时没有相邻带的实际重叠。InoRobot `P.json` 字段、编号和姿态顺序保持兼容。
+- 回归覆盖两种模式的 `99.9/100/100.099/100.1/100.1001/101 mm`、P 点与段数量及 P.json 点数；真实相机有效视野和现场 ROI 边界仍需设备验收。
+- 验证：源码树外 Debug/Release 完整构建成功，双配置全量 CTest 均 `18/18`（含扫描边界回归），双配置应用启动冒烟退出码 `0`，`git diff --check` 通过；真实 ROI GUI 复验及 Release 便携部署未完成。
+
+### 2026-09-24（模块 50 手眼标定统一与点云倒转修复）
+
+- 登记主模块 `50_coordinate_conversion`；调用方清理涉及 `apps/pointcloudstitch/regressionrunner.cpp` 与 `apps/pointcloudview/pointcloudprocessor.cpp`；相关入口 `apps/pointcloudview`（扫描 JSON、PLY 临时工件）、`modules/60_geometry_workpiece`、`modules/30_pointcloud_stitch`。
+- 根因：坐标转换存在重复实现（回归工具自带的 `RTmatDepth2robot` 解析与 `poseMatrix()`、view 应用自带的刚体校验/SLERP/进度启发式/内联矩阵乘法），且旧合并路径的 LineProfileXz 语义与 JSON 黄金路径不同（把输入 Y 当相机坐标保留、按进度轴与 `EmbeddedMotion` 启发式可选位姿）。点云上下/法向反转风险来自这两点，而不是矩阵方向。
+- 修复：模块 50 成为唯一数学实现，新增 `composeBaseFromDepth()`（固定 `T_base_depth = T_base_flange * T_flange_depth`）、`computeScanTravel()`（带符号行程）、`lineProfileCameraPoint()`/`lineProfileScanRatio()`（`[X,0,Z]` 与 `y/signedTravel`）、`RobotCloudStatus` 状态码；两个调用方的重复实现删除，改为调用模块 50。未使用求逆、Z 翻转或镜像作为修复手段。
+- 契约影响：位姿顺序 `[X,Y,Z,A,B,C]`、旋转约定、单位、PLY/PNG/JSON 文件格式、四件套文件名和既有错误码均未变化；模块 50 的改动为增量符号，`transformPointToRobotBase()` 仅追加可选 `QString *error` 尾参；`apps/pointcloudview/pointcloudprocessor.cpp` 的合并缓存版本号从 8 提升到 9 以失效旧算法缓存。
+- 验证：源码树外 Debug/Release 构建成功，双配置全量 CTest 均 `16/16`；4 项直接相关测试定向运行 `4/4`；`pointcloudview` Debug/Release 启动冒烟均 `ExitCode=0`。真实样本有效转换 `4,389,670` 点，JSON robot_base 与历史 baseline、多帧入口逐点比对的最大绝对误差和 RMS 均为 `0`。Release `windeployqt` 因缺少本机 Visual Studio release redistributable 发出警告，便携部署未验收。
+- 未验证：真实手眼 XML 的物理方向、机器人 A/B/C 与现场控制器定义、相机实际安装方向、实时相机预览统一、真实机器人安全/可达性/碰撞与干涉，均未在本轮范围内。
 
 ### 2026-09-20（PLY 临时工件线路接入：打开 PLY → robot_base → 四件套）
 
@@ -347,3 +380,14 @@ v0.3 继续作为 JSON、PLY、坐标、错误码和默认数值的数据契约�
 - 完成共享 seam fusion、平面拟合和渲染组件实现迁移。
 - 完成 `registration_diagnostic` 到模块接口的迁移。
 - Debug/Release 构建和全量 CTest 已执行；GUI 人工验收、生产夹具验收和兼容层删除仍待完成。
+
+### 2026-10-08（三点平面拟合等价提速 v2）
+
+- 主模块 `60_geometry_workpiece`，UI `apps/pointcloudview`；保留渲染算法、手眼转换、阈值、300 轮 RANSAC、随机种子、20000 点模型采样上限和两组三点流程。
+- `Options` 追加 `parallelEnabled=false`、`maxParallelTasks=4`，任务数限制为 1～4（含协调线程）；`Result` 追加 `cancelled` 和 `StageTimings timings`，记录候选筛选、RANSAC、PCA、分类、连通域、组装及总耗时，既有 JSON/PLY 输出格式不变。并行取消回调必须可并发调用。
+- RANSAC 依原序生成候选、评分只计数、数量相同保留最早模型；逐点分类按连续输入区间分配并按输入顺序合并。worker 仅读取 const Qt 容器、返回私有输出，全部任务汇合后才发布；PCA/RMS 累加保持串行和原浮点顺序。
+- 连通域保留原投影、自动半径、九邻格与精确距离判定；栅格只保留未访问点，发现后移除，每格预缓存九邻格指针以减少重复查找；连通域编号及最终索引仍按输入顺序生成。
+- wrapper 仅透传参数、取消和诊断；UI 在点数不少于 100000 时启用最多四个任务，输入 revision 变化、关闭和析构先取消，再等待 worker。日志记录三点索引、阶段时间、GUI 发布时间及下一次 `frameSwapped` 的总耗时；自动 PLY/原始纹理流程从第三点选中开始计时，手动入口从执行拟合开始计时。
+- 新增 `plane_fitting_equivalence_tests_v2`：密集/重复/不均匀密度、断开和临界连接、噪声倾斜、垂直、控制点跨域、非法输入与 deferred 路径；保留额外共享副本，对比串行与 1/2/4 任务完整结果，覆盖取消及 join 后生命周期。原算法 Debug/Release 生成的完整字段黄金摘要用于同工具链严格回归。
+- 基准、输入副本、优化前源码/程序和完整结果位于 `C:\pcv-build\fitbench-baseline`；6300000 点原始 PLY 的 SHA256 为 `BE0552A1ADD1D64208F53B3D0F460CF9AC6BA3087EF332998D91F22F4AF246A1`。固定测试组覆盖上表面不同位置和低平面，每组预热一次、正式五次，不计读取/转换/结果序列化耗时。
+- 验收尚未完成：用户确认实际控制点和 Start/End 参数未确定，暂不能保存真实 robot_base 测试输入或验收临时工件 PLY/JSON GUI。模块性能不能替代从第三点到完整显示的 GUI 验收；最终构建、CTest、性能数据及风险以本轮最终验证记录为准。

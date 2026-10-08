@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pcv/core/point_types.h>
+#include <pcv/planefitting/plane_fitting.h>
 
 #include <QString>
 #include <QVector>
@@ -23,6 +24,7 @@ struct LoadResult {
     bool canonicalReady = false;
     bool ok = false;
     bool usedCache = false;
+    qsizetype declaredPointCount = 0;
     Point3D minimum;
     Point3D maximum;
     bool hasBounds = false;
@@ -43,25 +45,29 @@ struct NoiseOptions {
 // One scan file and its fixed transform into the robot/world frame.  The
 // first integration stage intentionally treats each PLY as a rigid snapshot;
 // no per-point robot trajectory compensation is implied.
+//
+// The camera -> robot_base conversion itself is owned by module 50 and uses
+// the same LineProfileXz contract as the scanning JSON entry: the camera point
+// is [X,0,Z], the input Y only yields the scan ratio input.y / signedTravel
+// and Start/End define the scan direction. The progress/direction/coordinate
+// mode knobs below are retained for the merge cache key and for API
+// compatibility only; they no longer select a second conversion algorithm.
 struct WorldCloudInput {
     QString filePath;
     QMatrix4x4 startBaseFromFlange;
     QMatrix4x4 endBaseFromFlange;
+    // T_flange_depth (flange_from_depth) parsed from RTmatDepth2robot.
     QMatrix4x4 flangeFromDepth;
+    // Compatibility-only: never inverted, never a second conversion path.
     enum class ScanProgressSource : quint8 { VertexOrder, LocalX, LocalY, LocalZ };
     ScanProgressSource scanProgressSource = ScanProgressSource::VertexOrder;
     enum class ScanDirection : quint8 { Auto, Forward, Reverse };
-    // Forward maps the first scan sample to Start and the last to End.
-    // Reverse maps the first sample to End and the last to Start. Auto uses
-    // the world-axis displacement test implemented by the merge routine.
+    // Compatibility-only. The unified conversion takes the scan direction from
+    // Start/End (a negative signed travel is a valid reverse scan).
     ScanDirection scanDirection = ScanDirection::Auto;
     enum class ScanCoordinateMode : quint8 {
         Auto,
-        // The PLY scan axis already contains the metric Start-to-End motion.
-        // Apply one anchor flange pose to the complete local cloud.
         EmbeddedMotion,
-        // The PLY contains per-profile camera coordinates; interpolate the
-        // flange pose for every point using scan progress.
         PerPointPose
     };
     ScanCoordinateMode scanCoordinateMode = ScanCoordinateMode::Auto;
@@ -191,6 +197,9 @@ struct ThreePointPlaneOptions {
     // Fast preview mode: fit the model but defer full-cloud classification and
     // connected-component traversal until the user confirms the candidate.
     bool deferFinalClassification = false;
+    bool parallelEnabled = false;
+    int maxParallelTasks = 4;
+    std::function<bool()> isCancelled;
 };
 struct PlaneEdgeOptions {
     float edgeGridSize = 0.2f;
@@ -241,6 +250,8 @@ struct ThreePointPlaneResult {
     bool deferred = false;
     QString error;
     bool ok = false;
+    bool cancelled = false;
+    pcv::planefitting::StageTimings timings;
 };
 enum class PlaneConsistencyStatus : quint8 {
     Passed,

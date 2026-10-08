@@ -217,6 +217,59 @@ DropoutPair dropoutPair()
     return pair;
 }
 
+// Same construction as dropoutPair, but the source-only island is far larger
+// than the shared one, so the bidirectional hit ratio drops below 0.25 while
+// the accuracy among the matched points stays excellent. It reproduces the
+// 5_40 situation: a locally accurate correction on a pair that barely sees
+// common surface.
+DropoutPair lowVisibilityDropoutPair()
+{
+    constexpr float basePitch = 1.0f;
+    constexpr float islandPitch = 0.5f;
+    constexpr float baseMaxX = 70.0f;
+    constexpr float baseMaxY = 46.0f;
+    constexpr float sharedMinX = 4.0f;
+    constexpr float sharedMaxX = 20.0f;
+    constexpr float islandMinY = 13.0f;
+    constexpr float islandMaxY = 29.0f;
+    constexpr float extraMinX = 40.0f;
+    constexpr float extraMaxX = 64.0f;
+    constexpr float holeMinX = 20.0f;
+    constexpr float holeMaxX = 70.0f;
+    constexpr float holeMinY = 1.0f;
+    constexpr float holeMaxY = 45.0f;
+
+    DropoutPair pair;
+    pair.reference.sourceFile = QStringLiteral("low_visibility_reference.ply");
+    pair.moving.sourceFile = QStringLiteral("low_visibility_moving.ply");
+    for (float x = 0.0f; x < baseMaxX; x += basePitch) {
+        for (float y = 0.0f; y < baseMaxY; y += basePitch) {
+            appendDropoutPoint(&pair.moving, x, y, 0.0f);
+            const bool insideHole = x >= holeMinX && x < holeMaxX
+                && y >= holeMinY && y < holeMaxY;
+            if (!insideHole) appendDropoutPoint(&pair.reference, x, y, 0.0f);
+        }
+    }
+    for (float x = sharedMinX; x < sharedMaxX; x += islandPitch) {
+        for (float y = islandMinY; y < islandMaxY; y += islandPitch) {
+            appendDropoutPoint(&pair.moving, x, y, 12.0f);
+            appendDropoutPoint(&pair.reference, x, y, 12.0f);
+        }
+    }
+    // Source-only island: at least 20 mm away from every reference point, so
+    // none of its points can find a counterpart inside the 15 mm radius.
+    for (float x = extraMinX; x < extraMaxX; x += islandPitch)
+        for (float y = holeMinY; y < holeMaxY; y += islandPitch)
+            appendDropoutPoint(&pair.moving, x, y, 12.0f);
+
+    for (pointcloud::RobotBaseFrame *frame : {&pair.moving, &pair.reference}) {
+        frame->declaredCount = frame->fullPoints.size();
+        frame->startBaseFromFlange.setToIdentity();
+        frame->endBaseFromFlange.setToIdentity();
+    }
+    return pair;
+}
+
 pointcloud::IcpOptions dropoutOptions()
 {
     pointcloud::IcpOptions options;
@@ -253,6 +306,195 @@ pointcloud::RobotBaseFrame shallowBaseSteepStructureFrame(const QString &sourceF
     return frame;
 }
 
+
+// ---------------------------------------------------------------------
+// WP6: 2.5D height-map registration (controlled iteration).
+//
+// Synthetic surface with a raised plateau, a hole and the plateau cliffs.
+// Two frames of the same surface carry a known residual, so the height-map
+// search has a recoverable dx/dy (and a small dz/yaw) to find.
+// ---------------------------------------------------------------------
+struct HeightMapSurface {
+    float pitch = 0.8f;
+    float maximumX = 60.0f;
+    float maximumY = 45.0f;
+    float stepMinimumX = 20.0f;
+    float stepMaximumX = 36.0f;
+    float stepMinimumY = 12.0f;
+    float stepMaximumY = 34.0f;
+    float stepHeight = 6.0f;
+    float tiltPerMm = 0.02f;
+    bool cliffs = true;
+    bool hole = true;
+    // Real micro-roughness is not repeated across scans; a fixture that must be
+    // structurally featureless therefore carries no position-locked jitter.
+    bool jitter = true;
+};
+
+struct HeightMapPair {
+    QVector<pointcloud::Point3D> surface;
+    pointcloud::RobotBaseFrame reference;
+    pointcloud::RobotBaseFrame moving;
+};
+
+// Deterministic sub-millimetre roughness: a correct alignment still leaves a
+// small non-zero residual, so the score never collapses to a single value.
+QVector3D heightMapJitter(float x, float y)
+{
+    const qint64 key = qint64(std::lround(double(x) * 1000.0)) * 73856093LL
+        + qint64(std::lround(double(y) * 1000.0)) * 19349663LL;
+    const auto channel = [key](int index) {
+        quint32 state = quint32(key + qint64(index) * 2654435761LL) + 1013904223u;
+        state ^= state >> 13;
+        state *= 2246822519u;
+        state ^= state >> 17;
+        return float(double(state % 2001u) / 1000.0) - 1.0f;
+    };
+    return {channel(0) * 0.05f, channel(1) * 0.05f, channel(2) * 0.05f};
+}
+
+QVector<pointcloud::Point3D> heightMapSurfacePoints(const HeightMapSurface &spec)
+{
+    QVector<pointcloud::Point3D> points;
+    const auto elevation = [&spec](float x, float y) {
+        const bool onStep = x >= spec.stepMinimumX && x <= spec.stepMaximumX
+            && y >= spec.stepMinimumY && y <= spec.stepMaximumY;
+        return spec.tiltPerMm * x + (onStep ? spec.stepHeight : 0.0f);
+    };
+    for (float x = 0.0f; x <= spec.maximumX; x += spec.pitch) {
+        for (float y = 0.0f; y <= spec.maximumY; y += spec.pitch) {
+            if (spec.hole && x >= 42.0f && x <= 50.0f && y >= 6.0f && y <= 18.0f) continue;
+            const QVector3D jitter = spec.jitter ? heightMapJitter(x, y) : QVector3D();
+            points.push_back(pointcloud::Point3D{x + jitter.x(), y + jitter.y(),
+                                                 elevation(x, y) + jitter.z()});
+        }
+    }
+    if (spec.cliffs) {
+        for (float z = spec.pitch; z < spec.stepHeight; z += spec.pitch) {
+            for (float y = spec.stepMinimumY; y <= spec.stepMaximumY; y += spec.pitch) {
+                for (float x : {spec.stepMinimumX, spec.stepMaximumX}) {
+                    const QVector3D jitter = spec.jitter ? heightMapJitter(x, y) : QVector3D();
+                    points.push_back(pointcloud::Point3D{x + jitter.x(), y + jitter.y(),
+                        spec.tiltPerMm * x + z + jitter.z()});
+                }
+            }
+            for (float x = spec.stepMinimumX; x <= spec.stepMaximumX; x += spec.pitch) {
+                for (float y : {spec.stepMinimumY, spec.stepMaximumY}) {
+                    const QVector3D jitter = spec.jitter ? heightMapJitter(x, y) : QVector3D();
+                    points.push_back(pointcloud::Point3D{x + jitter.x(), y + jitter.y(),
+                        spec.tiltPerMm * x + z + jitter.z()});
+                }
+            }
+        }
+    }
+    // The scanner order follows the travel axis, so the points are sorted by X
+    // before the scanRatios are derived from their position.
+    std::sort(points.begin(), points.end(),
+              [](const pointcloud::Point3D &left, const pointcloud::Point3D &right) {
+                  return left.x < right.x;
+              });
+    return points;
+}
+
+pointcloud::RobotBaseFrame heightMapFrame(const QString &sourceFile,
+                                          const QVector<pointcloud::Point3D> &surface,
+                                          float offsetX, float offsetY, float offsetZ,
+                                          float yawDegrees, float travelStart,
+                                          float travelLength, float maximumX)
+{
+    pointcloud::RobotBaseFrame frame;
+    frame.sourceFile = sourceFile;
+    frame.fullPoints.reserve(surface.size());
+    frame.samplePoints.reserve(surface.size());
+    frame.sourceIndices.reserve(surface.size());
+    frame.scanRatios.reserve(surface.size());
+    QMatrix4x4 yaw;
+    yaw.setToIdentity();
+    yaw.rotate(yawDegrees, 0.0f, 0.0f, 1.0f);
+    for (const pointcloud::Point3D &point : surface) {
+        const QVector3D value = yaw.map(QVector3D(point.x, point.y, point.z))
+            + QVector3D(offsetX, offsetY, offsetZ);
+        const pointcloud::Point3D transformed{value.x(), value.y(), value.z(),
+                                              point.nx, point.ny, point.nz};
+        frame.fullPoints.push_back(transformed);
+        frame.samplePoints.push_back(transformed);
+        frame.sourceIndices.push_back(frame.sourceIndices.size());
+        frame.scanRatios.push_back(qBound(0.0f, point.x / maximumX, 1.0f));
+    }
+    frame.declaredCount = frame.fullPoints.size();
+    frame.startBaseFromFlange.setToIdentity();
+    frame.startBaseFromFlange.setColumn(3, QVector4D(travelStart, 0.0f, 0.0f, 1.0f));
+    frame.endBaseFromFlange.setToIdentity();
+    frame.endBaseFromFlange.setColumn(3, QVector4D(travelStart + travelLength, 0.0f, 0.0f, 1.0f));
+    frame.dominantTravelAxis = 0;
+    frame.signedTravel = travelLength;
+    return frame;
+}
+
+HeightMapPair heightMapPair(const HeightMapSurface &spec, float offsetX, float offsetY,
+                            float offsetZ = 0.0f, float yawDegrees = 0.0f)
+{
+    HeightMapPair pair;
+    pair.surface = heightMapSurfacePoints(spec);
+    pair.reference = heightMapFrame(QStringLiteral("heightmap_reference.ply"), pair.surface,
+                                    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 60.0f, spec.maximumX);
+    pair.moving = heightMapFrame(QStringLiteral("heightmap_moving.ply"), pair.surface,
+                                 offsetX, offsetY, offsetZ, yawDegrees, 10.0f, 60.0f,
+                                 spec.maximumX);
+    return pair;
+}
+
+pointcloud::IcpOptions heightMapOptions()
+{
+    pointcloud::IcpOptions options;
+    options.planePrealignmentEnabled = true;
+    options.planeIdentityTrackingEnabled = false;
+    options.tangentCoarseAlignmentEnabled = false;
+    options.tangentCoarseAlignmentAuto = false;
+    options.wideStructureDiagnosticEnabled = false;
+    options.parallelEnabled = false;
+    options.heightMapRegistrationEnabled = true;
+    return options;
+}
+
+// Human-readable snapshot of the 2.5D decision, used as the failure text so a
+// rejected fixture always reports why it was rejected.
+std::string heightMapReason(const char *label, const pointcloud::IcpDiagnostics &diagnostic)
+{
+    return (QStringLiteral("%1: reject=%2 before=%3 after=%4 rel=%5 dx=%6 dy=%7 dz=%8 yaw=%9 "
+                           "grid=%10 wh=%11x%12 srcRatio=%13 tgtRatio=%14 srcPts=%15 tgtPts=%16 "
+                           "levels=%17 degen=%18 traj=%19 source=%20 accepted=%21 legacy=%22 "
+                           "legacyReason=%23 corrT=%24 corrA=%25 visHard=%26")
+        .arg(QString::fromUtf8(label), diagnostic.heightMapRejectReason)
+        .arg(diagnostic.heightMapScoreBefore).arg(diagnostic.heightMapScoreAfter)
+        .arg(diagnostic.heightMapRelativeImprovement)
+        .arg(diagnostic.heightMapTranslationX).arg(diagnostic.heightMapTranslationY)
+        .arg(diagnostic.heightMapTranslationZ).arg(diagnostic.heightMapYawDegrees)
+        .arg(diagnostic.heightMapGridResolutionMm)
+        .arg(diagnostic.heightMapWidth).arg(diagnostic.heightMapHeight)
+        .arg(diagnostic.heightMapSourceValidRatio).arg(diagnostic.heightMapTargetValidRatio)
+        .arg(diagnostic.heightMapSourceValidPoints).arg(diagnostic.heightMapTargetValidPoints)
+        .arg(diagnostic.heightMapRestrictedIcpCompletedLevels)
+        .arg(diagnostic.heightMapRestrictedIcpDegenerate ? 1 : 0)
+        .arg(diagnostic.trajectoryDiagnosticReason)
+        .arg(diagnostic.selectedRegistrationSource)
+        .arg(diagnostic.accepted ? 1 : 0)
+        .arg(diagnostic.legacyIcpAccepted ? 1 : 0)
+        .arg(diagnostic.legacyIcpRejectReason)
+        .arg(diagnostic.correctionTranslation).arg(diagnostic.correctionAngleDegrees)
+        .arg(diagnostic.visibilityHardRejected ? 1 : 0)).toStdString();
+}
+
+bool heightMapDiagnosticsComplete(const pointcloud::IcpDiagnostics &diagnostic)
+{
+    return diagnostic.heightMapGridResolutionMm >= 0.5f
+        && diagnostic.heightMapGridResolutionMm <= 2.0f
+        && diagnostic.heightMapWidth > 0 && diagnostic.heightMapHeight > 0
+        && diagnostic.heightMapScoreBefore > 0.0f
+        && std::isfinite(diagnostic.heightMapSourceValidRatio)
+        && std::isfinite(diagnostic.heightMapTargetValidRatio)
+        && diagnostic.selectedRegistrationSource == QStringLiteral("heightmap_restricted_icp");
+}
 } // namespace
 
 int main(int argc, char **argv)
@@ -764,6 +1006,565 @@ int main(int argc, char **argv)
                                   && result.icpDiagnostics.size() == 2)
                                : !result.error.isEmpty(),
                      "a 30 degree pair must succeed or fail in a structured way")) return 1;
+    }
+
+
+
+
+    // (1)(4)(11) Known dx/dy recovery on the stepped surface; the legacy ICP
+    // passes as well, so the height-map result must be the formal source.
+    {
+        const HeightMapPair pair = heightMapPair(HeightMapSurface{}, 3.0f, -2.0f);
+        const auto result = pointcloud::registerRobotBaseFrames(
+            {pair.reference, pair.moving}, heightMapOptions());
+        if (!require(result.icpDiagnostics.size() == 2,
+                     "the height-map fixture must report two diagnostics")) return 1;
+        const pointcloud::IcpDiagnostics &d = result.icpDiagnostics[1];
+        if (!require(d.heightMapAttempted && d.heightMapAccepted,
+                     "the stepped surface must pass the 2.5D acceptance")) return 1;
+        if (!require(d.selectedRegistrationSource == QStringLiteral("heightmap_restricted_icp"),
+                     "both paths passing must select heightmap_restricted_icp")) return 1;
+        if (!require(!d.heightMapFallbackToIcp,
+                     "a height-map pass must not be reported as a fallback")) return 1;
+        if (!require(std::abs(d.heightMapTranslationX + 3.0f) <= 1.0f
+                         && std::abs(d.heightMapTranslationY - 2.0f) <= 1.0f,
+                     "the height-map search must recover the known dx/dy")) return 1;
+        if (!require(d.heightMapRelativeImprovement >= 0.01f
+                         && d.heightMapScoreAfter < d.heightMapScoreBefore,
+                     "the candidate must improve the robot initial score by 1%")) return 1;
+        if (!require(d.heightMapRestrictedIcpCompletedLevels == 3
+                         && !d.heightMapRestrictedIcpDegenerate,
+                     "the restricted ICP must complete three non-degenerate levels")) return 1;
+        if (!require(d.heightMapSourceValidRatio >= 0.25f && d.heightMapTargetValidRatio >= 0.25f
+                         && d.heightMapSourceValidPoints >= 100 && d.heightMapTargetValidPoints >= 100,
+                     "the height map must report both valid ratios and point counts")) return 1;
+        if (!require(d.correctionTranslation <= 10.0f && d.correctionAngleDegrees <= 1.0f,
+                     "the final correction must stay inside the strict budget")) return 1;
+        if (!require(d.legacyIcpComparisonAvailable && d.legacyIcpAccepted,
+                     "the legacy baseline must be recorded for every pair")) return 1;
+        if (!require(!d.visibilityHardRejected,
+                     "a well observed pair must not be visibility-rejected")) return 1;
+        if (!require(heightMapDiagnosticsComplete(d),
+                     "the 2.5D diagnostics must be fully populated")) return 1;
+        if (!require(result.registrationCorrections.size() == 2
+                         && std::abs(result.registrationCorrections[1](0, 3) + 3.0f) <= 1.0f,
+                     "the committed correction must carry the height-map result")) return 1;
+    }
+
+    // (2) Small dz and yaw: only dx/dy/dz/yaw are open, so the restricted
+    // degrees of freedom must still recover a small dz and a small yaw.
+    {
+        const HeightMapPair dzPair = heightMapPair(HeightMapSurface{}, 2.5f, -1.5f, 2.0f, 0.0f);
+        const auto dzResult = pointcloud::registerRobotBaseFrames(
+            {dzPair.reference, dzPair.moving}, heightMapOptions());
+        if (!require(dzResult.icpDiagnostics.size() == 2,
+                     "the dz fixture must report two diagnostics")) return 1;
+        const pointcloud::IcpDiagnostics &dzDiagnostic = dzResult.icpDiagnostics[1];
+        if (!require(std::abs(dzDiagnostic.heightMapTranslationZ + 2.0f) <= 1.0f,
+                     "the second stage must recover a small dz")) return 1;
+        if (!require(dzDiagnostic.heightMapAttempted,
+                     "the dz fixture must run the height-map attempt")) return 1;
+
+        const HeightMapPair yawPair = heightMapPair(HeightMapSurface{}, 0.0f, 0.0f, 0.0f, 0.4f);
+        const auto yawResult = pointcloud::registerRobotBaseFrames(
+            {yawPair.reference, yawPair.moving}, heightMapOptions());
+        if (!require(yawResult.icpDiagnostics.size() == 2,
+                     "the yaw fixture must report two diagnostics")) return 1;
+        const pointcloud::IcpDiagnostics &yawDiagnostic = yawResult.icpDiagnostics[1];
+        if (!require(yawDiagnostic.heightMapAttempted && yawDiagnostic.heightMapAccepted,
+                     heightMapReason("the yaw fixture must pass the 2.5D acceptance",
+                                     yawDiagnostic).c_str())) return 1;
+        // The restricted degrees of freedom must still recover the small yaw:
+        // the height map only initialises it, the restricted point-to-plane ICP
+        // finishes it, and both stay inside the four-dimensional subspace.
+        if (!require(std::abs(yawDiagnostic.correctionAngleDegrees - 0.4f) <= 0.2f,
+                     "the restricted ICP must recover the small yaw")) return 1;
+        const QVector3D rotatedScanAxis = yawResult.registrationCorrections[1].mapVector(
+            QVector3D(0.0f, 0.0f, 1.0f));
+        if (!require(rotatedScanAxis.z() >= 0.9999f
+                         && std::abs(rotatedScanAxis.x()) <= 1.0e-4f
+                         && std::abs(rotatedScanAxis.y()) <= 1.0e-4f,
+                     "the restricted correction must rotate about the scan axis only")) return 1;
+        if (!require(yawDiagnostic.correctionAngleDegrees <= 1.0f
+                         && yawDiagnostic.correctionTranslation <= 10.0f,
+                     "the yaw correction must stay inside the strict budget")) return 1;
+    }
+
+    // (3) A large flat plane must never be forced into an alignment.
+    {
+        HeightMapSurface flat;
+        flat.stepHeight = 0.0f;
+        flat.cliffs = false;
+        flat.hole = false;
+        flat.tiltPerMm = 0.0f;
+        flat.jitter = false;
+        const HeightMapPair pair = heightMapPair(flat, 3.0f, -2.0f);
+        const auto result = pointcloud::registerRobotBaseFrames(
+            {pair.reference, pair.moving}, heightMapOptions());
+        if (!require(result.icpDiagnostics.size() == 2,
+                     "the flat fixture must report two diagnostics")) return 1;
+        const pointcloud::IcpDiagnostics &d = result.icpDiagnostics[1];
+        if (!require(d.heightMapRejectReason == QStringLiteral("heightmap_candidate_ambiguous"),
+                     heightMapReason("a featureless plane must be rejected as ambiguous", d).c_str()))
+            return 1;
+        if (!require(!d.heightMapAccepted && !d.accepted,
+                     "an ambiguous candidate must never be accepted")) return 1;
+        if (!require(d.selectedRegistrationSource == QStringLiteral("none"),
+                     "a rejected height map with a failed legacy path selects no source")) return 1;
+    }
+
+    // (5) A height map thinner than the minimum valid ratio is rejected.
+    {
+        HeightMapPair pair = heightMapPair(HeightMapSurface{}, 3.0f, -2.0f);
+        QVector<pointcloud::Point3D> sparsePoints;
+        QVector<qsizetype> sparseIndices;
+        QVector<float> sparseRatios;
+        for (qsizetype index = 0; index < pair.moving.fullPoints.size(); ++index) {
+            if (index % 7 != 0) continue;
+            sparsePoints.push_back(pair.moving.fullPoints.at(index));
+            sparseIndices.push_back(pair.moving.sourceIndices.at(index));
+            sparseRatios.push_back(pair.moving.scanRatios.at(index));
+        }
+        pair.moving.fullPoints = sparsePoints;
+        pair.moving.samplePoints = sparsePoints;
+        pair.moving.sourceIndices = sparseIndices;
+        pair.moving.scanRatios = sparseRatios;
+        const auto result = pointcloud::registerRobotBaseFrames(
+            {pair.reference, pair.moving}, heightMapOptions());
+        if (!require(result.icpDiagnostics.size() == 2,
+                     "the sparse fixture must report two diagnostics")) return 1;
+        const pointcloud::IcpDiagnostics &d = result.icpDiagnostics[1];
+        if (!require(d.heightMapAttempted && !d.heightMapAccepted,
+                     "a height map below the valid ratio must not be accepted")) return 1;
+        if (!require(d.heightMapRejectReason == QStringLiteral("heightmap_insufficient_data"),
+                     "a height map below the valid ratio must report insufficient data")) return 1;
+        if (!require(d.heightMapSourceValidRatio < 0.25f || d.heightMapSourceValidPoints < 100,
+                     "the rejected pair must show the thin height map")) return 1;
+    }
+
+    // (6) Fewer than 100 valid points on either side is rejected.
+    {
+        const HeightMapPair pair = heightMapPair(HeightMapSurface{}, 54.0f, 39.0f);
+        const auto result = pointcloud::registerRobotBaseFrames(
+            {pair.reference, pair.moving}, heightMapOptions());
+        if (!require(result.icpDiagnostics.size() == 2,
+                     "the tiny-overlap fixture must report two diagnostics")) return 1;
+        const pointcloud::IcpDiagnostics &d = result.icpDiagnostics[1];
+        if (!require(d.heightMapAttempted && !d.heightMapAccepted,
+                     "a tiny overlap must not be accepted")) return 1;
+        if (!require(d.heightMapRejectReason == QStringLiteral("heightmap_insufficient_data")
+                         || d.heightMapRejectReason == QStringLiteral("heightmap_region_invalid"),
+                     "a tiny overlap must be rejected as insufficient data")) return 1;
+        if (!require(d.selectedRegistrationSource == QStringLiteral("none")
+                         || d.selectedRegistrationSource == QStringLiteral("legacy_icp"),
+                     "a tiny overlap must report a defined source")) return 1;
+    }
+
+    // (7) The grid resolution is estimated automatically inside 0.5..2.0 mm.
+    {
+        HeightMapSurface fine;
+        fine.pitch = 0.4f;
+        const auto fineResult = pointcloud::registerRobotBaseFrames(
+            {heightMapPair(fine, 3.0f, -2.0f).reference, heightMapPair(fine, 3.0f, -2.0f).moving},
+            heightMapOptions());
+        const pointcloud::IcpDiagnostics &fineDiagnostic = fineResult.icpDiagnostics[1];
+        if (!require(fineDiagnostic.heightMapGridResolutionMm == 0.5f,
+                     "a sub-0.5 mm pitch must be clamped to 0.5 mm")) return 1;
+        HeightMapSurface coarse;
+        coarse.pitch = 2.5f;
+        const auto coarseResult = pointcloud::registerRobotBaseFrames(
+            {heightMapPair(coarse, 3.0f, -2.0f).reference, heightMapPair(coarse, 3.0f, -2.0f).moving},
+            heightMapOptions());
+        const pointcloud::IcpDiagnostics &coarseDiagnostic = coarseResult.icpDiagnostics[1];
+        if (!require(coarseDiagnostic.heightMapGridResolutionMm == 2.0f,
+                     "a coarser pitch must be clamped to 2.0 mm")) return 1;
+        if (!require(fineDiagnostic.heightMapWidth > 0 && fineDiagnostic.heightMapHeight > 0
+                         && coarseDiagnostic.heightMapWidth > 0
+                         && coarseDiagnostic.heightMapHeight > 0,
+                     "both grid estimates must produce a height map")) return 1;
+    }
+
+    // (8) The strict 10 mm / 1 deg budget is never crossed.
+    {
+        pointcloud::IcpOptions zeroBudget = heightMapOptions();
+        zeroBudget.heightMapMaxTranslationMm = 0.0f;
+        const HeightMapPair pair = heightMapPair(HeightMapSurface{}, 3.0f, -2.0f);
+        const auto rejected = pointcloud::registerRobotBaseFrames({pair.reference, pair.moving}, zeroBudget);
+        const pointcloud::IcpDiagnostics &rejectedDiagnostic = rejected.icpDiagnostics[1];
+        if (!require(rejectedDiagnostic.heightMapRejectReason
+                         == QStringLiteral("heightmap_candidate_exceeds_budget"),
+                     "an empty translation budget must reject the candidate")) return 1;
+        if (!require(!rejectedDiagnostic.heightMapAccepted,
+                     "an over-budget candidate must not be accepted")) return 1;
+
+        const HeightMapPair farPair = heightMapPair(HeightMapSurface{}, 25.0f, -18.0f);
+        const auto far = pointcloud::registerRobotBaseFrames(
+            {farPair.reference, farPair.moving}, heightMapOptions());
+        const pointcloud::IcpDiagnostics &farDiagnostic = far.icpDiagnostics[1];
+        if (!require(std::abs(farDiagnostic.heightMapTranslationX) <= 10.0f + 1.0e-3f
+                         && std::abs(farDiagnostic.heightMapTranslationY) <= 10.0f + 1.0e-3f
+                         && std::abs(farDiagnostic.heightMapTranslationZ) <= 10.0f + 1.0e-3f,
+                     "a far offset must stay inside the 10 mm strict budget")) return 1;
+        if (!require(std::abs(farDiagnostic.heightMapYawDegrees) <= 1.0f + 1.0e-6f,
+                     "a candidate must stay inside the 1 degree strict budget")) return 1;
+        if (!require(farDiagnostic.correctionTranslation <= 10.0f + 1.0e-4f
+                         && farDiagnostic.correctionAngleDegrees <= 1.0f + 1.0e-6f,
+                     "the final correction must stay inside the strict budget")) return 1;
+    }
+
+
+    // (9) A restricted ICP that cannot solve its four freedoms must fail in a
+    // structured way and must never reach the formal output.
+    {
+        HeightMapSurface isolated;
+        isolated.stepMinimumX = 24.0f;
+        isolated.stepMaximumX = 40.0f;
+        isolated.stepMinimumY = 16.0f;
+        isolated.stepMaximumY = 32.0f;
+        isolated.cliffs = false;
+        isolated.hole = false;
+        isolated.tiltPerMm = 0.0f;
+        pointcloud::IcpOptions degenerateOptions = heightMapOptions();
+        degenerateOptions.voxelLevels = {3.0f, 1.5f, 0.75f};
+        degenerateOptions.correspondenceDistances = {6.0f, 3.0f, 1.5f};
+        const HeightMapPair pair = heightMapPair(isolated, 3.0f, -2.0f);
+        const auto result = pointcloud::registerRobotBaseFrames(
+            {pair.reference, pair.moving}, degenerateOptions);
+        if (!require(result.icpDiagnostics.size() == 2,
+                     "the degeneracy fixture must report two diagnostics")) return 1;
+        const pointcloud::IcpDiagnostics &d = result.icpDiagnostics[1];
+        if (!require(!(d.accepted && d.heightMapRestrictedIcpDegenerate),
+                     "a degenerate restricted ICP must never be accepted")) return 1;
+        if (d.heightMapRestrictedIcpDegenerate) {
+            if (!require(!d.heightMapAccepted
+                             && d.heightMapRejectReason
+                                    == QStringLiteral("heightmap_restricted_icp_degenerate"),
+                         "a degenerate restricted ICP must report its own failure code")) return 1;
+            if (!require(!d.accepted
+                             && d.selectedRegistrationSource == QStringLiteral("none"),
+                         "a degenerate restricted ICP must not produce a formal source")) return 1;
+        }
+        if (!require(d.accepted || !d.heightMapRejectReason.isEmpty(),
+                     "the degeneracy fixture must fail in a structured way")) return 1;
+    }
+
+    // (10) 2.5D fails and the legacy ICP passes: the legacy result is used.
+    {
+        pointcloud::IcpOptions fallbackOptions = heightMapOptions();
+        // An unreachable improvement gate: the height-map path always fails, so
+        // the legacy path has to carry the pair.
+        fallbackOptions.heightMapMinimumRelativeImprovement = 0.999f;
+        const HeightMapPair pair = heightMapPair(HeightMapSurface{}, 3.0f, -2.0f);
+        const auto result = pointcloud::registerRobotBaseFrames(
+            {pair.reference, pair.moving}, fallbackOptions);
+        if (!require(result.icpDiagnostics.size() == 2,
+                     "the fallback fixture must report two diagnostics")) return 1;
+        const pointcloud::IcpDiagnostics &d = result.icpDiagnostics[1];
+        if (!require(d.legacyIcpAccepted && d.accepted,
+                     heightMapReason("the legacy path must accept the fallback fixture", d).c_str()))
+            return 1;
+        if (!require(d.selectedRegistrationSource == QStringLiteral("legacy_icp"),
+                     heightMapReason("a height-map failure must fall back to legacy_icp", d).c_str()))
+            return 1;
+        if (!require(d.heightMapFallbackToIcp && !d.heightMapAccepted,
+                     "the fallback must be reported explicitly")) return 1;
+        if (!require(d.heightMapRejectReason == QStringLiteral("heightmap_insufficient_improvement"),
+                     "the fallback must keep the height-map reject reason")) return 1;
+    }
+
+    // (12) 2.5D passes while the legacy acceptance fails: the 2.5D result is
+    // still published, because this iteration uses the height-map criteria.
+    {
+        pointcloud::IcpOptions heightMapOnly = heightMapOptions();
+        // An unreachable evidence floor: the legacy structural gate fails in both
+        // the strict attempt and the relaxed retry, while the 2.5D acceptance
+        // does not use that gate at all.
+        heightMapOnly.minimumStructuralMatchedRatio = 5.0f;
+        const HeightMapPair pair = heightMapPair(HeightMapSurface{}, 3.0f, -2.0f);
+        const auto result = pointcloud::registerRobotBaseFrames(
+            {pair.reference, pair.moving}, heightMapOnly);
+        if (!require(result.icpDiagnostics.size() == 2,
+                     "the height-map-only fixture must report two diagnostics")) return 1;
+        const pointcloud::IcpDiagnostics &d = result.icpDiagnostics[1];
+        if (!require(!d.legacyIcpAccepted && d.legacyIcpComparisonAvailable,
+                     "the legacy baseline must fail without hiding the fixture")) return 1;
+        if (!require(d.heightMapAccepted && d.accepted,
+                     "the 2.5D result must be published although the legacy gate fails")) return 1;
+        if (!require(d.selectedRegistrationSource == QStringLiteral("heightmap_restricted_icp"),
+                     "the 2.5D-only pass must select heightmap_restricted_icp")) return 1;
+        if (!require(std::isfinite(d.structuralBidirectionalCoverage3mm),
+                     "the legacy structural metric must still be recorded")) return 1;
+    }
+
+    // (13) Both paths fail: no formal output is produced for the pair.
+    {
+        pointcloud::IcpOptions bothFail = heightMapOptions();
+        bothFail.heightMapMinimumRelativeImprovement = 0.999f;
+        bothFail.minimumStructuralMatchedRatio = 5.0f;
+        const HeightMapPair pair = heightMapPair(HeightMapSurface{}, 3.0f, -2.0f);
+        const auto result = pointcloud::registerRobotBaseFrames(
+            {pair.reference, pair.moving}, bothFail);
+        if (!require(result.icpDiagnostics.size() == 2,
+                     "the double-failure fixture must report two diagnostics")) return 1;
+        const pointcloud::IcpDiagnostics &d = result.icpDiagnostics[1];
+        if (!require(!d.accepted && !d.heightMapAccepted,
+                     "a double failure must not be accepted")) return 1;
+        if (!require(d.selectedRegistrationSource == QStringLiteral("none"),
+                     "a double failure must select no registration source")) return 1;
+        if (!require(d.failureCode == QStringLiteral("registration_paths_failed"),
+                     "a double failure must report its combined failure code")) return 1;
+    }
+
+    // (14) Multi-frame pairs are committed strictly in scan order.
+    {
+        const HeightMapSurface spec;
+        const QVector<pointcloud::Point3D> surface = heightMapSurfacePoints(spec);
+        const pointcloud::RobotBaseFrame first = heightMapFrame(
+            QStringLiteral("hm0.ply"), surface, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 60.0f, spec.maximumX);
+        const pointcloud::RobotBaseFrame second = heightMapFrame(
+            QStringLiteral("hm1.ply"), surface, 3.0f, -2.0f, 0.0f, 0.0f, 10.0f, 60.0f, spec.maximumX);
+        const pointcloud::RobotBaseFrame third = heightMapFrame(
+            QStringLiteral("hm2.ply"), surface, 5.0f, -1.0f, 0.0f, 0.0f, 20.0f, 60.0f, spec.maximumX);
+        const QVector<pointcloud::RobotBaseFrame> originals{first, second, third};
+        const auto result = pointcloud::registerRobotBaseFrames(
+            {first, second, third}, heightMapOptions());
+        if (!require(result.registrationCorrections.size() == 3
+                         && result.icpDiagnostics.size() == 3,
+                     "the three-frame fixture must report three corrections")) return 1;
+        if (!require(result.icpDiagnostics[1].targetCloudIndex == 0
+                         && result.icpDiagnostics[1].sourceCloudIndex == 1
+                         && result.icpDiagnostics[2].targetCloudIndex == 1
+                         && result.icpDiagnostics[2].sourceCloudIndex == 2,
+                     "the pairs must be processed in adjacent scan order")) return 1;
+        if (!require(result.icpDiagnostics[1].accepted && result.icpDiagnostics[2].accepted,
+                     "both adjacent pairs must register")) return 1;
+        if (!require(result.registrationCorrections[0].isIdentity(),
+                     "the reference frame keeps the identity correction")) return 1;
+        qsizetype offset = 0;
+        for (int cloudId = 0; cloudId < 3; ++cloudId) {
+            for (qsizetype index = 0; index < originals[cloudId].fullPoints.size(); ++index) {
+                const QVector3D expected = result.registrationCorrections[cloudId].map(
+                    QVector3D(originals[cloudId].fullPoints.at(index).x,
+                              originals[cloudId].fullPoints.at(index).y,
+                              originals[cloudId].fullPoints.at(index).z));
+                const pointcloud::Point3D &actual = result.points.at(offset + index);
+                if (!require(std::abs(actual.x - expected.x()) <= 1.0e-4f
+                                 && std::abs(actual.y - expected.y()) <= 1.0e-4f
+                                 && std::abs(actual.z - expected.z()) <= 1.0e-4f,
+                             "each frame must carry its own sequential global correction")) return 1;
+            }
+            offset += originals[cloudId].fullPoints.size();
+        }
+    }
+
+
+    // (15) Serial and parallel runs must agree on the points, the source
+    // mapping, the matrices and every height-map diagnostic.
+    {
+        const HeightMapSurface spec;
+        const QVector<pointcloud::Point3D> surface = heightMapSurfacePoints(spec);
+        const auto makeFrames = [&surface, &spec]() {
+            return QVector<pointcloud::RobotBaseFrame>{
+                heightMapFrame(QStringLiteral("hm_par0.ply"), surface, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 60.0f, spec.maximumX),
+                heightMapFrame(QStringLiteral("hm_par1.ply"), surface, 3.0f, -2.0f, 0.0f, 0.0f, 10.0f, 60.0f, spec.maximumX),
+                heightMapFrame(QStringLiteral("hm_par2.ply"), surface, 5.0f, -1.0f, 0.0f, 0.0f, 20.0f, 60.0f, spec.maximumX)};
+        };
+        pointcloud::IcpOptions serialOptions = heightMapOptions();
+        serialOptions.parallelEnabled = false;
+        QVector<pointcloud::RobotBaseFrame> serialInput = makeFrames();
+        const QVector<pointcloud::RobotBaseFrame> retained = serialInput;
+        const auto serial = pointcloud::registerRobotBaseFrames(std::move(serialInput), serialOptions);
+        if (!require(serial.ok && serial.icpDiagnostics.size() == 3,
+                     "the parallel fixture must register serially")) return 1;
+        for (const int tasks : {1, 2, 4}) {
+            pointcloud::IcpOptions options = heightMapOptions();
+            options.parallelEnabled = true;
+            options.maxParallelTasks = tasks;
+            const auto parallel = pointcloud::registerRobotBaseFrames(makeFrames(), options);
+            if (!require(parallel.points.size() == serial.points.size()
+                             && parallel.cloudIds == serial.cloudIds
+                             && parallel.sourceIndices == serial.sourceIndices
+                             && parallel.scanRatios == serial.scanRatios,
+                         "parallel registration must keep the source mapping")) return 1;
+            for (qsizetype index = 0; index < serial.points.size(); ++index) {
+                if (!require(parallel.points.at(index).x == serial.points.at(index).x
+                                 && parallel.points.at(index).y == serial.points.at(index).y
+                                 && parallel.points.at(index).z == serial.points.at(index).z,
+                             "parallel registration must keep the point order")) return 1;
+            }
+            for (qsizetype index = 0; index < serial.registrationCorrections.size(); ++index) {
+                for (int element = 0; element < 16; ++element) {
+                    if (!require(parallel.registrationCorrections.at(index).constData()[element]
+                                     == serial.registrationCorrections.at(index).constData()[element],
+                                 "parallel registration must keep the correction matrices")) return 1;
+                }
+            }
+            for (qsizetype index = 0; index < serial.icpDiagnostics.size(); ++index) {
+                const pointcloud::IcpDiagnostics &expected = serial.icpDiagnostics.at(index);
+                const pointcloud::IcpDiagnostics &actual = parallel.icpDiagnostics.at(index);
+                if (!require(actual.accepted == expected.accepted
+                                 && actual.selectedRegistrationSource == expected.selectedRegistrationSource
+                                 && actual.heightMapAccepted == expected.heightMapAccepted
+                                 && actual.heightMapTranslationX == expected.heightMapTranslationX
+                                 && actual.heightMapTranslationY == expected.heightMapTranslationY
+                                 && actual.heightMapTranslationZ == expected.heightMapTranslationZ
+                                 && actual.heightMapYawDegrees == expected.heightMapYawDegrees
+                                 && actual.heightMapScoreBefore == expected.heightMapScoreBefore
+                                 && actual.heightMapScoreAfter == expected.heightMapScoreAfter
+                                 && actual.heightMapGridResolutionMm == expected.heightMapGridResolutionMm
+                                 && actual.heightMapRejectReason == expected.heightMapRejectReason,
+                             "parallel registration must keep the height-map diagnostics")) return 1;
+            }
+        }
+        if (!require(retained.size() == 3
+                         && retained.first().fullPoints.size() == surface.size(),
+                     "the height-map path must not mutate the shared input frames")) return 1;
+    }
+
+    // (16) Cancellation during the 2.5D work never publishes a partial result.
+    {
+        const HeightMapPair pair = heightMapPair(HeightMapSurface{}, 3.0f, -2.0f);
+        // Cancellation is honoured in the frame preparation, in the height-map
+        // attempt (before the restricted ICP) and in every ICP iteration, and a
+        // cancelled run must never publish a partial result.
+        for (const int limit : {0, 3}) {
+            pointcloud::IcpOptions options = heightMapOptions();
+            int calls = 0;
+            options.isCancelled = [&calls, limit]() { return ++calls > limit; };
+            const auto result = pointcloud::registerRobotBaseFrames(
+                {pair.reference, pair.moving}, options);
+            if (!require(result.cancelled && !result.ok,
+                         heightMapReason("a cancelled 2.5D run must not publish a result",
+                                         result.icpDiagnostics.isEmpty()
+                                             ? pointcloud::IcpDiagnostics() : result.icpDiagnostics.last())
+                             .c_str())) return 1;
+            if (!require(result.points.isEmpty(),
+                         "a cancelled 2.5D run must not publish partial points")) return 1;
+            if (!require(result.error == QStringLiteral("已取消"),
+                         "a cancelled 2.5D run must report cancellation")) return 1;
+        }
+    }
+
+    // (17) Repeated calls must not pollute any cache, including after a
+    // cancelled run in between.
+    {
+        const HeightMapSurface spec;
+        const QVector<pointcloud::Point3D> surface = heightMapSurfacePoints(spec);
+        const auto makeFrames = [&surface, &spec]() {
+            return QVector<pointcloud::RobotBaseFrame>{
+                heightMapFrame(QStringLiteral("hm_rep0.ply"), surface, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 60.0f, spec.maximumX),
+                heightMapFrame(QStringLiteral("hm_rep1.ply"), surface, 3.0f, -2.0f, 0.0f, 0.0f, 10.0f, 60.0f, spec.maximumX)};
+        };
+        const auto first = pointcloud::registerRobotBaseFrames(makeFrames(), heightMapOptions());
+        pointcloud::IcpOptions cancelledOptions = heightMapOptions();
+        cancelledOptions.isCancelled = []() { return true; };
+        const auto cancelled = pointcloud::registerRobotBaseFrames(makeFrames(), cancelledOptions);
+        if (!require(cancelled.cancelled && !cancelled.ok,
+                     "the interleaved cancelled run must stay cancelled")) return 1;
+        const auto second = pointcloud::registerRobotBaseFrames(makeFrames(), heightMapOptions());
+        if (!require(first.points.size() == second.points.size()
+                         && first.cloudIds == second.cloudIds
+                         && first.sourceIndices == second.sourceIndices,
+                     "repeated 2.5D calls must produce the same mapping")) return 1;
+        for (qsizetype index = 0; index < first.registrationCorrections.size(); ++index) {
+            for (int element = 0; element < 16; ++element) {
+                if (!require(first.registrationCorrections.at(index).constData()[element]
+                                 == second.registrationCorrections.at(index).constData()[element],
+                             "repeated 2.5D calls must produce the same matrices")) return 1;
+            }
+        }
+        const pointcloud::IcpDiagnostics &a = first.icpDiagnostics[1];
+        const pointcloud::IcpDiagnostics &b = second.icpDiagnostics[1];
+        if (!require(a.heightMapScoreBefore == b.heightMapScoreBefore
+                         && a.heightMapScoreAfter == b.heightMapScoreAfter
+                         && a.heightMapAccepted == b.heightMapAccepted
+                         && a.selectedRegistrationSource == b.selectedRegistrationSource,
+                     "repeated 2.5D calls must produce the same diagnostics")) return 1;
+    }
+
+    // (18) Every report field of the iteration contract is serialized into the
+    // module diagnostics string the tools, the GUI and the regression harness
+    // all consume.
+    {
+        const HeightMapPair pair = heightMapPair(HeightMapSurface{}, 3.0f, -2.0f);
+        const auto result = pointcloud::registerRobotBaseFrames(
+            {pair.reference, pair.moving}, heightMapOptions());
+        const QStringList required{
+            QStringLiteral("heightmap_registration_enabled"),
+            QStringLiteral("heightmap_registration_attempted"),
+            QStringLiteral("heightmap_registration_accepted"),
+            QStringLiteral("heightmap_fallback_to_legacy_icp"),
+            QStringLiteral("heightmap_grid_resolution_mm"),
+            QStringLiteral("heightmap_valid_ratio_source"),
+            QStringLiteral("heightmap_valid_ratio_target"),
+            QStringLiteral("heightmap_valid_points_source"),
+            QStringLiteral("heightmap_valid_points_target"),
+            QStringLiteral("heightmap_score_before"),
+            QStringLiteral("heightmap_score_after"),
+            QStringLiteral("heightmap_relative_improvement"),
+            QStringLiteral("heightmap_delta_xyz_mm"),
+            QStringLiteral("heightmap_delta_yaw_deg"),
+            QStringLiteral("heightmap_restricted_icp_levels"),
+            QStringLiteral("heightmap_restricted_icp_degenerate"),
+            QStringLiteral("selected_registration_source"),
+            QStringLiteral("heightmap_reject_reason"),
+            QStringLiteral("visibility_hard_rejected"),
+            QStringLiteral("legacy_icp_comparison")};
+        for (const QString &field : required) {
+            if (!require(result.diagnostics.contains(field),
+                         "the height-map report field must be serialized")) return 1;
+        }
+        if (!require(result.diagnostics.contains(QStringLiteral("selected_registration_source=heightmap_restricted_icp")),
+                     "the report must name the selected registration source")) return 1;
+    }
+
+
+    // (5b) The visibility hard gate wins over the hit-point coverage: a pair
+    // whose local accuracy among the matched points is excellent but whose
+    // bidirectional hit ratio is below 0.25 must be rejected, and the same
+    // fixture must keep the legacy verdict while the switch stays off.
+    {
+        const DropoutPair pair = lowVisibilityDropoutPair();
+        const auto runPair = [](const DropoutPair &input, pointcloud::IcpOptions options) {
+            return pointcloud::registerRobotBaseFrames({input.reference, input.moving}, options);
+        };
+        pointcloud::IcpOptions legacyOptions = dropoutOptions();
+        pointcloud::IcpOptions gatedOptions = dropoutOptions();
+        gatedOptions.heightMapRegistrationEnabled = true;
+        const auto legacyResult = runPair(pair, legacyOptions);
+        if (!require(legacyResult.icpDiagnostics.size() == 2,
+                     "the low-visibility fixture must report two diagnostics")) return 1;
+        const pointcloud::IcpDiagnostics &legacyDiagnostic = legacyResult.icpDiagnostics[1];
+        if (!require(legacyDiagnostic.accepted && !legacyDiagnostic.visibilityHardRejected,
+                     "with the switch off the legacy verdict must be unchanged")) return 1;
+        if (!require(legacyDiagnostic.selectedRegistrationSource.isEmpty(),
+                     "with the switch off the 2.5D source field must stay empty")) return 1;
+        const auto gatedResult = runPair(pair, gatedOptions);
+        if (!require(gatedResult.icpDiagnostics.size() == 2,
+                     "the gated fixture must report two diagnostics")) return 1;
+        const pointcloud::IcpDiagnostics &gated = gatedResult.icpDiagnostics[1];
+        if (!require(gated.structuralBidirectionalMatchRatio < 0.25f,
+                     QStringLiteral("the fixture must really stay below the visibility floor: "
+                                    "source=%1 target=%2 bidirectional=%3 heightmap_source=%4 "
+                                    "heightmap_target=%5 selected=%6 reject=%7")
+                         .arg(gated.structuralSourceMatchRatio, 0, 'f', 4)
+                         .arg(gated.structuralTargetMatchRatio, 0, 'f', 4)
+                         .arg(gated.structuralBidirectionalMatchRatio, 0, 'f', 4)
+                         .arg(gated.heightMapSourceValidRatio, 0, 'f', 4)
+                         .arg(gated.heightMapTargetValidRatio, 0, 'f', 4)
+                         .arg(gated.selectedRegistrationSource, gated.heightMapRejectReason)
+                         .toStdString()
+                         .c_str())) return 1;
+        if (!require(!gated.accepted && gated.visibilityHardRejected,
+                     "a low-visibility pair must be hard rejected")) return 1;
+        if (!require(gated.failureCode == QStringLiteral("visibility_hard_rejected"),
+                     "the hard rejection must carry its own failure code")) return 1;
+        if (!require(gated.selectedRegistrationSource == QStringLiteral("none"),
+                     "a hard-rejected pair must select no registration source")) return 1;
+        if (!require(gated.heightMapRejectReason.isEmpty() || !gated.heightMapAccepted,
+                     "a hard-rejected pair must not report an accepted height map")) return 1;
+        if (!require(gated.legacyIcpComparisonAvailable,
+                     "the legacy baseline must still be recorded after the gate")) return 1;
     }
 
     std::cout << "Multiframe registration tests passed.\n";

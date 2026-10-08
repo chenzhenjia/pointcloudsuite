@@ -17,6 +17,33 @@ bool validateSnapshot(const RenderSnapshot &snapshot, QString *error)
     return true;
 }
 
+bool validatePointColorOverlay(const PointColorOverlay &overlay, qsizetype pointCount,
+                               QString *error)
+{
+    if (pointCount < 0 || overlay.colors.size() != pointCount
+        || overlay.valid.size() != pointCount) {
+        if (error) *error = QStringLiteral("点颜色覆盖与点云数量不一致");
+        return false;
+    }
+    for (int i = 0; i < overlay.colors.size(); ++i) {
+        const QVector4D &color = overlay.colors.at(i);
+        if (!std::isfinite(color.x()) || !std::isfinite(color.y())
+            || !std::isfinite(color.z()) || !std::isfinite(color.w())
+            || color.x() < 0.0f || color.x() > 1.0f
+            || color.y() < 0.0f || color.y() > 1.0f
+            || color.z() < 0.0f || color.z() > 1.0f
+            || color.w() < 0.0f || color.w() > 1.0f) {
+            if (error) *error = QStringLiteral("点颜色覆盖包含无效颜色值");
+            return false;
+        }
+        if (overlay.valid.at(i) > 1) {
+            if (error) *error = QStringLiteral("点颜色覆盖有效标记无效");
+            return false;
+        }
+    }
+    return true;
+}
+
 bool validateCoordinateFrame(const CoordinateFrame &frame, QString *error)
 {
     if (!frame.valid) return true;

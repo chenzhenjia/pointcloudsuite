@@ -6,6 +6,7 @@
 #include <QString>
 #include <QMatrix4x4>
 #include <QVector3D>
+#include <QVector4D>
 
 namespace pcv::render {
 
@@ -38,6 +39,11 @@ struct RenderSnapshot {
     quint64 revision = 0;
 };
 
+struct PointColorOverlay {
+    QVector<QVector4D> colors;
+    QVector<quint8> valid;
+};
+
 struct RenderOverlayOptions {
     bool showCoordinateAxes = true;
     bool showFloorGrid = true;
@@ -49,6 +55,8 @@ struct RenderOverlayOptions {
 };
 
 bool validateSnapshot(const RenderSnapshot &snapshot, QString *error = nullptr);
+bool validatePointColorOverlay(const PointColorOverlay &overlay, qsizetype pointCount,
+                               QString *error = nullptr);
 bool validateCoordinateFrame(const CoordinateFrame &frame, QString *error = nullptr);
 bool validateContours(const QVector<Contour> &contours, QString *error = nullptr);
 

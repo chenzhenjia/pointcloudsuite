@@ -165,7 +165,18 @@ CachedCloudResult readPlyCached(const QString &sourceFile, const QString &cacheD
     if (readCache(source, path, &result.points)) {
         result.usedCache = true;
         result.ok = true;
-        result.declaredPointCount = result.points.size();
+        // Preserve the source PLY header count even when the decoded point
+        // payload comes from cache. Strict raster provenance must compare the
+        // image pixel count with the original declaration, never with a
+        // potentially stale or compressed cache length.
+        result.declaredPointCount = sourceHeader.declaredPointCount;
+        if (result.declaredPointCount != result.points.size()) {
+            result.points.clear();
+            result.ok = false;
+            result.usedCache = false;
+        }
+    }
+    if (result.ok) {
         if (!canonicalReady(result.canonicalPlyPath, result.points)) {
             BinaryPlyWriteOptions writeOptions;
             writeOptions.includeNormals = true;

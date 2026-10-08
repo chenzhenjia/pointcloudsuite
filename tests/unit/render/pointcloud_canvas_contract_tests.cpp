@@ -26,6 +26,14 @@ int main(int argc, char **argv)
     contour.points = {QVector3D(0.0f, 0.0f, 0.0f),
                       QVector3D(std::numeric_limits<float>::infinity(), 0.0f, 0.0f)};
     if (pcv::render::validateContours({contour}, &error) || error.isEmpty()) return 1;
+    pcv::render::PointColorOverlay colors;
+    colors.colors = {QVector4D(0.0f, 0.5f, 1.0f, 1.0f),
+                     QVector4D(1.0f, 1.0f, 1.0f, 0.0f)};
+    colors.valid = {1, 0};
+    if (!pcv::render::validatePointColorOverlay(colors, 2, &error)) return 1;
+    if (pcv::render::validatePointColorOverlay(colors, 1, &error) || error.isEmpty()) return 1;
+    colors.colors[0].setX(std::numeric_limits<float>::quiet_NaN());
+    if (pcv::render::validatePointColorOverlay(colors, 2, &error) || error.isEmpty()) return 1;
     const pcv::render::RenderOverlayOptions defaults;
     if (!defaults.showCoordinateAxes || !defaults.showFloorGrid || !defaults.floorZUp
         || !defaults.showAxisLabels || defaults.showNormals || !defaults.showBoundingBox

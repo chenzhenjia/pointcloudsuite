@@ -69,6 +69,11 @@ public:
 
     void clearPlaneResult();
 
+    void setTextureGrayOverlay(const QVector<quint8> &grayscale,
+                               const QVector<quint8> &valid);
+
+    void clearTextureGrayOverlay();
+
     void setWorkpieceCoordinateSystem(const pcv::render::CoordinateFrame &frame);
 
     void clearWorkpieceCoordinateSystem();
@@ -106,6 +111,8 @@ private:
 
     void uploadStatesIfNeeded();
 
+    void uploadTextureIfNeeded();
+
     void uploadContoursIfNeeded();
 
     int pickPoint(const QPointF &position);
@@ -136,6 +143,7 @@ private:
     QOpenGLVertexArrayObject m_contourVertexArray;
     QOpenGLBuffer m_vertexBuffer;
     QOpenGLBuffer m_stateBuffer;
+    QOpenGLBuffer m_textureBuffer;
     QOpenGLBuffer m_contourBuffer;
     std::unique_ptr<QOpenGLFramebufferObject> m_pickingFbo;
     QVector3D m_center;
@@ -173,4 +181,9 @@ private:
     quint64 m_renderRevision = 0;
     qsizetype m_vertexBufferCapacityBytes = 0;
     qsizetype m_stateBufferCapacityBytes = 0;
+    qsizetype m_textureBufferCapacityBytes = 0;
+    QVector<QVector4D> m_textureColors;
+    QVector<quint8> m_textureValid;
+    bool m_textureUploadPending = false;
+    int m_textureFallbackColorMode = 0;
 };

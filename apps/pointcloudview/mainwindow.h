@@ -2,8 +2,11 @@
 
 #include <pcv/core/cancellation.h>
 #include <pcv/infrastructure/application_config.h>
+#include <pcv/scan/scan_planner.h>
+#include <pcv/texture/texture_mapping.h>
 
 #include <QMainWindow>
+#include <QElapsedTimer>
 #include <QStringList>
 #include "pointcloudprocessor.h"
 
@@ -12,6 +15,7 @@ class QLabel;
 class QAction;
 class QCloseEvent;
 class QDialog;
+class QHBoxLayout;
 class QProgressBar;
 class QComboBox;
 class QSpinBox;
@@ -19,6 +23,8 @@ class QDoubleSpinBox;
 class QCheckBox;
 class QPushButton;
 class QPlainTextEdit;
+class QToolButton;
+class QWidget;
 class RenderDialog;
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
 class CameraDialog;
@@ -46,6 +52,7 @@ private slots:
     void openCameraStream();
 #endif
     void openPointCloud();
+    void openTextureExperimentPly();
     void openPointCloudSource();
     void openTempScanningInfo();
     void openMultiFrameRegistration();
@@ -74,7 +81,13 @@ private slots:
     void handleCanvasEdgePointPicked(int index);
     void extractPlaneImage();
     void planeImageExtractionFinished();
+    void selectTextureImage();
+    void textureMappingFinished();
     void savePlaneImage();
+    void planScanTrajectory();
+    void scanPlanningFinished();
+    void exportScanTrajectory();
+    void exportInoRobotTrajectory();
     void startSecondPlanePointSelection();
     void cancelSecondPlanePointSelection();
 
@@ -114,19 +127,33 @@ private:
     void applyDepthRenderRange(const QVector<pointcloud::Point3D> &points);
     void publishCanvasCache(QVector<pointcloud::Point3D> points,
                             bool preserveTempWorkpieceSession = false);
+    bool textureRasterMappingReady(QString *error = nullptr) const;
     void finalizeTempWorkpiece();
     void resetSecondPlaneVerification();
     void updatePlaneExtractionUi();
     void updatePlaneEdgeUi();
+    void invalidateTextureOverlay();
+    void invalidateTextureExperiment();
     void clearPlaneEdgeUi();
+    void invalidateScanTrajectory(const QString &reason = QString());
     bool planeImageSaveReady(QString *error = nullptr) const;
     bool tempWorkpieceFinalizeReady(QString *error = nullptr) const;
     void validateSecondPlaneSelection();
-    void runPlaneExtraction(bool deferFinalClassification);
+    void runPlaneExtraction(bool deferFinalClassification, bool fromThirdPick = false);
     bool pointTaskRunning() const;
     void applyConfiguredDefaults();
     void applyRenderDialogSettings();
     void refreshRenderDialogContent();
+    void showSourceDialog();
+    void showCleanDialog();
+    void showPlaneDialog();
+    void showEdgeDialog();
+    void showScanDialog();
+    void setPickingOperation(const QString &text, bool visible);
+    void undoPickingOperation();
+    void cancelPickingOperation();
+    void confirmPickingOperation();
+    void finishEdgePointSelection();
     QListWidget *m_fileList = nullptr;
     QLabel *m_fileInfo = nullptr;
     QLabel *m_canvasInfo = nullptr;
@@ -160,12 +187,35 @@ private:
     QPushButton *m_selectEdgeButton = nullptr;
     QPushButton *m_clearEdgeSelectionButton = nullptr;
     QPushButton *m_extractPlaneImageButton = nullptr;
+    QPushButton *m_selectTextureImageButton = nullptr;
     QPushButton *m_savePlaneImageButton = nullptr;
     QPushButton *m_finalizeTempWorkpieceButton = nullptr;
     QLabel *m_planeImagePreview = nullptr;
     QPlainTextEdit *m_edgeOutput = nullptr;
+    QWidget *m_scanPlanningPage = nullptr;
+    QComboBox *m_scanMode = nullptr;
+    QDoubleSpinBox *m_scanHeight = nullptr;
+    QDoubleSpinBox *m_scanCameraWidth = nullptr;
+    QDoubleSpinBox *m_scanOverlap = nullptr;
+    QLabel *m_scanCenter = nullptr;
+    QLabel *m_scanRange = nullptr;
+    QPushButton *m_planScanButton = nullptr;
+    QPushButton *m_exportScanButton = nullptr;
+    QPushButton *m_exportInoRobotButton = nullptr;
+    QPlainTextEdit *m_scanOutput = nullptr;
     PointCloudCanvas *m_canvas = nullptr;
     RenderDialog *m_renderDialog = nullptr;
+    QDialog *m_sourceDialog = nullptr;
+    QDialog *m_cleanDialog = nullptr;
+    QDialog *m_planeDialog = nullptr;
+    QDialog *m_edgeDialog = nullptr;
+    QDialog *m_scanDialog = nullptr;
+    QWidget *m_operationBar = nullptr;
+    QLabel *m_operationLabel = nullptr;
+    QLabel *m_operationCount = nullptr;
+    QPushButton *m_operationUndo = nullptr;
+    QPushButton *m_operationCancel = nullptr;
+    QPushButton *m_operationConfirm = nullptr;
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
     CameraDialog *m_cameraDialog = nullptr;
 #endif
@@ -174,6 +224,8 @@ private:
     qsizetype m_livePreviewPointCount = 0;
     bool m_loading = false;
     QString m_pendingPath;
+    bool m_pendingTextureExperiment = false;
+    bool m_textureExperimentActive = false;
     QString m_pendingSourcePlyEncoding = QStringLiteral("unknown");
     QStringList m_sourceFiles;
     QString m_sourceDirectory;
@@ -185,19 +237,36 @@ private:
     QFutureWatcher<pointcloud::ThreePointPlaneResult> *m_threePlaneWatcher = nullptr;
     QFutureWatcher<pointcloud::PlaneEdgeResult> *m_edgeWatcher = nullptr;
     QFutureWatcher<pointcloud::PlaneImageResult> *m_planeImageWatcher = nullptr;
+    QFutureWatcher<pcv::scan::ScanTrajectoryResult> *m_scanPlanningWatcher = nullptr;
+    QFutureWatcher<pcv::texture::MappingResult> *m_textureMappingWatcher = nullptr;
     qsizetype m_noiseInputCount = 0;
     quint64 m_canvasRevision = 0;
     quint64 m_noiseInputRevision = 0;
     quint64 m_threePlaneInputRevision = 0;
+    pointcloud::CancellationToken m_planeCancelToken;
+    QElapsedTimer m_planeElapsed;
+    bool m_planeFramePending = false;
     quint64 m_edgeInputRevision = 0;
     quint64 m_planeImageInputRevision = 0;
     quint64 m_coordinateFrameRevision = 0;
     quint64 m_planeImageCoordinateRevision = 0;
     quint64 m_tempWorkpieceSessionRevision = 0;
+    quint64 m_roiRevision = 0;
+    quint64 m_scanPlanningRequestRevision = 0;
+    quint64 m_scanPlanningTaskRevision = 0;
+    quint64 m_scanPlanningCanvasRevision = 0;
+    quint64 m_scanPlanningCoordinateRevision = 0;
+    quint64 m_scanPlanningPlaneRevision = 0;
+    quint64 m_scanPlanningRoiRevision = 0;
+    quint64 m_textureInputRevision = 0;
     pointcloud::ThreePointPlaneResult m_threePlaneResult;
     pointcloud::WorkpieceCoordinateSystem m_workpieceCoordinate;
     pointcloud::PlaneEdgeResult m_planeEdgeResult;
     pointcloud::PlaneImageResult m_planeImageResult;
+    pcv::scan::ScanTrajectoryResult m_scanTrajectoryResult;
+    pointcloud::CancellationToken m_textureCancelToken;
+    QString m_textureImagePath;
+    QString m_pendingTextureImagePath;
     QVector<int> m_selectedPointIndices;
     QVector<int> m_secondPlanePointIndices;
     QVector<int> m_selectedEdgeIndices;
@@ -220,6 +289,10 @@ private:
     QString m_tempWorkpieceOutputDirectory;
     QString m_tempWorkpieceCreatedAtIso8601;
     QVector<qsizetype> m_tempWorkpieceSourceIndices;
+    qsizetype m_tempWorkpieceDeclaredPointCount = 0;
+    qsizetype m_tempWorkpieceRejectedInvalidPointCount = 0;
+    qsizetype m_tempWorkpieceRejectedRangePointCount = 0;
+    bool m_tempWorkpieceRasterCompatible = false;
     bool m_closing = false;
     WorkflowState m_workflowState = WorkflowState::Idle;
     // The active source is the single source of truth for temporary-workpiece
@@ -228,6 +301,7 @@ private:
     TempWorkpieceSource m_pendingTempWorkpieceSource = TempWorkpieceSource::None;
     // Cancellation callback handed to the long-running preparation worker.
     pointcloud::CancellationToken m_prepareCancelToken;
+    pointcloud::CancellationToken m_scanPlanningCancelToken;
     pcv::config::PointCloudViewDefaults m_defaults;
     Ui::MainWindow *ui = nullptr;
 };

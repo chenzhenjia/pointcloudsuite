@@ -1,4 +1,5 @@
 #include <pcv/stitching/multiframe_registration.h>
+#include <pcv/stitching/heightmap_registration.h>
 #include <pcv/filtering/downsample.h>
 
 #include <QElapsedTimer>
@@ -392,7 +393,8 @@ Increment estimateIncrement(const QVector<Point3D> &source,
                             float trimFraction = 1.0f,
                             QVector<float> *residualScratch = nullptr,
                             int *normalRejected = nullptr,
-                            int parallelTasks = 1) {
+                            int parallelTasks = 1,
+                            bool restrictedDof = false) {
     // The reference point set is always cropped to actualOverlap before it is
     // downsampled and indexed, so every indexed candidate is already inside
     // the overlap box and the per-candidate insideBounds() check is removed.
@@ -476,6 +478,25 @@ Increment estimateIncrement(const QVector<Point3D> &source,
                 normalMatrix[row][column]+=weight*jacobian[row]*jacobian[column];
         }
     };
+    // Restricted (2.5D) increment: the increment is parameterised by a yaw about
+    // the robot-base Z axis through the source centroid plus tx/ty/tz. The yaw
+    // column is the Z component of the rotation Jacobian, so the two
+    // out-of-plane rotation components are never solved for and the full 6 DoF
+    // is not opened.
+    const auto accumulateRestrictedResidual = [&](const QVector3D &axis,
+                                                  const QVector3D &sourcePoint,
+                                                  const QVector3D &targetPoint,
+                                                  double weight) {
+        const double residual = QVector3D::dotProduct(axis, sourcePoint - targetPoint);
+        const QVector3D rotation = QVector3D::crossProduct(sourcePoint-sourceCentroid,axis)
+            / float(rotationScale);
+        const double jacobian[4]{double(rotation.z()),double(axis.x()),double(axis.y()),double(axis.z())};
+        for(int row=0;row<4;++row){
+            rhs[row]-=weight*jacobian[row]*residual;
+            for(int column=0;column<4;++column)
+                normalMatrix[row][column]+=weight*jacobian[row]*jacobian[column];
+        }
+    };
     // Trimmed weighting: on a pair the other view only partly observed, the tail
     // of the residual distribution is dominated by correspondences that do not
     // really exist, so only the best fraction is allowed into the normal
@@ -504,14 +525,17 @@ Increment estimateIncrement(const QVector<Point3D> &source,
     for(const CorrespondencePair &pair:pairs){
         unique.insert(pair.targetIndex);
         const QVector3D difference = pair.source-pair.target;
-        const bool pointToPoint = isFeatureTarget(pair);
+        const bool pointToPoint = !restrictedDof && isFeatureTarget(pair);
         const double normalized = pointToPoint
             ? difference.length()/maximumDistance
             : std::abs(QVector3D::dotProduct(pair.normal,difference))/maximumDistance;
         if(normalized>=1.0)continue;
         if(normalized>residualLimit)continue;
         const double weight=std::pow(1.0-normalized*normalized,2.0);
-        if (pointToPoint) {
+        if (restrictedDof) {
+            accumulateRestrictedResidual(pair.normal,pair.source,pair.target,weight);
+            weightSum+=weight;
+        } else if (pointToPoint) {
             accumulateResidual(QVector3D(1,0,0),pair.source,pair.target,weight);
             accumulateResidual(QVector3D(0,1,0),pair.source,pair.target,weight);
             accumulateResidual(QVector3D(0,0,1),pair.source,pair.target,weight);
@@ -539,18 +563,29 @@ Increment estimateIncrement(const QVector<Point3D> &source,
         for(int row=0;row<6;++row)solution[row]+=eigenvectors[row][direction]*coefficient;
     }
     if(result.observableDof<1)return result;
-    result.degenerate=result.observableDof<6;
+    // In restricted mode only four directions exist, so an increment that solves
+    // all of them is complete; the two padded directions are never observable.
+    result.degenerate=result.observableDof<(restrictedDof?4:6);
     result.conditionRatio=float(minimumKept/maximumEigenvalue);
     for(int index=0;index<6;++index)result.normalizedUpdate[size_t(index)]=solution[index];
     result.rotationCenter=sourceCentroid;
     result.rotationScale=rotationScale;
-    const QVector3D rotationVector{float(solution[0]/rotationScale),float(solution[1]/rotationScale),float(solution[2]/rotationScale)};
-    const float angle=rotationVector.length();
-    QQuaternion quaternion;
-    if(angle>1.0e-12f)quaternion=QQuaternion::fromAxisAndAngle(rotationVector/angle,qRadiansToDegrees(angle));
     result.matrix.setToIdentity();
-    result.matrix.translate(sourceCentroid);result.matrix.rotate(quaternion);result.matrix.translate(-sourceCentroid);
-    result.matrix(0,3)+=float(solution[3]);result.matrix(1,3)+=float(solution[4]);result.matrix(2,3)+=float(solution[5]);
+    if (restrictedDof) {
+        const double yaw=solution[0]/rotationScale;
+        QQuaternion yawRotation;
+        if(std::abs(yaw)>1.0e-12)
+            yawRotation=QQuaternion::fromAxisAndAngle(QVector3D(0,0,1),float(qRadiansToDegrees(yaw)));
+        result.matrix.translate(sourceCentroid);result.matrix.rotate(yawRotation);result.matrix.translate(-sourceCentroid);
+        result.matrix(0,3)+=float(solution[1]);result.matrix(1,3)+=float(solution[2]);result.matrix(2,3)+=float(solution[3]);
+    } else {
+        const QVector3D rotationVector{float(solution[0]/rotationScale),float(solution[1]/rotationScale),float(solution[2]/rotationScale)};
+        const float angle=rotationVector.length();
+        QQuaternion quaternion;
+        if(angle>1.0e-12f)quaternion=QQuaternion::fromAxisAndAngle(rotationVector/angle,qRadiansToDegrees(angle));
+        result.matrix.translate(sourceCentroid);result.matrix.rotate(quaternion);result.matrix.translate(-sourceCentroid);
+        result.matrix(0,3)+=float(solution[3]);result.matrix(1,3)+=float(solution[4]);result.matrix(2,3)+=float(solution[5]);
+    }
     double squared=0.0,xySquared=0.0,zSquared=0.0;
     for(const CorrespondencePair &pair:pairs){const QVector3D residual=result.matrix.map(pair.source)-pair.target;squared+=residual.lengthSquared();xySquared+=residual.x()*residual.x()+residual.y()*residual.y();zSquared+=residual.z()*residual.z();}
     result.uniqueReferences=unique.size();
@@ -1383,6 +1418,22 @@ struct PairPreprocessCache {
     LevelTargetEntry levelTarget[3];
 };
 
+// Restricted ICP configuration of the 2.5D height-map path. It carries the
+// height-map candidate as the starting correction and replaces the generic
+// correction budget with the height-map budget, so the restricted ICP can only
+// refine the candidate and can never leave the strict 10 mm / 1 deg window.
+struct RestrictedRegistration {
+    bool enabled = false;
+    bool restrictedDof = true;
+    float maximumTranslationMm = 10.0f;
+    float maximumYawDegrees = 1.0f;
+    QMatrix4x4 initialCorrection;
+    // The 2.5D acceptance uses its own height-map criteria, so the legacy
+    // structural 3 mm coverage gate is measured and reported but does not
+    // reject the restricted attempt.
+    bool bypassLegacyStructuralAcceptance = false;
+};
+
 bool buildPlanePrealignment(const PlaneDiagnostic &sourcePlane,
                             const PlaneDiagnostic &targetPlane,
                             const IcpOptions &options,
@@ -1426,7 +1477,8 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
                             QMatrix4x4 *correction,
                             const ProgressCallback &progress,
                             PairStageTimes *stageTimes = nullptr,
-                            PairPreprocessCache *cache = nullptr) {
+                            PairPreprocessCache *cache = nullptr,
+                            const RestrictedRegistration &restricted = {}) {
     IcpDiagnostics diagnostic;
     diagnostic.attempted=true;
     diagnostic.targetCloudIndex=sourceIndex-1;
@@ -1441,7 +1493,16 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
         if (cancelFlag) return cancelFlag->load(std::memory_order_relaxed);
         return options.isCancelled && options.isCancelled();
     };
-    correction->setToIdentity();
+    // The restricted run starts from the height-map candidate instead of the
+    // identity, so the accumulated correction keeps the candidate and the trust
+    // region below measures the entire strict-budget window.
+    if (restricted.enabled) *correction = restricted.initialCorrection;
+    else correction->setToIdentity();
+    const float budgetTranslation = restricted.enabled
+        ? restricted.maximumTranslationMm : options.maximumCorrectionTranslation;
+    const float budgetAngleDegrees = restricted.enabled
+        ? restricted.maximumYawDegrees : options.maximumCorrectionAngleDegrees;
+    const bool restrictedIncrement = restricted.enabled && restricted.restrictedDof;
     // Intra-pair parallelism for the correspondence search. It is independent of
     // the outer frame parallelism: the per-pair loop stays serial and in scan
     // order, only the search inside one iteration is chunked.
@@ -1479,12 +1540,13 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
     } else {
         sourceBounds=cloudBounds(source);
         targetBounds=cloudBounds(target);
-        low=QVector3D(qMax(sourceBounds.minimum.x(),targetBounds.minimum.x())-options.overlapMargin,
-                      qMax(sourceBounds.minimum.y(),targetBounds.minimum.y())-options.overlapMargin,
-                      qMax(sourceBounds.minimum.z(),targetBounds.minimum.z())-options.overlapMargin);
-        high=QVector3D(qMin(sourceBounds.maximum.x(),targetBounds.maximum.x())+options.overlapMargin,
-                       qMin(sourceBounds.maximum.y(),targetBounds.maximum.y())+options.overlapMargin,
-                       qMin(sourceBounds.maximum.z(),targetBounds.maximum.z())+options.overlapMargin);
+        const float overlapMargin = options.overlapHardConstraint ? 0.0f : options.overlapMargin;
+        low=QVector3D(qMax(sourceBounds.minimum.x(),targetBounds.minimum.x())-overlapMargin,
+                      qMax(sourceBounds.minimum.y(),targetBounds.minimum.y())-overlapMargin,
+                      qMax(sourceBounds.minimum.z(),targetBounds.minimum.z())-overlapMargin);
+        high=QVector3D(qMin(sourceBounds.maximum.x(),targetBounds.maximum.x())+overlapMargin,
+                       qMin(sourceBounds.maximum.y(),targetBounds.maximum.y())+overlapMargin,
+                       qMin(sourceBounds.maximum.z(),targetBounds.maximum.z())+overlapMargin);
         if(high.x()<=low.x()||high.y()<=low.y()||high.z()<=low.z()){
             diagnostic.reason=QStringLiteral("相邻点云包围盒不重叠");return diagnostic;
         }
@@ -1547,7 +1609,9 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
         }
     }
     if(sourceCrop.size()<100||targetCrop.size()<100){diagnostic.reason=QStringLiteral("重叠区抽样点少于 100");return diagnostic;}
-    if(options.planePrealignmentEnabled){
+    // The restricted run keeps the height-map candidate as its starting value;
+    // the plane pre-alignment would replace it.
+    if(options.planePrealignmentEnabled && !restricted.enabled){
         QMatrix4x4 prealignment;
         if(sourcePlane.valid&&targetPlane.valid){
             if(!buildPlanePrealignment(sourcePlane,targetPlane,options,&prealignment,&diagnostic)){
@@ -1584,8 +1648,9 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             const Bounds sourceLocal = projectedBounds(overlapAlignedFull, origin, axisU, axisV, axisN);
             const Bounds targetLocal = projectedBounds(target, origin, axisU, axisV, axisN);
             actualOverlap = intersectBounds(sourceLocal, targetLocal);
-            actualOverlap.minimum -= QVector3D(options.overlapMargin, options.overlapMargin, options.overlapMargin);
-            actualOverlap.maximum += QVector3D(options.overlapMargin, options.overlapMargin, options.overlapMargin);
+            const float overlapMargin = options.overlapHardConstraint ? 0.0f : options.overlapMargin;
+            actualOverlap.minimum -= QVector3D(overlapMargin, overlapMargin, overlapMargin);
+            actualOverlap.maximum += QVector3D(overlapMargin, overlapMargin, overlapMargin);
             actualOverlap.valid = actualOverlap.maximum.x() > actualOverlap.minimum.x()
                 && actualOverlap.maximum.y() > actualOverlap.minimum.y()
                 && actualOverlap.maximum.z() > actualOverlap.minimum.z();
@@ -1712,8 +1777,8 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             for(float factor:factors){
                 const QMatrix4x4 candidateCorrection=
                     scaledRigidIncrement(coarseIncrement,factor)*correctionBeforeCoarse;
-                if(translationLength(candidateCorrection)>options.maximumCorrectionTranslation
-                    ||rotationAngle(candidateCorrection)>options.maximumCorrectionAngleDegrees)
+                if(translationLength(candidateCorrection)>budgetTranslation
+                    ||rotationAngle(candidateCorrection)>budgetAngleDegrees)
                     continue;
                 if(!rebuildActualOverlap(candidateCorrection))continue;
                 *correction=candidateCorrection;
@@ -1755,8 +1820,8 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             &&diagnostic.wideStructureCoverageBest>diagnostic.wideStructureCoverageBefore+options.tangentCoarseMinimumCoverageGain){
             const QMatrix4x4 correctionBeforeWide=*correction;
             const QMatrix4x4 candidateCorrection=wideCandidate*(*correction);
-            if(translationLength(candidateCorrection)<=options.maximumCorrectionTranslation
-                &&rotationAngle(candidateCorrection)<=options.maximumCorrectionAngleDegrees
+            if(translationLength(candidateCorrection)<=budgetTranslation
+                &&rotationAngle(candidateCorrection)<=budgetAngleDegrees
                 &&rebuildActualOverlap(candidateCorrection)){
                 if (!followCandidateCrop(candidateCorrection)) {
                     diagnostic.wideStructureDiagnosticReason = QStringLiteral(
@@ -1892,7 +1957,7 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             if(baselineInside<100){diagnostic.reason=QStringLiteral("%1 mm 层实际重叠区源点少于 100").arg(voxel);return diagnostic;}
         }
         FeatureResidualOptions featureResiduals;
-        if (steepPlane && structuralUsed && targetPlane.valid) {
+        if (!restrictedIncrement && steepPlane && structuralUsed && targetPlane.valid) {
             featureResiduals.enabled=true;
             featureResiduals.normal=targetPlane.normal;
             featureResiduals.origin=targetPlane.centroid;
@@ -1920,10 +1985,25 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             last=estimateIncrement(moving,reference,index,distance,actualOverlap,
                 &correspondenceScratch,&uniqueReferenceScratch,&featureResiduals,
                 options.normalCompatibilityDegrees,trimFraction,&residualScratch,
-                &diagnostic.normalRejectedCorrespondences,correspondenceTasks);
+                &diagnostic.normalRejectedCorrespondences,correspondenceTasks,restrictedIncrement);
             if (stageTimes) correspondenceClock.stop();
             if(!last.ok){diagnostic.reason=QStringLiteral("%1 mm 层有效对应少于 100").arg(voxel);return diagnostic;}
-            if(!degeneracyBasisLocked){
+            // Finite-value gate: a non-finite increment never reaches the trust
+            // region, the overlap trial or the output.
+            if(!std::isfinite(last.rmse)||!std::isfinite(last.xyRmse)
+                ||!std::isfinite(last.zRmse)||!std::isfinite(last.conditionRatio)){
+                diagnostic.reason=QStringLiteral("ICP 增量包含非有限值");return diagnostic;
+            }
+            for(int element=0;element<16;++element){
+                if(!std::isfinite(last.matrix.constData()[element])){
+                    diagnostic.reason=QStringLiteral("ICP 增量矩阵包含非有限值");return diagnostic;
+                }
+            }
+            if(restrictedIncrement){
+                // The restricted solver already returns an increment inside its
+                // own four-dimensional subspace, so the six-dimensional locked
+                // basis projection is skipped rather than re-applied.
+            }else if(!degeneracyBasisLocked){
                 lockedEigenvectors=last.eigenvectors;lockedEigenvalues=last.eigenvalues;
                 degeneracyBasisLocked=true;
             }else{
@@ -1956,8 +2036,8 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
                 if(countInsideBoundsTransformed(moving,candidate,actualOverlap,minimumInside)>=minimumInside){
                     overlapCandidateAvailable=true;
                     const QMatrix4x4 candidateCorrection=candidate*(*correction);
-                    if(translationLength(candidateCorrection)>options.maximumCorrectionTranslation
-                        ||rotationAngle(candidateCorrection)>options.maximumCorrectionAngleDegrees){
+                    if(translationLength(candidateCorrection)>budgetTranslation
+                        ||rotationAngle(candidateCorrection)>budgetAngleDegrees){
                         ++diagnostic.safetyConstrainedStepReductions;continue;
                     }
                     acceptedIncrement=candidate;overlapStepAccepted=true;
@@ -1977,7 +2057,7 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
             ++levelAcceptedIterations[level];
             const float translation=translationLength(*correction);
             const float angle=rotationAngle(*correction);
-            if(translation>options.maximumCorrectionTranslation||angle>options.maximumCorrectionAngleDegrees){diagnostic.reason=QStringLiteral("内部错误：ICP 信赖域越过安全范围");return diagnostic;}
+            if(translation>budgetTranslation||angle>budgetAngleDegrees){diagnostic.reason=QStringLiteral("内部错误：ICP 信赖域越过安全范围");return diagnostic;}
             const float fitness=float(last.correspondences)/qMax(1,moving.size());
             const float fitnessChange=previousFitness<0?std::numeric_limits<float>::max():std::abs(fitness-previousFitness)/qMax(1.0e-12f,std::abs(previousFitness));
             const float rmseChange=std::isfinite(previousRmse)?std::abs(last.rmse-previousRmse)/qMax(1.0e-12f,std::abs(previousRmse)):std::numeric_limits<float>::max();
@@ -2182,14 +2262,20 @@ IcpDiagnostics registerPair(const QVector<Point3D> &source,
                         .arg(diagnostic.structuralBidirectionalCoverage5mm,0,'f',4);
             }
             diagnostic.reason=diagnostic.structuralValidationReason;
-            return diagnostic;
+            // The 2.5D acceptance has its own height-map criteria: the legacy
+            // structural 3 mm coverage gate is measured, stamped and reported,
+            // but it does not reject the restricted attempt. The height-map
+            // acceptance decides after the restricted ICP returns.
+            if(!restricted.bypassLegacyStructuralAcceptance)return diagnostic;
+            diagnostic.structuralValidationPassed=false;
+        } else {
+            diagnostic.structuralValidationPassed=true;
+            diagnostic.structuralValidationReason=options.structuralCoverageOfMatched
+                ? QStringLiteral("已通过结构点双向覆盖验收（命中点内 3 mm=%1，命中率=%2）")
+                    .arg(diagnostic.structuralBidirectionalCoverage3mmOfMatched,0,'f',4)
+                    .arg(diagnostic.structuralBidirectionalMatchRatio,0,'f',4)
+                : QStringLiteral("已通过结构点双向覆盖验收");
         }
-        diagnostic.structuralValidationPassed=true;
-        diagnostic.structuralValidationReason=options.structuralCoverageOfMatched
-            ? QStringLiteral("已通过结构点双向覆盖验收（命中点内 3 mm=%1，命中率=%2）")
-                .arg(diagnostic.structuralBidirectionalCoverage3mmOfMatched,0,'f',4)
-                .arg(diagnostic.structuralBidirectionalMatchRatio,0,'f',4)
-            : QStringLiteral("已通过结构点双向覆盖验收");
     }else{
         diagnostic.structuralValidationPassed=true;
         diagnostic.structuralValidationReason=QStringLiteral("结构点验收已禁用");
@@ -2304,6 +2390,311 @@ MultiFrameRegistrationResult::OverlapDiagnostic overlapDiagnostic(
 }
 
 } // namespace
+
+// ---------------------------------------------------------------------------
+// 2.5D height-map attempt of one adjacent pair
+//
+// Order of operations (section 5 of the iteration contract): build the height
+// maps, search dx/dy, search a small dz/yaw window, run the restricted
+// point-to-plane ICP from the candidate, then apply the height-map acceptance.
+// The legacy ICP result stays available as a comparison and is never replaced
+// by this attempt.
+// ---------------------------------------------------------------------------
+
+struct HeightMapPairResult {
+    bool attempted = false;
+    bool searchAccepted = false;
+    bool accepted = false;
+    QString rejectReason;
+    QMatrix4x4 correction;
+    IcpDiagnostics diagnostic;
+    PairStageTimes stageTimes;
+    HeightMapSearchDiagnostic search;
+    HeightMapTrajectoryDiagnostic trajectory;
+    float gridResolutionMm = 0.0f;
+    int width = 0;
+    int height = 0;
+};
+
+HeightMapPairResult runHeightMapPair(const RobotBaseFrame &targetFrame,
+                                     const ConvertedCloud &targetCloud,
+                                     const RobotBaseFrame &sourceFrame,
+                                     const ConvertedCloud &sourceCloud,
+                                     int sourceIndex,
+                                     const QVector3D &stitchAxis,
+                                     float preferredSourcePlaneHeight,
+                                     float preferredTargetPlaneHeight,
+                                     bool planeIdentityTracked,
+                                     const IcpDiagnostics &legacyDiagnostic,
+                                     const IcpOptions &options,
+                                     const ProgressCallback &progress)
+{
+    HeightMapPairResult result;
+    result.attempted = true;
+    result.correction.setToIdentity();
+    const auto stampIdentity = [&](IcpDiagnostics *diagnostic) {
+        diagnostic->attempted = true;
+        diagnostic->targetCloudIndex = sourceIndex - 1;
+        diagnostic->sourceCloudIndex = sourceIndex;
+        diagnostic->heightMapAttempted = true;
+        if (diagnostic->selectedRegistrationSource.isEmpty())
+            diagnostic->selectedRegistrationSource = QStringLiteral("none");
+    };
+    const auto stampMetrics = [&](IcpDiagnostics *diagnostic) {
+        diagnostic->heightMapGridResolutionMm = result.gridResolutionMm;
+        diagnostic->heightMapWidth = result.width;
+        diagnostic->heightMapHeight = result.height;
+        diagnostic->heightMapScoreBefore = result.search.scoreBefore;
+        diagnostic->heightMapScoreAfter = result.search.scoreAfter;
+        diagnostic->heightMapRelativeImprovement = result.search.relativeImprovement;
+        diagnostic->heightMapSourceValidRatio = result.search.sourceValidRatio;
+        diagnostic->heightMapTargetValidRatio = result.search.targetValidRatio;
+        diagnostic->heightMapSourceValidPoints = result.search.sourceValidPoints;
+        diagnostic->heightMapTargetValidPoints = result.search.targetValidPoints;
+        diagnostic->heightMapTranslationX = result.search.translationX;
+        diagnostic->heightMapTranslationY = result.search.translationY;
+        diagnostic->heightMapTranslationZ = result.search.translationZ;
+        diagnostic->heightMapYawDegrees = result.search.yawDegrees;
+        diagnostic->heightMapNormalizedCorrelation = result.search.correlationAfter;
+        diagnostic->trajectoryDiagnosticReason = result.trajectory.reason;
+    };
+    const auto fail = [&](const QString &reason, bool replaceDiagnosticReason) {
+        result.accepted = false;
+        result.rejectReason = reason;
+        result.diagnostic.heightMapAttempted = true;
+        result.diagnostic.heightMapAccepted = false;
+        result.diagnostic.heightMapRejectReason = reason;
+        if (replaceDiagnosticReason) {
+            result.diagnostic.reason = reason;
+            result.diagnostic.failureCode = reason;
+        }
+        stampIdentity(&result.diagnostic);
+        stampMetrics(&result.diagnostic);
+    };
+    result.diagnostic.heightMapAttempted = true;
+    result.diagnostic.selectedRegistrationSource = QStringLiteral("none");
+
+    // 1. Trajectory diagnostic on the existing data only.
+    HeightMapTrajectoryInput targetInput;
+    targetInput.points = &targetCloud.full;
+    targetInput.scanRatios = &targetCloud.scanRatios;
+    targetInput.startBaseFromFlange = targetFrame.startBaseFromFlange;
+    targetInput.endBaseFromFlange = targetFrame.endBaseFromFlange;
+    targetInput.dominantTravelAxis = targetFrame.dominantTravelAxis;
+    targetInput.signedTravel = targetFrame.signedTravel;
+    HeightMapTrajectoryInput sourceInput;
+    sourceInput.points = &sourceCloud.full;
+    sourceInput.scanRatios = &sourceCloud.scanRatios;
+    sourceInput.startBaseFromFlange = sourceFrame.startBaseFromFlange;
+    sourceInput.endBaseFromFlange = sourceFrame.endBaseFromFlange;
+    sourceInput.dominantTravelAxis = sourceFrame.dominantTravelAxis;
+    sourceInput.signedTravel = sourceFrame.signedTravel;
+    result.trajectory = diagnoseHeightMapTrajectory(targetInput, sourceInput);
+    if (!result.trajectory.ok) {
+        fail(QStringLiteral("trajectory_diagnostic_failed"), true);
+        return result;
+    }
+
+    // 2. Region: the robot-initial overlap box, i.e. the X/Y intersection of
+    // the two frames. The joint bounding box of both frames is never used.
+    const Bounds sourceBounds = cloudBounds(sourceCloud.full);
+    const Bounds targetBounds = cloudBounds(targetCloud.full);
+    HeightMapRegion region;
+    region.minimumX = qMax(sourceBounds.minimum.x(), targetBounds.minimum.x());
+    region.minimumY = qMax(sourceBounds.minimum.y(), targetBounds.minimum.y());
+    region.maximumX = qMin(sourceBounds.maximum.x(), targetBounds.maximum.x());
+    region.maximumY = qMin(sourceBounds.maximum.y(), targetBounds.maximum.y());
+    if (!region.valid()) {
+        fail(QStringLiteral("heightmap_region_invalid"), true);
+        return result;
+    }
+
+    HeightMapOptions heightOptions;
+    heightOptions.minimumGridResolutionMm = qMin(options.heightMapGridMinimumMm,
+                                                 options.heightMapGridMaximumMm);
+    heightOptions.maximumGridResolutionMm = qMax(options.heightMapGridMinimumMm,
+                                                 options.heightMapGridMaximumMm);
+    heightOptions.minimumValidRatio = options.heightMapMinimumValidRatio;
+    heightOptions.minimumValidPoints = qMax(1, options.heightMapMinimumValidPoints);
+    heightOptions.overlapMarginMm = options.overlapMargin;
+
+    // 3. Grid resolution from the median point spacing of both frames.
+    float sourceResolution = 0.0f;
+    float targetResolution = 0.0f;
+    QString resolutionError;
+    if (!estimateHeightMapGridResolution(sourceCloud.full, heightOptions,
+                                         &sourceResolution, &resolutionError)) {
+        fail(resolutionError.isEmpty()
+                 ? QStringLiteral("heightmap_grid_resolution_invalid") : resolutionError, true);
+        return result;
+    }
+    if (!estimateHeightMapGridResolution(targetCloud.full, heightOptions,
+                                         &targetResolution, &resolutionError)) {
+        fail(resolutionError.isEmpty()
+                 ? QStringLiteral("heightmap_grid_resolution_invalid") : resolutionError, true);
+        return result;
+    }
+    result.gridResolutionMm = qBound(heightOptions.minimumGridResolutionMm,
+                                     0.5f * (sourceResolution + targetResolution),
+                                     heightOptions.maximumGridResolutionMm);
+
+    // 4. One map per frame, on the same grid and over the same region.
+    QElapsedTimer heightMapClock;
+    heightMapClock.start();
+    const HeightMap sourceMap = buildHeightMap(sourceCloud.full, region,
+                                               result.gridResolutionMm, heightOptions);
+    if (!sourceMap.ok) {
+        fail(sourceMap.error.isEmpty() ? QStringLiteral("heightmap_insufficient_data")
+                                       : sourceMap.error, true);
+        return result;
+    }
+    const HeightMap targetMap = buildHeightMap(targetCloud.full, region,
+                                               result.gridResolutionMm, heightOptions);
+    if (!targetMap.ok) {
+        fail(targetMap.error.isEmpty() ? QStringLiteral("heightmap_insufficient_data")
+                                       : targetMap.error, true);
+        return result;
+    }
+    result.width = targetMap.width;
+    result.height = targetMap.height;
+
+    // 5. Bounded coarse-to-fine search: stage I dx/dy, stage II a small
+    // dz/yaw window. The full 6 DoF is never opened.
+    HeightMapSearchOptions searchOptions;
+    searchOptions.searchEnabled = options.heightMapSearchEnabled;
+    searchOptions.maximumTranslationMm = options.heightMapMaxTranslationMm;
+    searchOptions.maximumYawDegrees = options.heightMapMaxYawDegrees;
+    searchOptions.minimumRelativeImprovement = options.heightMapMinimumRelativeImprovement;
+    searchOptions.gridResolutionMm = result.gridResolutionMm;
+    searchOptions.overlapMarginMm = options.overlapMargin;
+    searchOptions.isCancelled = [&options]() { return cancellationRequested(options); };
+    result.search = searchHeightMapAlignment(sourceMap, targetMap, searchOptions);
+    result.stageTimes.coarseSearchMs += heightMapClock.elapsed();
+    stampIdentity(&result.diagnostic);
+    stampMetrics(&result.diagnostic);
+    if (result.search.reason == QStringLiteral("已取消")) {
+        fail(QStringLiteral("已取消"), true);
+        return result;
+    }
+    if (!result.search.accepted) {
+        fail(result.search.reason.isEmpty() ? QStringLiteral("heightmap_search_failed")
+                                            : result.search.reason, true);
+        return result;
+    }
+    result.searchAccepted = true;
+    // Height-map acceptance gates the search itself does not own.
+    if (result.search.sourceValidRatio < options.heightMapMinimumValidRatio
+        || result.search.targetValidRatio < options.heightMapMinimumValidRatio
+        || result.search.sourceValidPoints < options.heightMapMinimumValidPoints
+        || result.search.targetValidPoints < options.heightMapMinimumValidPoints) {
+        fail(QStringLiteral("heightmap_insufficient_data"), true);
+        return result;
+    }
+    if (cancellationRequested(options)) {
+        fail(QStringLiteral("已取消"), true);
+        return result;
+    }
+
+    // 6. Restricted point-to-plane ICP from the candidate. Plane pre-alignment,
+    // the tangent coarse search and the wide structure search stay off, so the
+    // candidate is only refined inside the strict budget.
+    IcpOptions restrictedOptions = options;
+    restrictedOptions.planePrealignmentEnabled = false;
+    restrictedOptions.tangentCoarseAlignmentEnabled = false;
+    restrictedOptions.tangentCoarseAlignmentAuto = false;
+    restrictedOptions.wideStructureDiagnosticEnabled = false;
+    restrictedOptions.applyWideStructureCandidate = false;
+    restrictedOptions.structuralValidationEnabled = true;
+    restrictedOptions.maximumCorrectionTranslation = options.heightMapMaxTranslationMm;
+    restrictedOptions.maximumCorrectionAngleDegrees = options.heightMapMaxYawDegrees;
+    RestrictedRegistration restricted;
+    restricted.enabled = true;
+    restricted.restrictedDof = options.heightMapRestrictedDof;
+    restricted.maximumTranslationMm = options.heightMapMaxTranslationMm;
+    restricted.maximumYawDegrees = options.heightMapMaxYawDegrees;
+    restricted.initialCorrection = result.search.candidate;
+    restricted.bypassLegacyStructuralAcceptance = true;
+    QMatrix4x4 restrictedCorrection;
+    result.diagnostic = registerPair(sourceCloud.sample, targetCloud.sample, restrictedOptions,
+        sourceIndex, stitchAxis, preferredSourcePlaneHeight, preferredTargetPlaneHeight,
+        planeIdentityTracked, &restrictedCorrection, progress, &result.stageTimes, nullptr,
+        restricted);
+    result.correction = restrictedCorrection;
+    result.diagnostic.heightMapRestrictedIcpCompletedLevels = result.diagnostic.completedLevels;
+    result.diagnostic.heightMapRestrictedIcpDegenerate = result.diagnostic.degenerate;
+    stampIdentity(&result.diagnostic);
+    stampMetrics(&result.diagnostic);
+    if (result.diagnostic.reason == QStringLiteral("已取消")) {
+        fail(QStringLiteral("已取消"), false);
+        return result;
+    }
+    if (!result.diagnostic.accepted) {
+        fail(result.diagnostic.failureCode.isEmpty()
+                 ? QStringLiteral("heightmap_restricted_icp_failed")
+                 : result.diagnostic.failureCode, false);
+        return result;
+    }
+
+    // 7. 2.5D acceptance. It uses the height-map criteria of this iteration;
+    // the legacy 3 mm structural coverage stays recorded but does not gate it.
+    if (!result.diagnostic.converged || result.diagnostic.completedLevels != 3) {
+        fail(QStringLiteral("heightmap_restricted_icp_incomplete"), false);
+        return result;
+    }
+    if (result.diagnostic.degenerate) {
+        fail(QStringLiteral("heightmap_restricted_icp_degenerate"), false);
+        return result;
+    }
+    if (result.diagnostic.stoppedAtSafetyBoundary) {
+        fail(QStringLiteral("heightmap_candidate_exceeds_budget"), false);
+        return result;
+    }
+    if (result.diagnostic.actualOverlapSourceCount < qMax(100, options.minimumStructuralPoints)
+        || result.diagnostic.actualOverlapTargetCount < qMax(100, options.minimumStructuralPoints)) {
+        fail(QStringLiteral("heightmap_insufficient_overlap"), false);
+        return result;
+    }
+    // The candidate must not destroy the real overlap the legacy baseline
+    // found: a correction that keeps only a fragment of it never reaches the
+    // formal output.
+    if (legacyDiagnostic.actualOverlapSourceCount >= qMax(100, options.minimumStructuralPoints)
+        && result.diagnostic.actualOverlapSourceCount * 2 < legacyDiagnostic.actualOverlapSourceCount) {
+        fail(QStringLiteral("heightmap_candidate_overlap_destroyed"), false);
+        return result;
+    }
+    if (legacyDiagnostic.actualOverlapTargetCount >= qMax(100, options.minimumStructuralPoints)
+        && result.diagnostic.actualOverlapTargetCount * 2 < legacyDiagnostic.actualOverlapTargetCount) {
+        fail(QStringLiteral("heightmap_candidate_overlap_destroyed"), false);
+        return result;
+    }
+    if (result.diagnostic.correctionTranslation > options.heightMapMaxTranslationMm + 1.0e-4f
+        || result.diagnostic.correctionAngleDegrees > options.heightMapMaxYawDegrees + 1.0e-6f) {
+        fail(QStringLiteral("heightmap_candidate_exceeds_budget"), false);
+        return result;
+    }
+    for (int element = 0; element < 16; ++element) {
+        if (!std::isfinite(result.correction.constData()[element])) {
+            fail(QStringLiteral("heightmap_non_finite_result"), false);
+            return result;
+        }
+    }
+    if (!std::isfinite(result.diagnostic.heightMapScoreAfter)
+        || !std::isfinite(result.diagnostic.heightMapScoreBefore)
+        || !std::isfinite(result.diagnostic.correctionTranslation)
+        || !std::isfinite(result.diagnostic.correctionAngleDegrees)) {
+        fail(QStringLiteral("heightmap_non_finite_result"), false);
+        return result;
+    }
+    result.accepted = true;
+    result.diagnostic.heightMapAccepted = true;
+    result.diagnostic.selectedRegistrationSource = QStringLiteral("heightmap_restricted_icp");
+    result.diagnostic.heightMapRejectReason.clear();
+    result.diagnostic.reason = QStringLiteral("通过 2.5D 高程图验收（新口径：高程图有效比例/相对改善/受限 ICP 四自由度，非旧结构点 3 mm 验收）");
+    result.diagnostic.failureCode.clear();
+    stampIdentity(&result.diagnostic);
+    stampMetrics(&result.diagnostic);
+    return result;
+}
 
 MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inputs,
                                                       const IcpOptions &icp,
@@ -2501,7 +2892,7 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
         diagnostic.primaryAttemptReason=diagnostic.reason;
         diagnostic.blockingClass=classifyBlocking(diagnostic);
         QString retrySkipReason;
-        if(eligibleForRelaxedRetry(diagnostic,&retrySkipReason)){
+        if(icp.recoveryMode && eligibleForRelaxedRetry(diagnostic,&retrySkipReason)){
             if(cancellationRequested(icp)){result.cancelled=true;result.error=QStringLiteral("已取消");return result;}
             diagnostic.relaxedRetryAttempted=true;
             result.diagnostics+=QStringLiteral("scan %1 retry start: class=%2, reason=%3\n")
@@ -2554,6 +2945,141 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
             if(!retrySkipReason.isEmpty())
                 result.diagnostics+=QStringLiteral("scan %1 retry skipped: %2\n")
                     .arg(index+1).arg(retrySkipReason);
+        }
+        diagnostic.blockingClass=classifyBlocking(diagnostic);
+        // ------------------------------------------------------------------
+        // 2.5D height-map path (opt-in, default off).
+        //
+        // The legacy attempt above is kept as the baseline of this pair. The
+        // height-map attempt runs next; when it passes its own acceptance the
+        // formal output uses its restricted ICP result, and the legacy numbers
+        // stay a comparison that never overwrites it.
+        // ------------------------------------------------------------------
+        if(icp.heightMapRegistrationEnabled&&diagnostic.reason!=QStringLiteral("已取消")){
+            const IcpDiagnostics legacyDiagnostic=diagnostic;
+            const QMatrix4x4 legacyCorrection=correction;
+            QElapsedTimer heightMapClock;
+            heightMapClock.start();
+            HeightMapPairResult heightMap=runHeightMapPair(inputs.at(index-1),clouds.at(index-1),
+                inputs.at(index),clouds.at(index),index,sourceCenter-targetCenter,
+                result.trackedPlaneHeights.value(index),result.trackedPlaneHeights.value(index-1),
+                result.planeIdentityTrackingValid,legacyDiagnostic,icp,
+                [&](float fraction,const QString &message){
+                    update(pairStart+fraction*pairSpan,message+QStringLiteral("（2.5D 高程图）"));});
+            const qint64 heightMapTotalMs=heightMapClock.elapsed();
+            accumulateStageTimes(heightMap.stageTimes,heightMapTotalMs);
+            applyDiagnosticTimes(&heightMap.diagnostic,heightMap.stageTimes,heightMapTotalMs,0);
+            heightMap.diagnostic.filePath=inputs.at(index).sourceFile;
+            heightMap.diagnostic.legacyIcpComparisonAvailable=true;
+            heightMap.diagnostic.legacyIcpComparisonCoverage3mm=legacyDiagnostic.structuralBidirectionalCoverage3mm;
+            heightMap.diagnostic.legacyIcpComparisonP95=qMax(legacyDiagnostic.structuralSourceToTargetP95,
+                                                            legacyDiagnostic.structuralTargetToSourceP95);
+            heightMap.diagnostic.legacyIcpAccepted=legacyDiagnostic.accepted;
+            heightMap.diagnostic.legacyIcpRejectReason=legacyDiagnostic.accepted?QString():legacyDiagnostic.reason;
+            if(heightMap.diagnostic.reason==QStringLiteral("已取消")){
+                result.cancelled=true;result.error=heightMap.diagnostic.reason;return result;
+            }
+            // Selection. Both paths pass -> the height-map result is the formal
+            // output; only the legacy path passes -> fall back; neither -> none.
+            if(heightMap.accepted){
+                diagnostic=heightMap.diagnostic;
+                correction=heightMap.correction;
+                diagnostic.selectedRegistrationSource=QStringLiteral("heightmap_restricted_icp");
+                diagnostic.heightMapFallbackToIcp=false;
+            }else if(legacyDiagnostic.accepted){
+                diagnostic=legacyDiagnostic;
+                correction=legacyCorrection;
+                diagnostic.selectedRegistrationSource=QStringLiteral("legacy_icp");
+                diagnostic.heightMapAttempted=true;
+                diagnostic.heightMapAccepted=false;
+                diagnostic.heightMapFallbackToIcp=true;
+                diagnostic.heightMapRejectReason=heightMap.rejectReason;
+                diagnostic.heightMapGridResolutionMm=heightMap.diagnostic.heightMapGridResolutionMm;
+                diagnostic.heightMapWidth=heightMap.diagnostic.heightMapWidth;
+                diagnostic.heightMapHeight=heightMap.diagnostic.heightMapHeight;
+                diagnostic.heightMapSourceValidRatio=heightMap.diagnostic.heightMapSourceValidRatio;
+                diagnostic.heightMapTargetValidRatio=heightMap.diagnostic.heightMapTargetValidRatio;
+                diagnostic.heightMapSourceValidPoints=heightMap.diagnostic.heightMapSourceValidPoints;
+                diagnostic.heightMapTargetValidPoints=heightMap.diagnostic.heightMapTargetValidPoints;
+                diagnostic.heightMapScoreBefore=heightMap.diagnostic.heightMapScoreBefore;
+                diagnostic.heightMapScoreAfter=heightMap.diagnostic.heightMapScoreAfter;
+                diagnostic.heightMapRelativeImprovement=heightMap.diagnostic.heightMapRelativeImprovement;
+                diagnostic.heightMapTranslationX=heightMap.diagnostic.heightMapTranslationX;
+                diagnostic.heightMapTranslationY=heightMap.diagnostic.heightMapTranslationY;
+                diagnostic.heightMapTranslationZ=heightMap.diagnostic.heightMapTranslationZ;
+                diagnostic.heightMapYawDegrees=heightMap.diagnostic.heightMapYawDegrees;
+                diagnostic.heightMapRestrictedIcpCompletedLevels=heightMap.diagnostic.heightMapRestrictedIcpCompletedLevels;
+                diagnostic.heightMapRestrictedIcpDegenerate=heightMap.diagnostic.heightMapRestrictedIcpDegenerate;
+                diagnostic.heightMapNormalizedCorrelation=heightMap.diagnostic.heightMapNormalizedCorrelation;
+                diagnostic.trajectoryDiagnosticReason=heightMap.diagnostic.trajectoryDiagnosticReason;
+            }else{
+                diagnostic=heightMap.diagnostic;
+                correction.setToIdentity();
+                diagnostic.accepted=false;
+                diagnostic.selectedRegistrationSource=QStringLiteral("none");
+                diagnostic.heightMapFallbackToIcp=false;
+                if(diagnostic.heightMapRejectReason.isEmpty())
+                    diagnostic.heightMapRejectReason=legacyDiagnostic.failureCode.isEmpty()
+                        ?legacyDiagnostic.reason:legacyDiagnostic.failureCode;
+                diagnostic.reason=QStringLiteral("2.5D 与旧 ICP 均未通过：2.5D=%1；旧 ICP=%2")
+                    .arg(diagnostic.heightMapRejectReason,legacyDiagnostic.reason);
+                diagnostic.failureCode=QStringLiteral("registration_paths_failed");
+            }
+            diagnostic.legacyIcpComparisonAvailable=true;
+            diagnostic.legacyIcpComparisonCoverage3mm=legacyDiagnostic.structuralBidirectionalCoverage3mm;
+            diagnostic.legacyIcpComparisonP95=qMax(legacyDiagnostic.structuralSourceToTargetP95,
+                                                   legacyDiagnostic.structuralTargetToSourceP95);
+            diagnostic.legacyIcpAccepted=legacyDiagnostic.accepted;
+            diagnostic.legacyIcpRejectReason=legacyDiagnostic.accepted?QString():legacyDiagnostic.reason;
+            diagnostic.heightMapAttempted=true;
+            // Visibility hard gate: it applies to whichever path produced the
+            // final result and it wins over every local accuracy score. The
+            // hit-point coverage (cov3_of_matched) never bypasses it.
+            const float finalVisibleRatio=qMin(diagnostic.structuralSourceMatchRatio,
+                                               diagnostic.structuralTargetMatchRatio);
+            if(diagnostic.accepted&&finalVisibleRatio<icp.heightMapMinimumValidRatio){
+                diagnostic.visibilityHardRejected=true;
+                diagnostic.accepted=false;
+                diagnostic.selectedRegistrationSource=QStringLiteral("none");
+                diagnostic.heightMapAccepted=false;
+                diagnostic.failureCode=QStringLiteral("visibility_hard_rejected");
+                diagnostic.reason=QStringLiteral(
+                    "visibility_hard_rejected：最终有效可见比例 %1 低于 %2，低可见性硬拒绝（命中点内覆盖率不作为放行依据）")
+                    .arg(QString::number(double(finalVisibleRatio),'f',4))
+                    .arg(QString::number(double(icp.heightMapMinimumValidRatio),'f',4));
+                correction.setToIdentity();
+            }
+            result.diagnostics+=QStringLiteral(
+                "heightmap_report: heightmap_registration_enabled=%1 heightmap_registration_attempted=%2 "
+                "heightmap_registration_accepted=%3 heightmap_fallback_to_legacy_icp=%4 heightmap_grid_resolution_mm=%5 "
+                "heightmap_valid_ratio_source=%6 heightmap_valid_ratio_target=%7 heightmap_valid_points_source=%8 "
+                "heightmap_valid_points_target=%9 heightmap_score_before=%10 heightmap_score_after=%11 "
+                "heightmap_relative_improvement=%12 heightmap_delta_xyz_mm=%13,%14,%15 heightmap_delta_yaw_deg=%16 "
+                "heightmap_restricted_icp_levels=%17 heightmap_restricted_icp_degenerate=%18 "
+                "selected_registration_source=%19 heightmap_reject_reason=%20 visibility_hard_rejected=%21 "
+                "legacy_icp_comparison=%22\n")
+                .arg(QStringLiteral("true"))
+                .arg(QStringLiteral("true"))
+                .arg(diagnostic.heightMapAccepted?QStringLiteral("true"):QStringLiteral("false"))
+                .arg(diagnostic.heightMapFallbackToIcp?QStringLiteral("true"):QStringLiteral("false"))
+                .arg(QString::number(double(diagnostic.heightMapGridResolutionMm),'f',4))
+                .arg(QString::number(double(diagnostic.heightMapSourceValidRatio),'f',4))
+                .arg(QString::number(double(diagnostic.heightMapTargetValidRatio),'f',4))
+                .arg(diagnostic.heightMapSourceValidPoints)
+                .arg(diagnostic.heightMapTargetValidPoints)
+                .arg(QString::number(double(diagnostic.heightMapScoreBefore),'f',5))
+                .arg(QString::number(double(diagnostic.heightMapScoreAfter),'f',5))
+                .arg(QString::number(double(diagnostic.heightMapRelativeImprovement),'f',5))
+                .arg(QString::number(double(diagnostic.heightMapTranslationX),'f',4))
+                .arg(QString::number(double(diagnostic.heightMapTranslationY),'f',4))
+                .arg(QString::number(double(diagnostic.heightMapTranslationZ),'f',4))
+                .arg(QString::number(double(diagnostic.heightMapYawDegrees),'f',4))
+                .arg(diagnostic.heightMapRestrictedIcpCompletedLevels)
+                .arg(diagnostic.heightMapRestrictedIcpDegenerate?QStringLiteral("true"):QStringLiteral("false"))
+                .arg(diagnostic.selectedRegistrationSource)
+                .arg(diagnostic.heightMapRejectReason)
+                .arg(diagnostic.visibilityHardRejected?QStringLiteral("true"):QStringLiteral("false"))
+                .arg(diagnostic.legacyIcpComparisonAvailable?QStringLiteral("true"):QStringLiteral("false"));
         }
         diagnostic.blockingClass=classifyBlocking(diagnostic);
         result.icpDiagnostics.push_back(diagnostic);

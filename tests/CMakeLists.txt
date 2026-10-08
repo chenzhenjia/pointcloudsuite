@@ -49,7 +49,14 @@ target_link_libraries(plane_output_tests PRIVATE Qt::Core Qt::Gui pcv_m10_pointc
 add_test(NAME plane_output_tests COMMAND plane_output_tests)
 
 add_executable(temp_workpiece_interface_tests unit/interface/temp_workpiece_interface_tests.cpp)
-target_link_libraries(temp_workpiece_interface_tests PRIVATE Qt::Core Qt::Gui pcv_m60_geometry_workpiece)
+target_link_libraries(temp_workpiece_interface_tests PRIVATE
+    Qt::Core Qt::Gui pcv_m60_geometry_workpiece pcv_m50_coordinate_conversion)
+if(TARGET pcv_m30_pointcloud_stitch)
+    # Cross-path check: the scanning JSON entry and the multi-frame entry must
+    # return identical robot_base coordinates for the same PLY/XML/poses.
+    target_link_libraries(temp_workpiece_interface_tests PRIVATE pcv_m30_pointcloud_stitch)
+    target_compile_definitions(temp_workpiece_interface_tests PRIVATE PCV_TEST_HAS_M30_STITCHING=1)
+endif()
 add_test(NAME temp_workpiece_interface_tests COMMAND temp_workpiece_interface_tests)
 
 if(TARGET pcv_m30_pointcloud_stitch)
@@ -129,6 +136,31 @@ target_link_libraries(plane_fitting_tests PRIVATE Qt::Core Qt::Gui pcv_m60_geome
 add_test(NAME plane_fitting_tests COMMAND plane_fitting_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS plane_fitting_tests)
 
+add_executable(plane_fitting_equivalence_tests_v2 unit/planefitting/plane_fitting_equivalence_tests_v2.cpp)
+target_link_libraries(plane_fitting_equivalence_tests_v2 PRIVATE Qt::Core Qt::Gui pcv_m60_geometry_workpiece)
+add_test(NAME plane_fitting_equivalence_tests_v2 COMMAND plane_fitting_equivalence_tests_v2)
+list(APPEND PCV_APPLICATION_TEST_TARGETS plane_fitting_equivalence_tests_v2)
+
+add_executable(scan_planner_tests unit/scan/scan_planner_tests.cpp)
+target_link_libraries(scan_planner_tests PRIVATE Qt::Core Qt::Gui pcv_m60_geometry_workpiece)
+add_test(NAME scan_planner_tests COMMAND scan_planner_tests)
+list(APPEND PCV_APPLICATION_TEST_TARGETS scan_planner_tests)
+
+add_executable(texture_mapping_tests unit/texture/texture_mapping_tests.cpp)
+target_link_libraries(texture_mapping_tests PRIVATE Qt::Core Qt::Gui pcv_m60_geometry_workpiece)
+add_test(NAME texture_mapping_tests COMMAND texture_mapping_tests)
+list(APPEND PCV_APPLICATION_TEST_TARGETS texture_mapping_tests)
+
+if(PCV_BUILD_POINTCLOUDVIEW)
+    add_executable(texture_experiment_tests
+        unit/pointcloudview/texture_experiment_tests_v1.cpp
+    )
+    target_link_libraries(texture_experiment_tests PRIVATE
+        Qt::Core Qt::Gui pcv_m10_pointcloud_io pcv_m60_geometry_workpiece)
+    add_test(NAME texture_experiment_tests COMMAND texture_experiment_tests)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS texture_experiment_tests)
+endif()
+
 if(TARGET pcv_m20_pointcloud_render)
     add_executable(pointcloud_canvas_contract_tests unit/render/pointcloud_canvas_contract_tests.cpp)
     target_link_libraries(pointcloud_canvas_contract_tests PRIVATE Qt::Core Qt::Gui pcv_m20_pointcloud_render)
@@ -142,4 +174,9 @@ if(WIN32 AND TARGET Qt6::Core AND PCV_APPLICATION_TEST_TARGETS)
     set(PCV_TEST_PATH "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}")
     set_tests_properties(${PCV_APPLICATION_TEST_TARGETS}
         PROPERTIES ENVIRONMENT "${PCV_TEST_PATH}")
+endif()
+if(TARGET texture_experiment_tests)
+    set_property(TEST texture_experiment_tests APPEND PROPERTY ENVIRONMENT
+        "QT_QPA_PLATFORM=offscreen")
+    set_tests_properties(texture_experiment_tests PROPERTIES TIMEOUT 30)
 endif()

@@ -1,6 +1,7 @@
 #include "pointcloudprocessor.h"
 
 #include <pcv/planefitting/plane_fitting.h>
+#include <pcv/registration/handeye_transform.h>
 
 #include <pcv/io/cloud_cache.h>
 #include <pcv/filtering/downsample.h>
@@ -62,6 +63,7 @@ LoadResult loadPlyCachedResult(const QString &fileName) {
     result.ok = cached.ok;
     result.error = cached.error;
     result.usedCache = cached.usedCache;
+    result.declaredPointCount = cached.declaredPointCount;
     result.points = cached.points;
     result.warnings = cached.warnings;
     result.sourcePlyEncoding = cached.sourceFormat == pcv::detail::io::PlyFormat::Ascii
@@ -165,7 +167,9 @@ VoxelRepresentatives voxelRepresentatives(const QVector<Point3D> &points, float 
 }
 
 constexpr quint32 MergeCacheMagic = 0x314D4350; // PCM1
-constexpr quint32 MergeCacheVersion = 8;
+// Version 9 invalidates caches written by the removed in-app conversion
+// (local progress heuristics and an inline base*flange product).
+constexpr quint32 MergeCacheVersion = 9;
 QString intermediateDirectory() {
     return pcv::runtime::cacheDirectory();
 }
@@ -184,36 +188,6 @@ QString mergeCachePath(const QVector<WorldCloudInput> &inputs) {
 bool sameTransform(const QMatrix4x4 &a, const QMatrix4x4 &b) {
     const float *x = a.constData(), *y = b.constData();
     for (int i = 0; i < 16; ++i) if (std::abs(x[i] - y[i]) > 1.0e-6f) return false;
-    return true;
-}
-
-bool validateRigidTransform(const QMatrix4x4 &matrix, QString *error) {
-    const float *values = matrix.constData();
-    for (int i = 0; i < 16; ++i) {
-        if (!std::isfinite(values[i])) {
-            if (error) *error = QStringLiteral("矩阵包含 NaN/Inf");
-            return false;
-        }
-    }
-    if (std::abs(matrix(3, 0)) > 1.0e-4f || std::abs(matrix(3, 1)) > 1.0e-4f
-        || std::abs(matrix(3, 2)) > 1.0e-4f || std::abs(matrix(3, 3) - 1.0f) > 1.0e-4f) {
-        if (error) *error = QStringLiteral("齐次矩阵底行不是 [0 0 0 1]");
-        return false;
-    }
-    const QVector3D c0(matrix(0, 0), matrix(1, 0), matrix(2, 0));
-    const QVector3D c1(matrix(0, 1), matrix(1, 1), matrix(2, 1));
-    const QVector3D c2(matrix(0, 2), matrix(1, 2), matrix(2, 2));
-    const float tolerance = 2.0e-3f;
-    if (std::abs(c0.lengthSquared() - 1.0f) > tolerance
-        || std::abs(c1.lengthSquared() - 1.0f) > tolerance
-        || std::abs(c2.lengthSquared() - 1.0f) > tolerance
-        || std::abs(QVector3D::dotProduct(c0, c1)) > tolerance
-        || std::abs(QVector3D::dotProduct(c0, c2)) > tolerance
-        || std::abs(QVector3D::dotProduct(c1, c2)) > tolerance
-        || matrix.determinant() < 0.98f || matrix.determinant() > 1.02f) {
-        if (error) *error = QStringLiteral("旋转部分不是有效的刚体旋转矩阵");
-        return false;
-    }
     return true;
 }
 
@@ -400,58 +374,6 @@ IcpCorrection estimateIcpCorrection(const QVector<Point3D> &moving,
 
 void applyIcpCorrection(QVector<Point3D> &points, const IcpCorrection &c) { for(Point3D &p:points){const float x=p.x,y=p.y,z=p.z;p.x=c.r[0][0]*x+c.r[0][1]*y+c.r[0][2]*z+c.t.x();p.y=c.r[1][0]*x+c.r[1][1]*y+c.r[1][2]*z+c.t.y();p.z=c.r[2][0]*x+c.r[2][1]*y+c.r[2][2]*z+c.t.z();const float nx=p.nx,ny=p.ny,nz=p.nz;p.nx=c.r[0][0]*nx+c.r[0][1]*ny+c.r[0][2]*nz;p.ny=c.r[1][0]*nx+c.r[1][1]*ny+c.r[1][2]*nz;p.nz=c.r[2][0]*nx+c.r[2][1]*ny+c.r[2][2]*nz;} }
 
-QMatrix4x4 interpolateRigidTransform(const QMatrix4x4 &start, const QMatrix4x4 &end, float t) {
-    const QVector3D startPosition(start(0,3), start(1,3), start(2,3));
-    const QVector3D endPosition(end(0,3), end(1,3), end(2,3));
-    QMatrix3x3 startRotation, endRotation;
-    for (int row=0; row<3; ++row) for (int column=0; column<3; ++column) {
-        startRotation(row,column)=start(row,column); endRotation(row,column)=end(row,column);
-    }
-    const QQuaternion rotation = QQuaternion::slerp(
-        QQuaternion::fromRotationMatrix(startRotation),
-        QQuaternion::fromRotationMatrix(endRotation), t).normalized();
-    const QVector3D position = startPosition * (1.0f-t) + endPosition * t;
-    QMatrix4x4 result; result.setToIdentity(); result.rotate(rotation);
-    result(0,3)=position.x(); result(1,3)=position.y(); result(2,3)=position.z();
-    return result;
-}
-
-struct RigidTransformLut {
-    static constexpr int Resolution = 2048;
-    QVector<QMatrix4x4> values;
-    bool constant = false;
-
-    RigidTransformLut(const QMatrix4x4 &start, const QMatrix4x4 &end) {
-        values.reserve(Resolution + 1);
-        constant = true;
-        for (int i = 0; i < 16; ++i)
-            if (std::abs(start.constData()[i] - end.constData()[i]) > 1.0e-7f) { constant = false; break; }
-        if (constant) { values.push_back(start); return; }
-        for (int i = 0; i <= Resolution; ++i)
-            values.push_back(interpolateRigidTransform(start, end, float(i) / float(Resolution)));
-    }
-
-    const QMatrix4x4 &at(float t) const {
-        if (constant) return values.front();
-        const int index = qBound(0, qRound(t * float(Resolution)), Resolution);
-        return values[index];
-    }
-};
-
-float scanProgress(const QVector<Point3D> &points, qsizetype index,
-                   WorldCloudInput::ScanProgressSource source, float low, float high,
-                   bool reverseAxis) {
-    if (points.size() < 2 || source == WorldCloudInput::ScanProgressSource::VertexOrder)
-        return points.size() < 2 ? 0.0f : float(index) / float(points.size() - 1);
-    const int axis = source == WorldCloudInput::ScanProgressSource::LocalX ? 0
-                   : source == WorldCloudInput::ScanProgressSource::LocalY ? 1 : 2;
-    const Point3D &p = points[index];
-    const float value = axis == 0 ? p.x : axis == 1 ? p.y : p.z;
-    if (high <= low) return 0.0f;
-    const float progress = qBound(0.0f, (value-low)/(high-low), 1.0f);
-    return reverseAxis ? 1.0f - progress : progress;
-}
-
 struct CloudBounds {
     QVector3D minimum{std::numeric_limits<float>::max(),
                       std::numeric_limits<float>::max(),
@@ -571,130 +493,59 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
         QVector<Point3D> points = std::move(loaded[cloudId]);
         const CloudBounds localBounds = cloudBounds(points);
         QVector<qsizetype> sourceIndices(points.size());
-        const auto progressSource = inputs[cloudId].scanProgressSource;
-        const int progressAxis = progressSource == WorldCloudInput::ScanProgressSource::LocalX ? 0
-            : progressSource == WorldCloudInput::ScanProgressSource::LocalY ? 1 : 2;
-        float progressLow = std::numeric_limits<float>::max(), progressHigh = -progressLow;
-        float firstProgressValue = 0.0f, lastProgressValue = 0.0f;
-        bool haveFirstProgressValue = false, haveLastProgressValue = false;
-        const RigidTransformLut motionLut(inputs[cloudId].startBaseFromFlange,
-                                          inputs[cloudId].endBaseFromFlange);
-        if (progressSource != WorldCloudInput::ScanProgressSource::VertexOrder)
-            for (const Point3D &point : points) {
-                const float value = progressAxis == 0 ? point.x : progressAxis == 1 ? point.y : point.z;
-                progressLow = qMin(progressLow, value); progressHigh = qMax(progressHigh, value);
+        // Module 50 owns the complete camera -> robot_base conversion. This
+        // path uses the same LineProfileXz contract as the scanning JSON entry:
+        // the camera point is [X,0,Z], the input Y only yields the scan ratio
+        // y / signedTravel, and Start/End define the scan direction. No local
+        // matrix product, no default inverse and no Z flip / mirror patch.
+        qsizetype rejectedInvalid = 0;
+        qsizetype rejectedRange = 0;
+        float signedTravel = 0.0f;
+        int dominantTravelAxis = -1;
+        if (inputs[cloudId].applyRobotTransform) {
+            pointcloud::HandEyeCalibration calibration;
+            calibration.flangeFromDepth = inputs[cloudId].flangeFromDepth;
+            calibration.valid = true;
+            pointcloud::CloudTransformOptions conversionOptions;
+            conversionOptions.layout = pointcloud::DepthPointLayout::LineProfileXz;
+            conversionOptions.sampleStride = 1;
+            conversionOptions.interpolateRotation = true;
+            const pointcloud::RobotCloudResult converted =
+                pointcloud::transformLineScanToRobotBase(
+                    points, calibration,
+                    inputs[cloudId].startBaseFromFlange,
+                    inputs[cloudId].endBaseFromFlange, conversionOptions);
+            if (!converted.ok) {
+                result.error = QStringLiteral("%1：%2")
+                    .arg(QFileInfo(inputs[cloudId].filePath).fileName(), converted.error);
+                return result;
             }
-        if (progressSource != WorldCloudInput::ScanProgressSource::VertexOrder) {
-            for (const Point3D &point : points) {
-                if (!usablePoint(point)) continue;
-                const float value = progressAxis == 0 ? point.x : progressAxis == 1 ? point.y : point.z;
-                if (!haveFirstProgressValue) { firstProgressValue = value; haveFirstProgressValue = true; }
-                lastProgressValue = value;
-                haveLastProgressValue = true;
-            }
+            points = converted.points;
+            sourceIndices = converted.sourceIndices;
+            rejectedInvalid = converted.rejectedInvalid;
+            rejectedRange = converted.rejectedRange;
+            signedTravel = converted.signedTravel;
+            dominantTravelAxis = converted.dominantTravelAxis;
+        } else {
+            // Pure visual diagnostics: keep the original camera coordinates and
+            // only re-establish the identity source mapping after the read.
+            for (qsizetype sourceIndex = 0; sourceIndex < points.size(); ++sourceIndex)
+                sourceIndices[sourceIndex] = sourceIndex;
         }
-        const QVector3D robotDelta(
-            inputs[cloudId].endBaseFromFlange(0, 3) - inputs[cloudId].startBaseFromFlange(0, 3),
-            inputs[cloudId].endBaseFromFlange(1, 3) - inputs[cloudId].startBaseFromFlange(1, 3),
-            inputs[cloudId].endBaseFromFlange(2, 3) - inputs[cloudId].startBaseFromFlange(2, 3));
-        const float robotTravel = robotDelta.length();
-        const float localScanSpan = progressSource == WorldCloudInput::ScanProgressSource::VertexOrder
-            ? 0.0f : qMax(0.0f, progressHigh - progressLow);
-        const float embeddedMotionRatio = robotTravel > 1.0e-5f
-            ? localScanSpan / robotTravel : 0.0f;
-        bool coordinateEmbedsMotion =
-            inputs[cloudId].scanCoordinateMode == WorldCloudInput::ScanCoordinateMode::EmbeddedMotion;
-        if (inputs[cloudId].scanCoordinateMode == WorldCloudInput::ScanCoordinateMode::Auto) {
-            // A line-scan PLY commonly stores the calibrated scan travel in
-            // LocalY already. Applying the Start/End translation again would
-            // either double that travel or cancel it to an almost flat strip.
-            coordinateEmbedsMotion = inputs[cloudId].applyRobotTransform
-                && progressSource != WorldCloudInput::ScanProgressSource::VertexOrder
-                && robotTravel > 1.0e-5f
-                && embeddedMotionRatio >= 0.75f && embeddedMotionRatio <= 1.25f;
-        }
-        const bool anchorAtStart = !haveFirstProgressValue || !haveLastProgressValue
-            || std::abs(firstProgressValue) <= std::abs(lastProgressValue);
-        bool reverseProgress = haveFirstProgressValue && haveLastProgressValue
-            && lastProgressValue < firstProgressValue;
-        if (inputs[cloudId].scanDirection == WorldCloudInput::ScanDirection::Forward)
-            reverseProgress = false;
-        else if (inputs[cloudId].scanDirection == WorldCloudInput::ScanDirection::Reverse)
-            reverseProgress = true;
-        QString progressDecision = reverseProgress ? QStringLiteral("axis-decreasing initial reverse")
-                                                    : QStringLiteral("axis-forward initial");
-        if (coordinateEmbedsMotion) {
-            progressDecision = QStringLiteral(
-                "PLY scan axis already embeds motion (local span=%1, robot travel=%2, ratio=%3); fixed %4 pose")
-                .arg(localScanSpan, 0, 'g', 8).arg(robotTravel, 0, 'g', 8)
-                .arg(embeddedMotionRatio, 0, 'g', 6)
-                .arg(anchorAtStart ? QStringLiteral("Start") : QStringLiteral("End"));
-        }
-        // The local axis direction alone is not enough for Eye-in-Hand scans:
-        // the hand-eye/flange rotations can already reverse that axis in the
-        // world frame. Compare the transformed first/last valid samples for
-        // both pairings and select the candidate with the smaller residual.
-        if (!coordinateEmbedsMotion
-            && inputs[cloudId].scanDirection == WorldCloudInput::ScanDirection::Auto
-            && inputs[cloudId].applyRobotTransform && progressSource != WorldCloudInput::ScanProgressSource::VertexOrder
-            && haveFirstProgressValue && haveLastProgressValue && progressHigh > progressLow) {
-            const qsizetype validCount = std::count_if(points.cbegin(), points.cend(),
-                [](const Point3D &point) { return usablePoint(point); });
-            const qsizetype window = qMax<qsizetype>(1, qMin<qsizetype>(4096, validCount / 100));
-            QVector3D firstMean, lastMean; qsizetype ordinal = 0;
-            for (const Point3D &point : points) {
-                if (!usablePoint(point)) continue;
-                if (ordinal < window) firstMean += QVector3D(point.x, point.y, point.z);
-                if (ordinal >= validCount - window) lastMean += QVector3D(point.x, point.y, point.z);
-                ++ordinal;
-            }
-            firstMean /= float(window); lastMean /= float(window);
-            const QMatrix4x4 midTransform = interpolateRigidTransform(
-                inputs[cloudId].startBaseFromFlange,
-                inputs[cloudId].endBaseFromFlange, 0.5f) * inputs[cloudId].flangeFromDepth;
-            const QVector3D cameraWorldDelta = midTransform.mapVector(lastMean - firstMean);
-            const float forwardResidual = (cameraWorldDelta + robotDelta).length();
-            const float reverseResidual = (cameraWorldDelta - robotDelta).length();
-            reverseProgress = reverseResidual < forwardResidual;
-            progressDecision = QStringLiteral("auto first/last 1%% mean, forward residual=%1, reverse residual=%2, selected=%3")
-                .arg(forwardResidual, 0, 'g', 8).arg(reverseResidual, 0, 'g', 8)
-                .arg(reverseProgress ? QStringLiteral("reverse") : QStringLiteral("forward"));
-        }
-        result.diagnostics += QStringLiteral("%1\n  Robot transform: %2\n  Progress source: %3, range: %4 .. %5\n  Start matrix: %6\n  Mid matrix: %7\n  End matrix: %8\n  Hand-eye matrix (flange<-depth): %9\n  Local bounds: %10\n")
+        result.diagnostics += QStringLiteral("%1\n  Robot transform: %2\n  Conversion: module 50 LineProfileXz, camera point [X,0,Z], ratio = y / signed travel\n  Signed travel: %3 (dominant axis %4)\n  Rejected points: invalid=%5, out of range=%6\n  Start matrix: %7\n  Mid matrix: %8\n  End matrix: %9\n  Hand-eye matrix (flange<-depth): %10\n  Local bounds: %11\n")
             .arg(QFileInfo(inputs[cloudId].filePath).fileName())
             .arg(inputs[cloudId].applyRobotTransform ? QStringLiteral("enabled") : QStringLiteral("disabled"))
-            .arg(progressSourceName(progressSource))
-            .arg(progressSource == WorldCloudInput::ScanProgressSource::VertexOrder
-                     ? QStringLiteral("0") : QString::number(progressLow, 'g', 8))
-            .arg(progressSource == WorldCloudInput::ScanProgressSource::VertexOrder
-                     ? QStringLiteral("1") : QString::number(progressHigh, 'g', 8))
+            .arg(signedTravel, 0, 'g', 8)
+            .arg(dominantTravelAxis)
+            .arg(rejectedInvalid)
+            .arg(rejectedRange)
             .arg(formatMatrix(inputs[cloudId].startBaseFromFlange))
-            .arg(formatMatrix(interpolateRigidTransform(inputs[cloudId].startBaseFromFlange,
-                                                        inputs[cloudId].endBaseFromFlange, 0.5f)))
+            .arg(formatMatrix(pointcloud::interpolateRobotTransform(
+                     inputs[cloudId].startBaseFromFlange,
+                     inputs[cloudId].endBaseFromFlange, 0.5f)))
             .arg(formatMatrix(inputs[cloudId].endBaseFromFlange))
             .arg(formatMatrix(inputs[cloudId].flangeFromDepth))
             .arg(formatBounds(localBounds));
-        if (progressSource != WorldCloudInput::ScanProgressSource::VertexOrder)
-            result.diagnostics += QStringLiteral("  Progress first/last: %1 -> %2 (%3)\n")
-                .arg(firstProgressValue, 0, 'g', 8).arg(lastProgressValue, 0, 'g', 8)
-                .arg(progressDecision);
-        for (qsizetype sourceIndex=0; sourceIndex<points.size(); ++sourceIndex) {
-            Point3D &source=points[sourceIndex]; sourceIndices[sourceIndex]=sourceIndex;
-            if (inputs[cloudId].applyRobotTransform) {
-                const float progress = coordinateEmbedsMotion ? 0.0f
-                    : scanProgress(points, sourceIndex, progressSource, progressLow, progressHigh,
-                                   reverseProgress);
-                const QMatrix4x4 &baseFromFlange = coordinateEmbedsMotion
-                    ? (anchorAtStart ? inputs[cloudId].startBaseFromFlange
-                                     : inputs[cloudId].endBaseFromFlange)
-                    : motionLut.at(progress);
-                const QMatrix4x4 transform = baseFromFlange * inputs[cloudId].flangeFromDepth;
-                const QVector3D world = transform.map(QVector3D(source.x, source.y, source.z));
-                const QVector3D normal = transform.mapVector(QVector3D(source.nx, source.ny, source.nz));
-                source.x=world.x();source.y=world.y();source.z=world.z();
-                source.nx=normal.x();source.ny=normal.y();source.nz=normal.z();
-            }
-        }
         if (inputs[cloudId].voxelDownsample && inputs[cloudId].voxelSize > 0.0f) {
             std::unordered_map<NoiseKey, qsizetype, NoiseKeyHash> representatives;
             QVector<Point3D> reduced; QVector<qsizetype> reducedIndices;
@@ -941,6 +792,7 @@ LoadResult loadPlyResult(const QString &fileName) {
     result.parseElapsedMs = parsed.parseElapsedMs;
     result.totalElapsedMs = parsed.totalElapsedMs;
     result.usedCache = parsed.usedCache;
+    result.declaredPointCount = parsed.declaredPointCount;
     result.warnings = parsed.warnings;
     result.sourcePlyEncoding = parsed.sourceFormat == pcv::detail::io::PlyFormat::Ascii
         ? QStringLiteral("ascii")
@@ -978,6 +830,7 @@ LoadResult loadPlyResultWithProgress(const QString &fileName,
     result.parseElapsedMs = parsed.parseElapsedMs;
     result.totalElapsedMs = parsed.totalElapsedMs;
     result.usedCache = parsed.usedCache;
+    result.declaredPointCount = parsed.declaredPointCount;
     result.warnings = parsed.warnings;
     result.sourcePlyEncoding = parsed.sourceFormat == pcv::detail::io::PlyFormat::Ascii
         ? QStringLiteral("ascii")
@@ -2575,6 +2428,9 @@ ThreePointPlaneResult extractPlaneFromPoints(const QVector<Point3D> &points,
     moduleOptions.minimumDisconnectedComponentPoints = options.minimumDisconnectedComponentPoints;
     moduleOptions.minimumDisconnectedComponentRatio = options.minimumDisconnectedComponentRatio;
     moduleOptions.deferFinalClassification = options.deferFinalClassification;
+    moduleOptions.parallelEnabled = options.parallelEnabled;
+    moduleOptions.maxParallelTasks = options.maxParallelTasks;
+    moduleOptions.isCancelled = options.isCancelled;
     const auto fitted = pcv::planefitting::fit(points, seedIndices, moduleOptions);
     ThreePointPlaneResult result;
     result.model = {fitted.model.a, fitted.model.b, fitted.model.c, fitted.model.d,
@@ -2591,6 +2447,8 @@ ThreePointPlaneResult extractPlaneFromPoints(const QVector<Point3D> &points,
     result.connectedComponentCount = fitted.connectedComponentCount;
     result.significantComponentCount = fitted.significantComponentCount;
     result.deferred = fitted.deferred;
+    result.cancelled = fitted.cancelled;
+    result.timings = fitted.timings;
     result.error = fitted.error;
     result.ok = fitted.ok;
     return result;

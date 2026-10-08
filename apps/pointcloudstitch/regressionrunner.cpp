@@ -2,6 +2,7 @@
 
 #include "pointcloudprocessor.h"
 #include <pcv/io/ply_writer.h>
+#include <pcv/registration/handeye_transform.h>
 
 #include <QCommandLineOption>
 #include <QCommandLineParser>
@@ -15,10 +16,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QMatrix4x4>
 #include <QRegularExpression>
 #include <QSaveFile>
-#include <QXmlStreamReader>
 
 #include <cmath>
 
@@ -38,64 +37,18 @@ bool writeBinaryPlyFile(const QString &path, const QVector<pointcloud::Point3D> 
     return pcv::detail::io::writeBinaryPly(path, points, error, options);
 }
 
-QMatrix4x4 poseMatrix(const QVector<double> &pose)
+// Argument adapter only: the pose text is [X,Y,Z,A,B,C] in mm/deg and the
+// matrix is built by module 50's robotPoseToMatrix(); no math lives here.
+pointcloud::RobotPose toRobotPose(const QVector<double> &pose)
 {
-    QMatrix4x4 matrix;
-    matrix.setToIdentity();
-    // Pose text uses controller order [X,Y,Z,A,B,C], A=Rx, B=Ry, C=Rz.
-    matrix.rotate(float(pose.value(5)), 0.0f, 0.0f, 1.0f);
-    matrix.rotate(float(pose.value(4)), 0.0f, 1.0f, 0.0f);
-    matrix.rotate(float(pose.value(3)), 1.0f, 0.0f, 0.0f);
-    matrix(0, 3) = float(pose.value(0));
-    matrix(1, 3) = float(pose.value(1));
-    matrix(2, 3) = float(pose.value(2));
-    return matrix;
-}
-
-bool readCalibration(const QString &path, QMatrix4x4 *matrix, QString *error)
-{
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        *error = QStringLiteral("无法打开标定文件：%1").arg(path);
-        return false;
-    }
-    QXmlStreamReader xml(&file);
-    bool inside = false;
-    QVector<double> rotation, translation;
-    while (!xml.atEnd()) {
-        xml.readNext();
-        if (xml.isEndElement() && xml.name() == QStringLiteral("RTmatDepth2robot")) inside = false;
-        if (!xml.isStartElement()) continue;
-        if (xml.name() == QStringLiteral("RTmatDepth2robot")) inside = true;
-        else if (inside && xml.name() == QStringLiteral("RotMat")) {
-            rotation.resize(9);
-            for (int row = 0; row < 3; ++row)
-                for (int column = 0; column < 3; ++column) {
-                    bool ok = false;
-                    rotation[row * 3 + column] = xml.attributes()
-                        .value(QStringLiteral("r%1%2").arg(row).arg(column)).toDouble(&ok);
-                    if (!ok) rotation.clear();
-                }
-        } else if (inside && xml.name() == QStringLiteral("TVec")) {
-            translation.resize(3);
-            for (int index = 0; index < 3; ++index) {
-                bool ok = false;
-                translation[index] = xml.attributes().value(QStringLiteral("t%1").arg(index)).toDouble(&ok);
-                if (!ok) translation.clear();
-            }
-        }
-    }
-    if (xml.hasError() || rotation.size() != 9 || translation.size() != 3) {
-        *error = xml.hasError() ? xml.errorString()
-                                : QStringLiteral("XML 中 RTmatDepth2robot/RotMat/TVec 不完整");
-        return false;
-    }
-    matrix->setToIdentity();
-    for (int row = 0; row < 3; ++row) {
-        for (int column = 0; column < 3; ++column) (*matrix)(row, column) = float(rotation[row * 3 + column]);
-        (*matrix)(row, 3) = float(translation[row]);
-    }
-    return true;
+    pointcloud::RobotPose result;
+    result.x = pose.value(0);
+    result.y = pose.value(1);
+    result.z = pose.value(2);
+    result.rx = pose.value(3);
+    result.ry = pose.value(4);
+    result.rz = pose.value(5);
+    return result;
 }
 
 bool readPoseInfo(const QString &path, QHash<int, PoseRecord> *records, QString *error)
@@ -280,6 +233,39 @@ QJsonObject diagnosticJson(const pointcloud::IcpDiagnostics &diagnostic,
     item.insert(QStringLiteral("rmse_mm"), diagnostic.rmse);
     item.insert(QStringLiteral("correction_translation_mm"), diagnostic.correctionTranslation);
     item.insert(QStringLiteral("correction_angle_deg"), diagnostic.correctionAngleDegrees);
+    // 2.5D height-map registration (controlled iteration).
+    item.insert(QStringLiteral("heightmap_registration_enabled"), options.heightMapRegistrationEnabled);
+    item.insert(QStringLiteral("heightmap_registration_attempted"), diagnostic.heightMapAttempted);
+    item.insert(QStringLiteral("heightmap_registration_accepted"), diagnostic.heightMapAccepted);
+    item.insert(QStringLiteral("heightmap_fallback_to_legacy_icp"), diagnostic.heightMapFallbackToIcp);
+    item.insert(QStringLiteral("heightmap_grid_resolution_mm"), diagnostic.heightMapGridResolutionMm);
+    item.insert(QStringLiteral("heightmap_width"), diagnostic.heightMapWidth);
+    item.insert(QStringLiteral("heightmap_height"), diagnostic.heightMapHeight);
+    item.insert(QStringLiteral("heightmap_valid_ratio_source"), diagnostic.heightMapSourceValidRatio);
+    item.insert(QStringLiteral("heightmap_valid_ratio_target"), diagnostic.heightMapTargetValidRatio);
+    item.insert(QStringLiteral("heightmap_valid_points_source"), diagnostic.heightMapSourceValidPoints);
+    item.insert(QStringLiteral("heightmap_valid_points_target"), diagnostic.heightMapTargetValidPoints);
+    item.insert(QStringLiteral("heightmap_score_before"), diagnostic.heightMapScoreBefore);
+    item.insert(QStringLiteral("heightmap_score_after"), diagnostic.heightMapScoreAfter);
+    item.insert(QStringLiteral("heightmap_relative_improvement"), diagnostic.heightMapRelativeImprovement);
+    item.insert(QStringLiteral("heightmap_delta_xyz_mm"), QJsonArray{
+        diagnostic.heightMapTranslationX, diagnostic.heightMapTranslationY, diagnostic.heightMapTranslationZ});
+    item.insert(QStringLiteral("heightmap_delta_yaw_deg"), diagnostic.heightMapYawDegrees);
+    item.insert(QStringLiteral("heightmap_normalized_correlation"), diagnostic.heightMapNormalizedCorrelation);
+    item.insert(QStringLiteral("heightmap_restricted_icp_levels"), diagnostic.heightMapRestrictedIcpCompletedLevels);
+    item.insert(QStringLiteral("heightmap_restricted_icp_degenerate"), diagnostic.heightMapRestrictedIcpDegenerate);
+    item.insert(QStringLiteral("heightmap_reject_reason"), diagnostic.heightMapRejectReason);
+    item.insert(QStringLiteral("trajectory_diagnostic_reason"), diagnostic.trajectoryDiagnosticReason);
+    item.insert(QStringLiteral("selected_registration_source"), diagnostic.selectedRegistrationSource);
+    item.insert(QStringLiteral("visibility_hard_rejected"), diagnostic.visibilityHardRejected);
+    item.insert(QStringLiteral("actual_overlap_source_points"), diagnostic.actualOverlapSourceCount);
+    item.insert(QStringLiteral("actual_overlap_target_points"), diagnostic.actualOverlapTargetCount);
+    item.insert(QStringLiteral("legacy_icp_comparison"), QJsonObject{
+        {QStringLiteral("available"), diagnostic.legacyIcpComparisonAvailable},
+        {QStringLiteral("accepted"), diagnostic.legacyIcpAccepted},
+        {QStringLiteral("coverage_3mm"), diagnostic.legacyIcpComparisonCoverage3mm},
+        {QStringLiteral("p95_mm"), diagnostic.legacyIcpComparisonP95},
+        {QStringLiteral("reject_reason"), diagnostic.legacyIcpRejectReason}});
     QJsonArray levels;
     for (int index = 0; index < diagnostic.levelFitness.size(); ++index) {
         QJsonObject level;
@@ -313,9 +299,15 @@ int runRegression(const QStringList &arguments)
     const QCommandLineOption voxelOption(QStringLiteral("voxel-levels"), QStringLiteral("三个体素层级"), QStringLiteral("values"), QStringLiteral("1 0.5 0.2"));
     const QCommandLineOption distanceOption(QStringLiteral("correspondence-distances"), QStringLiteral("三个对应距离"), QStringLiteral("values"), QStringLiteral("3 1.5 0.6"));
     const QCommandLineOption transformOnlyOption(QStringLiteral("transform-only"), QStringLiteral("仅执行手眼坐标转换，跳过预对齐和 ICP"));
+    // 2.5D height-map registration stays off unless it is asked for explicitly.
+    const QCommandLineOption heightMapOption(QStringLiteral("heightmap-registration"),
+        QStringLiteral("启用 2.5D 高程图配准（默认关闭，旧 ICP 仍是回退路径）"));
+    const QCommandLineOption heightMapNoSearchOption(QStringLiteral("disable-heightmap-search"),
+        QStringLiteral("关闭 2.5D 高程图粗到细搜索（仅诊断）"));
     parser.addOptions({regressionOption, inputOption, poseOption, calibrationOption, reportOption, outputOption,
                        runtimeRootOption, jobIdOption, workpieceIdOption, baseNameOption,
-                       voxelOption, distanceOption, transformOnlyOption});
+                       voxelOption, distanceOption, transformOnlyOption, heightMapOption,
+                       heightMapNoSearchOption});
     parser.process(arguments);
     const QString inputDirectory = parser.value(inputOption);
     const QString posePath = parser.value(poseOption);
@@ -342,13 +334,17 @@ int runRegression(const QStringList &arguments)
     if (inputDirectory.isEmpty() || posePath.isEmpty() || calibrationPath.isEmpty() || reportPath.isEmpty()) return 2;
 
     QString error;
-    QMatrix4x4 calibration;
+    // Module 50 owns the hand-eye XML parsing and rigid-matrix validation.
+    pointcloud::HandEyeCalibration calibration;
     QHash<int, PoseRecord> poses;
-    if (!readCalibration(calibrationPath, &calibration, &error) || !readPoseInfo(posePath, &poses, &error)) return 2;
+    if (!pointcloud::loadHandEyeCalibration(calibrationPath, &calibration, &error)
+        || !readPoseInfo(posePath, &poses, &error)) return 2;
     pointcloud::IcpOptions options;
     options.enabled = !parser.isSet(transformOnlyOption);
     options.voxelLevels = parseLevels(parser.value(voxelOption), &error);
     options.correspondenceDistances = parseLevels(parser.value(distanceOption), &error);
+    options.heightMapRegistrationEnabled = parser.isSet(heightMapOption);
+    options.heightMapSearchEnabled = !parser.isSet(heightMapNoSearchOption);
     if (!error.isEmpty()) return 2;
 
     QDir directory(inputDirectory);
@@ -364,9 +360,9 @@ int runRegression(const QStringList &arguments)
         const PoseRecord record = poses.value(scan);
         pointcloud::WorldCloudInput input;
         input.filePath = directory.absoluteFilePath(file);
-        input.startBaseFromFlange = poseMatrix(record.start);
-        input.endBaseFromFlange = poseMatrix(record.end);
-        input.flangeFromDepth = calibration;
+        input.startBaseFromFlange = pointcloud::robotPoseToMatrix(toRobotPose(record.start));
+        input.endBaseFromFlange = pointcloud::robotPoseToMatrix(toRobotPose(record.end));
+        input.flangeFromDepth = calibration.flangeFromDepth;
         inputs.push_back(input);
         orderedPoses.push_back(record);
     }
@@ -474,6 +470,16 @@ int runRegression(const QStringList &arguments)
     parameterObject.insert(QStringLiteral("tracked_plane_heights_mm"),trackedPlaneHeights);
     parameterObject.insert(QStringLiteral("maximum_correction_translation_mm"), options.maximumCorrectionTranslation);
     parameterObject.insert(QStringLiteral("maximum_correction_angle_deg"), options.maximumCorrectionAngleDegrees);
+    parameterObject.insert(QStringLiteral("heightmap_registration_enabled"), options.heightMapRegistrationEnabled);
+    parameterObject.insert(QStringLiteral("heightmap_search_enabled"), options.heightMapSearchEnabled);
+    parameterObject.insert(QStringLiteral("heightmap_restricted_dof"), options.heightMapRestrictedDof);
+    parameterObject.insert(QStringLiteral("heightmap_grid_minimum_mm"), options.heightMapGridMinimumMm);
+    parameterObject.insert(QStringLiteral("heightmap_grid_maximum_mm"), options.heightMapGridMaximumMm);
+    parameterObject.insert(QStringLiteral("heightmap_minimum_valid_ratio"), options.heightMapMinimumValidRatio);
+    parameterObject.insert(QStringLiteral("heightmap_minimum_valid_points"), options.heightMapMinimumValidPoints);
+    parameterObject.insert(QStringLiteral("heightmap_minimum_relative_improvement"), options.heightMapMinimumRelativeImprovement);
+    parameterObject.insert(QStringLiteral("heightmap_max_translation_mm"), options.heightMapMaxTranslationMm);
+    parameterObject.insert(QStringLiteral("heightmap_max_yaw_deg"), options.heightMapMaxYawDegrees);
     root.insert(QStringLiteral("parameters"), parameterObject);
     QJsonArray pairs;
     for (int index = 1; index < result.icpDiagnostics.size(); ++index)

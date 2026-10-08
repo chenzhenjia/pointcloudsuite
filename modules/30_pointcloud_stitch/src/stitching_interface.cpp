@@ -266,6 +266,22 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     registrationOptions.visibilityWarningRatio = options.visibilityWarningRatio;
     registrationOptions.tangentCoarseTrimmedScore = options.tangentCoarseTrimmedScore;
     registrationOptions.correspondenceParallelTasks = options.correspondenceParallelTasks;
+    // 2.5D height-map registration. The grouped request (StitchingRequest)
+    // carries it inside registrationOptions, which is copied verbatim; the
+    // legacy flat entry point carries it in the dedicated fields below, so the
+    // two entry points can never contradict each other.
+    if (!options.useRegistrationOptions) {
+        registrationOptions.heightMapRegistrationEnabled = options.heightMapRegistrationEnabled;
+        registrationOptions.heightMapGridMinimumMm = options.heightMapGridMinimumMm;
+        registrationOptions.heightMapGridMaximumMm = options.heightMapGridMaximumMm;
+        registrationOptions.heightMapMinimumValidRatio = options.heightMapMinimumValidRatio;
+        registrationOptions.heightMapMinimumValidPoints = options.heightMapMinimumValidPoints;
+        registrationOptions.heightMapMinimumRelativeImprovement = options.heightMapMinimumRelativeImprovement;
+        registrationOptions.heightMapMaxTranslationMm = options.heightMapMaxTranslationMm;
+        registrationOptions.heightMapMaxYawDegrees = options.heightMapMaxYawDegrees;
+        registrationOptions.heightMapRestrictedDof = options.heightMapRestrictedDof;
+        registrationOptions.heightMapSearchEnabled = options.heightMapSearchEnabled;
+    }
     registrationOptions.parallelEnabled = options.parallelEnabled;
     registrationOptions.maxParallelTasks = options.maxParallelTasks;
     registrationOptions.cancellation = cancellationToken;
@@ -306,12 +322,14 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
             // The failure code is already part of the reason text; the visibility
             // numbers are added here because they decide whether the pair is
             // simply not comparable (little common surface) or misregistered.
-            result.message = QStringLiteral("第 %1 帧配准未通过（%2）：%3；命中率=%4，命中点内双向 3 mm=%5")
+            result.message = QStringLiteral("第 %1 帧配准未通过（%2）：%3；命中率=%4，命中点内双向 3 mm=%5；来源=%6")
                 .arg(index + 1)
                 .arg(diagnostic.failureCode.isEmpty() ? QStringLiteral("未分类") : diagnostic.failureCode)
                 .arg(diagnostic.reason)
                 .arg(QString::number(double(diagnostic.structuralBidirectionalMatchRatio), 'f', 4))
-                .arg(QString::number(double(diagnostic.structuralBidirectionalCoverage3mmOfMatched), 'f', 4));
+                .arg(QString::number(double(diagnostic.structuralBidirectionalCoverage3mmOfMatched), 'f', 4))
+                .arg(diagnostic.selectedRegistrationSource.isEmpty()
+                         ? QStringLiteral("legacy_icp") : diagnostic.selectedRegistrationSource);
             return result;
         }
     }
@@ -384,6 +402,50 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     manifestJson.insert(QStringLiteral("mapping_file"), mappingName);
     manifestJson.insert(QStringLiteral("success"), true);
     manifestJson.insert(QStringLiteral("diagnostics"), result.diagnostics);
+    // 2.5D height-map registration report. The block is emitted for every pair
+    // even when the switch is off, so a consumer can always tell which path
+    // produced the formal output and why the other one was rejected.
+    QJsonArray registrationPairs;
+    for (int index = 1; index < registration.icpDiagnostics.size(); ++index) {
+        const pointcloud::IcpDiagnostics &pair = registration.icpDiagnostics.at(index);
+        QJsonObject item;
+        item.insert(QStringLiteral("pair_source_cloud_index"), pair.sourceCloudIndex);
+        item.insert(QStringLiteral("accepted"), pair.accepted);
+        item.insert(QStringLiteral("selected_registration_source"), pair.selectedRegistrationSource);
+        item.insert(QStringLiteral("heightmap_registration_enabled"), registrationOptions.heightMapRegistrationEnabled);
+        item.insert(QStringLiteral("heightmap_registration_attempted"), pair.heightMapAttempted);
+        item.insert(QStringLiteral("heightmap_registration_accepted"), pair.heightMapAccepted);
+        item.insert(QStringLiteral("heightmap_fallback_to_legacy_icp"), pair.heightMapFallbackToIcp);
+        item.insert(QStringLiteral("heightmap_grid_resolution_mm"), pair.heightMapGridResolutionMm);
+        item.insert(QStringLiteral("heightmap_width"), pair.heightMapWidth);
+        item.insert(QStringLiteral("heightmap_height"), pair.heightMapHeight);
+        item.insert(QStringLiteral("heightmap_valid_ratio_source"), pair.heightMapSourceValidRatio);
+        item.insert(QStringLiteral("heightmap_valid_ratio_target"), pair.heightMapTargetValidRatio);
+        item.insert(QStringLiteral("heightmap_valid_points_source"), pair.heightMapSourceValidPoints);
+        item.insert(QStringLiteral("heightmap_valid_points_target"), pair.heightMapTargetValidPoints);
+        item.insert(QStringLiteral("heightmap_score_before"), pair.heightMapScoreBefore);
+        item.insert(QStringLiteral("heightmap_score_after"), pair.heightMapScoreAfter);
+        item.insert(QStringLiteral("heightmap_relative_improvement"), pair.heightMapRelativeImprovement);
+        item.insert(QStringLiteral("heightmap_delta_xyz_mm"), QJsonArray{
+            pair.heightMapTranslationX, pair.heightMapTranslationY, pair.heightMapTranslationZ});
+        item.insert(QStringLiteral("heightmap_delta_yaw_deg"), pair.heightMapYawDegrees);
+        item.insert(QStringLiteral("heightmap_restricted_icp_levels"), pair.heightMapRestrictedIcpCompletedLevels);
+        item.insert(QStringLiteral("heightmap_restricted_icp_degenerate"), pair.heightMapRestrictedIcpDegenerate);
+        item.insert(QStringLiteral("heightmap_reject_reason"), pair.heightMapRejectReason);
+        item.insert(QStringLiteral("trajectory_diagnostic_reason"), pair.trajectoryDiagnosticReason);
+        item.insert(QStringLiteral("visibility_hard_rejected"), pair.visibilityHardRejected);
+        item.insert(QStringLiteral("structural_bidirectional_coverage_3mm"), pair.structuralBidirectionalCoverage3mm);
+        item.insert(QStringLiteral("actual_overlap_source_points"), pair.actualOverlapSourceCount);
+        item.insert(QStringLiteral("actual_overlap_target_points"), pair.actualOverlapTargetCount);
+        item.insert(QStringLiteral("legacy_icp_comparison"), QJsonObject{
+            {QStringLiteral("available"), pair.legacyIcpComparisonAvailable},
+            {QStringLiteral("accepted"), pair.legacyIcpAccepted},
+            {QStringLiteral("coverage_3mm"), pair.legacyIcpComparisonCoverage3mm},
+            {QStringLiteral("p95_mm"), pair.legacyIcpComparisonP95},
+            {QStringLiteral("reject_reason"), pair.legacyIcpRejectReason}});
+        registrationPairs.append(item);
+    }
+    manifestJson.insert(QStringLiteral("registration_pairs"), registrationPairs);
     bool outputWritten = transaction.stageBinaryPly(
         QStringLiteral("stitched_robot_base.ply"), registration.points, false,
         {QStringLiteral("coordinate_frame robot_base")})

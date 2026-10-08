@@ -329,7 +329,7 @@ QWidget#wgt_canvas_host { background-color: #ffffff; }
         <item>
          <widget class="QTabWidget" name="tw_main">
           <property name="currentIndex">
-           <number>2</number>
+           <number>3</number>
           </property>
           <widget class="QWidget" name="wgt_render">
            <attribute name="title">
@@ -395,6 +395,11 @@ QWidget#wgt_canvas_host { background-color: #ffffff; }
               <item>
                <property name="text">
                 <string>法向量</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>纹理灰度</string>
                </property>
               </item>
              </widget>
@@ -832,6 +837,13 @@ QWidget#wgt_canvas_host { background-color: #ffffff; }
              </widget>
             </item>
             <item>
+             <widget class="QPushButton" name="btn_select_texture_image">
+              <property name="text">
+               <string>选择同次扫描亮度图并贴到平面</string>
+              </property>
+             </widget>
+            </item>
+            <item>
              <widget class="QPushButton" name="btn_finalize_temp_workpiece">
               <property name="text">
                <string>提交临时工件四件套</string>
@@ -991,7 +1003,7 @@ QWidget#wgt_canvas_host { background-color: #ffffff; }
      <x>0</x>
      <y>0</y>
      <width>1811</width>
-     <height>30</height>
+     <height>27</height>
     </rect>
    </property>
   </widget>

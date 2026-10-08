@@ -8,6 +8,18 @@ seam fusion 实现与公共类型位于本模块 `include/pcv/stitching/`（`sea
 
 最后核对日期：2026-09-17。本文件历史正文中出现的旧名称与旧职责表述为当时状态，仅用于追溯。2026-09-17 之后的验证结论必须单独记录；本轮文档同步未运行 CTest。
 
+### 2026-09-18（2.5D 高程图配准受控迭代）
+
+- 需求登记：主模块 `30_pointcloud_stitch`，配套公共匹配类型仍由 40 的规划占位承载；未修改 `modules/50_coordinate_conversion`、手眼矩阵、机器人 `[X,Y,Z,A,B,C]` 语义、原始 PLY 或 `workpiece_list.json`。
+- 新增 `pcv::stitching::HeightMap` / `HeightMapRegistrationResult`（`heightmap_registration.h/.cpp`）：按机器人初值重叠框与候选框交集构建 2.5D 高程图，保存有效掩膜、网格计数、源点索引、原始/去趋势高程、局部范围和网格原点；分辨率由中位间距估计并限制在 `0.5~2.0 mm`，异常返回 `heightmap_grid_resolution_invalid` 或 `heightmap_insufficient_data`。
+- 搜索为无外部依赖的受限 coarse-to-fine：第一阶段仅 `Δx/Δy`，第二阶段仅小范围 `Δz/yaw`，严格预算 `10 mm/1°`；使用有效重叠鲁棒高程残差、有效掩膜和候选唯一性/实际重叠检查，保留轨迹诊断和取消语义。不引入 pose graph、硬件时间戳或 `Δt` 估计。
+- `IcpOptions.heightMapRegistrationEnabled` 默认 `false`，新增网格、有效比例/点数、改善率、预算、受限自由度等字段均追加在结构体末尾；`IcpDiagnostics` 追加 2.5D 尝试、评分、网格、受限 ICP、回退、来源和拒绝字段。开关关闭时沿用旧 ICP。
+- 开关开启时每个相邻 pair 同时保留 legacy baseline：2.5D 通过全部新验收且受限 ICP 三层完成时来源为 `heightmap_restricted_icp`；2.5D 失败且 legacy 通过时为 `legacy_icp`；两者失败为 `none`。最终有效可见比例 `<0.25` 优先硬拒绝，报告 `visibility_hard_rejected=true`，不得以命中点内覆盖率放行。
+- 应用层 `stitchingwindow.cpp` / `regressionrunner.cpp` 仅透传和序列化上述字段，并显示“2.5D 配准通过 / 失败回退旧 ICP / 低可见性拒绝 / 候选歧义 / 受限 ICP 退化”等状态；未改变窗口生命周期、异步调度或取消对象管理。
+- 验证：Debug 定向构建 `cmake --build C:\pcv-build\heightmap-iteration-debug-v1 --config Debug --target multiframe_registration_tests stitching_interface_tests pointcloudstitch` 成功；定向测试 2/2 通过；Debug 全量 CTest 15/15 通过。Release 定向构建 `C:\pcv-build\heightmap-iteration-release-v1` 的三个目标成功，定向测试 2/2 通过。
+- 真实回放（源码树外 `D:\pcv-replay\heightmap-v1`，输入为原始 PLY 同盘硬链接，未覆盖原始数据）：`1/test_1` 报告 `heightmap_registration_report_v2.json` 成功，网格 `1.91765 mm`、有效比例 source/target=`0.5623/0.7987`、有效点=`6709/9530`、评分改善 `10.42%`，但受限 ICP 标记退化（3 层完成），故安全回退 `legacy_icp`，生成正式 `regression_registered_robot_base.ply`；`5_40/test` 网格 `1.93265 mm`、有效比例=`0.6691/0.8358`、评分改善 `5.47%`，legacy baseline 虽报告可用，但最终比例 `0.2246` 触发 `visibility_hard_rejected`，来源 `none`，未生成正式合并 PLY。
+- Release 部署未做独立便携验收：构建环境未找到 Visual Studio redist 子目录；GUI 人工冒烟、PageHeap、真实生产夹具和现场同步仍未验证。
+
 ### 2026-09-17（配准新选项透传与失败信息细化）
 
 - 需求登记：主模块 `30_pointcloud_stitch`（配套 40 模块的验收口径与鲁棒性改动）。

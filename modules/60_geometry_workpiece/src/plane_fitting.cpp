@@ -1,11 +1,16 @@
 #include <pcv/planefitting/plane_fitting.h>
 
 #include <QVector3D>
+#include <QElapsedTimer>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <random>
+#include <future>
+#include <vector>
 #include <unordered_map>
 
 namespace {
@@ -60,9 +65,35 @@ struct Cell {
 };
 struct CellHash {
     std::size_t operator()(const Cell &cell) const noexcept {
-        return std::hash<int>{}(cell.x) ^ (std::hash<int>{}(cell.y) << 1);
+        return std::hash<quint64>{}((quint64(quint32(cell.x)) << 32) | quint32(cell.y));
     }
 };
+
+struct PendingCell {
+    QVector<int> points;
+    std::array<PendingCell *, 9> neighbors{};
+};
+
+// Tasks own their outputs. The caller joins every worker before merging in input order.
+template <typename Work>
+auto orderedTasks(int count, int taskCount, const Work &work)
+{
+    using Output = decltype(work(0, count));
+    std::vector<std::future<Output>> futures;
+    futures.reserve(taskCount - 1);
+    for (int task = 1; task < taskCount; ++task) {
+        const int begin = int(qint64(count) * task / taskCount);
+        const int end = int(qint64(count) * (task + 1) / taskCount);
+        futures.push_back(std::async(std::launch::async, [begin, end, &work]() {
+            return work(begin, end);
+        }));
+    }
+    std::vector<Output> outputs;
+    outputs.reserve(taskCount);
+    outputs.push_back(work(0, count / taskCount));
+    for (auto &future : futures) outputs.push_back(future.get());
+    return outputs;
+}
 
 } // namespace
 
@@ -73,6 +104,33 @@ Result fit(const QVector<pointcloud::Point3D> &points,
            const Options &options)
 {
     Result result;
+    QElapsedTimer totalTimer, stageTimer;
+    totalTimer.start();
+    stageTimer.start();
+    const auto elapsed = [&stageTimer]() {
+        const double ms = stageTimer.nsecsElapsed() / 1.0e6;
+        stageTimer.restart();
+        return ms;
+    };
+    std::atomic_bool cancellationObserved{false};
+    const auto cancelled = [&options, &cancellationObserved]() {
+        if (cancellationObserved.load(std::memory_order_relaxed)) return true;
+        if (options.isCancelled && options.isCancelled()) {
+            cancellationObserved.store(true, std::memory_order_relaxed);
+            return true;
+        }
+        return false;
+    };
+    const auto cancelledResult = [&]() {
+        Result failure;
+        failure.cancelled = true;
+        failure.error = QStringLiteral("cancelled");
+        failure.timings = result.timings;
+        failure.timings.totalMs = totalTimer.nsecsElapsed() / 1.0e6;
+        return failure;
+    };
+    if (cancelled()) return cancelledResult();
+    const int taskCount = options.parallelEnabled ? qBound(1, options.maxParallelTasks, 4) : 1;
     if (seedIndices.size() < 3 || points.size() < 3) {
         result.error = QStringLiteral("至少需要三个有效采样点");
         return result;
@@ -132,13 +190,32 @@ Result fit(const QVector<pointcloud::Point3D> &points,
         const float value = modelNormal.x() * p.x + modelNormal.y() * p.y + modelNormal.z() * p.z + modelD;
         return std::abs(value) / (options.useZAxisResidual ? qMax(std::abs(modelNormal.z()), 1.0e-6f) : 1.0f);
     };
-    for (int i = 0; i < points.size(); ++i) {
-        if (options.isCancelled && options.isCancelled()) {
-            result.error = QStringLiteral("cancelled");
-            return result;
-        }
-        if (finite(points[i]) && residualFor(normal, d, points[i]) <= initialTolerance) result.candidateIndices.push_back(i);
-    }
+    const auto classify = [&](const QVector3D &n, float offset, float tolerance,
+                              const QVector<int> *indices) {
+        const int count = int(indices ? indices->size() : points.size());
+        const auto work = [&points, indices, &finite, &residualFor, &cancelled, n, offset, tolerance]
+                          (int begin, int end) {
+            QVector<int> output;
+            output.reserve(end - begin);
+            for (int local = begin; local < end; ++local) {
+                if ((local & 1023) == 0 && cancelled()) return QVector<int>{};
+                const int index = indices ? indices->at(local) : local;
+                const auto &p = points.at(index);
+                if (finite(p) && residualFor(n, offset, p) <= tolerance) output.push_back(index);
+            }
+            return output;
+        };
+        auto outputs = orderedTasks(count, taskCount, work);
+        QVector<int> output;
+        qsizetype size = 0;
+        for (const auto &part : outputs) size += part.size();
+        output.reserve(size);
+        for (const auto &part : outputs) output.append(part);
+        return output;
+    };
+    result.candidateIndices = classify(normal, d, initialTolerance, nullptr);
+    if (cancelled()) return cancelledResult();
+    result.timings.candidateMs = elapsed();
     const int required = qMax(3, options.minInliers);
     if (result.candidateIndices.size() < required) {
         result.error = QStringLiteral("初始平面附近候选点不足：%1 / %2").arg(result.candidateIndices.size()).arg(required);
@@ -147,18 +224,19 @@ Result fit(const QVector<pointcloud::Point3D> &points,
     QVector<int> modelCandidates;
     const int maximumModelPoints = 20000;
     const int step = qMax(1, int((result.candidateIndices.size() + maximumModelPoints - 1) / maximumModelPoints));
+    modelCandidates.reserve(maximumModelPoints);
     for (int i = 0; i < result.candidateIndices.size(); i += step) modelCandidates.push_back(result.candidateIndices[i]);
-    QVector<int> bestModelInliers;
+    const QVector<int> &modelIndices = modelCandidates;
     QVector3D bestNormal = normal;
     float bestD = d;
     std::mt19937 rng(options.randomSeed);
     std::uniform_int_distribution<int> pick(0, modelCandidates.size() - 1);
     const float minimumNormalZ = std::cos(qDegreesToRadians(qBound(0.0f, options.maxNormalTiltDegrees, 89.0f)));
+    struct Trial { QVector3D normal; float d; };
+    QVector<Trial> generated;
+    generated.reserve(qMax(1, options.ransacIterations));
     for (int iteration = 0; iteration < qMax(1, options.ransacIterations); ++iteration) {
-        if (options.isCancelled && options.isCancelled()) {
-            result.error = QStringLiteral("cancelled");
-            return result;
-        }
+        if (cancelled()) return cancelledResult();
         const int ia = pick(rng), ib = pick(rng), ic = pick(rng);
         if (ia == ib || ia == ic || ib == ic) continue;
         QVector3D candidateNormal = QVector3D::crossProduct(vectorFor(modelCandidates[ib]) - vectorFor(modelCandidates[ia]), vectorFor(modelCandidates[ic]) - vectorFor(modelCandidates[ia]));
@@ -170,35 +248,60 @@ Result fit(const QVector<pointcloud::Point3D> &points,
         bool containsSeeds = true;
         for (int seed : seedIndices) if (residualFor(candidateNormal, candidateD, points[seed]) > surfaceTolerance) { containsSeeds = false; break; }
         if (!containsSeeds) continue;
-        QVector<int> inliers;
-        for (int index : modelCandidates) {
-            const auto &p = points[index];
-            const float value = std::abs(candidateNormal.x() * p.x + candidateNormal.y() * p.y + candidateNormal.z() * p.z + candidateD) / (options.useZAxisResidual ? qMax(std::abs(candidateNormal.z()), 1.0e-6f) : 1.0f);
-            if (value <= surfaceTolerance) inliers.push_back(index);
-        }
-        if (inliers.size() > bestModelInliers.size()) { bestModelInliers = std::move(inliers); bestNormal = candidateNormal; bestD = candidateD; }
+        generated.push_back({candidateNormal, candidateD});
     }
-    QVector<int> refinedInliers;
-        for (int index : result.candidateIndices) {
-            if (options.isCancelled && options.isCancelled()) {
-                result.error = QStringLiteral("cancelled");
-                return result;
+    const QVector<Trial> &trials = generated;
+    struct Score { int count = 0; int trial = -1; };
+    const auto scoreTrials = [&trials, &modelIndices, &points, &options, &cancelled, surfaceTolerance]
+                             (int begin, int end) {
+        Score best;
+        for (int trial = begin; trial < end; ++trial) {
+            if (cancelled()) return Score{};
+            const auto &model = trials.at(trial);
+            const QVector3D candidateNormal = model.normal;
+            const float candidateD = model.d;
+            int inliers = 0;
+            for (int local = 0; local < modelIndices.size(); ++local) {
+                if ((local & 1023) == 0 && cancelled()) return Score{};
+                const auto &p = points.at(modelIndices.at(local));
+                const float value = std::abs(candidateNormal.x() * p.x + candidateNormal.y() * p.y + candidateNormal.z() * p.z + candidateD) / (options.useZAxisResidual ? qMax(std::abs(candidateNormal.z()), 1.0e-6f) : 1.0f);
+                if (value <= surfaceTolerance) ++inliers;
             }
-        const auto &p = points[index];
-        const float value = std::abs(bestNormal.x() * p.x + bestNormal.y() * p.y + bestNormal.z() * p.z + bestD) / (options.useZAxisResidual ? qMax(std::abs(bestNormal.z()), 1.0e-6f) : 1.0f);
-        if (value <= surfaceTolerance) refinedInliers.push_back(index);
+            if (inliers > best.count) best = {inliers, trial};
+        }
+        return best;
+    };
+    const auto scores = orderedTasks(int(trials.size()), taskCount, scoreTrials);
+    Score best;
+    for (const auto &score : scores) if (score.count > best.count) best = score;
+    if (cancelled()) return cancelledResult();
+    if (best.trial >= 0) {
+        bestNormal = trials.at(best.trial).normal;
+        bestD = trials.at(best.trial).d;
     }
+    result.timings.ransacMs = elapsed();
+    const QVector<int> &candidates = result.candidateIndices;
+    QVector<int> refinedInliers = classify(bestNormal, bestD, surfaceTolerance, &candidates);
+    if (cancelled()) return cancelledResult();
+    result.timings.classificationMs += elapsed();
     if (refinedInliers.size() < required) { result.error = QStringLiteral("RANSAC 平面内点不足：%1 / %2").arg(refinedInliers.size()).arg(required); return result; }
     QVector3D finalNormal = bestNormal;
     float finalD = bestD;
     double finalEigenvalues[3] = {};
     const int refinementIterations = qBound(1, options.pcaRefinementIterations, 3);
     for (int iteration = 0; iteration < refinementIterations; ++iteration) {
+        if (cancelled()) return cancelledResult();
         double mean[3] = {};
-        for (int index : refinedInliers) { mean[0] += points[index].x; mean[1] += points[index].y; mean[2] += points[index].z; }
+        int visited = 0;
+        for (int index : refinedInliers) {
+            if ((visited++ & 1023) == 0 && cancelled()) return cancelledResult();
+            mean[0] += points[index].x; mean[1] += points[index].y; mean[2] += points[index].z;
+        }
         for (double &v : mean) v /= refinedInliers.size();
         double cov[3][3] = {};
+        visited = 0;
         for (int index : refinedInliers) {
+            if ((visited++ & 1023) == 0 && cancelled()) return cancelledResult();
             const double delta[3] = {points[index].x - mean[0], points[index].y - mean[1], points[index].z - mean[2]};
             for (int r = 0; r < 3; ++r) for (int c = 0; c < 3; ++c) cov[r][c] += delta[r] * delta[c];
         }
@@ -211,29 +314,34 @@ Result fit(const QVector<pointcloud::Point3D> &points,
         if (finalNormal.z() < 0.0f) finalNormal = -finalNormal;
         if (options.useZAxisResidual && finalNormal.z() < minimumNormalZ) { result.error = QStringLiteral("最小二乘/PCA 平面不符合 2.5D 约束"); return result; }
         finalD = -QVector3D::dotProduct(finalNormal, QVector3D(float(mean[0]), float(mean[1]), float(mean[2])));
-        QVector<int> reclassified;
-        for (int index : result.candidateIndices) if (residualFor(finalNormal, finalD, points[index]) <= surfaceTolerance) reclassified.push_back(index);
+        result.timings.pcaMs += elapsed();
+        QVector<int> reclassified = classify(finalNormal, finalD, surfaceTolerance, &candidates);
+        if (cancelled()) return cancelledResult();
+        result.timings.classificationMs += elapsed();
         ++result.pcaRefinementCount;
         if (reclassified.size() < required) { result.error = QStringLiteral("PCA 重分类后平面内点不足：%1 / %2").arg(reclassified.size()).arg(required); return result; }
         if (reclassified == refinedInliers) break;
         refinedInliers = std::move(reclassified);
     }
+    result.timings.pcaMs += elapsed();
     for (int seed : seedIndices) if (residualFor(finalNormal, finalD, points[seed]) > surfaceTolerance) { result.error = QStringLiteral("最终拟合平面未包含全部控制点"); return result; }
     result.planarity = float(1.0 - finalEigenvalues[2] / qMax(finalEigenvalues[1], 1.0e-20));
     if (options.deferFinalClassification) {
         result.planeIndices = refinedInliers;
         result.deferred = true;
     } else {
-        QVector<int> classified;
-        for (int i = 0; i < points.size(); ++i) if (finite(points[i]) && residualFor(finalNormal, finalD, points[i]) <= surfaceTolerance) classified.push_back(i);
+        const QVector<int> classified = classify(finalNormal, finalD, surfaceTolerance, nullptr);
+        if (cancelled()) return cancelledResult();
+        result.timings.classificationMs += elapsed();
         const QVector3D originPoint = QVector3D(-finalD * finalNormal.x(), -finalD * finalNormal.y(), -finalD * finalNormal.z());
         const QVector3D axisU = QVector3D::crossProduct(finalNormal, std::abs(finalNormal.z()) < 0.9f ? QVector3D(0, 0, 1) : QVector3D(0, 1, 0)).normalized();
         const QVector3D axisV = QVector3D::crossProduct(finalNormal, axisU).normalized();
         QVector<QVector2D> projected; projected.reserve(classified.size());
-        std::unordered_map<Cell, QVector<int>, CellHash> grid;
+        std::unordered_map<Cell, PendingCell, CellHash> grid;
         float minU = std::numeric_limits<float>::max(), minV = minU;
         float maxU = std::numeric_limits<float>::lowest(), maxV = maxU;
         for (int index : classified) {
+            if ((projected.size() & 1023) == 0 && cancelled()) return cancelledResult();
             const QVector3D delta = vectorFor(index) - originPoint;
             const QVector2D uv(QVector3D::dotProduct(delta, axisU), QVector3D::dotProduct(delta, axisV));
             projected.push_back(uv);
@@ -245,24 +353,90 @@ Result fit(const QVector<pointcloud::Point3D> &points,
                                                / qMax(1, projected.size())));
         const float radius = options.connectivityRadius > 0.0f
             ? options.connectivityRadius : qMax(spacing * 2.5f, 1.0e-6f);
-        for (int local = 0; local < projected.size(); ++local)
-            grid[{int(std::floor(projected[local].x() / radius)), int(std::floor(projected[local].y() / radius))}].push_back(local);
+        QVector<PendingCell *> cells;
+        QVector<int> pendingPositions;
+        cells.reserve(projected.size());
+        pendingPositions.reserve(projected.size());
+        grid.reserve(std::min<std::size_t>(std::size_t(projected.size()), 262144));
+        for (int local = 0; local < projected.size(); ++local) {
+            if ((local & 1023) == 0 && cancelled()) return cancelledResult();
+            const Cell cell{int(std::floor(projected[local].x() / radius)), int(std::floor(projected[local].y() / radius))};
+            auto &bucket = grid[cell];
+            auto &pending = bucket.points;
+            cells.push_back(&bucket);
+            pendingPositions.push_back(int(pending.size()));
+            pending.push_back(local);
+        }
+        // unordered_map element pointers survive rehash. Resolve each cell's same
+        // nine neighbors once rather than performing nine hash lookups per point.
+        for (auto &entry : grid) {
+            if (cancelled()) return cancelledResult();
+            int neighbor = 0;
+            for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
+                const auto it = grid.find({entry.first.x + dx, entry.first.y + dy});
+                entry.second.neighbors[neighbor++] = it == grid.end() ? nullptr : &it->second;
+            }
+        }
         QVector<int> component(classified.size(), -1), sizes;
-        for (int start = 0, count = 0; start < classified.size(); ++start) if (component[start] < 0) { QVector<int> queue{start}; component[start] = count; for (int head = 0; head < queue.size(); ++head) { const Cell cell{int(std::floor(projected[queue[head]].x() / radius)), int(std::floor(projected[queue[head]].y() / radius))}; for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) { const auto it = grid.find({cell.x + dx, cell.y + dy}); if (it == grid.end()) continue; for (int neighbor : it->second) if (component[neighbor] < 0 && (projected[neighbor] - projected[queue[head]]).lengthSquared() <= radius * radius) { component[neighbor] = count; queue.push_back(neighbor); } } } sizes.push_back(queue.size()); ++count; }
+        const auto removePending = [&pendingPositions](QVector<int> &pending, int slot) {
+            const int moved = pending.last();
+            pending[slot] = moved;
+            pendingPositions[moved] = slot;
+            pending.removeLast();
+        };
+        QVector<int> queue;
+        queue.reserve(classified.size());
+        for (int start = 0, count = 0; start < classified.size(); ++start) {
+            if ((start & 1023) == 0 && cancelled()) return cancelledResult();
+            if (component[start] >= 0) continue;
+            queue.clear();
+            queue.push_back(start);
+            component[start] = count;
+            removePending(cells.at(start)->points, pendingPositions.at(start));
+            for (int head = 0; head < queue.size(); ++head) {
+                if (cancelled()) return cancelledResult();
+                const int current = queue.at(head);
+                for (PendingCell *neighborCell : cells.at(current)->neighbors) {
+                    if (!neighborCell) continue;
+                    auto &pending = neighborCell->points;
+                    for (int slot = 0; slot < pending.size();) {
+                        if ((slot & 1023) == 0 && cancelled()) return cancelledResult();
+                        const int neighbor = pending.at(slot);
+                        if ((projected.at(neighbor) - projected.at(current)).lengthSquared() <= radius * radius) {
+                            component[neighbor] = count;
+                            queue.push_back(neighbor);
+                            removePending(pending, slot);
+                        } else ++slot;
+                    }
+                }
+            }
+            sizes.push_back(int(queue.size()));
+            ++count;
+        }
         result.connectedComponentCount = sizes.size();
         int selected = -1;
         if (options.keepSeedComponentOnly) for (int seed : seedIndices) { const int local = classified.indexOf(seed); if (local < 0) { result.error = QStringLiteral("拟合后采样点不在最终平面容差内"); return result; } if (selected < 0) selected = component[local]; else if (selected != component[local]) { result.error = QStringLiteral("采样点不在同一连通区域"); return result; } }
         const int referenceSize = selected >= 0 ? sizes[selected] : (sizes.isEmpty() ? 0 : *std::max_element(sizes.cbegin(), sizes.cend()));
         const int threshold = qMax(qMax(1, options.minimumDisconnectedComponentPoints), int(std::ceil(double(referenceSize) * qBound(0.0f, options.minimumDisconnectedComponentRatio, 1.0f))));
-        for (int local = 0; local < classified.size(); ++local) if (!options.keepSeedComponentOnly || component[local] == selected) result.planeIndices.push_back(classified[local]); else if (sizes[component[local]] >= threshold) result.disconnectedPlaneIndices.push_back(classified[local]);
+        result.planeIndices.reserve(classified.size());
+        for (int local = 0; local < classified.size(); ++local) {
+            if ((local & 1023) == 0 && cancelled()) return cancelledResult();
+            if (!options.keepSeedComponentOnly || component[local] == selected) result.planeIndices.push_back(classified[local]);
+            else if (sizes[component[local]] >= threshold) result.disconnectedPlaneIndices.push_back(classified[local]);
+        }
         result.significantComponentCount = 0; for (int size : sizes) if (size >= threshold) ++result.significantComponentCount;
     }
+    result.timings.connectivityMs = elapsed();
     if (result.planeIndices.size() < required) { result.error = QStringLiteral("目标连通区域点数不足：%1 / %2").arg(result.planeIndices.size()).arg(required); return result; }
     double squared = 0.0; float maximum = 0.0f;
-    for (int index : result.planeIndices) { result.planePoints.push_back(points[index]); const float distance = residualFor(finalNormal, finalD, points[index]); squared += double(distance) * distance; maximum = qMax(maximum, distance); }
+    result.planePoints.reserve(result.planeIndices.size());
+    for (int index : result.planeIndices) { if ((result.planePoints.size() & 1023) == 0 && cancelled()) return cancelledResult(); result.planePoints.push_back(points[index]); const float distance = residualFor(finalNormal, finalD, points[index]); squared += double(distance) * distance; maximum = qMax(maximum, distance); }
     result.rmsError = float(std::sqrt(squared / qMax(1, result.planeIndices.size())));
     result.usedThreshold = surfaceTolerance;
     result.model = {finalNormal.x(), finalNormal.y(), finalNormal.z(), finalD, int(result.planeIndices.size()), result.rmsError, maximum};
+    if (cancelled()) return cancelledResult();
+    result.timings.assemblyMs = elapsed();
+    result.timings.totalMs = totalTimer.nsecsElapsed() / 1.0e6;
     result.ok = true;
     return result;
 }

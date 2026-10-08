@@ -34,6 +34,11 @@ struct StitchingRegistrationGroup {
     float visibilityWarningRatio = 0.25f;
     bool tangentCoarseTrimmedScore = true;
     int correspondenceParallelTasks = 0;
+    // 2.5D height-map registration (controlled iteration) is carried by
+    // StitchingRegistrationGroup::options, i.e. the whole IcpOptions block that
+    // this group already forwards. It is deliberately NOT duplicated as a flat
+    // field here: two sources for the same switch would let a defaulted flat
+    // copy silently disable the feature. Default off.
 };
 
 struct StitchingSeamGroup {
@@ -88,6 +93,17 @@ struct [[deprecated("Use StitchingRequest grouped fields")]] StitchingOptions {
     float visibilityWarningRatio = 0.25f;
     bool tangentCoarseTrimmedScore = true;
     int correspondenceParallelTasks = 0;
+    // 2.5D height-map registration, forwarded to IcpOptions.
+    bool heightMapRegistrationEnabled = false;
+    float heightMapGridMinimumMm = 0.5f;
+    float heightMapGridMaximumMm = 2.0f;
+    float heightMapMinimumValidRatio = 0.25f;
+    int heightMapMinimumValidPoints = 100;
+    float heightMapMinimumRelativeImprovement = 0.01f;
+    float heightMapMaxTranslationMm = 10.0f;
+    float heightMapMaxYawDegrees = 1.0f;
+    bool heightMapRestrictedDof = true;
+    bool heightMapSearchEnabled = true;
     // Compatible default: the registration result keeps the 2 mm pre/post ICP
     // diagnostic frames. Standard output callers disable this to skip frames.
     bool collectDiagnosticFrames = true;

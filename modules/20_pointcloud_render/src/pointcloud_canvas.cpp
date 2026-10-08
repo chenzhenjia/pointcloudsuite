@@ -5,6 +5,7 @@
 PointCloudCanvas::PointCloudCanvas(QWidget *parent)
         : QOpenGLWidget(parent), m_vertexBuffer(QOpenGLBuffer::VertexBuffer),
           m_stateBuffer(QOpenGLBuffer::VertexBuffer),
+          m_textureBuffer(QOpenGLBuffer::VertexBuffer),
           m_contourBuffer(QOpenGLBuffer::VertexBuffer) {
         setMinimumSize(620, 480);
         setMouseTracking(true);
@@ -20,6 +21,7 @@ PointCloudCanvas::~PointCloudCanvas()  {
         if (m_contourBuffer.isCreated()) m_contourBuffer.destroy();
         if (m_contourVertexArray.isCreated()) m_contourVertexArray.destroy();
         if (m_stateBuffer.isCreated()) m_stateBuffer.destroy();
+        if (m_textureBuffer.isCreated()) m_textureBuffer.destroy();
         if (m_vertexBuffer.isCreated()) m_vertexBuffer.destroy();
         if (m_vertexArray.isCreated()) m_vertexArray.destroy();
         doneCurrent();
@@ -51,6 +53,7 @@ void PointCloudCanvas::setCloud(QVector<pointcloud::Point3D> points) {
         m_selectedIndices.clear();
         m_coordinatePointIndex = -1;
         m_workpieceCoordinate = {};
+        clearTextureGrayOverlay();
         m_contourVertices.clear();
         m_contourRanges.clear();
         m_contourUploadPending = true;
@@ -85,6 +88,7 @@ void PointCloudCanvas::setCloudStreaming(QVector<pointcloud::Point3D> points) {
         m_planeResultIndices.clear();
         m_edgeResultIndices.clear();
         m_coordinatePointIndex = -1;
+        clearTextureGrayOverlay();
         updateBounds();
         m_uploadError.clear();
         m_uploadPending = true;
@@ -134,6 +138,7 @@ void PointCloudCanvas::setPlaneResult(const QVector<int> &planeIndices, const QV
             qWarning() << "PointCloudCanvas rejected contour snapshot:" << renderError;
             return;
         }
+        const bool planeChanged = m_planeResultIndices != planeIndices;
         m_planeResultIndices = planeIndices;
         m_edgeResultIndices = edgeIndices;
         m_pointStates.fill(NormalPoint, m_points.size());
@@ -152,6 +157,7 @@ void PointCloudCanvas::setPlaneResult(const QVector<int> &planeIndices, const QV
         }
         m_stateUploadPending = true;
         m_contourUploadPending = true;
+        if (planeChanged) clearTextureGrayOverlay();
         validateRenderSnapshot();
         update();
     }
@@ -169,6 +175,37 @@ void PointCloudCanvas::clearPlaneResult() {
         m_contourRanges.clear();
         m_stateUploadPending = true;
         m_contourUploadPending = true;
+        clearTextureGrayOverlay();
+        update();
+    }
+
+void PointCloudCanvas::setTextureGrayOverlay(const QVector<quint8> &grayscale,
+                                             const QVector<quint8> &valid) {
+        if (QThread::currentThread() != thread()) return;
+        pcv::render::PointColorOverlay overlay;
+        overlay.valid = valid;
+        overlay.colors.resize(grayscale.size());
+        for (int i = 0; i < grayscale.size(); ++i) {
+            const float value = float(grayscale.at(i)) / 255.0f;
+            overlay.colors[i] = QVector4D(value, value, value,
+                                          valid.value(i, 0) ? 1.0f : 0.0f);
+        }
+        QString error;
+        if (!pcv::render::validatePointColorOverlay(overlay, m_points.size(), &error)) {
+            qWarning() << "PointCloudCanvas rejected texture overlay:" << error;
+            return;
+        }
+        m_textureColors = std::move(overlay.colors);
+        m_textureValid = valid;
+        m_textureUploadPending = true;
+        update();
+    }
+
+void PointCloudCanvas::clearTextureGrayOverlay() {
+        if (QThread::currentThread() != thread()) return;
+        m_textureColors.fill(QVector4D(0.0f, 0.0f, 0.0f, 0.0f), m_points.size());
+        m_textureValid.fill(0, m_points.size());
+        m_textureUploadPending = true;
         update();
     }
 
@@ -198,6 +235,7 @@ void PointCloudCanvas::setPointSize(int size) {
 void PointCloudCanvas::setDisplayOptions(int colorMode, double overlay, double mapMin,
                            double mapMax) {
         if (QThread::currentThread() != thread()) return;
+        if (colorMode != 3) m_textureFallbackColorMode = qBound(0, colorMode, 2);
         m_colorMode = colorMode;
         m_overlay = float(qBound(0.0, overlay, 1.0));
         m_mapMin = float(mapMin);
@@ -273,8 +311,10 @@ void PointCloudCanvas::initializeGL()  {
             uniform float overlay;
             uniform int renderPass;
             layout(location = 2) in uint pointState;
+            layout(location = 3) in vec4 textureColor;
             out float heightValue;
             out vec3 normalValue;
+            out vec4 textureValue;
             flat out int stateValue;
             void main() {
                 vec3 normalized = (vertexPosition - cloudCenter) * (2.0 / cloudSpan);
@@ -282,6 +322,7 @@ void PointCloudCanvas::initializeGL()  {
                 gl_Position.xy += viewPan * gl_Position.w;
                 gl_PointSize = renderPass == 0 ? pointSize : max(pointSize + 6.0, 8.0);
                 normalValue = vertexNormal;
+                textureValue = textureColor;
                 stateValue = int(pointState);
                 heightValue = clamp((vertexPosition.z - minHeight) /
                                     max(maxHeight - minHeight, 0.000001), 0.0, 1.0);
@@ -292,10 +333,12 @@ void PointCloudCanvas::initializeGL()  {
             in float heightValue;
             in vec3 normalValue;
             uniform int colorMode;
+            uniform int textureFallbackColorMode;
             uniform float overlay;
             uniform int renderPass;
             out vec4 fragmentColor;
             flat in int stateValue;
+            in vec4 textureValue;
             void main() {
                 if (renderPass == 1 && distance(gl_PointCoord, vec2(0.5)) > 0.48)
                     discard;
@@ -305,18 +348,26 @@ void PointCloudCanvas::initializeGL()  {
                 vec3 color = heightValue < 0.5
                     ? mix(lowColor, middleColor, heightValue * 2.0)
                     : mix(middleColor, highColor, (heightValue - 0.5) * 2.0);
-                if (colorMode == 1) {
+                int activeColorMode = colorMode == 3 ? textureFallbackColorMode : colorMode;
+                if (activeColorMode == 1) {
                     float gray = dot(color, vec3(0.299, 0.587, 0.114));
                     color = vec3(gray);
-                } else if (colorMode == 2) {
+                } else if (activeColorMode == 2) {
                     color = normalize(abs(normalValue) + vec3(0.001));
                 }
+                bool hasTextureColor = colorMode == 3 && textureValue.a > 0.5;
+                if (hasTextureColor)
+                    color = textureValue.rgb;
                 vec3 normal = length(normalValue) > 0.0001
                     ? normalize(normalValue) : vec3(0.0, 0.0, 1.0);
-                float light = 0.72 + 0.28 * max(dot(normal, normalize(vec3(0.35, 0.45, 0.82))), 0.0);
+                float light = hasTextureColor
+                    ? 1.0
+                    : 0.72 + 0.28 * max(dot(normal, normalize(vec3(0.35, 0.45, 0.82))), 0.0);
                 if (renderPass == 1) color = vec3(1.0);
-                else if (stateValue == 1) color = vec3(0.58);
-                else if (stateValue == 2) color = vec3(1.0, 0.86, 0.18);
+                else if (!hasTextureColor) {
+                    if (stateValue == 1) color = vec3(0.58);
+                    else if (stateValue == 2) color = vec3(1.0, 0.86, 0.18);
+                }
                 fragmentColor = vec4(color * light, max(0.02, overlay));
             }
         )";
@@ -386,6 +437,7 @@ void PointCloudCanvas::initializeGL()  {
         }
 
         if (!m_vertexArray.create() || !m_vertexBuffer.create() || !m_stateBuffer.create()
+            || !m_textureBuffer.create()
             || !m_contourVertexArray.create() || !m_contourBuffer.create()) {
             m_initializationError = tr("无法创建 OpenGL 顶点缓冲区");
             return;
@@ -398,9 +450,10 @@ void PointCloudCanvas::paintGL()  {
 
         if (m_initializationError.isEmpty() && context() && context()->isValid()
             && !m_points.isEmpty()) {
-            uploadCloudIfNeeded();
+                uploadCloudIfNeeded();
             if (m_uploadError.isEmpty()) {
                 uploadStatesIfNeeded();
+                uploadTextureIfNeeded();
                 uploadContoursIfNeeded();
                 const QMatrix4x4 transform = viewTransform();
                 m_program.bind();
@@ -414,6 +467,7 @@ void PointCloudCanvas::paintGL()  {
                 m_program.setUniformValue("minHeight", lower);
                 m_program.setUniformValue("maxHeight", upper);
                 m_program.setUniformValue("colorMode", m_colorMode);
+                m_program.setUniformValue("textureFallbackColorMode", m_textureFallbackColorMode);
                 m_program.setUniformValue("overlay", m_overlay);
                 m_program.setUniformValue("renderPass", 0);
                 m_vertexArray.bind();
@@ -626,9 +680,27 @@ void PointCloudCanvas::uploadCloudIfNeeded() {
             glEnableVertexAttribArray(2);
             glVertexAttribIPointer(2, 1, GL_UNSIGNED_BYTE, sizeof(quint8), nullptr);
             m_stateBuffer.release();
+            m_textureBuffer.bind();
+            m_textureBuffer.setUsagePattern(QOpenGLBuffer::DynamicDraw);
+            const qsizetype textureBytes = m_textureColors.size()
+                * qsizetype(sizeof(QVector4D));
+            if (textureBytes > m_textureBufferCapacityBytes) {
+                const qsizetype grown = qMax(textureBytes,
+                    qMax<qsizetype>(1024, m_textureBufferCapacityBytes * 2));
+                m_textureBuffer.allocate(static_cast<int>(grown));
+                m_textureBufferCapacityBytes = grown;
+            }
+            if (textureBytes > 0)
+                m_textureBuffer.write(0, m_textureColors.constData(), int(textureBytes));
+            m_program.bind();
+            m_program.enableAttributeArray(3);
+            m_program.setAttributeBuffer(3, GL_FLOAT, 0, 4, sizeof(QVector4D));
+            m_program.release();
+            m_textureBuffer.release();
             m_program.release();
             m_uploadPending = false;
             m_stateUploadPending = false;
+            m_textureUploadPending = false;
             qInfo() << "OpenGL cloud upload finished, points=" << m_points.size()
                     << "bytes=" << uploadBytes;
         }
@@ -651,6 +723,30 @@ void PointCloudCanvas::uploadStatesIfNeeded() {
         m_stateBuffer.release();
         m_vertexArray.release();
         m_stateUploadPending = false;
+    }
+
+void PointCloudCanvas::uploadTextureIfNeeded() {
+        if (!m_textureUploadPending || !m_textureBuffer.isCreated()) return;
+        m_vertexArray.bind();
+        m_textureBuffer.bind();
+        m_textureBuffer.setUsagePattern(QOpenGLBuffer::DynamicDraw);
+        const qsizetype textureBytes = m_textureColors.size()
+            * qsizetype(sizeof(QVector4D));
+        if (textureBytes > m_textureBufferCapacityBytes) {
+            const qsizetype grown = qMax(textureBytes,
+                qMax<qsizetype>(1024, m_textureBufferCapacityBytes * 2));
+            m_textureBuffer.allocate(static_cast<int>(grown));
+            m_textureBufferCapacityBytes = grown;
+        }
+        if (textureBytes > 0)
+            m_textureBuffer.write(0, m_textureColors.constData(), int(textureBytes));
+        m_program.bind();
+        m_program.enableAttributeArray(3);
+        m_program.setAttributeBuffer(3, GL_FLOAT, 0, 4, sizeof(QVector4D));
+        m_program.release();
+        m_textureBuffer.release();
+        m_vertexArray.release();
+        m_textureUploadPending = false;
     }
 
 void PointCloudCanvas::uploadContoursIfNeeded() {
