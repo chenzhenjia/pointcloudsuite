@@ -14,7 +14,7 @@
 |---|---|---|---|
 | 10 `pointcloud_io` | `pcv_m10_pointcloud_io` | PLY/缓存、过滤、相机帧、writer、事务已有实现；相机实验受开关控制 | 规范 IO API 与生产调用收敛 |
 | 20 `pointcloud_render` | `pcv_m20_pointcloud_render` | Qt/OpenGL 画布、点选、纹理灰度覆盖已有实现 | 完成真实桌面交互和纹理视觉验收 |
-| 30 `pointcloud_stitch` | `pcv_m30_pointcloud_stitch` | ICP、多帧、seam、2.5D 可选路径、快速重叠精配准、manifest 与事务编排已有实现 | 分组请求成为主实现，旧入口仅适配 |
+| 30 `pointcloud_stitch` | `pcv_m30_pointcloud_stitch` | 2026-10-09 算法恢复到 `6329426`：ICP、多帧、seam、manifest 与事务编排；后续 2.5D/快速模式已回滚 | 分组请求成为主实现，旧入口仅适配 |
 | 40 `pointcloud_matching` | `pcv_m40_pointcloud_matching`（`INTERFACE`） | 仅聚合 30/60；业务未实现 | 后续版本定义位置确认与移动判定 |
 | 50 `coordinate_conversion` | `pcv_m50_coordinate_conversion` | 唯一手眼、插值与坐标数学实现 | `pcv::coordinates` 公共门面与生产调用收敛 |
 | 60 `geometry_workpiece` | `pcv_m60_geometry_workpiece` | 平面/边缘/ROI/WObj、临时工件、扫描规划、严格栅格纹理已有实现 | `geometry/workpiece` 公共门面与交接收敛 |
@@ -29,7 +29,7 @@
 - 手眼链固定为 `T_base_depth = T_base_flange * T_flange_depth`，`RTmatDepth2robot=T_flange_depth`。`LineProfileXz` 用 `[X,0,Z]`，输入 Y 仅表示 `y/signedTravel`；`FullXyz` 保留完整 XYZ。控制器位姿 `[X,Y,Z,A,B,C]`，`A=Rx/B=Ry/C=Rz`，`Rz(C)*Ry(B)*Rx(A)`；长度 mm、角度 deg。
 - 扫描规划是相机扫描轨迹，支持 `Global/LocalRoi`，UI 默认 LocalRoi；范围来自 WObj1 XY 投影，默认高度/相机宽度/重叠/两端延长为 `50/100/50/50 mm`，单线容差 `0.1 mm`，产品固定 `-X→+X` 线序与 `+Y→-Y` 行程。输出项目 `scan_trajectory_v1` 与 InoRobot `sr2026-p-json-mvp-2`；P[10] 起始、最多 9990 点、XYZ 为 WObj1 局部坐标，姿态 `[X,Y,Z,RZ,RY,RX]`，不写控制器。
 - 纹理采用严格 `source_raster_index`：原始 PLY 点数等于亮度图像素数，左上角 row-major，仅当前平面点接收灰度；不裁剪/缩放/翻转/配准，无合法 provenance 或经过过滤/降采样/拼接时拒绝。`PLY 纹理实验（原始坐标）` 是独立实验入口，不转换到 `robot_base`、不建立 WObj1、不输出四件套。
-- 拼接公共 API 默认 `Legacy`，GUI 默认 `PoseOverlapFine`；快速模式使用位姿初值与两层重叠区 ICP（体素 `0.5/0.2 mm`、距离 `3.0/0.6 mm`、迭代 `20/15`、每对预算 `10 mm/1°`），默认关闭 seam/preview。低质量或无有效修正可警告并回退位姿；取消、输入、映射与文件错误仍失败。`formal_output` 仅表示事务成功，严格质量状态为 `not_run`。
+- 拼接算法与公共类型恢复到 `6329426`；GUI 默认完整配准，保留仅手眼转换，恢复原严格质量判定、seam/preview 和事务输出策略。共享模块 50 当前手眼实现及输出覆盖确认保留；2.5D/快速模式增量已回滚。
 - 输出 PLY 为 binary little-endian；正式 Mask PNG 为 Grayscale8 0/255，显示用亮度灰度可为 0～255。JSON 字段、文件名、错误码和原有默认值以已发布契约与对应公共头为准；本次整理不修改 schema。新增扫描诊断字段和拼接模式是各日期记录的增量，不是本次新增能力。
 
 ## 4. 未实现边界与 UI 交接

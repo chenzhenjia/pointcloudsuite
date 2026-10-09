@@ -2,7 +2,12 @@
 
 > 文档状态：既有数据契约与历史增量记录。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](pointcloudview_v0.4.md)；总索引：[docs/README.md](../README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
 
-### 2026-10-08：位姿粗配准＋重叠区快速精配准增量契约
+### 2026-10-09：PointCloudStitch 算法契约回滚
+
+- 模块 30 的公共类型与 PLY/preview/映射/manifest 输出编排恢复到 `6329426`；后续 heightmap/fine 参数、诊断和报告增量不再属于当前实现。下方对应增量记录保留追溯。
+- 坐标约定、模块 50 统一手眼数学、模块 10 事务契约及其他模块保持当前版本。具体范围、验证和风险见 `docs/modules/30_pointcloud_stitch.md` 本轮记录。
+
+### 2026-10-08：位姿粗配准＋重叠区快速精配准增量契约（已回滚）
 
 - `RegistrationProfile::{Legacy,PoseOverlapFine}` 及 fine 两层/迭代/预算选项追加到 `IcpOptions` 尾部，API 默认 Legacy；默认数值为体素 0.5/0.2 mm、距离 3.0/0.6 mm、20/15 迭代、10 mm/1°。只解可观测 6DoF，不改变手眼/ABC/单位/PLY/provenance。
 - 新路径的质量政策为 warn-only；至少 100 个有效对应是求解条件，不是正式输出的旧结构门槛。无解/越界/无重叠回退机器人位置并记录锚点重置；非有限输入、取消、映射和输出错误仍硬失败。Legacy 原验收保持不变。

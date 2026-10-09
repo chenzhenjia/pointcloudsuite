@@ -14,7 +14,7 @@
 
 全剖/点剖闭环是共同目标，高点标注/外部刀路/结果贴合接入仍待 schema 与调用方式冻结。仓库已有的是点云/几何/临时工件、相机扫描轨迹和严格原始栅格灰度显示，不能把流程图全部步骤写为完成。
 
-当前扫描保留 Global/LocalRoi（UI 默认 LocalRoi），50 是统一手眼数学来源，30 API 默认 Legacy/UI 默认 PoseOverlapFine，40 移动判定仍未实现。下方“删除全局扫描”等带日期记录是历史过程，后续规则已替代；保留正文供追溯。
+当前扫描保留 Global/LocalRoi（UI 默认 LocalRoi），50 是统一手眼数学来源；2026-10-09 按用户要求将 30 算法恢复到 `6329426`，UI 默认完整配准，后续 2.5D/快速模式已回滚。40 移动判定仍未实现。下方带日期的“删除全局扫描”及新配准记录是历史过程，后续规则已替代；保留正文供追溯。
 
 正式状态：[v0.4 基线](docs/requirements/pointcloudview_v0.4.md)；所有权：[协同文档](docs/architecture/module_ui_integration_v0.4.md)；后续代码批次：[开发方案](docs/development/module_convergence_v0.4.md)。所有代码更新都要在本文件追加日期、owner、文件/API、行为、实际验证、未验证项与回滚点。本次仅文档整理，不改变代码或测试结论。
 
@@ -270,3 +270,13 @@
 - 验证：51 份 Markdown 落盘内容核对一致，161 个本地 Markdown 链接目标存在；一级标题、代码围栏和替换字符检查通过，未发现锚点链接；`git diff --check` 通过。不运行构建、CTest 或 GUI。历史记录中的 `15/15`、`16/16`、`17/17`、`18/18` 等不代表本次验证，也不代表当前所有配置的测试数量。
 - 工作区：本次仅产生 Markdown 修改及新增，未提交；检查时另见 `.pcv_tmp_build.bat`、`.pcv_tmp_configure.bat`、`.pcv_tmp_ctest.bat`、`.pcv_tmp_run.bat` 删除状态，本次未操作这些文件。
 - 风险：真实点云 GUI 全流程、实际控制点与 Start/End、现场 row-major 一致性、手眼物理方向、机器人可达性/碰撞、Release 便携部署和外部刀路 schema/页面形态仍待验收或冻结。整理记录不改变这些结论。
+
+### 2026-10-09（PointCloudStitch 算法定向回滚到 6329426）
+
+- 主模块 30；用户明确授权 Git 定向回滚。起始工作区干净，基线为 `6329426`（2026-09-18 09:27:46 +08:00），使用 `git restore --source=6329426 --worktree -- <paths>`，不重置项目历史。
+- 模块 CMake、公共头、multiframe/stitching 实现、UI 模式文件及两份拼接测试恢复基线；seam 算法本就与基线一致。删除后续新增 heightmap 源/头，移除 pose_overlap_fine 专属测试注册与 heightmap/fine/interface-pipeline 回放参数。GUI 恢复完整配准/仅手眼转换两种模式。
+- 必要差异：保留模块 50 当前统一手眼实现、regressionrunner 参数适配和 GUI 报告的统一坐标组合调用，保留已有输出覆盖确认。其他模块、其他测试注册及历史文档记录保留。同步应用/模块 README、v0.3/v0.4 契约、协同文档、开发方案与 target.md。
+- 验证：`C:\pcv-build\stitch-rollback-6329426-debug-v1` 完整 Debug 构建成功；定向 stitching_interface/seam_fusion/multiframe 测试 `3/3` 通过，全量 CTest `19/19` 通过。核心模块文件、UI 与对应测试对 `6329426` 的 `git diff --exit-code` 为 `0`，`git diff --check` 通过。
+- 启动冒烟：首次指定 offscreen 时 pointcloudstitch 停在 Runtime Library 弹窗，未算成功；结束本轮测试进程后，显式使用当前 Qt plugins/platforms 与 windows 平台重试，pointcloudstitch/pointcloudview 自关闭启动退出码均为 `0`。未影响已有用户运行的 pointcloudview。
+- 未验证：Release 构建/部署、真实 PLY/XML/Start-End 回放与 GUI 全流程、现场质量/性能/机器人安全。模块 50 保持当前版本，因此不是整个项目逐字回退；恢复旧算法也恢复其既有质量/性能限制。
+- 回滚点：本轮前完整版本仍为 `ca0adc7`。本轮作为独立本地 Git 提交保存，不进行远程上传或强制推送。

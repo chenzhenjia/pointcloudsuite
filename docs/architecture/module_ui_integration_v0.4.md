@@ -2,7 +2,13 @@
 
 > 文档状态：当前参考。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
 
-### 2026-10-08：PointCloudStitch 快速重叠精配准接入
+### 2026-10-09：PointCloudStitch 算法回滚到 6329426
+
+- 主模块 30 的算法、公共类型、编排与测试恢复到 `6329426`，依赖仍为 `30 -> 10/50`；共享模块 50 当前实现保留，应用继续调用统一手眼入口。
+- GUI 恢复完整配准/仅手眼转换两种模式，保留输出覆盖确认；后续 heightmap/fine 源码、字段、回放参数和专属测试注册移除。输出与严格失败策略恢复基线，其他模块不回滚。
+- 以下快速模式与 2.5D 记录仅保留历史追溯。本轮实际验证见 `docs/modules/30_pointcloud_stitch.md` 文末。
+
+### 2026-10-08：PointCloudStitch 快速重叠精配准接入（已回滚）
 
 - 30 唯一实现 `RegistrationProfile::PoseOverlapFine`，50/10 的数学与事务契约不变，40 仍仅兼容转发。API 默认 Legacy；PointCloudStitch UI 默认位姿粗配准＋两层重叠区精配准。
 - 原始 robot_base 相邻样本求 pair 矩阵，按帧序累计后作用整帧；失败回退当前原机器人位姿，重置链锚点。每对 10 mm/1°，累计不限但报告。worker 只读、主线程顺序提交不变。

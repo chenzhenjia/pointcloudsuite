@@ -21,7 +21,7 @@
 
 采用增量 alias/forwarding 或薄门面，底层类型与算法 namespace 暂保留，不做全部实现改名。新门面不复制算法、不修改结构体布局/默认值/错误码；旧头、target 和 namespace 保留一个兼容周期。可标记的旧类型/函数使用 `[[deprecated]]`，namespace/转发头以说明和迁移记录标注；不能假装 namespace 本身可统一加弃用属性。
 
-30 的分组请求成为主实现，旧 `StitchingOptions/stitchRawLineProfiles` 反向适配。兼容映射逐字段记录，显式保留旧 `allowOverwrite=true` 与新请求 `false` 的不同默认值，并完整透传注册 profile、2.5D、seam、preview、诊断、进度与取消。保留 Legacy 和 PoseOverlapFine 的质量/回退政策差异。
+30 的分组请求成为主实现，旧 `StitchingOptions/stitchRawLineProfiles` 反向适配。兼容映射逐字段记录，显式保留旧 `allowOverwrite=true` 与新请求 `false` 的不同默认值，并完整透传配准、seam、preview、诊断、进度与取消。2026-10-09 算法已恢复到 `6329426`，后续收敛以该完整配准流程为准，不重新引入已回滚的 profile/2.5D 增量。
 
 IO writer 与事务仅保留 10 实现；30/60 领域结果与提交编排的拆分先保留现有便利入口行为，再逐步提供纯结果/manifest 边界。所有正式产物走同一事务，提交失败不得返回正式成功状态。
 

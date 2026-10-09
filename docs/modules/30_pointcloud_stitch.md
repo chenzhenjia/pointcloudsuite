@@ -2,7 +2,13 @@
 
 > 文档状态：当前参考。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
 
-### 2026-10-08（位姿粗配准＋重叠区快速精配准）
+## 当前算法版本（2026-10-09 回滚）
+
+按用户要求恢复 `6329426`（2026-09-18 09:27:46 +08:00）的拼接算法。模块 CMake、`multiframe_registration.h/.cpp`、`stitching_interface.h/.cpp`、多帧与接口测试源码直接由 Git 恢复；seam 实现在该提交后未变化。移除后续新增的 heightmap 源/头与 `pose_overlap_fine_tests` 注册。GUI 恢复两种模式，默认“配准与融合”，回归工具移除后续 heightmap/fine/interface-pipeline 参数。
+
+保留共享模块 50 当前手眼数学与应用调用统一入口，并保留已有输出覆盖确认；未回滚其他模块或项目提交历史。以下 2.5D/快速精配准记录为历史实现，不代表当前能力。本轮实际验证与风险在文末追加。
+
+### 2026-10-08（位姿粗配准＋重叠区快速精配准，已回滚）
 
 - 主模块 30，复用 50 坐标转换及 10 `ArtifactTransaction`；40 不新增实现。`IcpOptions.profile` 默认为 `RegistrationProfile::Legacy`，GUI 默认新 `PoseOverlapFine`，旧完整配准和仅位姿转换入口保留。
 - 新路径只在原 robot_base 相邻帧样本的重叠区域执行两层 point-to-plane ICP：体素 `0.5/0.2 mm`、距离 `3.0/0.6 mm`、迭代上限 `20/15`；连续三次增量 `<=0.005 mm/0.0005°` 提前结束。法向邻域至少 `1.5 mm`，避免细层体素小于输入间距时无法估计法向。特征值阈值仍为 `1e-3`，只解可观测方向；低对应比例/退化仅警告。
@@ -25,9 +31,9 @@ seam fusion 实现与公共类型位于本模块 `include/pcv/stitching/`（`sea
 
 `StitchingRequest/stitch()` 已公开，但内部仍组装 `StitchingOptions` 并调用旧实现；反向适配尚未实施。`registrationdialog` 和 `registration_diagnostic` 仍用旧 Options/入口，工具 CMake 仍链接旧 10 与 40 聚合 target。算法头位于 `pcv/stitching/`，实际 namespace 主要是 `pointcloud::`；目标 `pcv::stitching` 门面不是全部已落地。
 
-现有 30 入口会编排 10 的事务，不能描述为全部只返回 manifest。API 默认 Legacy，GUI 默认 PoseOverlapFine；快速模式质量仅警告、回退位姿继续的政策不适用于取消/输入/映射/事务错误。`formal_output` 仅表示提交，严格验收 `not_run`。
+现有 30 入口会编排 10 的事务，不能描述为全部只返回 manifest。2026-10-09 算法已恢复到 `6329426`，API/GUI 使用原完整配准流程；快速模式字段与输出策略已回滚。
 
-当前测试登记包括 `pose_overlap_fine_tests`；本次不运行测试，不把历史重复回归的“正在/已执行”写为本轮通过。收敛顺序见 [开发方案](../development/module_convergence_v0.4.md)。
+`pose_overlap_fine_tests` 注册已随算法回滚移除；历史重复回归结论不代表本次验证。收敛顺序见 [开发方案](../development/module_convergence_v0.4.md)，具体测试以本轮追加记录为准。
 
 ## 历史变更与验证记录
 
@@ -115,3 +121,13 @@ seam fusion 实现与公共类型位于本模块 `include/pcv/stitching/`（`sea
 - 建立模块边界和 `pcv_m30_pointcloudstitch` 兼容入口；保留现有应用流程。
 - M3/M4：`stitching_interface` 已迁移到模块源码，target 负责流程编排并依赖配准、坐标转换和读写模块。
 - M5.1：应用 seam fusion 入口已增加 `ok/error/cancelled` 状态并在正式输出前 fail-closed；GUI 仍保留应用数据模型适配，待公共拼接类型完全收敛后删除适配层。
+
+### 2026-10-09（PointCloudStitch 算法定向回滚到 6329426）
+
+- 主模块 30；用户明确授权 Git 定向回滚。起始工作区干净，基线为 `6329426`（2026-09-18 09:27:46 +08:00），使用 `git restore --source=6329426 --worktree -- <paths>`，不重置项目历史。
+- 模块 CMake、公共头、multiframe/stitching 实现、UI 模式文件及两份拼接测试恢复基线；seam 算法本就与基线一致。删除后续新增 heightmap 源/头，移除 pose_overlap_fine 专属测试注册与 heightmap/fine/interface-pipeline 回放参数。GUI 恢复完整配准/仅手眼转换两种模式。
+- 必要差异：保留模块 50 当前统一手眼实现、regressionrunner 参数适配和 GUI 报告的统一坐标组合调用，保留已有输出覆盖确认。其他模块、其他测试注册及历史文档记录保留。同步应用/模块 README、v0.3/v0.4 契约、协同文档、开发方案与 target.md。
+- 验证：`C:\pcv-build\stitch-rollback-6329426-debug-v1` 完整 Debug 构建成功；定向 stitching_interface/seam_fusion/multiframe 测试 `3/3` 通过，全量 CTest `19/19` 通过。核心模块文件、UI 与对应测试对 `6329426` 的 `git diff --exit-code` 为 `0`，`git diff --check` 通过。
+- 启动冒烟：首次指定 offscreen 时 pointcloudstitch 停在 Runtime Library 弹窗，未算成功；结束本轮测试进程后，显式使用当前 Qt plugins/platforms 与 windows 平台重试，pointcloudstitch/pointcloudview 自关闭启动退出码均为 `0`。未影响已有用户运行的 pointcloudview。
+- 未验证：Release 构建/部署、真实 PLY/XML/Start-End 回放与 GUI 全流程、现场质量/性能/机器人安全。模块 50 保持当前版本，因此不是整个项目逐字回退；恢复旧算法也恢复其既有质量/性能限制。
+- 回滚点：本轮前完整版本仍为 `ca0adc7`。本轮作为独立本地 Git 提交保存，不进行远程上传或强制推送。

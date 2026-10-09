@@ -3,7 +3,6 @@
 #include "pointcloudprocessor.h"
 #include <pcv/io/ply_writer.h>
 #include <pcv/registration/handeye_transform.h>
-#include <pcv/interface/stitching_interface.h>
 
 #include <QCommandLineOption>
 #include <QCommandLineParser>
@@ -234,39 +233,6 @@ QJsonObject diagnosticJson(const pointcloud::IcpDiagnostics &diagnostic,
     item.insert(QStringLiteral("rmse_mm"), diagnostic.rmse);
     item.insert(QStringLiteral("correction_translation_mm"), diagnostic.correctionTranslation);
     item.insert(QStringLiteral("correction_angle_deg"), diagnostic.correctionAngleDegrees);
-    // 2.5D height-map registration (controlled iteration).
-    item.insert(QStringLiteral("heightmap_registration_enabled"), options.heightMapRegistrationEnabled);
-    item.insert(QStringLiteral("heightmap_registration_attempted"), diagnostic.heightMapAttempted);
-    item.insert(QStringLiteral("heightmap_registration_accepted"), diagnostic.heightMapAccepted);
-    item.insert(QStringLiteral("heightmap_fallback_to_legacy_icp"), diagnostic.heightMapFallbackToIcp);
-    item.insert(QStringLiteral("heightmap_grid_resolution_mm"), diagnostic.heightMapGridResolutionMm);
-    item.insert(QStringLiteral("heightmap_width"), diagnostic.heightMapWidth);
-    item.insert(QStringLiteral("heightmap_height"), diagnostic.heightMapHeight);
-    item.insert(QStringLiteral("heightmap_valid_ratio_source"), diagnostic.heightMapSourceValidRatio);
-    item.insert(QStringLiteral("heightmap_valid_ratio_target"), diagnostic.heightMapTargetValidRatio);
-    item.insert(QStringLiteral("heightmap_valid_points_source"), diagnostic.heightMapSourceValidPoints);
-    item.insert(QStringLiteral("heightmap_valid_points_target"), diagnostic.heightMapTargetValidPoints);
-    item.insert(QStringLiteral("heightmap_score_before"), diagnostic.heightMapScoreBefore);
-    item.insert(QStringLiteral("heightmap_score_after"), diagnostic.heightMapScoreAfter);
-    item.insert(QStringLiteral("heightmap_relative_improvement"), diagnostic.heightMapRelativeImprovement);
-    item.insert(QStringLiteral("heightmap_delta_xyz_mm"), QJsonArray{
-        diagnostic.heightMapTranslationX, diagnostic.heightMapTranslationY, diagnostic.heightMapTranslationZ});
-    item.insert(QStringLiteral("heightmap_delta_yaw_deg"), diagnostic.heightMapYawDegrees);
-    item.insert(QStringLiteral("heightmap_normalized_correlation"), diagnostic.heightMapNormalizedCorrelation);
-    item.insert(QStringLiteral("heightmap_restricted_icp_levels"), diagnostic.heightMapRestrictedIcpCompletedLevels);
-    item.insert(QStringLiteral("heightmap_restricted_icp_degenerate"), diagnostic.heightMapRestrictedIcpDegenerate);
-    item.insert(QStringLiteral("heightmap_reject_reason"), diagnostic.heightMapRejectReason);
-    item.insert(QStringLiteral("trajectory_diagnostic_reason"), diagnostic.trajectoryDiagnosticReason);
-    item.insert(QStringLiteral("selected_registration_source"), diagnostic.selectedRegistrationSource);
-    item.insert(QStringLiteral("visibility_hard_rejected"), diagnostic.visibilityHardRejected);
-    item.insert(QStringLiteral("actual_overlap_source_points"), diagnostic.actualOverlapSourceCount);
-    item.insert(QStringLiteral("actual_overlap_target_points"), diagnostic.actualOverlapTargetCount);
-    item.insert(QStringLiteral("legacy_icp_comparison"), QJsonObject{
-        {QStringLiteral("available"), diagnostic.legacyIcpComparisonAvailable},
-        {QStringLiteral("accepted"), diagnostic.legacyIcpAccepted},
-        {QStringLiteral("coverage_3mm"), diagnostic.legacyIcpComparisonCoverage3mm},
-        {QStringLiteral("p95_mm"), diagnostic.legacyIcpComparisonP95},
-        {QStringLiteral("reject_reason"), diagnostic.legacyIcpRejectReason}});
     QJsonArray levels;
     for (int index = 0; index < diagnostic.levelFitness.size(); ++index) {
         QJsonObject level;
@@ -300,17 +266,9 @@ int runRegression(const QStringList &arguments)
     const QCommandLineOption voxelOption(QStringLiteral("voxel-levels"), QStringLiteral("三个体素层级"), QStringLiteral("values"), QStringLiteral("1 0.5 0.2"));
     const QCommandLineOption distanceOption(QStringLiteral("correspondence-distances"), QStringLiteral("三个对应距离"), QStringLiteral("values"), QStringLiteral("3 1.5 0.6"));
     const QCommandLineOption transformOnlyOption(QStringLiteral("transform-only"), QStringLiteral("仅执行手眼坐标转换，跳过预对齐和 ICP"));
-    const QCommandLineOption fineOption(QStringLiteral("pose-overlap-fine"), QStringLiteral("位姿粗配准＋两层重叠区精配准，质量仅警告"));
-    const QCommandLineOption interfaceOption(QStringLiteral("interface-pipeline"), QStringLiteral("通过模块30事务流水线回放（无预览）"));
-    // 2.5D height-map registration stays off unless it is asked for explicitly.
-    const QCommandLineOption heightMapOption(QStringLiteral("heightmap-registration"),
-        QStringLiteral("启用 2.5D 高程图配准（默认关闭，旧 ICP 仍是回退路径）"));
-    const QCommandLineOption heightMapNoSearchOption(QStringLiteral("disable-heightmap-search"),
-        QStringLiteral("关闭 2.5D 高程图粗到细搜索（仅诊断）"));
     parser.addOptions({regressionOption, inputOption, poseOption, calibrationOption, reportOption, outputOption,
                        runtimeRootOption, jobIdOption, workpieceIdOption, baseNameOption,
-                       voxelOption, distanceOption, transformOnlyOption, heightMapOption,
-                       heightMapNoSearchOption, fineOption, interfaceOption});
+                       voxelOption, distanceOption, transformOnlyOption});
     parser.process(arguments);
     const QString inputDirectory = parser.value(inputOption);
     const QString posePath = parser.value(poseOption);
@@ -337,22 +295,13 @@ int runRegression(const QStringList &arguments)
     if (inputDirectory.isEmpty() || posePath.isEmpty() || calibrationPath.isEmpty() || reportPath.isEmpty()) return 2;
 
     QString error;
-    // Module 50 owns the hand-eye XML parsing and rigid-matrix validation.
     pointcloud::HandEyeCalibration calibration;
     QHash<int, PoseRecord> poses;
-    if (!pointcloud::loadHandEyeCalibration(calibrationPath, &calibration, &error)
-        || !readPoseInfo(posePath, &poses, &error)) return 2;
+    if (!pointcloud::loadHandEyeCalibration(calibrationPath, &calibration, &error) || !readPoseInfo(posePath, &poses, &error)) return 2;
     pointcloud::IcpOptions options;
     options.enabled = !parser.isSet(transformOnlyOption);
     options.voxelLevels = parseLevels(parser.value(voxelOption), &error);
     options.correspondenceDistances = parseLevels(parser.value(distanceOption), &error);
-    options.heightMapRegistrationEnabled = parser.isSet(heightMapOption);
-    options.heightMapSearchEnabled = !parser.isSet(heightMapNoSearchOption);
-    if (parser.isSet(fineOption)) {
-        if (parser.isSet(transformOnlyOption) || parser.isSet(heightMapOption)) return 2;
-        options.profile = pointcloud::RegistrationProfile::PoseOverlapFine;
-        options.collectDiagnosticFrames = false;
-    }
     if (!error.isEmpty()) return 2;
 
     QDir directory(inputDirectory);
@@ -375,42 +324,6 @@ int runRegression(const QStringList &arguments)
         orderedPoses.push_back(record);
     }
 
-    if (parser.isSet(fineOption) || parser.isSet(interfaceOption)) {
-        if (outputDirectory.isEmpty()) return 2;
-        pcv::interface::StitchingRequest request;
-        request.input.calibrationPath = calibrationPath;
-        request.registration.options = options;
-        request.registration.collectDiagnosticFrames = false;
-        request.artifacts.outputDirectory = outputDirectory;
-        request.artifacts.writePreview = false;
-        request.artifacts.allowOverwrite = false;
-        for (const PoseRecord &pose : orderedPoses) {
-            const int index = request.input.frames.size();
-            request.input.frames.push_back({inputs.at(index).filePath,
-                toRobotPose(pose.start), toRobotPose(pose.end)});
-        }
-        const auto shared = pcv::interface::stitch(request);
-        QJsonObject report;
-        if (shared.success) {
-            QFile manifest(shared.manifest.reportJson);
-            if (!manifest.open(QIODevice::ReadOnly)) return 3;
-            report = QJsonDocument::fromJson(manifest.readAll()).object();
-        }
-        report.insert(QStringLiteral("success"), shared.success);
-        report.insert(QStringLiteral("error"), shared.message);
-        report.insert(QStringLiteral("error_code"), shared.errorCode);
-        report.insert(QStringLiteral("diagnostics"), shared.diagnostics);
-        report.insert(QStringLiteral("output_ply"), shared.outputPly);
-        report.insert(QStringLiteral("total_wall_ms"), double(shared.totalMs));
-        report.insert(QStringLiteral("output_wall_ms"), double(shared.outputMs));
-        report.insert(QStringLiteral("registration_wall_ms"), double(shared.registrationMs));
-        report.insert(QStringLiteral("output_points"), double(shared.points.size()));
-        if (!QDir().mkpath(QFileInfo(reportPath).absolutePath())) return 3;
-        QSaveFile file(reportPath);
-        if (!file.open(QIODevice::WriteOnly)
-            || file.write(QJsonDocument(report).toJson(QJsonDocument::Indented)) < 0 || !file.commit()) return 3;
-        return shared.success ? 0 : 1;
-    }
     pointcloud::WorldCloudMergeResult result;
     if (inputs.size() >= 2) result = pointcloud::mergePlyCloudsInWorld(inputs, options);
     else if (!options.enabled && inputs.size() == 1) result = pointcloud::mergePlyCloudsInWorld(inputs, options);
@@ -514,16 +427,6 @@ int runRegression(const QStringList &arguments)
     parameterObject.insert(QStringLiteral("tracked_plane_heights_mm"),trackedPlaneHeights);
     parameterObject.insert(QStringLiteral("maximum_correction_translation_mm"), options.maximumCorrectionTranslation);
     parameterObject.insert(QStringLiteral("maximum_correction_angle_deg"), options.maximumCorrectionAngleDegrees);
-    parameterObject.insert(QStringLiteral("heightmap_registration_enabled"), options.heightMapRegistrationEnabled);
-    parameterObject.insert(QStringLiteral("heightmap_search_enabled"), options.heightMapSearchEnabled);
-    parameterObject.insert(QStringLiteral("heightmap_restricted_dof"), options.heightMapRestrictedDof);
-    parameterObject.insert(QStringLiteral("heightmap_grid_minimum_mm"), options.heightMapGridMinimumMm);
-    parameterObject.insert(QStringLiteral("heightmap_grid_maximum_mm"), options.heightMapGridMaximumMm);
-    parameterObject.insert(QStringLiteral("heightmap_minimum_valid_ratio"), options.heightMapMinimumValidRatio);
-    parameterObject.insert(QStringLiteral("heightmap_minimum_valid_points"), options.heightMapMinimumValidPoints);
-    parameterObject.insert(QStringLiteral("heightmap_minimum_relative_improvement"), options.heightMapMinimumRelativeImprovement);
-    parameterObject.insert(QStringLiteral("heightmap_max_translation_mm"), options.heightMapMaxTranslationMm);
-    parameterObject.insert(QStringLiteral("heightmap_max_yaw_deg"), options.heightMapMaxYawDegrees);
     root.insert(QStringLiteral("parameters"), parameterObject);
     QJsonArray pairs;
     for (int index = 1; index < result.icpDiagnostics.size(); ++index)

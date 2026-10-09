@@ -11,8 +11,6 @@
 
 namespace pointcloud {
 
-enum class RegistrationProfile { Legacy, PoseOverlapFine };
-
 using ProgressCallback = std::function<void(float, const QString &)>;
 
 struct RobotBaseFrame {
@@ -53,8 +51,8 @@ struct IcpOptions {
     QVector<float> voxelLevels = {1.0f, 0.5f, 0.2f};
     QVector<float> correspondenceDistances = {3.0f, 1.5f, 0.6f};
     int sampleStride = 8;
-    float overlapMargin = 0.0f;
-    bool planePrealignmentEnabled = false;
+    float overlapMargin = 5.0f;
+    bool planePrealignmentEnabled = true;
     float maximumPlanePrealignmentTranslation = 6.0f;
     float maximumPlanePrealignmentAngleDegrees = 0.5f;
     bool planeIdentityTrackingEnabled = true;
@@ -71,8 +69,8 @@ struct IcpOptions {
     float planeIdentityNormalToleranceDegrees = 3.0f;
     float planeIdentityOffsetToleranceMm = 5.0f;
     int steepPlaneMinimumObservableDof = 3;
-    float maximumCorrectionTranslation = 2.0f;
-    float maximumCorrectionAngleDegrees = 0.2f;
+    float maximumCorrectionTranslation = 10.0f;
+    float maximumCorrectionAngleDegrees = 1.0f;
     bool structuralValidationEnabled = true;
     float structuralPlaneExclusionMm = 3.0f;
     float minimumDegenerateStructuralCoverage3mm = 0.65f;
@@ -87,7 +85,7 @@ struct IcpOptions {
     // value, after plane pre-alignment, misses the accepted overlap/coverage
     // conditions; diagnostic callers re-enable it explicitly.
     bool tangentCoarseAlignmentEnabled = false;
-    bool tangentCoarseAlignmentAuto = false;
+    bool tangentCoarseAlignmentAuto = true;
     // When true (compatible default) the registration result carries the 2 mm
     // pre/post ICP diagnostic frames; callers in standard output mode disable
     // this to skip the unused diagnostic generation entirely.
@@ -176,37 +174,6 @@ struct IcpOptions {
     // "shallow main plane + steep structure" data, and no real-data evidence
     // exists yet. 90 disables the structural routing.
     float structuralFrameRouteDegrees = 90.0f;
-
-    // --- 2.5D height-map registration (controlled iteration) ---------------
-    // Every field below is appended after every pre-existing member so that no
-    // legacy offset moves. The whole path is OFF by default: with
-    // heightMapRegistrationEnabled=false the pipeline is byte-for-byte the
-    // legacy one, including its formal-output decision.
-    bool heightMapRegistrationEnabled = false;
-    float heightMapGridMinimumMm = 0.5f;
-    float heightMapGridMaximumMm = 2.0f;
-    float heightMapMinimumValidRatio = 0.25f;
-    int heightMapMinimumValidPoints = 100;
-    float heightMapMinimumRelativeImprovement = 0.01f;
-    float heightMapMaxTranslationMm = 10.0f;
-    float heightMapMaxYawDegrees = 1.0f;
-    bool heightMapRestrictedDof = true;
-    bool heightMapSearchEnabled = true;
-    // Production uses the robot-base pose and overlap as hard constraints.
-    // Legacy coarse recovery is available only when this switch is explicit.
-    bool recoveryMode = false;
-    bool overlapHardConstraint = true;
-    float maximumCumulativeCorrectionTranslation = 2.0f;
-    float maximumCumulativeCorrectionAngleDegrees = 0.2f;
-    float qualityRmsMm = 0.5f;
-    float qualityP95Mm = 1.0f;
-    float qualityNormalAngleDegrees = 0.5f;
-    RegistrationProfile profile = RegistrationProfile::Legacy;
-    QVector<float> fineVoxelLevels = {0.5f, 0.2f};
-    QVector<float> fineCorrespondenceDistances = {3.0f, 0.6f};
-    QVector<int> fineMaximumIterations = {20, 15};
-    float fineMaximumTranslationMm = 10.0f;
-    float fineMaximumAngleDegrees = 1.0f;
 };
 
 inline bool cancellationRequested(const IcpOptions &options)
@@ -421,52 +388,6 @@ struct IcpDiagnostics {
     int icpCorrespondenceParallelTasks = 1;
     QString relaxedRetrySkippedReason;
     int skippedLevels = 0;
-
-    // --- 2.5D height-map registration (controlled iteration) ---------------
-    // Appended after every pre-existing member (same ABI reason as above).
-    // The fixed source vocabulary of selectedRegistrationSource is
-    // "legacy_icp", "heightmap_restricted_icp" or "none".
-    bool heightMapAttempted = false;
-    bool heightMapAccepted = false;
-    bool heightMapFallbackToIcp = false;
-    float heightMapGridResolutionMm = 0.0f;
-    int heightMapWidth = 0;
-    int heightMapHeight = 0;
-    float heightMapSourceValidRatio = 0.0f;
-    float heightMapTargetValidRatio = 0.0f;
-    int heightMapSourceValidPoints = 0;
-    int heightMapTargetValidPoints = 0;
-    float heightMapScoreBefore = 0.0f;
-    float heightMapScoreAfter = 0.0f;
-    float heightMapRelativeImprovement = 0.0f;
-    float heightMapTranslationX = 0.0f;
-    float heightMapTranslationY = 0.0f;
-    float heightMapTranslationZ = 0.0f;
-    float heightMapYawDegrees = 0.0f;
-    int heightMapRestrictedIcpCompletedLevels = 0;
-    bool heightMapRestrictedIcpDegenerate = false;
-    QString heightMapRejectReason;
-    QString selectedRegistrationSource;
-    bool legacyIcpComparisonAvailable = false;
-    float legacyIcpComparisonCoverage3mm = 0.0f;
-    float legacyIcpComparisonP95 = 0.0f;
-    bool visibilityHardRejected = false;
-    // Specific trajectory diagnostic failure (section 8 of the iteration
-    // contract) and the legacy baseline outcome of the same pair. The legacy
-    // numbers are a comparison only: they never overwrite an accepted 2.5D
-    // result.
-    QString trajectoryDiagnosticReason;
-    bool legacyIcpAccepted = false;
-    QString legacyIcpRejectReason;
-    float heightMapNormalizedCorrelation = 0.0f;
-    // accepted remains the legacy quality verdict; output permission is separate.
-    bool fineApplied = false;
-    bool poseFallback = false;
-    bool chainAnchorReset = false;
-    bool structuralMetricsComputed = false;
-    QString fineReason;
-    QMatrix4x4 pairCorrection;
-    QMatrix4x4 cumulativeCorrection;
 };
 
 struct MultiFrameRegistrationResult {
@@ -527,10 +448,6 @@ struct MultiFrameRegistrationResult {
     int registrationAttemptCount = 0;
     QString error;
     bool cancelled = false;
-    bool partial = false;
-    int completedFrameCount = 0;
-    int failedFrameIndex = -1;
-    QString registrationSource = QStringLiteral("robot_pose_icp");
     bool ok = false;
 };
 

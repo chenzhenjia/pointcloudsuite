@@ -12,7 +12,7 @@
 
 ## 输入与输出
 
-输入为四帧或多帧 PLY、手眼标定 XML 和起止位姿。统一接口为 `pcv::interface::StitchingRequest` / `stitch()`；`stitchRawLineProfiles` 为兼容入口。正式输出沿用 `stitched_robot_base.ply` 与 provenance/manifest。GUI 默认 `PoseOverlapFine`，公共 API 默认 `Legacy`；快速模式每对预算 `10 mm / 1°`，仅质量问题可警告并回退机器人位姿，输入、取消、映射或事务错误仍失败。`formal_output` 表示事务成功，不能表示严格质量验收通过；快速模式默认关闭 seam 与 preview。
+输入为四帧或多帧 PLY、手眼标定 XML 和起止位姿。统一接口为 `pcv::interface::StitchingRequest` / `stitch()`；`stitchRawLineProfiles` 为兼容入口。2026-10-09 按用户要求将算法恢复到 `6329426`：GUI 默认“配准与融合”，保留“仅手眼坐标转换”；2.5D 与 `PoseOverlapFine` 已回滚。正式输出沿用 `stitched_robot_base.ply`、preview、provenance/manifest 与事务提交。保留模块 50 统一手眼入口及已有输出覆盖确认；具体回滚范围和验证见模块 30 文档。
 
 ## 构建
 

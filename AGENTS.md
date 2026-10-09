@@ -309,3 +309,13 @@ IO/输出/接口测试，以及实验相机开关开启时的 `frame_converter_t
 - 新建 10/60 规范模块文档；旧 05/10/60/70/80 文档保留正文并作为历史/兼容索引。开发方案见 `docs/development/module_convergence_v0.4.md`；所有代码更新必须同步对应模块文档和 `target.md`，记录日期、文件/API、行为、实际验证及风险。
 - 当前 namespace/API 迁移未完成：工具和 registrationdialog 仍调用旧拼接入口，分组请求内部仍适配旧实现。扫描规划、严格栅格纹理、快速拼接的当前能力按源码写，40/90/100 仍为未实现业务占位。
 - 验证：51 份 Markdown 内容核对、161 个本地链接目标、一级标题、代码围栏和替换字符检查通过，未发现锚点链接；源码与 CMake 静态核对及 `git diff --check` 完成。本轮不运行构建、CTest 或 GUI，不引用历史测试计数作为本次通过。
+
+### 2026-10-09（PointCloudStitch 算法定向回滚到 6329426）
+
+- 主模块 30；用户明确授权 Git 定向回滚。起始工作区干净，基线为 `6329426`（2026-09-18 09:27:46 +08:00），使用 `git restore --source=6329426 --worktree -- <paths>`，不重置项目历史。
+- 模块 CMake、公共头、multiframe/stitching 实现、UI 模式文件及两份拼接测试恢复基线；seam 算法本就与基线一致。删除后续新增 heightmap 源/头，移除 pose_overlap_fine 专属测试注册与 heightmap/fine/interface-pipeline 回放参数。GUI 恢复完整配准/仅手眼转换两种模式。
+- 必要差异：保留模块 50 当前统一手眼实现、regressionrunner 参数适配和 GUI 报告的统一坐标组合调用，保留已有输出覆盖确认。其他模块、其他测试注册及历史文档记录保留。同步应用/模块 README、v0.3/v0.4 契约、协同文档、开发方案与 target.md。
+- 验证：`C:\pcv-build\stitch-rollback-6329426-debug-v1` 完整 Debug 构建成功；定向 stitching_interface/seam_fusion/multiframe 测试 `3/3` 通过，全量 CTest `19/19` 通过。核心模块文件、UI 与对应测试对 `6329426` 的 `git diff --exit-code` 为 `0`，`git diff --check` 通过。
+- 启动冒烟：首次指定 offscreen 时 pointcloudstitch 停在 Runtime Library 弹窗，未算成功；结束本轮测试进程后，显式使用当前 Qt plugins/platforms 与 windows 平台重试，pointcloudstitch/pointcloudview 自关闭启动退出码均为 `0`。未影响已有用户运行的 pointcloudview。
+- 未验证：Release 构建/部署、真实 PLY/XML/Start-End 回放与 GUI 全流程、现场质量/性能/机器人安全。模块 50 保持当前版本，因此不是整个项目逐字回退；恢复旧算法也恢复其既有质量/性能限制。
+- 回滚点：本轮前完整版本仍为 `ca0adc7`。本轮作为独立本地 Git 提交保存，不进行远程上传或强制推送。

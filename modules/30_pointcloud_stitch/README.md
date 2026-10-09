@@ -12,6 +12,6 @@
 
 ## 接口与测试
 
-统一接口为分组式 `pcv::interface::StitchingRequest` / `StitchingResult` 和 `stitch()`；旧 `StitchingOptions` / `stitchRawLineProfiles` 为弃用兼容入口。公共 API 默认 `Legacy`，GUI 默认 `PoseOverlapFine`；质量警告、回退与文件提交状态分开。主要测试为 `stitching_interface_tests`、`multiframe_registration_tests`、`pose_overlap_fine_tests`、`seam_fusion_tests` 和并行等价测试。应用只负责 UI、输入组织、进度和结果展示。
+统一接口为分组式 `pcv::interface::StitchingRequest` / `StitchingResult` 和 `stitch()`；旧 `StitchingOptions` / `stitchRawLineProfiles` 为弃用兼容入口。2026-10-09 算法、公共头、模块 CMake 与接口测试恢复到 `6329426`；2.5D 与 `PoseOverlapFine` 及其专属测试注册已移除，GUI 默认“配准与融合”。主要测试为 `stitching_interface_tests`、`multiframe_registration_tests`、`seam_fusion_tests` 和并行等价测试。应用只负责 UI、输入组织、进度和结果展示。
 
 最后核对日期：2026-10-09（文档静态核对）（ICP 归属、分组接口和事务输出边界复核）。
