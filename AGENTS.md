@@ -290,3 +290,13 @@ IO/输出/接口测试，以及实验相机开关开启时的 `frame_converter_t
 - 新增 `plane_fitting_equivalence_tests_v2`：密集/重复/不均匀密度、断开和临界连接、噪声倾斜、垂直、控制点跨域、非法输入与 deferred 路径；保留额外共享副本，对比串行与 1/2/4 任务完整结果，覆盖取消及 join 后生命周期。原算法 Debug/Release 生成的完整字段黄金摘要用于同工具链严格回归。
 - 基准、输入副本、优化前源码/程序和完整结果位于 `C:\pcv-build\fitbench-baseline`；6300000 点原始 PLY 的 SHA256 为 `BE0552A1ADD1D64208F53B3D0F460CF9AC6BA3087EF332998D91F22F4AF246A1`。固定测试组覆盖上表面不同位置和低平面，每组预热一次、正式五次，不计读取/转换/结果序列化耗时。
 - 验收尚未完成：用户确认实际控制点和 Start/End 参数未确定，暂不能保存真实 robot_base 测试输入或验收临时工件 PLY/JSON GUI。模块性能不能替代从第三点到完整显示的 GUI 验收；最终构建、CTest、性能数据及风险以本轮最终验证记录为准。
+
+### 2026-10-08（PointCloudStitch 位姿粗配准＋重叠区快速精配准）
+
+- 主模块 `30_pointcloud_stitch`；保留 `Legacy` 完整配准和仅位姿直拼入口，新增 `RegistrationProfile::PoseOverlapFine`。新模式以模块 50 的 `robot_base` 位姿为初值，仅在相邻帧机器人初值重叠区执行两层受限 point-to-plane ICP（体素 `0.5/0.2 mm`、对应距离 `3.0/0.6 mm`、迭代 `20/15`），每对修正预算 `10 mm / 1°`。
+- 新模式跳过旧平面跟踪、切向/宽范围搜索、恢复重试、2.5D 和 legacy 双跑；仅更新可观测方向，退化、低覆盖、结构不足和无有效解按警告处理。无重叠、超预算或取消时回退机器人位姿或终止任务，按扫描顺序累计 pair 矩阵；不混用已修正目标，不重复累计。
+- 新模式默认关闭 seam fusion 与 preview，保留全量有效点、`cloudIds`、`sourceIndices`、`scanRatios` 和事务化正式输出。manifest/诊断记录 `fine_applied`、`pose_fallback`、层数、对应数量、残差、退化状态、pair/cumulative matrix 及累计漂移；`formal_output` 只表示文件事务提交成功，质量策略为 `warn_only`。
+- GUI 默认选择 `PoseOverlapFine`，公共 API 默认仍为 `Legacy`；`regressionrunner` 增加 `--pose-overlap-fine` 和 `--interface-pipeline`。未修改手眼矩阵、坐标约定、窗口生命周期、原始输入或提交/推送行为。
+- 本轮源码树外构建目录：`C:\pcv-build\pose-overlap-fine-debug-v1`、`C:\pcv-build\pose-overlap-fine-release-v1`，生成器 `NMake Makefiles`，MSVC `19.51.36252.0`，Qt `C:\Qt\6.8.3\msvc2022_64`。Debug/Release 定向构建已成功；Debug 定向 `stitching_interface_tests`、`seam_fusion_tests`、`multiframe_registration_tests`、`pose_overlap_fine_tests` 已通过，100 次重复回归正在/已执行，以最终命令结果为准。
+- 结构平面路径补充修复 `structuralOverlapPlane()` 返回结构平面时初始化 `axisU/axisV`，避免局部重叠范围退化为 `[0,0]`。测试覆盖水平、`30°/60°/75°`、纯平面可观测自由度、链累计、回退、取消、预算、低覆盖警告及串并行等价。
+- `D:\stitch_test` 当前可见 `hand_eye_convert.xml` 和 PLY，但缺少可安全重放所需的 Start/End 位姿 JSON/TXT 或历史报告；因此 `1/test_1`、`5_40/test`、`6_50/test` 及真实倾斜夹具本轮未作真实回放，不以合成测试替代现场结论。GUI 人工拼接、真实输出质量、PageHeap 和 Release 便携部署仍需补验；Release `windeployqt` 可能受本机 Visual Studio release redistributable 缺失影响。

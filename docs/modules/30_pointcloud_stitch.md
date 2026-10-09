@@ -1,5 +1,16 @@
 # 30_pointcloud_stitch：多帧拼接（唯一编排模块）
 
+### 2026-10-08（位姿粗配准＋重叠区快速精配准）
+
+- 主模块 30，复用 50 坐标转换及 10 `ArtifactTransaction`；40 不新增实现。`IcpOptions.profile` 默认为 `RegistrationProfile::Legacy`，GUI 默认新 `PoseOverlapFine`，旧完整配准和仅位姿转换入口保留。
+- 新路径只在原 robot_base 相邻帧样本的重叠区域执行两层 point-to-plane ICP：体素 `0.5/0.2 mm`、距离 `3.0/0.6 mm`、迭代上限 `20/15`；连续三次增量 `<=0.005 mm/0.0005°` 提前结束。法向邻域至少 `1.5 mm`，避免细层体素小于输入间距时无法估计法向。特征值阈值仍为 `1e-3`，只解可观测方向；低对应比例/退化仅警告。
+- 包围盒候选窗增加首层匹配半径容差，允许水平面的零厚度 Z 范围；有效求解仍需至少 100 个真实近邻对应。每对 `10 mm/1°`，越界、无重叠或无解弃用修正，当前帧恢复原机器人位姿并重置链锚点。成功矩阵按 `C[i]=C[i-1]*P[i]` 顺序累计，样本不累计变换，整帧只变换一次；累计不设上限但记录矩阵/漂移。
+- 跳过平面身份、平面预对齐、粗/宽搜索、恢复、2.5D、旧验收和 ICP 诊断帧；新模式不执行 seam fusion。`accepted` 不冒充旧验收通过；新字段 `fineApplied/poseFallback/chainAnchorReset/fineReason/pairCorrection/cumulativeCorrection` 区分计算与质量。
+- `artifacts.writePreview` 兼容默认 `true`，新 GUI profile 设 `false`。正式输出仍为 `stitched_robot_base.ply`、`.pcvmap`、`stitching_manifest.json`，全量有效点、点序和来源映射保留。报告 `processing_mode=pose_overlap_fine`、`quality_policy=warn_only`、`strict_validation_status=not_run`、`structural_metrics_status=not_computed`；逐对保存矩阵、层数、迭代/对应/残差、退化及回退，汇总完成/回退数量。
+- 并行 worker 沿用 const 视图和私有结果、顺序提交。文件/标定/位姿/非有限/映射、内存、取消和事务失败仍为硬失败；GUI 写入已有结果前统一确认覆盖，不修改窗口生命周期。
+- 回放工具增加 `--pose-overlap-fine` 和 `--interface-pipeline`，走模块 30 的事务输出；同配置对照可用后者或结合 `--transform-only`，新接口回放不自动覆盖已有输出。
+- 本轮验证结果见文末追加的最终验收记录。真实 `D:\stitch_test` 只有原 PLY/XML，位姿 TXT 和历史回放报告缺失，不能据此声称 `1/5_40/6_50` 效果或速度已验收。双平面、局部误配与累计漂移仍可能出现，正式输出成功不代表严格几何验证。
+
 状态：已实现。本模块为多帧拼接的唯一编排模块：读取（10）、坐标转换调用（50）、多帧 ICP/结构校验、seam fusion、拼接诊断和 manifest 均在此收敛；最终文件统一通过 10 的 `pcv::io::ArtifactTransaction` 提交。规范实现位于 `modules/30_pointcloud_stitch`，模块 target 为 `pcv_m30_pointcloud_stitch`；旧 target `pcv_m30_pointcloudstitch` 保留为迁移期兼容入口（仅转发）。
 
 seam fusion 实现与公共类型位于本模块 `include/pcv/stitching/`（`seam_fusion.h/.cpp`、`seam_fusion_kernel.h`、`seam_fusion_types.h`）；模块 40 的 `include/pcv/registration/seam_fusion*.h` 仅为转发头。

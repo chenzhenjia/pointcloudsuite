@@ -17,6 +17,7 @@
 #include <QThreadPool>
 #include <QTextStream>
 #include <QtConcurrent>
+#include <QtMath>
 
 #include <atomic>
 #include <cmath>
@@ -82,6 +83,8 @@ QByteArray mappingBytes(const pointcloud::MultiFrameRegistrationResult &merge)
 
 StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
 {
+    QElapsedTimer totalClock;
+    totalClock.start();
     const auto cancelled = [&options]() {
         return options.isCancelled && options.isCancelled();
     };
@@ -286,6 +289,8 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     registrationOptions.maxParallelTasks = options.maxParallelTasks;
     registrationOptions.cancellation = cancellationToken;
     registrationOptions.isCancelled = tokenCancelled;
+    const bool fast = registrationOptions.enabled
+        && registrationOptions.profile == pointcloud::RegistrationProfile::PoseOverlapFine;
     QElapsedTimer registrationClock;
     registrationClock.start();
     auto registration = pointcloud::registerRobotBaseFrames(std::move(frames), registrationOptions,
@@ -300,6 +305,7 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     result.transformMs = transformMsAccumulator;
     result.readWorkMs = readMsAccumulator;
     result.transformWorkMs = transformMsAccumulator;
+    result.framePreparationWallMs = frameWallMs;
     result.parallelEnabled = useParallelFrames;
     result.requestedParallelTasks = requestedParallelTasks;
     result.actualParallelTasks = useParallelFrames ? actualParallelTasks : 1;
@@ -317,7 +323,7 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     }
     for (int index = 1; index < registration.icpDiagnostics.size(); ++index) {
         const pointcloud::IcpDiagnostics &diagnostic = registration.icpDiagnostics[index];
-        if (!diagnostic.accepted) {
+        if (!diagnostic.accepted && !fast) {
             result.errorCode = QStringLiteral("PCV_STITCH_001");
             // The failure code is already part of the reason text; the visibility
             // numbers are added here because they decide whether the pair is
@@ -333,7 +339,7 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
             return result;
         }
     }
-    if (options.seamEnabled) {
+    if (options.seamEnabled && !fast && registrationOptions.enabled) {
         pointcloud::SeamFusionOptions seamOptions;
         seamOptions.enabled = true;
         seamOptions.halfWidth = options.seamHalfWidthMm;
@@ -390,8 +396,10 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     pcv::io::ArtifactTransaction transaction(options.outputDirectory,
                                               options.allowOverwrite,
                                               cancelled);
-    const QVector<pointcloud::Point3D> preview = previewPoints(registration.points, options.previewRatio);
-    const QString previewName = QStringLiteral("stitched_robot_base_preview.ply");
+    const bool writePreview = options.writePreview && !fast;
+    const QVector<pointcloud::Point3D> preview = writePreview
+        ? previewPoints(registration.points, options.previewRatio) : QVector<pointcloud::Point3D>();
+    const QString previewName = writePreview ? QStringLiteral("stitched_robot_base_preview.ply") : QString();
     const QString mappingName = QStringLiteral("stitched_robot_base.pcvmap");
     const QString reportName = QStringLiteral("stitching_manifest.json");
     QJsonObject manifestJson;
@@ -401,6 +409,24 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     manifestJson.insert(QStringLiteral("preview_ply"), previewName);
     manifestJson.insert(QStringLiteral("mapping_file"), mappingName);
     manifestJson.insert(QStringLiteral("success"), true);
+    manifestJson.insert(QStringLiteral("formal_output"), true);
+    manifestJson.insert(QStringLiteral("processing_mode"), fast ? QStringLiteral("pose_overlap_fine")
+        : (registrationOptions.enabled ? QStringLiteral("registration_and_fusion") : QStringLiteral("hand_eye_transform_only")));
+    manifestJson.insert(QStringLiteral("quality_policy"), fast ? QStringLiteral("warn_only") : QStringLiteral("legacy"));
+    manifestJson.insert(QStringLiteral("strict_validation_status"), fast || !registrationOptions.enabled
+        ? QStringLiteral("not_run") : QStringLiteral("passed"));
+    manifestJson.insert(QStringLiteral("geometry_registration_verified"), !fast && registrationOptions.enabled);
+    int fineCount = 0, fallbackCount = 0;
+    double maximumCumulativeTranslation = 0.0, maximumCumulativeAngle = 0.0;
+    const auto matrixJson = [](const QMatrix4x4 &matrix) {
+        QJsonArray rows;
+        for (int row = 0; row < 4; ++row) {
+            QJsonArray values;
+            for (int col = 0; col < 4; ++col) values.append(matrix(row, col));
+            rows.append(values);
+        }
+        return rows;
+    };
     manifestJson.insert(QStringLiteral("diagnostics"), result.diagnostics);
     // 2.5D height-map registration report. The block is emitted for every pair
     // even when the switch is off, so a consumer can always tell which path
@@ -411,6 +437,44 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         QJsonObject item;
         item.insert(QStringLiteral("pair_source_cloud_index"), pair.sourceCloudIndex);
         item.insert(QStringLiteral("accepted"), pair.accepted);
+        if (fast) {
+            fineCount += pair.fineApplied;
+            fallbackCount += pair.poseFallback;
+            item.insert(QStringLiteral("fine_status"), pair.fineApplied ? QStringLiteral("fine_applied") : QStringLiteral("pose_fallback"));
+            item.insert(QStringLiteral("fine_reason"), pair.fineReason);
+            item.insert(QStringLiteral("chain_anchor_reset"), pair.chainAnchorReset);
+            item.insert(QStringLiteral("strict_validation_status"), QStringLiteral("not_run"));
+            item.insert(QStringLiteral("structural_metrics_status"), QStringLiteral("not_computed"));
+            item.insert(QStringLiteral("completed_levels"), pair.completedLevels);
+            item.insert(QStringLiteral("iterations"), pair.iterations);
+            item.insert(QStringLiteral("converged"), pair.converged);
+            item.insert(QStringLiteral("correspondences"), pair.correspondences);
+            item.insert(QStringLiteral("rmse_mm"), pair.rmse);
+            item.insert(QStringLiteral("fitness"), pair.fitness);
+            item.insert(QStringLiteral("observable_dof"), pair.observableDof);
+            item.insert(QStringLiteral("degenerate"), pair.degenerate);
+            item.insert(QStringLiteral("low_source_correspondence_warning"), pair.visibilityWarning);
+            item.insert(QStringLiteral("pair_correction"), matrixJson(pair.pairCorrection));
+            item.insert(QStringLiteral("cumulative_correction"), matrixJson(pair.cumulativeCorrection));
+            const QMatrix4x4 &cumulative = pair.cumulativeCorrection;
+            const double cumulativeTranslation = QVector3D(cumulative(0, 3), cumulative(1, 3), cumulative(2, 3)).length();
+            const double cumulativeAngle = qRadiansToDegrees(std::acos(qBound(-1.0,
+                (double(cumulative(0, 0)) + cumulative(1, 1) + cumulative(2, 2) - 1.0) * 0.5, 1.0)));
+            maximumCumulativeTranslation = qMax(maximumCumulativeTranslation, cumulativeTranslation);
+            maximumCumulativeAngle = qMax(maximumCumulativeAngle, cumulativeAngle);
+            item.insert(QStringLiteral("cumulative_translation_mm"), cumulativeTranslation);
+            item.insert(QStringLiteral("cumulative_rotation_deg"), cumulativeAngle);
+            QJsonArray iterations;
+            for (int count : pair.levelIterations) iterations.append(count);
+            item.insert(QStringLiteral("level_iterations"), iterations);
+            QJsonArray counts, residuals, ratios;
+            for (int count : pair.levelCorrespondences) counts.append(count);
+            for (float residual : pair.levelRmse) residuals.append(residual);
+            for (float ratio : pair.levelFitness) ratios.append(ratio);
+            item.insert(QStringLiteral("level_correspondences"), counts);
+            item.insert(QStringLiteral("level_rmse_mm"), residuals);
+            item.insert(QStringLiteral("level_fitness"), ratios);
+        }
         item.insert(QStringLiteral("selected_registration_source"), pair.selectedRegistrationSource);
         item.insert(QStringLiteral("heightmap_registration_enabled"), registrationOptions.heightMapRegistrationEnabled);
         item.insert(QStringLiteral("heightmap_registration_attempted"), pair.heightMapAttempted);
@@ -446,16 +510,53 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         registrationPairs.append(item);
     }
     manifestJson.insert(QStringLiteral("registration_pairs"), registrationPairs);
+    manifestJson.insert(QStringLiteral("fine_applied_count"), fineCount);
+    manifestJson.insert(QStringLiteral("pose_fallback_count"), fallbackCount);
+    if (fast) {
+        manifestJson.insert(QStringLiteral("maximum_cumulative_translation_mm"), maximumCumulativeTranslation);
+        manifestJson.insert(QStringLiteral("maximum_cumulative_rotation_deg"), maximumCumulativeAngle);
+        manifestJson.insert(QStringLiteral("fine_translation_budget_mm"), registrationOptions.fineMaximumTranslationMm);
+        manifestJson.insert(QStringLiteral("fine_rotation_budget_deg"), registrationOptions.fineMaximumAngleDegrees);
+    }
+    manifestJson.insert(QStringLiteral("timings_ms"), QJsonObject{
+        {QStringLiteral("frame_preparation_wall"), double(frameWallMs)},
+        {QStringLiteral("read_work"), double(readMsAccumulator)},
+        {QStringLiteral("transform_work"), double(transformMsAccumulator)},
+        {QStringLiteral("registration_wall"), double(registrationMs)},
+        {QStringLiteral("icp_level_1"), double(registration.icpLevel1Ms)},
+        {QStringLiteral("icp_level_2"), double(registration.icpLevel2Ms)},
+        {QStringLiteral("before_output_wall"), double(totalClock.elapsed())}});
+    manifestJson.insert(QStringLiteral("actual_parallel_tasks"), result.actualParallelTasks);
+    QJsonArray frameRecords;
+    for (int index = 0; index < registration.frameMetadata.size(); ++index) {
+        const auto &frame = registration.frameMetadata.at(index);
+        frameRecords.append(QJsonObject{
+            {QStringLiteral("source_file"), frame.sourceFile},
+            {QStringLiteral("declared_points"), double(frame.declaredCount)},
+            {QStringLiteral("converted_points"), double(frame.convertedCount)},
+            {QStringLiteral("rejected_invalid"), double(frame.rejectedInvalid)},
+            {QStringLiteral("rejected_range"), double(frame.rejectedRange)},
+            {QStringLiteral("start_base_from_flange"), matrixJson(frame.startBaseFromFlange)},
+            {QStringLiteral("end_base_from_flange"), matrixJson(frame.endBaseFromFlange)},
+            {QStringLiteral("flange_from_depth"), matrixJson(frame.flangeFromDepth)},
+            {QStringLiteral("cumulative_correction"), matrixJson(registration.registrationCorrections.at(index))}});
+    }
+    manifestJson.insert(QStringLiteral("frames"), frameRecords);
+    manifestJson.insert(QStringLiteral("source_point_counts"), [&]() {
+        QJsonArray counts;
+        for (const auto &frame : registration.frameMetadata) counts.append(double(frame.convertedCount));
+        return counts;
+    }());
     bool outputWritten = transaction.stageBinaryPly(
         QStringLiteral("stitched_robot_base.ply"), registration.points, false,
         {QStringLiteral("coordinate_frame robot_base")})
-        && transaction.stageBinaryPly(previewName, preview, false,
-                                      {QStringLiteral("coordinate_frame robot_base")})
+        && (!writePreview || transaction.stageBinaryPly(previewName, preview, false,
+                                      {QStringLiteral("coordinate_frame robot_base")}))
         && transaction.stageBytes(mappingName, mappingBytes(registration))
         && transaction.stageJson(reportName,
                                  QJsonDocument(manifestJson).toJson(QJsonDocument::Indented))
         ;
-    if (outputWritten && options.writeDiagnosticFrames) {
+    if (outputWritten && options.writeDiagnosticFrames && !fast) {
         for (int index = 0; index < registration.diagnosticPreIcpFrames.size(); ++index) {
             const QString pre = QStringLiteral("diagnostic_pre_icp_frame_%1.ply").arg(index + 1, 2, 10, QChar('0'));
             const QString post = QStringLiteral("diagnostic_post_icp_frame_%1.ply").arg(index + 1, 2, 10, QChar('0'));
@@ -493,7 +594,7 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     result.success = true;
     result.outputPly = outputPath;
     result.manifest.formalPly = outputPath;
-    result.manifest.previewPly = QDir(options.outputDirectory).filePath(previewName);
+    result.manifest.previewPly = writePreview ? QDir(options.outputDirectory).filePath(previewName) : QString();
     result.manifest.mappingFile = QDir(options.outputDirectory).filePath(mappingName);
     result.manifest.reportJson = QDir(options.outputDirectory).filePath(reportName);
     result.points = std::move(registration.points);
@@ -501,8 +602,7 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     result.merge.ok = true;
     result.merge.error.clear();
     result.diagnostics += QStringLiteral("formal_output=%1\n").arg(outputPath);
-    result.totalMs = result.readMs + result.transformMs + result.registrationMs
-        + result.seamFusionMs + result.outputMs;
+    result.totalMs = totalClock.elapsed();
     result.diagnostics += QStringLiteral(
         "timings_ms read=%1 transform=%2 registration=%3 pre=%4 coarse=%5 icp1=%6 icp2=%7 icp3=%8 structural=%9 retry=%10 attempts=%11 seam=%12 output=%13 total=%14\n")
         .arg(result.readMs).arg(result.transformMs).arg(result.registrationMs)
@@ -544,6 +644,7 @@ StitchingResult stitch(const StitchingRequest &request)
     options.previewRatio = request.artifacts.previewRatio;
     options.writeSourceClouds = request.artifacts.writeSourceClouds;
     options.writeDiagnosticFrames = request.artifacts.writeDiagnosticFrames;
+    options.writePreview = request.artifacts.writePreview;
     options.sampleStride = request.registration.sampleStride;
     options.parallelEnabled = request.registration.parallelEnabled;
     options.maxParallelTasks = request.registration.maxParallelTasks;

@@ -129,6 +129,7 @@ endif()
 add_executable(multiframe_registration_tests unit/registration/multiframe_registration_tests.cpp)
 target_link_libraries(multiframe_registration_tests PRIVATE Qt::Core Qt::Gui pcv_m30_pointcloud_stitch)
 add_test(NAME multiframe_registration_tests COMMAND multiframe_registration_tests)
+add_test(NAME pose_overlap_fine_tests COMMAND multiframe_registration_tests --pose-overlap-fine-only)
 list(APPEND PCV_APPLICATION_TEST_TARGETS multiframe_registration_tests)
 
 add_executable(plane_fitting_tests unit/planefitting/plane_fitting_tests.cpp)
@@ -174,6 +175,7 @@ if(WIN32 AND TARGET Qt6::Core AND PCV_APPLICATION_TEST_TARGETS)
     set(PCV_TEST_PATH "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}")
     set_tests_properties(${PCV_APPLICATION_TEST_TARGETS}
         PROPERTIES ENVIRONMENT "${PCV_TEST_PATH}")
+    set_tests_properties(pose_overlap_fine_tests PROPERTIES ENVIRONMENT "${PCV_TEST_PATH}")
 endif()
 if(TARGET texture_experiment_tests)
     set_property(TEST texture_experiment_tests APPEND PROPERTY ENVIRONMENT

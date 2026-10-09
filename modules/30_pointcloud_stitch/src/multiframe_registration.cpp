@@ -1236,12 +1236,13 @@ PlaneDiagnostic structuralOverlapPlane(const QVector<Point3D> &targetCrop,
     const QVector<Point3D> structural=structuralPoints(targetCrop,targetPlane,
         options.structuralPlaneExclusionMm,cropBounds);
     if(structural.size()<options.minimumStructuralPoints)return {};
-    const PlaneDiagnostic structuralPlane=pcaPlane(structural,
+    PlaneDiagnostic structuralPlane=pcaPlane(structural,
         std::numeric_limits<float>::quiet_NaN(),&options);
     if(!structuralPlane.valid)return {};
     const float minimumCosine=float(std::cos(double(qDegreesToRadians(
         qBound(0.0f,options.structuralFrameRouteDegrees,90.0f)))));
     if(std::abs(QVector3D::dotProduct(structuralPlane.normal,targetPlane.normal))>=minimumCosine)return {};
+    assignPlaneAxes(&structuralPlane, targetPlane.axisU);
     return structuralPlane;
 }
 
@@ -2696,19 +2697,168 @@ HeightMapPairResult runHeightMapPair(const RobotBaseFrame &targetFrame,
     return result;
 }
 
+// Fast profile: robot poses are the coarse alignment. No plane identity,
+// coarse search or quality acceptance branch participates in this solver.
+static IcpDiagnostics refinePoseOverlap(const QVector<Point3D> &source,
+                                       const QVector<Point3D> &target,
+                                       const IcpOptions &options, int sourceIndex,
+                                       QMatrix4x4 *correction,
+                                       const ProgressCallback &progress) {
+    IcpDiagnostics d;
+    d.attempted = true;
+    d.sourceCloudIndex = sourceIndex;
+    d.targetCloudIndex = sourceIndex - 1;
+    correction->setToIdentity();
+    const auto fallback = [&](const QString &reason) {
+        correction->setToIdentity();
+        d.poseFallback = true;
+        d.chainAnchorReset = true;
+        d.fineReason = reason;
+        d.reason = QStringLiteral("退回位姿直拼：%1").arg(reason);
+        d.selectedRegistrationSource = QStringLiteral("pose_fallback");
+        return d;
+    };
+    const Bounds sb = cloudBounds(source), tb = cloudBounds(target);
+    const float margin = options.fineCorrespondenceDistances.at(0);
+    Bounds overlap;
+    overlap.valid = sb.valid && tb.valid;
+    for (int axis = 0; axis < 3; ++axis) {
+        overlap.minimum[axis] = qMax(sb.minimum[axis], tb.minimum[axis]) - margin;
+        overlap.maximum[axis] = qMin(sb.maximum[axis], tb.maximum[axis]) + margin;
+        if (overlap.maximum[axis] < overlap.minimum[axis]) overlap.valid = false;
+    }
+    if (!overlap.valid) return fallback(QStringLiteral("no_overlap"));
+    const QVector<Point3D> sourceCrop = cropCloud(source, overlap.minimum, overlap.maximum);
+    const QVector<Point3D> targetCrop = cropCloud(target, overlap.minimum, overlap.maximum);
+    d.actualOverlapSourceCount = sourceCrop.size();
+    d.actualOverlapTargetCount = targetCrop.size();
+    if (sourceCrop.size() < 100 || targetCrop.size() < 100)
+        return fallback(QStringLiteral("overlap_points_insufficient"));
+    const int tasks = options.parallelEnabled
+        ? qBound(1, options.maxParallelTasks > 0 ? options.maxParallelTasks
+                                               : QThread::idealThreadCount() - 1, 4) : 1;
+    d.icpCorrespondenceParallelTasks = tasks;
+    QVector<CorrespondencePair> pairs;
+    std::unordered_set<int> unique;
+    bool allLevelsConverged = true;
+    for (int level = 0; level < 2; ++level) {
+        if (cancellationRequested(options)) return fallback(QStringLiteral("已取消"));
+        QElapsedTimer timer;
+        timer.start();
+        const float voxel = options.fineVoxelLevels.at(level);
+        const float radius = options.fineCorrespondenceDistances.at(level);
+        QVector<Point3D> moving = voxelDownsample(sourceCrop, voxel);
+        QVector<Point3D> reference = voxelDownsample(targetCrop, voxel);
+        if (moving.size() < 100 || reference.size() < 100)
+            return fallback(QStringLiteral("level_points_insufficient"));
+        // The 0.2 mm voxel is not the input pitch. Keep a neighbourhood large
+        // enough for millimetre-spaced scans at the fine level.
+        estimateNormals(&reference, qMax(1.5f, qMax(voxel * 4.0f, radius * 1.5f)));
+        const SpatialIndex index = buildIndex(reference, radius);
+        applyTransform(&moving, *correction);
+        int stall = 0, iterations = 0;
+        for (; iterations < options.fineMaximumIterations.at(level); ++iterations) {
+            if (progress) progress((float(level) + float(iterations) / float(options.fineMaximumIterations.at(level))) / 2.0f,
+                QStringLiteral("重叠区精配准：第 %1/2 层，迭代 %2").arg(level + 1).arg(iterations + 1));
+            if (cancellationRequested(options)) return fallback(QStringLiteral("已取消"));
+            const Increment increment = estimateIncrement(moving, reference, index, radius,
+                overlap, &pairs, &unique, nullptr, 0.0f, 1.0f, nullptr, nullptr, tasks);
+            if (!increment.ok || increment.observableDof < 1)
+                return fallback(QStringLiteral("no_observable_solution"));
+            const QMatrix4x4 candidate = increment.matrix * (*correction);
+            for (int element = 0; element < 16; ++element)
+                if (!std::isfinite(candidate.constData()[element]))
+                    return fallback(QStringLiteral("non_finite_correction"));
+            if (translationLength(candidate) > options.fineMaximumTranslationMm
+                || rotationAngle(candidate) > options.fineMaximumAngleDegrees)
+                return fallback(QStringLiteral("fine_correction_exceeds_budget"));
+            *correction = candidate;
+            applyTransform(&moving, increment.matrix);
+            d.observableDof = increment.observableDof;
+            d.conditionRatio = increment.conditionRatio;
+            d.degenerate = d.degenerate || increment.degenerate;
+            ++d.iterations;
+            if (translationLength(increment.matrix) <= 0.005f
+                && rotationAngle(increment.matrix) <= 0.0005f) ++stall;
+            else stall = 0;
+            if (stall >= 3) { ++iterations; break; }
+        }
+        allLevelsConverged = allLevelsConverged && stall >= 3;
+        // Measure the selected matrix, not the residual of the previous update.
+        const CorrespondenceChunk final = findCorrespondences(moving, reference, index,
+            radius, overlap, -1.0f, 0, moving.size());
+        if (final.pairs.size() < 100)
+            return fallback(QStringLiteral("final_correspondences_insufficient"));
+        double squared = 0.0;
+        for (const CorrespondencePair &pair : final.pairs)
+            squared += double((pair.source - pair.target).lengthSquared());
+        d.correspondences = final.pairs.size();
+        d.movingSampleCount = moving.size();
+        d.rmse = float(std::sqrt(squared / double(final.pairs.size())));
+        if (!std::isfinite(d.rmse)) return fallback(QStringLiteral("non_finite_residual"));
+        d.fitness = float(final.pairs.size()) / float(moving.size());
+        d.levelIterations.push_back(iterations);
+        d.levelCorrespondences.push_back(d.correspondences);
+        d.levelRmse.push_back(d.rmse);
+        d.levelFitness.push_back(d.fitness);
+        d.completedLevels = level + 1;
+        if (level == 0) d.icpLevel1Ms = timer.elapsed();
+        else d.icpLevel2Ms = timer.elapsed();
+        if (progress) progress(float(level + 1) / 2.0f, QStringLiteral("重叠区精配准：第 %1/2 层").arg(level + 1));
+    }
+    d.fineApplied = true;
+    d.converged = allLevelsConverged;
+    d.correctionTranslation = translationLength(*correction);
+    d.correctionAngleDegrees = rotationAngle(*correction);
+    d.correctionX = (*correction)(0, 3);
+    d.correctionY = (*correction)(1, 3);
+    d.correctionZ = (*correction)(2, 3);
+    d.pairCorrection = *correction;
+    d.selectedRegistrationSource = QStringLiteral("fine_applied");
+    d.fineReason = d.degenerate ? QStringLiteral("observable_directions_only") : QStringLiteral("fine_completed");
+    d.reason = d.degenerate ? QStringLiteral("精配准完成；退化方向保持初值") : QStringLiteral("精配准完成");
+    if (!allLevelsConverged) {
+        d.fineReason += QStringLiteral(";iteration_limit_reached");
+        d.reason += QStringLiteral("；达到迭代上限，未声明收敛");
+    }
+    d.visibilityWarning = d.fitness < 0.25f;
+    if (d.visibilityWarning) {
+        d.fineReason += QStringLiteral(";low_source_correspondence_ratio");
+        d.reason += QStringLiteral("；源点有效对应比例偏低，仅警告");
+    }
+    return d;
+}
+
 MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inputs,
                                                       const IcpOptions &icp,
                                                       const ProgressCallback &progress) {
     MultiFrameRegistrationResult result;
     const auto update=[&](float value,const QString &message){if(progress)progress(qBound(0.0f,value,1.0f),message);};
     const int minimumInputs=icp.enabled?2:1;
+    const bool fast = icp.enabled && icp.profile == RegistrationProfile::PoseOverlapFine;
     if(inputs.size()<minimumInputs){
         result.error=icp.enabled?QStringLiteral("配准至少需要两个扫描点云")
                                 :QStringLiteral("坐标转换至少需要一个扫描点云");
         return result;
     }
-    if(icp.enabled&&(icp.voxelLevels.size()!=3||icp.correspondenceDistances.size()!=3)){
+    if(icp.enabled&&!fast&&(icp.voxelLevels.size()!=3||icp.correspondenceDistances.size()!=3)){
         result.error=QStringLiteral("参考流程要求三个体素和对应距离层级");return result;
+    }
+    if (fast) {
+        if (icp.fineVoxelLevels.size() != 2 || icp.fineCorrespondenceDistances.size() != 2
+            || icp.fineMaximumIterations.size() != 2
+            || !std::isfinite(icp.fineMaximumTranslationMm) || icp.fineMaximumTranslationMm <= 0
+            || icp.fineMaximumTranslationMm > 10.0f
+            || !std::isfinite(icp.fineMaximumAngleDegrees) || icp.fineMaximumAngleDegrees <= 0
+            || icp.fineMaximumAngleDegrees > 1.0f) {
+            result.error = QStringLiteral("重叠区精配准配置无效"); return result;
+        }
+        for (int level = 0; level < 2; ++level)
+            if (!std::isfinite(icp.fineVoxelLevels.at(level)) || icp.fineVoxelLevels.at(level) <= 0
+                || !std::isfinite(icp.fineCorrespondenceDistances.at(level))
+                || icp.fineCorrespondenceDistances.at(level) <= 0 || icp.fineMaximumIterations.at(level) < 1) {
+                result.error = QStringLiteral("重叠区精配准层级无效"); return result;
+            }
     }
     QVector<ConvertedCloud> clouds;
     clouds.reserve(inputs.size());
@@ -2722,6 +2872,13 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
             || inputs[index].fullPoints.size() != inputs[index].scanRatios.size()) {
             result.error = QStringLiteral("第 %1 帧点云与来源映射长度不一致").arg(index + 1);
             return result;
+        }
+        if (fast) {
+            for (const auto &points : {&inputs.at(index).fullPoints, &inputs.at(index).samplePoints})
+                for (const Point3D &point : *points)
+                    if (!finitePoint(point)) {
+                        result.error = QStringLiteral("机器人基坐标点云包含非有限值"); return result;
+                    }
         }
         ConvertedCloud converted;
         converted.full=std::move(inputs[index].fullPoints);
@@ -2756,6 +2913,7 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
         clouds.push_back(std::move(converted));
     }
     result.registrationCorrections.resize(inputs.size());
+    if (icp.enabled && !fast) {
     result.planeIdentityTrackingValid=trackPlaneIdentity(clouds,icp,&result.trackedPlaneHeights,
         &result.planeIdentityConsensusHeight,&result.planeIdentityDiagnostics);
     if (!result.planeIdentityTrackingValid) {
@@ -2770,12 +2928,13 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
         }
     }
     result.diagnostics+=QStringLiteral("Plane identity: %1\n").arg(result.planeIdentityDiagnostics);
+    }
     for(QMatrix4x4 &matrix:result.registrationCorrections)matrix.setToIdentity();
     result.registrationCorrections[0].setToIdentity();
     IcpDiagnostics reference;reference.filePath=inputs[0].sourceFile;reference.sourceCloudIndex=0;reference.accepted=true;reference.reason=QString::fromUtf8("参考点云");
     reference.blockingClass=QStringLiteral("accepted");
     result.icpDiagnostics.push_back(reference);
-    if (icp.collectDiagnosticFrames) {
+    if (icp.enabled && !fast && icp.collectDiagnosticFrames) {
         QElapsedTimer frameClock;
         frameClock.start();
         result.diagnosticPreIcpFrames.reserve(clouds.size());
@@ -2811,7 +2970,7 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
     // order, so the overlap results stay order-independent.
     const QVector<ConvertedCloud> *const cloudView = &clouds;
     QVector<MultiFrameRegistrationResult::OverlapDiagnostic> preparedOverlaps(pairCount);
-    if (icp.enabled && result.parallelEnabled) {
+    if (icp.enabled && !fast && result.parallelEnabled) {
         QThreadPool pool;
         pool.setMaxThreadCount(actualParallelTasks);
         QVector<QFuture<MultiFrameRegistrationResult::OverlapDiagnostic>> futures;
@@ -2824,7 +2983,7 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
         // Explicit join barrier: no worker outlives this block.
         for (int index = 0; index < futures.size(); ++index)
             preparedOverlaps[index] = futures[index].result();
-    } else if (icp.enabled) {
+    } else if (icp.enabled && !fast) {
         for (int index = 1; index < inputs.size(); ++index)
             preparedOverlaps[index - 1] = overlapDiagnostic(index, cloudView->at(index).sample,
                                                             cloudView->at(index - 1).sample);
@@ -2839,6 +2998,45 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
         const float pairStart=0.15f+(0.85f*float(index-1)/float(pairCount));
         const float pairSpan=0.85f/float(pairCount);
         update(pairStart,QString::fromUtf8("配准 scan %1 到相邻点云 scan %2").arg(index+1).arg(index));
+        if (fast) {
+            QMatrix4x4 pair;
+            QElapsedTimer clock;
+            clock.start();
+            // sample remains in the original robot frame; full alone is corrected.
+            IcpDiagnostics d = refinePoseOverlap(clouds.at(index).sample, clouds.at(index - 1).sample,
+                icp, index, &pair, [&](float value, const QString &message) {
+                    update(pairStart + value * pairSpan, message);
+                });
+            if (cancellationRequested(icp)) {
+                result.cancelled = true; result.error = QStringLiteral("已取消"); return result;
+            }
+            d.filePath = inputs.at(index).sourceFile;
+            d.attemptTotalMs = clock.elapsed();
+            result.registrationTotalMs += d.attemptTotalMs;
+            result.icpLevel1Ms += d.icpLevel1Ms;
+            result.icpLevel2Ms += d.icpLevel2Ms;
+            ++result.registrationAttemptCount;
+            QMatrix4x4 global;
+            if (d.fineApplied) global = result.registrationCorrections.at(index - 1) * pair;
+            for (int element = 0; element < 16; ++element)
+                if (!std::isfinite(global.constData()[element])) {
+                    result.error = QStringLiteral("累计修正包含非有限值"); return result;
+                }
+            result.registrationCorrections[index] = global;
+            d.cumulativeCorrection = global;
+            if (d.fineApplied) {
+                applyTransform(&clouds[index].full, global);
+                for (const Point3D &point : clouds.at(index).full)
+                    if (!finitePoint(point)) {
+                        result.error = QStringLiteral("累计修正后的点云包含非有限值"); return result;
+                    }
+            }
+            result.diagnostics += QStringLiteral("pair %1: %2, levels=%3, correspondences=%4, rmse=%5, cumulative=%6 mm/%7 deg\n")
+                .arg(index).arg(d.reason).arg(d.completedLevels).arg(d.correspondences).arg(d.rmse)
+                .arg(translationLength(global)).arg(rotationAngle(global));
+            result.icpDiagnostics.push_back(d);
+            continue;
+        }
         result.overlapDiagnostics.push_back(preparedOverlaps[index - 1]);
         const QVector3D sourceCenter((inputs[index].startBaseFromFlange(0,3)+inputs[index].endBaseFromFlange(0,3))*.5f,
                                      (inputs[index].startBaseFromFlange(1,3)+inputs[index].endBaseFromFlange(1,3))*.5f,
@@ -3121,7 +3319,7 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
             continue;
         }
     }
-    if (icp.collectDiagnosticFrames) {
+    if (icp.enabled && !fast && icp.collectDiagnosticFrames) {
         QElapsedTimer frameClock;
         frameClock.start();
         result.diagnosticPostIcpFrames.reserve(clouds.size());

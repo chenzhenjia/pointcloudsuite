@@ -11,6 +11,8 @@
 
 namespace pointcloud {
 
+enum class RegistrationProfile { Legacy, PoseOverlapFine };
+
 using ProgressCallback = std::function<void(float, const QString &)>;
 
 struct RobotBaseFrame {
@@ -199,6 +201,12 @@ struct IcpOptions {
     float qualityRmsMm = 0.5f;
     float qualityP95Mm = 1.0f;
     float qualityNormalAngleDegrees = 0.5f;
+    RegistrationProfile profile = RegistrationProfile::Legacy;
+    QVector<float> fineVoxelLevels = {0.5f, 0.2f};
+    QVector<float> fineCorrespondenceDistances = {3.0f, 0.6f};
+    QVector<int> fineMaximumIterations = {20, 15};
+    float fineMaximumTranslationMm = 10.0f;
+    float fineMaximumAngleDegrees = 1.0f;
 };
 
 inline bool cancellationRequested(const IcpOptions &options)
@@ -451,6 +459,14 @@ struct IcpDiagnostics {
     bool legacyIcpAccepted = false;
     QString legacyIcpRejectReason;
     float heightMapNormalizedCorrelation = 0.0f;
+    // accepted remains the legacy quality verdict; output permission is separate.
+    bool fineApplied = false;
+    bool poseFallback = false;
+    bool chainAnchorReset = false;
+    bool structuralMetricsComputed = false;
+    QString fineReason;
+    QMatrix4x4 pairCorrection;
+    QMatrix4x4 cumulativeCorrection;
 };
 
 struct MultiFrameRegistrationResult {

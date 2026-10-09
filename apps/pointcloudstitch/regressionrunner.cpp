@@ -3,6 +3,7 @@
 #include "pointcloudprocessor.h"
 #include <pcv/io/ply_writer.h>
 #include <pcv/registration/handeye_transform.h>
+#include <pcv/interface/stitching_interface.h>
 
 #include <QCommandLineOption>
 #include <QCommandLineParser>
@@ -299,6 +300,8 @@ int runRegression(const QStringList &arguments)
     const QCommandLineOption voxelOption(QStringLiteral("voxel-levels"), QStringLiteral("三个体素层级"), QStringLiteral("values"), QStringLiteral("1 0.5 0.2"));
     const QCommandLineOption distanceOption(QStringLiteral("correspondence-distances"), QStringLiteral("三个对应距离"), QStringLiteral("values"), QStringLiteral("3 1.5 0.6"));
     const QCommandLineOption transformOnlyOption(QStringLiteral("transform-only"), QStringLiteral("仅执行手眼坐标转换，跳过预对齐和 ICP"));
+    const QCommandLineOption fineOption(QStringLiteral("pose-overlap-fine"), QStringLiteral("位姿粗配准＋两层重叠区精配准，质量仅警告"));
+    const QCommandLineOption interfaceOption(QStringLiteral("interface-pipeline"), QStringLiteral("通过模块30事务流水线回放（无预览）"));
     // 2.5D height-map registration stays off unless it is asked for explicitly.
     const QCommandLineOption heightMapOption(QStringLiteral("heightmap-registration"),
         QStringLiteral("启用 2.5D 高程图配准（默认关闭，旧 ICP 仍是回退路径）"));
@@ -307,7 +310,7 @@ int runRegression(const QStringList &arguments)
     parser.addOptions({regressionOption, inputOption, poseOption, calibrationOption, reportOption, outputOption,
                        runtimeRootOption, jobIdOption, workpieceIdOption, baseNameOption,
                        voxelOption, distanceOption, transformOnlyOption, heightMapOption,
-                       heightMapNoSearchOption});
+                       heightMapNoSearchOption, fineOption, interfaceOption});
     parser.process(arguments);
     const QString inputDirectory = parser.value(inputOption);
     const QString posePath = parser.value(poseOption);
@@ -345,6 +348,11 @@ int runRegression(const QStringList &arguments)
     options.correspondenceDistances = parseLevels(parser.value(distanceOption), &error);
     options.heightMapRegistrationEnabled = parser.isSet(heightMapOption);
     options.heightMapSearchEnabled = !parser.isSet(heightMapNoSearchOption);
+    if (parser.isSet(fineOption)) {
+        if (parser.isSet(transformOnlyOption) || parser.isSet(heightMapOption)) return 2;
+        options.profile = pointcloud::RegistrationProfile::PoseOverlapFine;
+        options.collectDiagnosticFrames = false;
+    }
     if (!error.isEmpty()) return 2;
 
     QDir directory(inputDirectory);
@@ -367,6 +375,42 @@ int runRegression(const QStringList &arguments)
         orderedPoses.push_back(record);
     }
 
+    if (parser.isSet(fineOption) || parser.isSet(interfaceOption)) {
+        if (outputDirectory.isEmpty()) return 2;
+        pcv::interface::StitchingRequest request;
+        request.input.calibrationPath = calibrationPath;
+        request.registration.options = options;
+        request.registration.collectDiagnosticFrames = false;
+        request.artifacts.outputDirectory = outputDirectory;
+        request.artifacts.writePreview = false;
+        request.artifacts.allowOverwrite = false;
+        for (const PoseRecord &pose : orderedPoses) {
+            const int index = request.input.frames.size();
+            request.input.frames.push_back({inputs.at(index).filePath,
+                toRobotPose(pose.start), toRobotPose(pose.end)});
+        }
+        const auto shared = pcv::interface::stitch(request);
+        QJsonObject report;
+        if (shared.success) {
+            QFile manifest(shared.manifest.reportJson);
+            if (!manifest.open(QIODevice::ReadOnly)) return 3;
+            report = QJsonDocument::fromJson(manifest.readAll()).object();
+        }
+        report.insert(QStringLiteral("success"), shared.success);
+        report.insert(QStringLiteral("error"), shared.message);
+        report.insert(QStringLiteral("error_code"), shared.errorCode);
+        report.insert(QStringLiteral("diagnostics"), shared.diagnostics);
+        report.insert(QStringLiteral("output_ply"), shared.outputPly);
+        report.insert(QStringLiteral("total_wall_ms"), double(shared.totalMs));
+        report.insert(QStringLiteral("output_wall_ms"), double(shared.outputMs));
+        report.insert(QStringLiteral("registration_wall_ms"), double(shared.registrationMs));
+        report.insert(QStringLiteral("output_points"), double(shared.points.size()));
+        if (!QDir().mkpath(QFileInfo(reportPath).absolutePath())) return 3;
+        QSaveFile file(reportPath);
+        if (!file.open(QIODevice::WriteOnly)
+            || file.write(QJsonDocument(report).toJson(QJsonDocument::Indented)) < 0 || !file.commit()) return 3;
+        return shared.success ? 0 : 1;
+    }
     pointcloud::WorldCloudMergeResult result;
     if (inputs.size() >= 2) result = pointcloud::mergePlyCloudsInWorld(inputs, options);
     else if (!options.enabled && inputs.size() == 1) result = pointcloud::mergePlyCloudsInWorld(inputs, options);

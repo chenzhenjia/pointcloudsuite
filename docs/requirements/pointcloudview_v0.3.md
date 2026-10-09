@@ -1,5 +1,13 @@
 # PointCloudSuite 点云处理项目需求文档
 
+### 2026-10-08：位姿粗配准＋重叠区快速精配准增量契约
+
+- `RegistrationProfile::{Legacy,PoseOverlapFine}` 及 fine 两层/迭代/预算选项追加到 `IcpOptions` 尾部，API 默认 Legacy；默认数值为体素 0.5/0.2 mm、距离 3.0/0.6 mm、20/15 迭代、10 mm/1°。只解可观测 6DoF，不改变手眼/ABC/单位/PLY/provenance。
+- 新路径的质量政策为 warn-only；至少 100 个有效对应是求解条件，不是正式输出的旧结构门槛。无解/越界/无重叠回退机器人位置并记录锚点重置；非有限输入、取消、映射和输出错误仍硬失败。Legacy 原验收保持不变。
+- `fineApplied/poseFallback/chainAnchorReset/structuralMetricsComputed/fineReason/pairCorrection/cumulativeCorrection` 追加诊断尾部。`accepted` 保留旧质量含义，不用它表示新模式文件提交权限；新模式严格验收未执行，旧覆盖指标报告未计算。
+- `StitchingArtifactGroup.writePreview=true` 兼容旧调用，GUI 新模式关闭。正式输出沿用 `stitched_robot_base.ply/.pcvmap` 与 `stitching_manifest.json`，报告新增模式、质量政策、严格状态、逐对两层指标/矩阵、完成与回退数、输入位姿/过滤统计和阶段计时；全部有效点保留。
+- 不设置累计漂移上限，不以正式文件生成证明正确对齐。真实样本回放缺 Start/End 位姿时必须标为未验证。构建/测试结果见本轮最终验证记录。
+
 版本：v0.3  
 最后核对日期：2026-09-22
 状态：数据契约基线（v0.3）；架构和 UI 交接已进入 v0.4，发布验收待完成

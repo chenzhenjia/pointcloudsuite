@@ -19,9 +19,11 @@
        <item row="2" column="0"><widget class="QLabel" name="lbl_processing_mode"><property name="text"><string>处理模式</string></property></widget></item>
        <item row="2" column="1" colspan="2">
         <widget class="QComboBox" name="cb_processing_mode">
+         <property name="currentIndex"><number>2</number></property>
          <property name="toolTip"><string>仅手眼坐标转换模式不会执行主平面预对齐、ICP 或接缝融合</string></property>
          <item><property name="text"><string>完整流程：手眼转换 → ICP 配准 → 接缝融合</string></property></item>
          <item><property name="text"><string>仅坐标转换：手眼转换 → 直接输出 PLY</string></property></item>
+         <item><property name="text"><string>快速拼接：位姿粗配准 → 重叠区精配准 → 全量输出</string></property></item>
         </widget>
        </item>
       </layout>

@@ -97,6 +97,7 @@ QVector<pointcloud::Point3D> deterministicPreview(const QVector<pointcloud::Poin
 
 QString registrationPairStatus(const pointcloud::IcpDiagnostics &diagnostic)
 {
+    if (diagnostic.fineApplied || diagnostic.poseFallback) return diagnostic.reason;
     // 2.5D height-map status first: the operator must be able to tell the new
     // acceptance口径 apart from the legacy structural acceptance.
     if (diagnostic.visibilityHardRejected)
@@ -652,6 +653,7 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
     request.artifacts.previewRatio = previewRatio;
     request.artifacts.writeSourceClouds = writeSources;
     request.artifacts.writeDiagnosticFrames = diagnosticOutput;
+    request.artifacts.writePreview = icp.profile != pointcloud::RegistrationProfile::PoseOverlapFine;
     request.isCancelled = [cancelRequested]() {
         return cancelRequested && cancelRequested->load();
     };
@@ -682,9 +684,10 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
             : shared.message;
         return result;
     }
-    result.registrationAccepted = true;
+    const bool fast = icp.profile == pointcloud::RegistrationProfile::PoseOverlapFine;
+    result.registrationAccepted = !fast;
     result.multiFrameConsistent = true;
-    if (icp.enabled) {
+    if (icp.enabled && !fast) {
         for (int index = 1; index < result.merge.icpDiagnostics.size(); ++index) {
             const auto&diagnostic=result.merge.icpDiagnostics[index];
             if (!diagnostic.accepted) {
@@ -695,7 +698,8 @@ StitchTaskResult runStitching(const QVector<pointcloud::WorldCloudInput> &inputs
     result.multiFrameConsistent = result.registrationAccepted;
     if(icp.enabled){
         for(int index=1;index<result.merge.icpDiagnostics.size();++index)
-            result.registrationApplied=result.registrationApplied||result.merge.icpDiagnostics[index].accepted;
+            result.registrationApplied=result.registrationApplied||result.merge.icpDiagnostics[index].accepted
+                || result.merge.icpDiagnostics[index].fineApplied;
     }
     result.mergedFile = shared.manifest.formalPly.isEmpty() ? shared.outputPly : shared.manifest.formalPly;
     result.previewFile = shared.manifest.previewPly;
@@ -1095,7 +1099,17 @@ QVector<pointcloud::WorldCloudInput> StitchingWindow::collectInputs(QString *err
 pointcloud::IcpOptions StitchingWindow::collectIcpOptions(QString *error) const
 {
     pointcloud::IcpOptions options;
-    options.enabled = ui->cb_processing_mode->currentIndex() == 0;
+    options.enabled = ui->cb_processing_mode->currentIndex() != 1;
+    const bool fast = ui->cb_processing_mode->currentIndex() == 2;
+    options.profile = fast ? pointcloud::RegistrationProfile::PoseOverlapFine : pointcloud::RegistrationProfile::Legacy;
+    options.parallelEnabled = ui->chk_parallel_processing->isChecked();
+    options.maxParallelTasks = ui->sb_parallel_tasks->value();
+    if (fast) {
+        options.collectDiagnosticFrames = false;
+        options.fineMaximumTranslationMm = float(ui->dsb_max_translation->value());
+        options.fineMaximumAngleDegrees = float(ui->dsb_max_rotation->value());
+        return options;
+    }
     options.collectDiagnosticFrames = ui->chk_diagnostic_output->isChecked();
     // Keep the high-precision runtime profile explicit here. This also makes
     // Qt Creator builds independent of compiler header-dependency locale.
@@ -1162,6 +1176,17 @@ void StitchingWindow::startStitching()
         return;
     }
 
+    const QStringList outputNames = {QStringLiteral("stitched_robot_base.ply"),
+        QStringLiteral("stitched_robot_base.pcvmap"), QStringLiteral("stitching_manifest.json"),
+        QStringLiteral("stitched_robot_base_preview.ply")};
+    QStringList existing;
+    for (const QString &name : outputNames)
+        if (QFileInfo::exists(QDir(output).filePath(name))) existing.push_back(name);
+    if (!existing.isEmpty() && QMessageBox::question(this, tr("确认覆盖输出"),
+        tr("输出目录已有结果：\n%1\n是否覆盖本次待写入文件？未写入的旧文件将保留。")
+            .arg(existing.join(QLatin1Char('\n'))), QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No) != QMessageBox::Yes) return;
+
     m_cancelRequested->store(false);
     m_watcher = new QFutureWatcher<StitchTaskResult>(this);
     connect(m_watcher, &QFutureWatcher<StitchTaskResult>::finished,
@@ -1169,16 +1194,18 @@ void StitchingWindow::startStitching()
     setBusy(true);
     appendLog(tr("开始：%1 个点云；模式=%2；机器人坐标转换=开启；ICP=%3")
                   .arg(inputs.size())
-                  .arg(icp.enabled ? tr("配准与融合") : tr("仅手眼坐标转换"))
+                  .arg(icp.profile == pointcloud::RegistrationProfile::PoseOverlapFine
+                       ? tr("位姿粗配准＋重叠区精配准") : (icp.enabled ? tr("配准与融合") : tr("仅手眼坐标转换")))
                   .arg(icp.enabled ? tr("开启") : tr("关闭")));
     appendLog(tr("并行处理=%1，最大任务数=%2")
                   .arg(icp.parallelEnabled ? tr("开启") : tr("关闭"))
                   .arg(icp.maxParallelTasks == 0 ? tr("自动") : QString::number(icp.maxParallelTasks)));
     const double previewRatio = ui->dsb_preview_ratio->value();
-    const bool diagnosticOutput = ui->chk_diagnostic_output->isChecked();
+    const bool fast = icp.profile == pointcloud::RegistrationProfile::PoseOverlapFine;
+    const bool diagnosticOutput = !fast && ui->chk_diagnostic_output->isChecked();
     const bool writeSources = diagnosticOutput;
     SeamFusionOptions seamOptions;
-    seamOptions.enabled = icp.enabled && ui->chk_seam_fusion->isChecked();
+    seamOptions.enabled = icp.enabled && !fast && ui->chk_seam_fusion->isChecked();
     seamOptions.halfWidth = float(ui->dsb_seam_half_width->value());
     seamOptions.mutualDistance = float(ui->dsb_mutual_distance->value());
     seamOptions.decisionCellSize = float(ui->dsb_decision_voxel->value());
@@ -1236,6 +1263,13 @@ void StitchingWindow::stitchingFinished()
         const pointcloud::IcpDiagnostics &diagnostic = result.merge.icpDiagnostics[index];
         appendLog(tr("scan %1：%2").arg(index + 1).arg(registrationPairStatus(diagnostic)));
     }
+    if (result.icpOptions.profile == pointcloud::RegistrationProfile::PoseOverlapFine) {
+        statusBar()->showMessage(tr("快速拼接输出完成；质量条件仅警告"));
+        QMessageBox::information(this, tr("完成"),
+            tr("已生成全量机器人基坐标点云：\n%1\n未执行严格质量核验；请查看逐帧精配准/回退报告。")
+                .arg(result.mergedFile));
+        return;
+    }
     statusBar()->showMessage(result.transformOnly
         ? tr("手眼坐标转换和输出完成") : tr("点云配准和输出完成"));
     QMessageBox::information(this, tr("完成"), result.transformOnly
@@ -1246,26 +1280,30 @@ void StitchingWindow::stitchingFinished()
 void StitchingWindow::updateProcessingModeUi()
 {
     const bool registrationMode = ui->cb_processing_mode->currentIndex() == 0;
-    ui->chk_icp->setChecked(registrationMode);
+    const bool fast = ui->cb_processing_mode->currentIndex() == 2;
+    ui->dsb_max_translation->setMaximum(fast ? 10.0 : 1000.0);
+    ui->dsb_max_rotation->setMaximum(fast ? 1.0 : 45.0);
+    ui->chk_icp->setChecked(registrationMode || fast);
     ui->le_voxel_levels->setEnabled(registrationMode);
     ui->le_correspondence_distances->setEnabled(registrationMode);
     ui->le_iterations->setEnabled(registrationMode);
     ui->dsb_overlap_margin->setEnabled(registrationMode);
-    ui->dsb_max_translation->setEnabled(registrationMode);
-    ui->dsb_max_rotation->setEnabled(registrationMode);
+    ui->dsb_max_translation->setEnabled(registrationMode || fast);
+    ui->dsb_max_rotation->setEnabled(registrationMode || fast);
+    ui->dsb_preview_ratio->setEnabled(!fast);
     ui->chk_seam_fusion->setEnabled(registrationMode);
     ui->dsb_seam_half_width->setEnabled(registrationMode);
     ui->dsb_mutual_distance->setEnabled(registrationMode);
     ui->dsb_decision_voxel->setEnabled(registrationMode);
     ui->chk_diagnostic_output->setEnabled(registrationMode);
-    ui->btn_start->setText(registrationMode
-        ? tr("开始世界坐标配准") : tr("开始手眼坐标转换"));
-    ui->pte_log->setPlaceholderText(registrationMode
+    ui->btn_start->setText(fast ? tr("开始重叠区快速拼接") : (registrationMode
+        ? tr("开始世界坐标配准") : tr("开始手眼坐标转换")));
+    ui->pte_log->setPlaceholderText(fast ? tr("读取、位姿粗配准、两层重叠精配准、逐帧回退和正式输出报告。") : (registrationMode
         ? tr("转换、重叠检查、ICP、接缝和输出报告将显示在这里。")
-        : tr("读取、手眼坐标转换和输出进度将显示在这里。"));
-    statusBar()->showMessage(registrationMode
+        : tr("读取、手眼坐标转换和输出进度将显示在这里。")));
+    statusBar()->showMessage(fast ? tr("位姿粗配准＋两层重叠区精配准；失败回退位姿，质量仅警告，无预览/接缝融合") : (registrationMode
         ? tr("添加至少两个 PLY，并填写对应扫描 Start/End 位姿")
-        : tr("添加一个或多个 PLY，转换后不执行 ICP 或接缝融合"));
+        : tr("添加一个或多个 PLY，转换后不执行 ICP 或接缝融合")));
 }
 
 void StitchingWindow::setBusy(bool busy)

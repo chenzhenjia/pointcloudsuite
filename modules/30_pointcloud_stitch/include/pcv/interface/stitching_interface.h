@@ -52,6 +52,7 @@ struct StitchingArtifactGroup {
     double previewRatio = 0.1;
     bool writeSourceClouds = false;
     bool writeDiagnosticFrames = false;
+    bool writePreview = true;
 };
 
 struct StitchingArtifactManifest {
@@ -116,6 +117,7 @@ struct [[deprecated("Use StitchingRequest grouped fields")]] StitchingOptions {
     bool writeDiagnosticFrames = false;
     std::function<bool()> isCancelled;
     std::function<void(float, const QString &)> progress;
+    bool writePreview = true;
 };
 
 struct StitchingResult {
@@ -146,6 +148,7 @@ struct StitchingResult {
     int actualParallelTasks = 1;
     qint64 readWorkMs = 0;
     qint64 transformWorkMs = 0;
+    qint64 framePreparationWallMs = 0;
 };
 
 StitchingResult stitchRawLineProfiles(const StitchingOptions &options);

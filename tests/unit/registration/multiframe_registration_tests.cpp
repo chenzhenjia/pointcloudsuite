@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <limits>
 
 namespace {
 
@@ -500,6 +501,7 @@ bool heightMapDiagnosticsComplete(const pointcloud::IcpDiagnostics &diagnostic)
 int main(int argc, char **argv)
 {
     QCoreApplication application(argc, argv);
+    if (!application.arguments().contains(QStringLiteral("--pose-overlap-fine-only"))) {
 
     {
         auto referenceOnly = validFrame(QStringLiteral("reference.ply"));
@@ -736,6 +738,9 @@ int main(int argc, char **argv)
         // tests enable them explicitly rather than relying on a default.
         const auto coarseOptions = [&]() {
             pointcloud::IcpOptions options = dropoutOptions();
+            // This fixture asks for 4 mm recovery; production's 2 mm default
+            // cannot legally recover it. Keep the test's intended budget explicit.
+            options.maximumCorrectionTranslation = 10.0f;
             options.minimumStructuralPoints = 10;
             options.tangentCoarseAlignmentEnabled = true;
             options.normalCompatibilityDegrees = 45.0f;
@@ -789,7 +794,10 @@ int main(int argc, char **argv)
                      "the pair must still register with the normal gate disabled")) return 1;
         if (!require(std::abs(withoutGate.icpDiagnostics[1].correctionY + 4.0f) <= 0.5f
                          && std::abs(withoutGate.icpDiagnostics[1].correctionX) <= 0.5f,
-                     "the gate-disabled pair must recover the same offset")) return 1;
+                     qPrintable(QStringLiteral("gate-disabled correction=%1,%2; coarse=%3,%4; %5")
+                         .arg(withoutGate.icpDiagnostics[1].correctionX).arg(withoutGate.icpDiagnostics[1].correctionY)
+                         .arg(withoutGate.icpDiagnostics[1].tangentCoarseX).arg(withoutGate.icpDiagnostics[1].tangentCoarseY)
+                         .arg(withoutGate.diagnostics)))) return 1;
         // Estimated normals on a jittered surface already disagree by more than
         // 45 degrees at the finest level, so the gate is expected to reject a
         // few correspondences there; the counter proves it is wired in, and the
@@ -827,7 +835,13 @@ int main(int argc, char **argv)
         if (!require(routedDiagnostic.overlapCoordinateSystem == QStringLiteral("plane_uvn"),
                      "the dominant structure must define the overlap frame")) return 1;
         if (!require(routedDiagnostic.accepted,
-                     "the structurally routed pair must still register")) return 1;
+                     qPrintable(QStringLiteral("the structurally routed pair must still register: %1 / %2 / levels=%3 / corr=%4 / coverage=%5 / local=[%6,%7,%8]-[%9,%10,%11]")
+                         .arg(routedDiagnostic.reason, routedDiagnostic.failureCode)
+                         .arg(routedDiagnostic.completedLevels)
+                         .arg(routedDiagnostic.correspondences)
+                         .arg(routedDiagnostic.structuralBidirectionalCoverage3mmOfMatched)
+                         .arg(routedDiagnostic.overlapLocalMinimum.x()).arg(routedDiagnostic.overlapLocalMinimum.y()).arg(routedDiagnostic.overlapLocalMinimum.z())
+                         .arg(routedDiagnostic.overlapLocalMaximum.x()).arg(routedDiagnostic.overlapLocalMaximum.y()).arg(routedDiagnostic.overlapLocalMaximum.z())))) return 1;
 
         pointcloud::IcpOptions legacyRouting = dropoutOptions();
         legacyRouting.structuralFrameRouteDegrees = 90.0f;
@@ -1567,6 +1581,153 @@ int main(int argc, char **argv)
                      "the legacy baseline must still be recorded after the gate")) return 1;
     }
 
+    }
+    // Pose coarse alignment + overlap-only refinement. Pure planes deliberately
+    // expose only three directions; quality degeneracy must not reject output.
+    pointcloud::IcpOptions fine;
+    fine.profile = pointcloud::RegistrationProfile::PoseOverlapFine;
+    fine.parallelEnabled = false;
+    for (float tilt : {0.0f, 30.0f, 60.0f, 75.0f}) {
+        auto reference = validFrame(QStringLiteral("fine_ref"));
+        QMatrix4x4 rotation;
+        rotation.rotate(tilt, 0, 1, 0);
+        for (int i = 0; i < reference.fullPoints.size(); ++i) {
+            auto &p = reference.fullPoints[i];
+            const auto v = rotation.map(QVector3D(p.x, p.y, 0));
+            p.x = v.x(); p.y = v.y(); p.z = v.z();
+        }
+        reference.samplePoints = reference.fullPoints;
+        auto moving = reference;
+        moving.sourceFile = QStringLiteral("fine_moving");
+        const QVector3D normal = rotation.mapVector(QVector3D(0, 0, 1));
+        for (auto &p : moving.fullPoints) {
+            p.x += normal.x() * 0.2f; p.y += normal.y() * 0.2f; p.z += normal.z() * 0.2f;
+        }
+        moving.samplePoints = moving.fullPoints;
+        const auto result = pointcloud::registerRobotBaseFrames({reference, moving}, fine);
+        const auto &d = result.icpDiagnostics.at(1);
+        if (!require(result.ok && d.fineApplied && d.completedLevels == 2 && d.degenerate
+            && !d.accepted && !d.structuralMetricsComputed && d.rmse < 0.02f,
+            "tilted pure plane must refine observable directions without strict acceptance")) return 1;
+        const QVector3D t(result.registrationCorrections.at(1)(0, 3),
+                          result.registrationCorrections.at(1)(1, 3), result.registrationCorrections.at(1)(2, 3));
+        if (!require((t + normal * 0.2f).length() < 0.03f,
+                     "pure plane tangential direction must retain robot pose")) return 1;
+    }
+    {
+        auto a = validFrame(QStringLiteral("a"));
+        auto tilted = a;
+        QMatrix4x4 residual;
+        residual.translate(0, 0, 0.15f);
+        residual.rotate(0.2f, 1, 0, 0);
+        for (auto &p : tilted.fullPoints) {
+            const auto v = residual.map(QVector3D(p.x, p.y, p.z));
+            p.x = v.x(); p.y = v.y(); p.z = v.z();
+        }
+        tilted.samplePoints = tilted.fullPoints;
+        const auto angular = pointcloud::registerRobotBaseFrames({a, tilted}, fine);
+        if (!require(angular.icpDiagnostics.at(1).fineApplied
+            && angular.icpDiagnostics.at(1).rmse < 0.1f,
+            "fine 6DoF must refine small roll/pitch instead of locking them")) return 1;
+        auto b = a;
+        for (auto &p : b.fullPoints) p.z += 0.2f;
+        b.samplePoints = b.fullPoints;
+        auto c = a;
+        for (auto &p : c.fullPoints) p.z += 0.4f;
+        c.samplePoints = c.fullPoints;
+        const auto chain = pointcloud::registerRobotBaseFrames({a, b, c}, fine);
+        const auto ab = pointcloud::registerRobotBaseFrames({a, b}, fine);
+        const auto bc = pointcloud::registerRobotBaseFrames({b, c}, fine);
+        if (!require(chain.icpDiagnostics.at(2).fineApplied
+            && chain.registrationCorrections.at(2) == ab.registrationCorrections.at(1) * bc.registrationCorrections.at(1),
+            "fine pair corrections must compose original robot samples exactly once")) return 1;
+        auto far = validFrame(QStringLiteral("far"), 1000);
+        auto next = far;
+        for (auto &p : next.fullPoints) p.z += 0.2f;
+        next.samplePoints = next.fullPoints;
+        const auto reset = pointcloud::registerRobotBaseFrames({a, b, far, next}, fine);
+        if (!require(reset.ok && reset.icpDiagnostics.at(2).poseFallback
+            && reset.icpDiagnostics.at(2).chainAnchorReset && reset.registrationCorrections.at(2).isIdentity()
+            && reset.registrationCorrections.at(3) == pointcloud::registerRobotBaseFrames({far, next}, fine).registrationCorrections.at(1),
+            "fallback must reset chain at robot pose, subsequent pair must remain local")) return 1;
+        auto limited = fine;
+        limited.fineMaximumTranslationMm = 0.01f;
+        const auto rejected = pointcloud::registerRobotBaseFrames({a, b}, limited);
+        if (!require(rejected.ok && rejected.icpDiagnostics.at(1).poseFallback
+            && rejected.registrationCorrections.at(1).isIdentity(), "out-of-budget fine result must be discarded")) return 1;
+        auto invalid = fine;
+        invalid.fineVoxelLevels.clear();
+        if (!require(!pointcloud::registerRobotBaseFrames({a, b}, invalid).ok, "invalid fine configuration must fail")) return 1;
+        invalid = fine;
+        invalid.fineMaximumTranslationMm = 11.0f;
+        if (!require(!pointcloud::registerRobotBaseFrames({a, b}, invalid).ok,
+            "fine budget cannot exceed the agreed 10 mm trust region")) return 1;
+        auto nonfinite = b;
+        nonfinite.fullPoints[0].x = std::numeric_limits<float>::infinity();
+        if (!require(!pointcloud::registerRobotBaseFrames({a, nonfinite}, fine).ok,
+            "non-finite robot input must remain a hard failure")) return 1;
+        auto cancel = fine;
+        int calls = 0;
+        cancel.isCancelled = [&calls] { return ++calls > 5; };
+        if (!require(pointcloud::registerRobotBaseFrames({a, b}, cancel).cancelled,
+                     "cancellation during fine registration must stop output")) return 1;
+        auto cancelledOnIteration = fine;
+        cancelledOnIteration.cancellation = std::make_shared<std::atomic_bool>(false);
+        const auto cancelledResult = pointcloud::registerRobotBaseFrames({a, b}, cancelledOnIteration,
+            [token = cancelledOnIteration.cancellation](float, const QString &message) {
+                if (message.contains(QStringLiteral("迭代"))) token->store(true);
+            });
+        if (!require(cancelledResult.cancelled && !cancelledResult.ok && cancelledResult.points.isEmpty(),
+            "iteration cancellation must not publish partial merged points")) return 1;
+    }
+    {
+        // Both scans share the boundary, but the target has a large interior
+        // hole. Low source correspondence ratio warns without quality gating.
+        auto source = validFrame(QStringLiteral("low_visibility_source"));
+        source.fullPoints.clear(); source.sourceIndices.clear(); source.scanRatios.clear();
+        auto target = source;
+        const auto append = [](pointcloud::RobotBaseFrame &frame, float x, float y, float z) {
+            frame.fullPoints.push_back({x, y, z});
+            frame.sourceIndices.push_back(frame.sourceIndices.size());
+            frame.scanRatios.push_back(0.5f);
+        };
+        for (int x = 0; x <= 60; ++x)
+            for (int y = 0; y <= 60; ++y) {
+                append(source, float(x), float(y), 0.2f);
+                if (x < 2 || y < 2 || x > 58 || y > 58)
+                    append(target, float(x), float(y), 0.0f);
+            }
+        source.samplePoints = source.fullPoints; target.samplePoints = target.fullPoints;
+        source.declaredCount = source.fullPoints.size(); target.declaredCount = target.fullPoints.size();
+        const auto result = pointcloud::registerRobotBaseFrames({target, source}, fine);
+        if (!require(result.ok && result.icpDiagnostics.at(1).fineApplied
+            && result.icpDiagnostics.at(1).visibilityWarning
+            && result.icpDiagnostics.at(1).fitness < 0.25f
+            && result.points.size() == target.fullPoints.size() + source.fullPoints.size(),
+            qPrintable(QStringLiteral("low coverage must warn and retain all valid points in fine mode: %1 / fitness=%2 / dof=%3 / size=%4")
+                .arg(result.icpDiagnostics.at(1).fineReason).arg(result.icpDiagnostics.at(1).fitness)
+                .arg(result.icpDiagnostics.at(1).observableDof).arg(result.points.size())))) return 1;
+    }
+    {
+        const QVector<pointcloud::RobotBaseFrame> input = {denseFrame(QStringLiteral("dense_a"), 0), denseFrame(QStringLiteral("dense_b"), 0.15f)};
+        const auto sharedInput = input; // preserve Qt refcount > 1
+        const auto serial = pointcloud::registerRobotBaseFrames(input, fine);
+        for (int tasks : {1, 2, 4}) {
+            auto parallel = fine; parallel.parallelEnabled = true; parallel.maxParallelTasks = tasks;
+            const auto result = pointcloud::registerRobotBaseFrames(input, parallel);
+            if (!require(result.ok && result.points.size() == serial.points.size()
+                && result.cloudIds == serial.cloudIds && result.sourceIndices == serial.sourceIndices
+                && result.scanRatios == serial.scanRatios && result.registrationCorrections == serial.registrationCorrections
+                && result.icpDiagnostics.at(1).fineApplied == serial.icpDiagnostics.at(1).fineApplied
+                && result.icpDiagnostics.at(1).levelRmse == serial.icpDiagnostics.at(1).levelRmse,
+                "fine serial/parallel outputs and diagnostics must agree")) return 1;
+            for (int i = 0; i < result.points.size(); ++i)
+                if (!require(result.points.at(i).x == serial.points.at(i).x
+                    && result.points.at(i).y == serial.points.at(i).y
+                    && result.points.at(i).z == serial.points.at(i).z, "fine point order must match exactly")) return 1;
+        }
+        if (!require(sharedInput.size() == input.size(), "shared inputs must survive worker join")) return 1;
+    }
     std::cout << "Multiframe registration tests passed.\n";
     return 0;
 }
