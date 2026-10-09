@@ -1,5 +1,7 @@
 # 配置说明
 
+> 文档状态：当前参考。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../docs/requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../docs/README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
+
 `pointcloudview.config.json` 是版本化配置模板。配置用于指定业务数据目录和点云处理默认参数。
 
 配置查找顺序：
@@ -15,4 +17,4 @@
 
 模块路径、target 和 UI 交接边界以 `docs/architecture/module_ui_integration_v0.4.md` 为准；配置字段与数据目录契约不因模块重整改变。
 
-最后核对日期：2026-09-17。
+最后核对日期：2026-10-09（文档静态核对）。

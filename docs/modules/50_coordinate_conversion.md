@@ -1,5 +1,7 @@
 # 50_coordinate_conversion：坐标转换
 
+> 文档状态：当前参考。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
+
 状态：已实现。本模块为手眼标定、位姿插值、坐标变换的**唯一数学实现来源**。规范实现位于
 `modules/50_coordinate_conversion/{include,src}`，模块 target 为 `pcv_m50_coordinate_conversion`；旧 target
 `pcv_m50_coordinateconversion` 保留为迁移期兼容入口（仅转发）。
@@ -23,7 +25,11 @@
 `transformPointToRobotBase`、`transformLineScanToRobotBase`；回归测试 `handeye_transform_tests`，
 跨路径一致性测试在 `temp_workpiece_interface_tests`（JSON/临时工件入口 vs 多帧入口逐点比对）。
 
-最后核对日期：2026-09-24。
+最后核对日期：2026-10-09（文档静态核对）。
+
+## 当前命名与迁移（2026-10-09）
+
+唯一数学实现已统一，公共头仍为 `pcv/registration/handeye_transform.h`，实际 namespace 为 `pointcloud::`。`pcv::coordinates` 是待提供的规范门面，不是已经完成的整体改名。后续只迁生产边界并保留底层类型兼容，详见 [开发方案](../development/module_convergence_v0.4.md)。本次未重跑手眼测试或现场方向校验。
 
 ## 变更记录
 

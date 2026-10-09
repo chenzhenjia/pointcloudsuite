@@ -1,5 +1,7 @@
 # 代码构成
 
+> 文档状态：当前参考。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
+
 本文档描述当前 v0.4 代码边界。模块迁移和 UI 交接以 `module_ui_integration_v0.4.md` 为准；详细 API 和字段以公共头、CMake 和测试为准，v0.3 文档只保留数据契约。
 
 ## 规范模块
@@ -11,13 +13,13 @@
 | `pcv_m30_pointcloud_stitch` | 多帧输入、ICP/多帧配准、坐标转换调用、seam fusion、诊断和 manifest（唯一拼接编排） | 10、50、Qt Core/Gui/Concurrent |
 | `pcv_m40_pointcloud_matching` | 规划中的工件位置确认占位；当前为 30/60 的 `INTERFACE` 兼容聚合 | 30、60 |
 | `pcv_m50_coordinate_conversion` | XML 标定、位姿插值、坐标转换（唯一数学实现） | `pcv_core`、Qt Core/Gui |
-| `pcv_m60_geometry_workpiece` | 平面/边缘几何、ROI、WObj、临时工件流程和诊断 | 10、50、Qt Core/Gui |
+| `pcv_m60_geometry_workpiece` | 平面/边缘几何、ROI、WObj、临时工件、扫描规划、严格栅格纹理和诊断 | 10、50、Qt Core/Gui |
 
 实验相机能力由 `PCV_BUILD_EXPERIMENTAL_CAMERA` 控制，位于 `pcv_m10_pointcloud_io`
 （`pcv::camera` 头与实现）。无 SDK 时仍可构建纯函数转换与 Mock 源；真实 Mv3dLp 编译
 仅在 SDK 存在时启用。相机取流不属于 v0.4 稳定发布基线。
 
-`pcv::io::ArtifactTransaction` 是 PNG、PLY、JSON 和 manifest 的唯一提交边界。30/60 只返回领域结果和 manifest，不直接写最终目录。
+`pcv::io::ArtifactTransaction` 是 PNG、PLY、JSON 和 manifest 的唯一提交边界。30/60 的现有业务入口也会编排事务 staging/commit；最终文件操作由 10 实施。将领域计算与提交编排进一步分离属于目标状态，不把现有入口描述为纯返回结果。
 
 历史目录名 `05_camerainput`、`10_pointcloudread`、`20_pointcloudrender`、
 `30_pointcloudstitch`、`40_pointcloudregistration`、`50_coordinateconversion`、
@@ -41,4 +43,4 @@
 header 在迁移期保留，只做 target/header 转发，不再增加新功能。删除前必须完成引用审计、
 全量构建、CTest、GUI 和真实夹具验收，并单独提交。
 
-最后核对日期：2026-09-17（v0.4 模块聚合与事务输出边界同步后）。
+最后核对日期：2026-10-09（文档静态核对）（v0.4 模块聚合与事务输出边界同步后）。

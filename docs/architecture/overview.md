@@ -1,5 +1,7 @@
 # 架构概览
 
+> 文档状态：当前参考。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
+
 PointCloudSuite v0.4 是多应用 CMake 工作区。应用依赖共享模块，共享模块不得反向依赖应用。迁移与 UI 交接真相源见 `module_ui_integration_v0.4.md`。
 
 ## 分层结构
@@ -16,7 +18,7 @@ modules/
   30_pointcloud_stitch  多帧拼接、ICP、seam fusion、manifest（唯一拼接编排）
   40_pointcloud_matching 工件位置确认规划占位（移动判定未实现）
   50_coordinate_conversion 手眼标定、位姿插值、坐标变换（唯一数学实现）
-  60_geometry_workpiece 平面、边缘、ROI、WObj、临时工件
+  60_geometry_workpiece 平面、边缘、ROI、WObj、临时工件、扫描规划、栅格纹理
 src/                  基础设施和兼容聚合 target
 tests/                CTest 测试
 tools/                可选诊断工具
@@ -34,7 +36,7 @@ tools/                可选诊断工具
 - `40_pointcloud_matching` 是规划中的工件位置确认占位，当前仅为 30/60 的兼容聚合。
 - seam fusion 实现与公共类型位于 `30_pointcloud_stitch` 的 stitching 目录。
 - `50_coordinate_conversion` 是旋转、位姿插值和手眼变换的唯一数学实现来源。
-- `60_geometry_workpiece` 负责平面、边缘、ROI、WObj 和临时工件。
+- `60_geometry_workpiece` 负责平面、边缘、ROI、WObj、临时工件、扫描规划和严格原始栅格亮度映射；扫描规划与同事负责的全剖/点剖刀路规划是不同能力。
 - 应用负责 UI、异步任务和用户提示。
 - 运行数据不得写入源码树。
 
@@ -56,7 +58,7 @@ tools/                可选诊断工具
 `pointcloudstitch` 使用 `pcv_m10_pointcloud_io`、`pcv_m30_pointcloud_stitch` 和
 `pcv_m50_coordinate_conversion`；生产链统一调用 30 的 `StitchingRequest`/`stitch()`，不直接维护 ICP、seam fusion 或最终 PLY writer。
 
-`registration_diagnostic` 通过 30 的统一拼接接口调用流水线；新调用使用 `pcv::interface::StitchingRequest` / `stitch()`，旧 `stitchRawLineProfiles` 仅兼容。
+`registration_diagnostic` 当前仍使用 30 的 `pcv::interface::StitchingOptions` / `stitchRawLineProfiles()`，CMake 仍链接旧 10 target 和 40 聚合 target。迁到分组式 `StitchingRequest` / `stitch()` 与规范 target 属于待办，不把该工具描述为已完成迁移。
 
 `intensity_viewer` 仅在 `PCV_BUILD_EXPERIMENTAL_CAMERA=ON` 且至少构建一个桌面应用时生成；它使用 `pcv_m10_pointcloud_io` 和 Qt Widgets 预览有效完整扫描的亮度图，属于实验性相机能力。
 
@@ -70,4 +72,4 @@ tools/                可选诊断工具
 `pcv_interface`、`pcv_output`）保留为迁移期兼容入口，只做 target/header 转发。
 新代码一律使用规范 target；删除旧入口前需完成引用审计、全量构建、CTest、GUI 和真实夹具验收。
 
-最后核对日期：2026-09-17（v0.4 模块、应用入口和 UI 交接边界同步后）。
+最后核对日期：2026-10-09（文档静态核对）（v0.4 模块、应用入口和 UI 交接边界同步后）。

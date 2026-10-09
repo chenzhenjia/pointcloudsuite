@@ -1,6 +1,8 @@
 # 05_camerainput：海康 Mv3dLp 点云取流模块
 
-> 历史模块：2026-09-06 已并入 v0.4 `10_pointcloud_io`（`modules/10_pointcloud_io`，target `pcv_m10_pointcloud_io`）。相机公共头 `pcv/camera/*`、帧转换、`LatestFrameSlot`、Mock 源、扫描组帧与可选 Mv3dLp 实现均随目录迁入；相机为 `PCV_BUILD_EXPERIMENTAL_CAMERA` 可选实验能力，无 SDK 仍可构建纯函数转换与 Mock 源，真实 Mv3dLp 编译需 SDK。旧 target `pcv_m05_camerainput` 保留为兼容 INTERFACE，转发到 `pcv_m10_pointcloud_io`。以下内容为并入前的历史记录，不再作为当前规范；正文中旧 target 和独立模块目录等表述仅用于追溯。当前规范见 [10_pointcloud_read.md](10_pointcloud_read.md)（文件名保留旧名称）。
+> 文档状态：历史与兼容索引。整理日期：2026-10-09（仅静态核对）。规范入口：[10_pointcloud_io.md](10_pointcloud_io.md)；总索引：[docs/README.md](../README.md)。正文和带日期的验证结论保留用于追溯，当前实现请查规范入口。
+
+> 历史模块：2026-09-06 已并入 v0.4 `10_pointcloud_io`（`modules/10_pointcloud_io`，target `pcv_m10_pointcloud_io`）。相机公共头 `pcv/camera/*`、帧转换、`LatestFrameSlot`、Mock 源、扫描组帧与可选 Mv3dLp 实现均随目录迁入；相机为 `PCV_BUILD_EXPERIMENTAL_CAMERA` 可选实验能力，无 SDK 仍可构建纯函数转换与 Mock 源，真实 Mv3dLp 编译需 SDK。旧 target `pcv_m05_camerainput` 保留为兼容 INTERFACE，转发到 `pcv_m10_pointcloud_io`。以下内容为并入前的历史记录，不再作为当前规范；正文中旧 target 和独立模块目录等表述仅用于追溯。当前规范见 [10_pointcloud_io.md](10_pointcloud_io.md)；旧 [10_pointcloud_read.md](10_pointcloud_read.md) 保留历史正文。
 
 状态（并入前）：实验中（2026-09）；根 CMake 默认构建，`scripts/build_windows.ps1` 默认关闭，仍需实机验收后才能纳入发布基线。
 需求登记：启用 3DMVS 回调取流；DP2240 默认请求 `Range_Image=7`，将 SDK 原始深度回调转换并组装为完整 ABC32f 扫描。

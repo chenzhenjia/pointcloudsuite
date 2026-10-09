@@ -1,5 +1,7 @@
 # PointCloudSuite v0.4 模块与 UI 交接中间文档
 
+> 文档状态：当前参考。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
+
 ### 2026-10-08：PointCloudStitch 快速重叠精配准接入
 
 - 30 唯一实现 `RegistrationProfile::PoseOverlapFine`，50/10 的数学与事务契约不变，40 仍仅兼容转发。API 默认 Legacy；PointCloudStitch UI 默认位姿粗配准＋两层重叠区精配准。
@@ -7,7 +9,7 @@
 - 新模式质量仅警告，不执行旧结构验收/2.5D/seam；`fine_applied` 与 `pose_fallback` 不能被 UI 显示为“严格通过”。正式 PLY/映射/manifest 事务提交，无预览，报告 `strict_validation_status=not_run`；输出身份与几何质量分开。
 - GUI 参数与模式/覆盖确认允许变更，窗口生命周期和异步调度不变。文件、位姿、转换、取消或写出错误仍不发布部分结果。验收与未验证项参见模块 30 当次记录。
 
-状态：架构冻结草案（2026-09-22）。本文件是模块重整、UI 同事接入和后续交接的协同真相源；源码、CMake、公共头和测试优先级高于历史文档。本轮已完成扫描规划接入的 Debug/Release 构建和 CTest，GUI 真实点云全流程仍待人工验收。
+状态：v0.4 协同约束与迁移记录（2026-10-09 静态核对）。正式需求与实现状态见 [v0.4 基线](../requirements/pointcloudview_v0.4.md)，后续批次见 [开发方案](../development/module_convergence_v0.4.md)，业务目标与代码变更追加到 [target.md](../../target.md)。源码、CMake、公共头和测试是实现事实来源；本次未构建、未运行 CTest/GUI，下方带日期的验证只对应当次变更。
 
 ## 1. 六模块职责与数据流
 
@@ -18,7 +20,7 @@
 |30 pointcloud_stitch|`modules/30_pointcloud_stitch` / `pcv_m30_pointcloud_stitch`|多帧拼接编排、ICP、多帧配准、seam fusion、诊断、manifest|10/50|
 |40 pointcloud_matching|`modules/40_pointcloud_matching` / `pcv_m40_pointcloud_matching`|规划中的工件位置确认占位；本版不实现移动判定|30/60（兼容聚合）|
 |50 coordinate_conversion|`modules/50_coordinate_conversion` / `pcv_m50_coordinate_conversion`|手眼标定、位姿插值、坐标变换唯一实现（`T_base_depth = T_base_flange * T_flange_depth`）|core|
-|60 geometry_workpiece|`modules/60_geometry_workpiece` / `pcv_m60_geometry_workpiece`|平面拟合、平面/边缘几何、ROI、WObj、临时工件、扫描路径规划|10/50|
+|60 geometry_workpiece|`modules/60_geometry_workpiece` / `pcv_m60_geometry_workpiece`|平面拟合、平面/边缘几何、ROI、WObj、临时工件、扫描路径规划、严格栅格纹理|10/50|
 
 数据流固定为：输入 PLY/相机帧 → 10 读取/预处理 → 50 转换到 `robot_base` → 30 拼接或 60 几何处理 → 10 事务 staging/commit → 应用/UI 展示。共享模块不得依赖 `apps/`。
 
@@ -38,10 +40,26 @@
 |`modules/60_plane_fitting`|`modules/60_geometry_workpiece`；`pcv_m60_plane_fitting`/`pcv_m60_planefitting` 转发|
 |`modules/70_roi_template`|实现迁入 60，target/header 兼容转发|
 |`modules/80_plane_output`|实现迁入 10，target/header 兼容转发|
-|`src/filtering` / `pcv_filtering`|实现迁入 10 `pcv::processing`，旧 target/header 转发|
+|`src/filtering` / `pcv_filtering`|实现迁入 10；头路径 `pcv/processing/`，实际 namespace `pcv::detail::filtering`；旧 target/header 转发|
 |`pcv::detail::io`、`pointcloud::`|保留一个版本周期；新 API 优先 `pcv::io/stitching/coordinates/geometry/workpiece`|
 
-重命名按三批执行：公共边界 → 应用/UI → 历史兼容清理。每批均需维护映射和编译验证，不允许无记录批量替换。
+### 当前 API 与目标 namespace（迁移未完成）
+
+| current_header | current_namespace | target_namespace | migration_state |
+|---|---|---|---|
+| `pcv/io/ply_reader.h`、`cloud_cache.h`、`ply_writer.h` | `pcv::detail::io` | `pcv::io` | 生产调用仍使用旧 namespace |
+| `pcv/processing/*` | `pcv::detail::filtering` | `pcv::io` 预处理门面 | 路径已迁，namespace 未迁 |
+| `pcv/io/plane_output.h` | `pcv::output` | `pcv::io` | 正式 writer 实现在 10，旧 namespace 保留 |
+| `pcv/io/artifact_transaction.h` | `pcv::io` | `pcv::io` | 已落地 |
+| `pcv/interface/stitching_interface.h` | `pcv::interface` | `pcv::stitching` | 分组请求已落地，内部仍映射旧 Options |
+| `pcv/stitching/multiframe_registration.h`、seam/heightmap 头 | `pointcloud::` | `pcv::stitching` 门面 | 底层类型暂保留兼容 |
+| `pcv/registration/handeye_transform.h` | `pointcloud::` | `pcv::coordinates` | 数学已统一，namespace 未迁 |
+| `pcv/planefitting/plane_fitting.h` | `pcv::planefitting` | `pcv::geometry` | 待提供公共门面 |
+| `pcv/workpiece/temp_workpiece_geometry.h`、`roi_matching.h` | `pcv::roi`、`pcv::matching` | `pcv::geometry/workpiece` | 路径不等于 namespace |
+| `pcv/workpiece/temp_workpiece_interface.h` | `pcv::interface` | `pcv::workpiece` | 待迁生产调用 |
+| `pcv/scan/*`、`pcv/texture/*`、`pcv/camera/*` | `pcv::scan/texture/camera` | 同当前 | 保持独立领域接口 |
+
+本轮确定策略：生产调用迁到新门面，底层旧类型/namespace 通过 alias/forwarding 保留；不进行底层全部改名。代码迁移按公共边界 → 应用/UI → 兼容审计分批，清理删除独立安排。编译验证属于后续验收；2026-10-09 仅执行文档静态检查。
 
 ### 命名与弃用规则
 
@@ -49,19 +67,21 @@
 - 类型：`PascalCase`；函数和局部变量：`lowerCamelCase`；常量：`kPascalCase`。
 - JSON 字段：`snake_case`，单位写入字段名，例如 `_mm`、`_deg`、`_ms`。
 - 新公共 API 使用 `pcv::io`、`pcv::stitching`、`pcv::coordinates`、`pcv::geometry`、`pcv::workpiece`。
-- 旧 `pointcloud::`、`pcv::detail::*`、旧 target 和旧 header 保留一个版本周期，并以 `[[deprecated]]` 或 forwarding 入口标记；兼容层不得新增实现。
+- 旧 `pointcloud::`、`pcv::detail::*`、旧 target 和旧 header 保留一个版本周期，按迁移批次以 `[[deprecated]]` 或 forwarding/说明标记；当前并非全部标记完成。namespace 本身不用统一弃用属性，兼容层不得新增实现。
 - 每批重命名必须更新本映射表、直接依赖构建结果和回滚点，禁止无记录的全文批量替换。
 
 ## 4. 公共 API 与数据约定
 
-- 30 提供分组式 `pcv::interface::StitchingRequest`（`input`、`registration`、`seam`、`artifacts`）和 `stitch()`；旧 `StitchingOptions` 标记 `[[deprecated]]` 并映射到新接口。
+- 30 提供分组式 `pcv::interface::StitchingRequest`（`input`、`registration`、`seam`、`artifacts`）和 `stitch()`；旧 `StitchingOptions` 已标记 `[[deprecated]]`，但当前 `stitch(request)` 内部仍映射 Options 并调用旧入口；反向适配是待实施任务。registrationdialog 与 registration_diagnostic 仍调用旧入口。
 - 10 提供 `pcv::io::ArtifactTransaction`：`stageBinaryPly`、`stageGrayscalePng`、`stageJson`、`commit`、`abort`。相对路径必须位于输出根目录；默认拒绝覆盖，可选 `allowOverwrite`；取消、失败时回滚并清理 staging/backup。
-- PLY 正式输出为 binary little-endian；PNG 为 `Grayscale8` 且像素归一化为 0/255；JSON 字段 `snake_case`，单位写入字段名（`_mm`、`_deg`、`_ms`）。
+- PLY 正式输出为 binary little-endian；正式 Mask PNG 为 `Grayscale8` 0/255，显示亮度纹理保留 0～255。`stageGrayscalePng` 会二值化，不能作为保真亮度 writer；`stageJson` 写序列化 bytes，schema 校验由领域调用方承担。JSON 命名规范为 `snake_case` + 单位后缀，但既有字段不因命名整理而改名。
 - 坐标约定：`robot_base`；控制器位姿 `[X,Y,Z,A,B,C]`，`A=Rx`、`B=Ry`、`C=Rz`，旋转 `Rz(C)*Ry(B)*Rx(A)`；长度 mm、角度 deg。
 - 手眼链：`RTmatDepth2robot` = `T_flange_depth`（flange_from_depth）；`p_robot_base = T_base_flange(Start/End 插值) * T_flange_depth * p_camera`。禁止默认求逆，禁止固定 Z 翻转/镜像/180° 补丁。`LineProfileXz` 的相机点是 `[X,0,Z]`，输入 Y 只表示扫描进度（`ratio = y / signedTravel`）；`FullXyz` 保留完整 XYZ；法向与点共用同一旋转且不平移。
-- 30/60 只生成领域结果和 manifest；正式文件由 10 事务提交。取消不得发布部分结果或复用旧正式输出。
+- 当前 30/60 业务入口会编排领域计算与 10 事务 staging/commit；最终文件操作归 10。纯结果/manifest 与提交编排的进一步分离属于目标状态，现有便利入口继续保持行为。取消不得发布部分结果或复用旧正式输出。
 
 ## 5. 文件所有权白名单
+
+后端 owner：陈振佳；前端/外部项目 owner：于海军（职责基线见 target.md）。新增文件必须在交接包登记实际 owner。
 
 主线维护：`modules/**`、`src/**`、`apps/pointcloudview/mainwindow.*`、根 CMake、稳定公共头、模块测试和本文件。
 
@@ -70,6 +90,8 @@ UI 同事限定：`apps/pointcloudview/features/**`、`apps/pointcloudview/ui/` 
 临时 adapter 只能位于 `apps/pointcloudview/adapters/**`，文件头必须标记 `Experimental` 或 `Deprecated`，并注明 owner、创建日期、替代 API、删除条件和截止版本；不得成为模块间长期依赖。
 
 ## 6. UI 与刀路规划接入边界
+
+扫描轨迹是现有相机采集路径；高点标注、全剖/点剖刀路算法和外部项目接入由同事负责，后端只提供公共能力与版本化契约边界。外部 schema 名称/DTO 版本/调用方式以及 QWidget/QDialog 页面形态在同事交接包冻结后接入；未冻结前不得声明完成。本轮不统一 pointcloudstitch 视觉。
 
 扫描路径规划属于 60 模块领域 API。`pcv::scan::planScanTrajectory()` 支持 `Global`（拟合平面有效点）和 `LocalRoi`（当前 ROI 有效点，规划阶段不重新拟合），固定使用 WObj1 X 作为横向覆盖轴、Y 作为行程轴，产品方向固定为 `+Y → -Y`。默认 `scanHeightMm=50`、`cameraWidthMm=100`、`overlapMm=50`、两端延长 `travelExtensionMm=50`；模块从 WObj1 XY 投影包围盒自动计算中心、原始/最终行程和扫描带。P 点 ABC 直接取 WObj1 姿态，返回连续 `P0/P1...` 轨迹点、独立扫描线段、项目 `scan_trajectory_v1` JSON 和 InoRobot `sr2026-p-json-mvp-2` 兼容 JSON。应用/UI 只负责参数转换、结果展示和文件接入，不实现第二套路径算法；本版不做 IK、关节限位、碰撞或干涉平面检查。
 
@@ -90,14 +112,14 @@ handoff/
   risks_and_rollback.md 已知问题、删除条件、回滚点
 ```
 
-验收门禁：Debug/Release 新构建目录可配置；本轮双配置全量 CTest 均 `16/16`；`pointcloudview` 启动冒烟通过，新页面真实点云全流程 GUI smoke、JSON/PLY 现场数据、机器人夹具、40 移动判定和刀路算法仍明确标记为未验收。Release `windeployqt` 仍提示本机缺少 Visual Studio release redistributable，便携部署未验收。
+当前门禁：文档链接/状态/API/target 静态一致性和 `git diff --check`。本次不运行 Debug/Release 构建、CTest 或 GUI；历史 `16/16` 等计数仅对应下方各日期。后续软件验收需要源码树外可写构建、动态回归、主窗/feature GUI smoke 与真实数据；40 移动判定、刀路算法和现场机器人验收不属于已完成能力。Release 便携部署风险参见历史 windeployqt 记录，不宣称本次已重新检查。
 
 ### 2026-09-30 扫描规划验收补充
 
 - Debug/Release 构建成功；双配置全量 CTest 均 `16/16`，`scan_planner_tests` 双配置通过；`pointcloudview` 双配置自关闭启动冒烟均退出码 `0`；`git diff --check` 通过。
 - GUI 人工 LocalRoi 单线/多线、参数修改、固定方向、P.json 导出和旧结果失效未完成，原因是 computer-use connector 返回 `unsupported Codex auth method: apikey`；真实相机、机器人可达性、碰撞/干涉和控制器导入仍需现场验收。
 
-## 9. 2026-09-20：PLY 临时工件线路接入记录
+## 8. 历史记录：2026-09-20 PLY 临时工件线路接入
 
 主模块 `60_geometry_workpiece`；协作 `50_coordinate_conversion`、`10_pointcloud_io`；UI 编排 `apps/pointcloudview/mainwindow.*`（仍属主线维护白名单）。
 
@@ -124,7 +146,7 @@ handoff/
 - 发布边界：本次仅发布 PLY/JSON 临时工件状态机、取消/失败语义、模块 60 共享转换路径、对应测试和文档；既有模块 30/PointCloudStitch 工作区修改不纳入。
 - GUI smoke、真实线扫 PLY/XML、机器人夹具和 WObj1 朝向仍需人工现场验收。
 
-## 11. 2026-09-24：手眼标定统一与点云倒转修复
+## 9. 历史记录：2026-09-24 手眼标定统一与点云倒转修复
 
 主模块 `50_coordinate_conversion`；调用方清理：`apps/pointcloudstitch/regressionrunner.cpp`、`apps/pointcloudview/pointcloudprocessor.cpp`。
 
@@ -188,3 +210,10 @@ handoff/
 - 新增 `plane_fitting_equivalence_tests_v2`：密集/重复/不均匀密度、断开和临界连接、噪声倾斜、垂直、控制点跨域、非法输入与 deferred 路径；保留额外共享副本，对比串行与 1/2/4 任务完整结果，覆盖取消及 join 后生命周期。原算法 Debug/Release 生成的完整字段黄金摘要用于同工具链严格回归。
 - 基准、输入副本、优化前源码/程序和完整结果位于 `C:\pcv-build\fitbench-baseline`；6300000 点原始 PLY 的 SHA256 为 `BE0552A1ADD1D64208F53B3D0F460CF9AC6BA3087EF332998D91F22F4AF246A1`。固定测试组覆盖上表面不同位置和低平面，每组预热一次、正式五次，不计读取/转换/结果序列化耗时。
 - 验收尚未完成：用户确认实际控制点和 Start/End 参数未确定，暂不能保存真实 robot_base 测试输入或验收临时工件 PLY/JSON GUI。模块性能不能替代从第三点到完整显示的 GUI 验收；最终构建、CTest、性能数据及风险以本轮最终验证记录为准。
+
+## 10. 2026-10-09：文档整理与后续开发登记
+
+- 统一正式 v0.4 基线、10/60 规范入口和目标/实际 namespace 映射；旧文档保留正文，当前入口与历史记录分开。
+- 当前待办：分组请求反向适配、registrationdialog/诊断工具生产调用迁移、10/50/60 公共门面与工具 target 收敛；没有在本次文档整理中实施代码迁移。
+- 回滚点：本轮开始时工作区干净，变更全部为 Markdown 独立 diff；不触及源码、CMake、数据产物、提交或远端。
+- 验证：本轮仅静态核对与 diff 检查，未运行构建、CTest 或 GUI。所有代码更新继续追加到 target.md 和对应模块文档。

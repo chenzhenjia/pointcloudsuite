@@ -1,5 +1,7 @@
 # 平面与临时工件输出契约 v0.1
 
+> 文档状态：历史归档。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../README.md)。正文和带日期的验证结论保留用于追溯，当前实现请查规范入口。
+
 > 状态：历史契约归档。当前实现以 `docs/architecture/module_ui_integration_v0.4.md`、`docs/requirements/pointcloudview_v0.3.md`、`modules/10_pointcloud_io` 的 `pcv::io::ArtifactTransaction` 和源码测试为准。本文保留 v0.1 契约事实，不作为当前唯一规范。最后核对日期：2026-09-17。
 
 文件名保留 `proposal` 后缀以兼容已有引用，但当前实现以源码常量和测试为准。

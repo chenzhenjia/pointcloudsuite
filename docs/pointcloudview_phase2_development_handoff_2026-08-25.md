@@ -1,5 +1,7 @@
 # PointCloudView 第二阶段开发交接记录
 
+> 文档状态：历史归档。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](README.md)。正文和带日期的验证结论保留用于追溯，当前实现请查规范入口。
+
 > 状态：历史交接归档。本文记录阶段性状态；当前模块、UI 交接和回滚边界以 `docs/architecture/module_ui_integration_v0.4.md` 为准，数据契约以 v0.3 文档及源码为准。最后核对日期：2026-09-17。
 
 更新时间：2026-08-25  

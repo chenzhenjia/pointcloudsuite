@@ -1,5 +1,7 @@
 # minimal plane output v0.1
 
+> 文档状态：历史归档。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../../../docs/requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../../../docs/README.md)。正文和带日期的验证结论保留用于追溯，当前实现请查规范入口。
+
 > 状态：历史示例归档。该示例用于说明 v0.1 文件结构，不代表当前生产输入或 v0.4 验收。当前模块/输出边界请参阅 `docs/architecture/module_ui_integration_v0.4.md`，字段契约请参阅 `docs/requirements/pointcloudview_v0.3.md`。最后核对日期：2026-09-17。
 
 这是 `sr2026-temp-workpiece-info-mvp-2` 契约的最小非生产示例。

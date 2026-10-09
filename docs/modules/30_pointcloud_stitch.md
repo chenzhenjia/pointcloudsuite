@@ -1,5 +1,7 @@
 # 30_pointcloud_stitch：多帧拼接（唯一编排模块）
 
+> 文档状态：当前参考。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
+
 ### 2026-10-08（位姿粗配准＋重叠区快速精配准）
 
 - 主模块 30，复用 50 坐标转换及 10 `ArtifactTransaction`；40 不新增实现。`IcpOptions.profile` 默认为 `RegistrationProfile::Legacy`，GUI 默认新 `PoseOverlapFine`，旧完整配准和仅位姿转换入口保留。
@@ -17,7 +19,17 @@ seam fusion 实现与公共类型位于本模块 `include/pcv/stitching/`（`sea
 
 接口：分组式 `pcv::interface::StitchingRequest`（`input`、`registration`、`seam`、`artifacts`）、`StitchingResult`、`stitch()` 和 `applyTrajectorySeamFusion`。旧 `StitchingOptions` / `stitchRawLineProfiles` 为弃用兼容入口。测试：`stitching_interface_tests`、`multiframe_registration_tests`、`seam_fusion_tests` 和并行等价测试。应用只负责输入组织、进度、窗口状态和结果展示。
 
-最后核对日期：2026-09-17。本文件历史正文中出现的旧名称与旧职责表述为当时状态，仅用于追溯。2026-09-17 之后的验证结论必须单独记录；本轮文档同步未运行 CTest。
+最后核对日期：2026-10-09（文档静态核对）。本文件历史正文中出现的旧名称与旧职责表述为当时状态，仅用于追溯。2026-09-17 之后的验证结论必须单独记录；本轮文档同步未运行 CTest。
+
+## 当前实现与兼容待办（2026-10-09 静态核对）
+
+`StitchingRequest/stitch()` 已公开，但内部仍组装 `StitchingOptions` 并调用旧实现；反向适配尚未实施。`registrationdialog` 和 `registration_diagnostic` 仍用旧 Options/入口，工具 CMake 仍链接旧 10 与 40 聚合 target。算法头位于 `pcv/stitching/`，实际 namespace 主要是 `pointcloud::`；目标 `pcv::stitching` 门面不是全部已落地。
+
+现有 30 入口会编排 10 的事务，不能描述为全部只返回 manifest。API 默认 Legacy，GUI 默认 PoseOverlapFine；快速模式质量仅警告、回退位姿继续的政策不适用于取消/输入/映射/事务错误。`formal_output` 仅表示提交，严格验收 `not_run`。
+
+当前测试登记包括 `pose_overlap_fine_tests`；本次不运行测试，不把历史重复回归的“正在/已执行”写为本轮通过。收敛顺序见 [开发方案](../development/module_convergence_v0.4.md)。
+
+## 历史变更与验证记录
 
 ### 2026-09-18（2.5D 高程图配准受控迭代）
 

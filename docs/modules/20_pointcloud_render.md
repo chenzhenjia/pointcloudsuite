@@ -1,5 +1,7 @@
 # 20_pointcloud_render：点云渲染
 
+> 文档状态：当前参考。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
+
 状态：迁移完成，真实桌面验收待完成。规范实现位于 `modules/20_pointcloud_render`，应用仅负责业务状态和 DTO 转换。
 
 规范目录：`modules/20_pointcloud_render`；模块 target：`pcv_m20_pointcloud_render`；旧 target `pcv_m20_pointcloudrender` 保留为迁移期兼容入口（仅转发）。
@@ -8,7 +10,11 @@
 
 接口/测试：`PointCloudCanvas`、`pointcloud_canvas_contract_tests`；真实 Windows 桌面交互和关闭生命周期需单独验收。
 
-最后核对日期：2026-09-17。实现位于 `modules/20_pointcloud_render/src/pointcloud_canvas.cpp`。UI 同事工作区与 adapter 边界见 v0.4 协同文档；本文件历史正文中的旧名称为当时名称，仅用于追溯。
+最后核对日期：2026-10-09（文档静态核对）。实现位于 `modules/20_pointcloud_render/src/pointcloud_canvas.cpp`。UI 同事工作区与 adapter 边界见 v0.4 协同文档；本文件历史正文中的旧名称为当时名称，仅用于追溯。
+
+## 当前纹理覆盖边界（2026-10-09）
+
+`PointColorOverlay` 和 per-point 灰度覆盖已有实现，采样来源由 60 的严格 source raster 映射提供；渲染层只校验 DTO 并在 GUI 线程上传。点云/平面索引变化清除覆盖，同一平面边缘结果更新与 WObj1 修改保留覆盖；旧记录中的坐标系变化清除规则已被后续严格栅格规则取代。真实视觉方向与大点云 OpenGL 性能未在本次验收。
 
 ## 变更记录
 

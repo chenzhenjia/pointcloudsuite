@@ -1,5 +1,7 @@
 # 依赖与构建环境
 
+> 文档状态：当前参考。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](docs/requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](docs/README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
+
 ## 必需环境
 
 - Windows 10 或 Windows 11
@@ -29,4 +31,4 @@ Windows 构建会使用 Qt 的 `windeployqt` 部署运行库和插件。构建�
 
 v0.4 模块重整未增加外部依赖；模块与 UI 交接边界见 `docs/architecture/module_ui_integration_v0.4.md`。
 
-最后核对日期：2026-09-17。
+最后核对日期：2026-10-09（文档静态核对）。

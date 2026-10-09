@@ -1,5 +1,7 @@
 # 40_pointcloud_matching
 
+> 文档状态：规划占位与兼容边界。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../../docs/requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../../docs/README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
+
 ## 当前状态
 
 规划占位。40 的正式声明是工件位置确认能力，但本版不实现移动判定或新输出闭环。多帧 ICP 已迁入 30，ROI/临时工件几何已迁入 60；`pcv_m40_pointcloud_matching` 与 `pcv_m40_pointcloudregistration` 仅为兼容聚合入口。
@@ -14,4 +16,4 @@
 
 不得依赖应用或 Qt Widgets。现有多帧 ICP/结构校验测试归 30，ROI/临时工件测试归 60；40 当前没有可声明为通过的移动判定测试。
 
-最后核对日期：2026-09-17（40 调整为规划占位后复核）。
+最后核对日期：2026-10-09（文档静态核对）（40 调整为规划占位后复核）。

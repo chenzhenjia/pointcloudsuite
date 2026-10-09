@@ -1,12 +1,14 @@
 # 80_plane_output：工具平面输出
 
+> 文档状态：历史与兼容索引。整理日期：2026-10-09（仅静态核对）。规范入口：[10_pointcloud_io.md](10_pointcloud_io.md)；总索引：[docs/README.md](../README.md)。正文和带日期的验证结论保留用于追溯，当前实现请查规范入口。
+
 状态：兼容入口。PNG、PLY、JSON writer 与事务提交实现已迁入 `modules/10_pointcloud_io` / `pcv_m10_pointcloud_io`；`modules/80_plane_output`、`pcv_m80_plane_output`、`pcv_m80_planeoutput` 与 `pcv_output` 仅转发，不得新增重复实现。
 
 契约：Grayscale8 PNG（0/255）、binary little-endian XYZ PLY、`sr2026-temp-workpiece-info-mvp-2` JSON；通过 `pcv::io::ArtifactTransaction` staging 后成套提交并在失败时回滚。
 
 接口/测试：`writePlaneOutput`；`plane_output_tests`。
 
-最后核对日期：2026-09-17。本文件历史正文中的旧名称与旧实现位置为当时状态，仅用于追溯。
+最后核对日期：2026-10-09（文档静态核对）。本文件历史正文中的旧名称与旧实现位置为当时状态，仅用于追溯。
 
 ## 变更记录
 

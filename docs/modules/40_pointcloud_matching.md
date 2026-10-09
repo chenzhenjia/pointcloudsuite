@@ -1,5 +1,7 @@
 # 40_pointcloud_matching：工件位置确认（规划占位）
 
+> 文档状态：规划占位与兼容边界。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
+
 状态：**规划目标，未实现**。正式声明：对经过点云处理和平面/坐标转换后的数据，生成含 `robot_base` 坐标信息的平面点云数据和坐标元数据，用于确定机器人坐标系中的工件信息；后续可通过基准模板或参考扫描比较，判断工件是否被挪动。
 
 规范目录：`modules/40_pointcloud_matching`；模块 target：`pcv_m40_pointcloud_matching`。当前 target 与旧 `pcv_m40_pointcloudregistration`、`pcv_registration` 均为 `INTERFACE` 聚合/转发入口。多帧 ICP、相邻帧配准和结构校验的规范实现已迁入 30；ROI 匹配和临时工件几何的规范实现已迁入 60。
@@ -8,7 +10,9 @@
 
 测试归属：`multiframe_registration_tests`、`seam_fusion_tests` 归 30；`roi_matching_tests` 归 60。40 的未来位置确认能力尚无功能验收结论。
 
-最后核对日期：2026-09-17。下方记录描述迁移前 40 承载配准/ROI 实现时的历史事实，仅用于追溯；不得据此把 40 的工件移动判定写为已实现。
+最后核对日期：2026-10-09（文档静态核对）。下方记录描述迁移前 40 承载配准/ROI 实现时的历史事实，仅用于追溯；不得据此把 40 的工件移动判定写为已实现。
+
+## 历史变更记录（现有配准归 30，ROI 归 60）
 
 ### 2026-09-18（2.5D 高程图配准契约边界）
 
@@ -134,7 +138,7 @@
 - 融合带中的未匹配点现在显式保留，并累计到 `SeamFusionDiagnostic::unmatchedPreserved`；只有成功匹配的点生成插值结果。
 - 应用 `seamfusion.h/.cpp` 改用 `pcv::SeamFusionOptions/Result/Diagnostic` 类型别名，包装层不再复制结果模型。
 - 应用 `pointcloudprocessor.h` 已改为直接复用 `multiframe_registration.h` 的 `IcpOptions`、`IcpDiagnostics`、`FrameTransformMetadata` 和 `MultiFrameRegistrationResult`；仅保留兼容函数入口和 `WorldCloudInput` 别名。
-# 40_pointcloud_matching：工件位置确认（规划占位）
+### 历史补充：40 规划声明
 
 正式声明：对经过点云处理和平面/坐标转换后的数据，生成含 `robot_base` 坐标信息的平面点云数据和坐标元数据，用于确定机器人坐标系中的工件信息；后续可通过基准模板或参考扫描比较，判断工件是否被挪动。
 

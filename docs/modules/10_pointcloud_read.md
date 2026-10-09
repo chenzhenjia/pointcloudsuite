@@ -1,5 +1,7 @@
 # 10_pointcloud_io：点云读写、相机输入与事务输出
 
+> 文档状态：历史与兼容索引。整理日期：2026-10-09（仅静态核对）。规范入口：[10_pointcloud_io.md](10_pointcloud_io.md)；总索引：[docs/README.md](../README.md)。正文和带日期的验证结论保留用于追溯，当前实现请查规范入口。
+
 公共接口 `pcv::detail::io::inspectPlyHeader()` 仅读取 PLY header 至 `end_header`，返回格式、版本、vertex 数量和 header 错误，不解析点数据；供 `pointcloudcli inspect ply` 和 `registration_diagnostic inspect` 使用。`pcv::detail::io::readPly()` 供 `pointcloudcli read ply` 输出完整点云摘要，保留 ASCII、binary little-endian/big-endian、Bounds、intensity 和取消语义。
 
 状态：已实现。规范实现位于 `modules/10_pointcloud_io/{include,src}`，模块 target 为 `pcv_m10_pointcloud_io`；旧 target `pcv_m10_pointcloud_read`、`pcv_m10_pointcloudread`、`pcv_m05_camerainput`、`pcv_io`、`pcv_filtering` 和 `pcv_m80_plane_output` 为迁移期兼容入口（仅转发）。本文件文件名保留旧名称以避免历史链接失效。

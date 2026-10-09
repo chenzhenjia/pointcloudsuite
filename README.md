@@ -1,21 +1,23 @@
 # PointCloudSuite
 
+> 文档状态：当前参考。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](docs/requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](docs/README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
+
 PointCloudSuite 是基于 Qt 6、C++17 和 CMake 的工业点云处理项目，提供点云查看、平面处理、多帧拼接、配准、坐标转换、成套输出、诊断工具和自动化测试。
 
 ## 当前基线
 
-当前项目进入 v0.4 模块重整阶段。模块边界和 UI 交接以 `docs/architecture/module_ui_integration_v0.4.md` 为准；字段、JSON/PLY 和坐标契约继续以 v0.3 需求文档为准。源码、CMake 和测试是事实来源；历史版本文档仅用于追溯。
+当前项目处于 v0.4 架构与兼容迁移阶段；正式需求基线见 [pointcloudview_v0.4.md](docs/requirements/pointcloudview_v0.4.md)，后续开发方案见 [module_convergence_v0.4.md](docs/development/module_convergence_v0.4.md)，目标与变更记录见 [target.md](target.md)。模块边界和 UI 交接以 `docs/architecture/module_ui_integration_v0.4.md` 为准；字段、JSON/PLY 和坐标契约继续以 v0.3 需求文档为准。源码、CMake 和测试是事实来源；历史版本文档仅用于追溯。
 
 ## 项目组成
 
-- `pointcloudview`：点云读取、渲染、点选、平面拟合、ROI/模板和输出。
+- `pointcloudview`：点云读取、渲染、点选、平面拟合、ROI/WObj、临时工件四件套、扫描规划与严格栅格亮度纹理；原始坐标纹理为独立实验入口。
 - `pointcloudstitch`：线扫点云坐标转换、多帧配准、接缝融合和结果编排。
 - `pointcloudcli`：独立命令行工具；当前提供 `inspect ply`、`read ply`、`temp-workpiece run <job.json>`，以及 `--help`、`--version`。
 - `intensity_viewer`：实验性亮度图预览与手动 PNG 保存工具，仅在 `PCV_BUILD_EXPERIMENTAL_CAMERA=ON` 且至少构建一个桌面应用时生成。
 - 相机（海康 Mv3dLp）实验取流能力：已并入 `modules/10_pointcloud_io`（target `pcv_m10_pointcloud_io`），由 `PCV_BUILD_EXPERIMENTAL_CAMERA` 控制；仍属实验，需实机验收。
 - 规范共享模块为 `10_pointcloud_io`、`20_pointcloud_render`、`30_pointcloud_stitch`、`40_pointcloud_matching`（规划占位）、`50_coordinate_conversion` 和 `60_geometry_workpiece`。
 - `40_pointcloud_matching` 当前只保留兼容聚合入口，尚未实现基准模板、移动判定、机器人执行或正式输出闭环。
-- `registration_diagnostic`：通过 30 的统一拼接接口执行诊断；新调用优先 `StitchingRequest` / `stitch()`，旧 `stitchRawLineProfiles` 仅兼容。支持通用多帧输入、位姿匹配和 `inspect` PLY header 检查。
+- `registration_diagnostic`：通过 30 的统一拼接接口执行诊断；当前仍使用 `StitchingOptions` / `stitchRawLineProfiles()`，分组式请求迁移待完成。支持通用多帧输入、位姿匹配和 `inspect` PLY header 检查。
 - `tests/`：模块和接口回归测试。
 - `docs/`：需求、架构、契约、开发和用户文档。
 
@@ -121,4 +123,4 @@ print(json.loads(result.stdout)["loaded_points"])
 
 详细模块职责见 [v0.4 模块与 UI 交接文档](docs/architecture/module_ui_integration_v0.4.md)、[v0.3 数据契约](docs/requirements/pointcloudview_v0.3.md) 和 [模块文档](docs/modules/)。
 
-最后核对日期：2026-09-17。
+最后核对日期：2026-10-09（文档静态核对）。

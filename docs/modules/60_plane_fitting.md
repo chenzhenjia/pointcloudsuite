@@ -1,8 +1,10 @@
 # 60_geometry_workpiece：工件几何
 
+> 文档状态：历史与兼容索引。整理日期：2026-10-09（仅静态核对）。规范入口：[60_geometry_workpiece.md](60_geometry_workpiece.md)；总索引：[docs/README.md](../README.md)。正文和带日期的验证结论保留用于追溯，当前实现请查规范入口。
+
 状态：已实现，兼容入口保留。规范实现位于 `modules/60_geometry_workpiece/{include,src}`，模块 target 为 `pcv_m60_geometry_workpiece`；`pcv_m60_plane_fitting`、`pcv_m60_planefitting` 和 `pcv_m70_roi_template` 仅转发。职责包括平面拟合与诊断、平面/边缘几何、ROI、WObj、临时工件流程和扫描路径规划；正式文件通过 10 的事务 API 提交。应用入口仅负责参数转换、生命周期和结果映射。本文件文件名保留旧名称以避免历史链接失效。
 
-接口/测试：`pcv::geometry`、`pcv::workpiece`、`pcv::scan`，以及兼容的 `pcv::planefitting::fit`；`plane_fitting_tests`、`roi_matching_tests`、`scan_planner_tests`、`temp_workpiece_interface_tests` 和几何回归测试。
+接口/测试：当前为 `pcv::planefitting::fit`、`pcv::interface` 临时工件接口、`pcv::roi` / `pcv::matching` 几何接口及 `pcv::scan` / `pcv::texture`；目标 `pcv::geometry` / `pcv::workpiece` namespace 尚待迁移；`plane_fitting_tests`、`roi_matching_tests`、`scan_planner_tests`、`temp_workpiece_interface_tests` 和几何回归测试。
 
 最后核对日期：2026-10-08。纯算法实现不得依赖 `apps/` 或 Qt Widgets。本文件历史正文中的旧名称与旧职责为当时状态，仅用于追溯。
 

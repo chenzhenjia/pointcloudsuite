@@ -1,5 +1,7 @@
 # Windows 构建
 
+> 文档状态：当前参考。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
+
 ## 环境要求
 
 - Windows 10/11；
@@ -114,8 +116,14 @@ cmake --build <DebugBuildDir> --config Debug
 ctest --test-dir <DebugBuildDir> -C Debug --output-on-failure
 ```
 
+## 本次文档整理的验证范围（2026-10-09）
+
+本轮按用户要求只做静态检查，不执行本文构建/CTest/GUI 命令。本文保留命令供后续独立验收使用；历史测试计数不能代表当前所有配置。近期新增的 pose-overlap-fine、平面等价提速和纹理实验测试是否启用以 tests/CMakeLists.txt 与构建选项为准，不固定当前总测试数。
+
+后续开发批次和回滚点见 [module_convergence_v0.4.md](module_convergence_v0.4.md)，实际代码变更和验证需同步 [target.md](../../target.md)。
+
 ## 验收原则
 
 修改公共头、CMake、UI、processor 或输出契约后，必须重新配置并构建受影响应用，必要时执行 Debug/Release 全量 CTest。GUI 人工验收和真实生产夹具验收必须单独记录。
 
-最后核对日期：2026-09-17。
+最后核对日期：2026-10-09（文档静态核对）。

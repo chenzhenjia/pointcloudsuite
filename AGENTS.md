@@ -1,5 +1,7 @@
 # PointCloudSuite Agent 工作手册
 
+> 文档状态：当前参考。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](docs/requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](docs/README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
+
 适用范围：本仓库。沟通默认使用中文；代码、命令、变量名、文件名、路径和错误信息保留原文。最后核对日期：2026-09-17。
 
 ## 1. 真相源与安全边界
@@ -300,3 +302,10 @@ IO/输出/接口测试，以及实验相机开关开启时的 `frame_converter_t
 - 本轮源码树外构建目录：`C:\pcv-build\pose-overlap-fine-debug-v1`、`C:\pcv-build\pose-overlap-fine-release-v1`，生成器 `NMake Makefiles`，MSVC `19.51.36252.0`，Qt `C:\Qt\6.8.3\msvc2022_64`。Debug/Release 定向构建已成功；Debug 定向 `stitching_interface_tests`、`seam_fusion_tests`、`multiframe_registration_tests`、`pose_overlap_fine_tests` 已通过，100 次重复回归正在/已执行，以最终命令结果为准。
 - 结构平面路径补充修复 `structuralOverlapPlane()` 返回结构平面时初始化 `axisU/axisV`，避免局部重叠范围退化为 `[0,0]`。测试覆盖水平、`30°/60°/75°`、纯平面可观测自由度、链累计、回退、取消、预算、低覆盖警告及串并行等价。
 - `D:\stitch_test` 当前可见 `hand_eye_convert.xml` 和 PLY，但缺少可安全重放所需的 Start/End 位姿 JSON/TXT 或历史报告；因此 `1/test_1`、`5_40/test`、`6_50/test` 及真实倾斜夹具本轮未作真实回放，不以合成测试替代现场结论。GUI 人工拼接、真实输出质量、PageHeap 和 Release 便携部署仍需补验；Release `windeployqt` 可能受本机 Visual Studio release redistributable 缺失影响。
+
+### 2026-10-09（全仓 Markdown 整理与文档职责校准）
+
+- 本轮仅修改文档；正式需求与状态基线新增 `docs/requirements/pointcloudview_v0.4.md`，模块/UI 协同规则仍在 `docs/architecture/module_ui_integration_v0.4.md`，既有数据契约保留 v0.3。
+- 新建 10/60 规范模块文档；旧 05/10/60/70/80 文档保留正文并作为历史/兼容索引。开发方案见 `docs/development/module_convergence_v0.4.md`；所有代码更新必须同步对应模块文档和 `target.md`，记录日期、文件/API、行为、实际验证及风险。
+- 当前 namespace/API 迁移未完成：工具和 registrationdialog 仍调用旧拼接入口，分组请求内部仍适配旧实现。扫描规划、严格栅格纹理、快速拼接的当前能力按源码写，40/90/100 仍为未实现业务占位。
+- 验证：51 份 Markdown 内容核对、161 个本地链接目标、一级标题、代码围栏和替换字符检查通过，未发现锚点链接；源码与 CMake 静态核对及 `git diff --check` 完成。本轮不运行构建、CTest 或 GUI，不引用历史测试计数作为本次通过。

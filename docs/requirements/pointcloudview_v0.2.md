@@ -1,5 +1,7 @@
 # PointCloudSuite 点云查看与处理程序需求文档
 
+> 文档状态：历史归档。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](pointcloudview_v0.4.md)；总索引：[docs/README.md](../README.md)。正文和带日期的验证结论保留用于追溯，当前实现请查规范入口。
+
 > 状态：历史归档。当前模块/UI 边界请参阅 `docs/architecture/module_ui_integration_v0.4.md`，数据契约请参阅 `docs/requirements/pointcloudview_v0.3.md`。本文仅保留 v0.2 历史事实，不作为当前实现规范。最后核对日期：2026-09-17。
 
 版本：v0.2
