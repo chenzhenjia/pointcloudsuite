@@ -3,12 +3,19 @@ qt_add_executable(pointcloudview
     main.cpp
     mainwindow.cpp
     mainwindow.h
+    cloud_source_context_v1.h
+    workpiece_template_ui_v1.cpp
+    features/workpiece_template_dialog_v1.cpp
+    features/workpiece_template_dialog_v1.h
+    process_memory_usage_v1.cpp
+    process_memory_usage_v1.h
     ui/mainwindow.ui
     renderdialog.cpp
     renderdialog.h
     ui/renderdialog.ui
-    registrationdialog.cpp
-    registrationdialog.h
+    selectedplanedialog.cpp
+    selectedplanedialog.h
+    selected_plane_launcher.h
     pointcloudprocessor.cpp
     pointcloudprocessor.h
     pointcloudview.qrc
@@ -43,7 +50,11 @@ target_link_libraries(pointcloudview
         pcv_m20_pointcloud_render
         pcv_m60_geometry_workpiece
         pcv_m30_pointcloud_stitch
+        pcv_stitching_ui
 )
+if (WIN32)
+    target_link_libraries(pointcloudview PRIVATE Psapi)
+endif()
 if(PCV_BUILD_EXPERIMENTAL_CAMERA)
     target_link_libraries(pointcloudview PRIVATE pcv_m10_pointcloud_io)
     target_compile_definitions(pointcloudview PRIVATE PCV_BUILD_EXPERIMENTAL_CAMERA=1)

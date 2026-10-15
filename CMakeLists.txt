@@ -66,6 +66,9 @@ endif()
 
 add_subdirectory(src)
 add_subdirectory(modules)
+if(PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_POINTCLOUDSTITCH)
+    add_subdirectory(apps/stitching_ui)
+endif()
 
 # Keep the desktop applications directly connected to the root project. This
 # makes both executable targets visible to Qt Creator after CMake reconfigure.

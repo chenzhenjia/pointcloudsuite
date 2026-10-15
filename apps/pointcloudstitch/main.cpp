@@ -1,4 +1,4 @@
-#include "stitchingwindow.h"
+#include <stitchingwindow.h>
 #include "regressionrunner.h"
 
 #include <QApplication>

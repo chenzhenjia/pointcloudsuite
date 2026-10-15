@@ -2,6 +2,8 @@ add_library(pcv_m30_pointcloud_stitch STATIC
     src/stitching_interface.cpp
     src/seam_fusion.cpp
     src/multiframe_registration.cpp
+    src/selected_plane_stitch.cpp
+    include/pcv/stitching/selected_plane_stitch.h
     include/pcv/interface/stitching_interface.h
     include/pcv/stitching/seam_fusion.h
     include/pcv/stitching/seam_fusion_kernel.h

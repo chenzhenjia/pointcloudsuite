@@ -4,6 +4,8 @@
 #include <pcv/infrastructure/application_config.h>
 #include <pcv/scan/scan_planner.h>
 #include <pcv/texture/texture_mapping.h>
+#include <pcv/workpiece/workpiece_template_v1.h>
+#include "cloud_source_context_v1.h"
 
 #include <QMainWindow>
 #include <QElapsedTimer>
@@ -25,7 +27,12 @@ class QPushButton;
 class QPlainTextEdit;
 class QToolButton;
 class QWidget;
+class QTimer;
+class QProgressDialog;
+struct WorkpieceTemplateTaskProgressV1;
 class RenderDialog;
+class StitchingWindow;
+struct StitchingPublication;
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
 class CameraDialog;
 #endif
@@ -56,6 +63,7 @@ private slots:
     void openPointCloudSource();
     void openTempScanningInfo();
     void openMultiFrameRegistration();
+    void stitchingSucceeded(const StitchingPublication &publication);
     void loadSelectedSource();
     void loadFinished();
     void tempWorkpieceFinished();
@@ -90,8 +98,14 @@ private slots:
     void exportInoRobotTrajectory();
     void startSecondPlanePointSelection();
     void cancelSecondPlanePointSelection();
+    void updateMemoryUsage();
+    void createWorkpieceTemplate();
+    void openWorkpieceTemplate();
+    void workpieceTemplateFinished();
 
 private:
+    friend struct StitchingViewTestAccess;
+    friend struct WorkpieceTemplateViewTestAccess;
     // Behavioural state of the single temporary-workpiece workflow. Both data
     // sources (scanning JSON and plain PLY) share it; it gates new data-source
     // opens and keeps cancelled or stale sessions from publishing results.
@@ -126,7 +140,14 @@ private:
     void appendTempWorkpieceOutput(const QString &text);
     void applyDepthRenderRange(const QVector<pointcloud::Point3D> &points);
     void publishCanvasCache(QVector<pointcloud::Point3D> points,
-                            bool preserveTempWorkpieceSession = false);
+                            bool preserveTempWorkpieceSession = false,
+                            CloudSourceContextV1 source = {});
+    bool workpieceTemplateReady() const;
+    void startWorkpieceTemplateSave(pcv::workpiece::SaveWorkpieceTemplateRequest request);
+    void startWorkpieceTemplateLoad(const QString &infoFile);
+    void prepareWorkpieceTemplateTask(bool loading);
+    bool publishWorkpieceTemplateResult(const pcv::workpiece::WorkpieceTemplateResult &result);
+    void cancelAndWaitWorkpieceTemplate();
     bool textureRasterMappingReady(QString *error = nullptr) const;
     void finalizeTempWorkpiece();
     void resetSecondPlaneVerification();
@@ -157,6 +178,8 @@ private:
     QListWidget *m_fileList = nullptr;
     QLabel *m_fileInfo = nullptr;
     QLabel *m_canvasInfo = nullptr;
+    QLabel *m_memoryInfo = nullptr;
+    QTimer *m_memoryTimer = nullptr;
     QProgressBar *m_progress = nullptr;
     QSpinBox *m_pointSize = nullptr;
     QComboBox *m_colorMode = nullptr;
@@ -205,6 +228,7 @@ private:
     QPlainTextEdit *m_scanOutput = nullptr;
     PointCloudCanvas *m_canvas = nullptr;
     RenderDialog *m_renderDialog = nullptr;
+    StitchingWindow *m_stitchingWindow = nullptr;
     QDialog *m_sourceDialog = nullptr;
     QDialog *m_cleanDialog = nullptr;
     QDialog *m_planeDialog = nullptr;
@@ -221,6 +245,19 @@ private:
 #endif
     QVector<pointcloud::Point3D> m_rawPoints;
     QVector<pointcloud::Point3D> m_points;
+    CloudSourceContextV1 m_rawCloudSource;
+    CloudSourceContextV1 m_currentCloudSource;
+    CloudSourceContextV1 m_noiseCloudSource;
+    quint64 m_cloudSourceRevision = 0;
+    QFutureWatcher<pcv::workpiece::WorkpieceTemplateResult> *m_templateWatcher = nullptr;
+    QProgressDialog *m_templateProgressDialog = nullptr;
+    QTimer *m_templateProgressTimer = nullptr;
+    std::shared_ptr<WorkpieceTemplateTaskProgressV1> m_templateProgress;
+    pointcloud::CancellationToken m_templateCancelToken;
+    bool m_templateTaskActive = false;
+    bool m_templateLoading = false;
+    bool m_templateFormActive = false;
+    quint64 m_templateInputRevision = 0;
     qsizetype m_livePreviewPointCount = 0;
     bool m_loading = false;
     QString m_pendingPath;
@@ -228,6 +265,7 @@ private:
     bool m_textureExperimentActive = false;
     QString m_pendingSourcePlyEncoding = QStringLiteral("unknown");
     QStringList m_sourceFiles;
+    QStringList m_stitchingArtifactPaths;
     QString m_sourceDirectory;
     bool m_folderScanOnly = false;
     QFutureWatcher<pointcloud::LoadResult> *m_loadWatcher = nullptr;

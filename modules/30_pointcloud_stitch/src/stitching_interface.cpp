@@ -319,6 +319,10 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         pointcloud::SeamFusionOptions seamOptions;
         seamOptions.enabled = true;
         seamOptions.halfWidth = options.seamHalfWidthMm;
+        seamOptions.mutualDistance = options.seamMutualDistanceMm;
+        seamOptions.decisionCellSize = options.seamDecisionCellSizeMm;
+        seamOptions.parallelEnabled = options.parallelEnabled;
+        seamOptions.maxParallelTasks = options.maxParallelTasks;
         seamOptions.cancellation = cancellationToken;
         seamOptions.isCancelled = cancelled;
         const auto seam = pointcloud::applyTrajectorySeamFusion(&registration, seamOptions);
@@ -493,6 +497,8 @@ StitchingResult stitch(const StitchingRequest &request)
     options.correspondenceParallelTasks = request.registration.correspondenceParallelTasks;
     options.seamEnabled = request.seam.enabled;
     options.seamHalfWidthMm = request.seam.halfWidthMm;
+    options.seamMutualDistanceMm = request.seam.mutualDistanceMm;
+    options.seamDecisionCellSizeMm = request.seam.decisionCellSizeMm;
     options.isCancelled = request.isCancelled;
     options.progress = request.progress;
     return stitchRawLineProfiles(options);

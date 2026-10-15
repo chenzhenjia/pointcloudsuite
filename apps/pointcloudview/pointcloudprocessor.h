@@ -52,7 +52,7 @@ struct NoiseOptions {
 // and Start/End define the scan direction. The progress/direction/coordinate
 // mode knobs below are retained for the merge cache key and for API
 // compatibility only; they no longer select a second conversion algorithm.
-struct WorldCloudInput {
+struct ViewLegacyWorldCloudInput {
     QString filePath;
     QMatrix4x4 startBaseFromFlange;
     QMatrix4x4 endBaseFromFlange;
@@ -78,7 +78,7 @@ struct WorldCloudInput {
     bool applyRobotTransform = true;
 };
 
-struct IcpOptions {
+struct ViewLegacyIcpOptions {
     bool enabled = true;
     int maximumIterations = 30;
     float maximumCorrespondenceDistance = 2.0f;
@@ -108,7 +108,7 @@ struct IcpOptions {
     QVector<float> voxelLevels = {2.0f, 0.8f, 0.25f};
 };
 
-struct IcpDiagnostics {
+struct ViewLegacyIcpDiagnostics {
     QString filePath;
     bool attempted = false;
     bool converged = false;
@@ -130,13 +130,13 @@ struct IcpDiagnostics {
     QString reason;
 };
 
-struct WorldCloudMergeResult {
+struct ViewLegacyWorldCloudMergeResult {
     QVector<Point3D> points;
     QVector<int> cloudIds;
     QVector<qsizetype> sourceIndices;
     QVector<QString> sourceFiles;
     QString diagnostics;
-    QVector<IcpDiagnostics> icpDiagnostics;
+    QVector<ViewLegacyIcpDiagnostics> icpDiagnostics;
     qsizetype pointsBeforeCrossCloudFusion = 0;
     qsizetype crossCloudDuplicateCount = 0;
     float crossCloudFusionVoxelSize = 0.0f;
@@ -376,8 +376,8 @@ LoadResult loadPlyResultWithProgress(const QString &fileName,
 
 // Loads each PLY once, applies its supplied rigid world transform, and
 // concatenates the measured points.  No virtual/centroid points are created.
-WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inputs,
-                                             const IcpOptions &icp = {});
+ViewLegacyWorldCloudMergeResult mergePlyCloudsInWorld(const QVector<ViewLegacyWorldCloudInput> &inputs,
+                                             const ViewLegacyIcpOptions &icp = {});
 
 // HiViewer-style proportional thinning. denominator=1 keeps all points,
 // denominator=2 keeps approximately 1/2, denominator=16 keeps approximately 1/16.

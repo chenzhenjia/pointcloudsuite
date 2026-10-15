@@ -39,6 +39,8 @@ struct StitchingRegistrationGroup {
 struct StitchingSeamGroup {
     bool enabled = false;
     float halfWidthMm = 8.0f;
+    float mutualDistanceMm = 0.6f;
+    float decisionCellSizeMm = 0.5f;
 };
 
 struct StitchingArtifactGroup {
@@ -100,6 +102,8 @@ struct [[deprecated("Use StitchingRequest grouped fields")]] StitchingOptions {
     bool writeDiagnosticFrames = false;
     std::function<bool()> isCancelled;
     std::function<void(float, const QString &)> progress;
+    float seamMutualDistanceMm = 0.6f;
+    float seamDecisionCellSizeMm = 0.5f;
 };
 
 struct StitchingResult {

@@ -38,6 +38,8 @@ public:
         EdgePoint = 2
     };
     std::function<void(int)> pointPicked;
+    // Optional GUI-thread timing hook, immediately before the picking pass.
+    std::function<void()> pointPickingStarted;
     std::function<void(const QRectF &)> edgeRectanglePicked;
 
     explicit PointCloudCanvas(QWidget *parent = nullptr);

@@ -173,11 +173,11 @@ constexpr quint32 MergeCacheVersion = 9;
 QString intermediateDirectory() {
     return pcv::runtime::cacheDirectory();
 }
-QString progressSourceName(WorldCloudInput::ScanProgressSource source);
-QString mergeCachePath(const QVector<WorldCloudInput> &inputs) {
+QString progressSourceName(ViewLegacyWorldCloudInput::ScanProgressSource source);
+QString mergeCachePath(const QVector<ViewLegacyWorldCloudInput> &inputs) {
     if (inputs.isEmpty()) return {};
     QCryptographicHash hash(QCryptographicHash::Sha256);
-    for (const WorldCloudInput &input : inputs) {
+    for (const ViewLegacyWorldCloudInput &input : inputs) {
         hash.addData(QFileInfo(input.filePath).absoluteFilePath().toUtf8());
         hash.addData("\0", 1);
     }
@@ -191,9 +191,9 @@ bool sameTransform(const QMatrix4x4 &a, const QMatrix4x4 &b) {
     return true;
 }
 
-bool readMergeCache(const QVector<WorldCloudInput> &inputs, WorldCloudMergeResult &result) {
+bool readMergeCache(const QVector<ViewLegacyWorldCloudInput> &inputs, ViewLegacyWorldCloudMergeResult &result) {
     for (const auto &input : inputs)
-        if (input.scanDirection == WorldCloudInput::ScanDirection::Auto) return false;
+        if (input.scanDirection == ViewLegacyWorldCloudInput::ScanDirection::Auto) return false;
     QFile file(mergeCachePath(inputs));
     if (!file.open(QIODevice::ReadOnly)) return false;
     QDataStream stream(&file); stream.setByteOrder(QDataStream::LittleEndian);
@@ -270,7 +270,7 @@ bool readMergeCache(const QVector<WorldCloudInput> &inputs, WorldCloudMergeResul
     }
     return result.ok;
 }
-void writeMergeCache(const QVector<WorldCloudInput> &inputs, const WorldCloudMergeResult &result) {
+void writeMergeCache(const QVector<ViewLegacyWorldCloudInput> &inputs, const ViewLegacyWorldCloudMergeResult &result) {
     const QString path = mergeCachePath(inputs), temp = path + QStringLiteral(".tmp");
     QFile file(temp); if (!file.open(QIODevice::WriteOnly)) return;
     QDataStream stream(&file); stream.setByteOrder(QDataStream::LittleEndian);
@@ -435,18 +435,18 @@ QString formatBounds(const CloudBounds &bounds) {
         .arg(bounds.maximum.y(), 0, 'g', 8).arg(bounds.maximum.z(), 0, 'g', 8);
 }
 
-QString progressSourceName(WorldCloudInput::ScanProgressSource source) {
+QString progressSourceName(ViewLegacyWorldCloudInput::ScanProgressSource source) {
     switch (source) {
-    case WorldCloudInput::ScanProgressSource::LocalX: return QStringLiteral("LocalX");
-    case WorldCloudInput::ScanProgressSource::LocalY: return QStringLiteral("LocalY");
-    case WorldCloudInput::ScanProgressSource::LocalZ: return QStringLiteral("LocalZ");
-    case WorldCloudInput::ScanProgressSource::VertexOrder: break;
+    case ViewLegacyWorldCloudInput::ScanProgressSource::LocalX: return QStringLiteral("LocalX");
+    case ViewLegacyWorldCloudInput::ScanProgressSource::LocalY: return QStringLiteral("LocalY");
+    case ViewLegacyWorldCloudInput::ScanProgressSource::LocalZ: return QStringLiteral("LocalZ");
+    case ViewLegacyWorldCloudInput::ScanProgressSource::VertexOrder: break;
     }
     return QStringLiteral("VertexOrder");
 }
 
-WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &inputs, const IcpOptions &icp) {
-    WorldCloudMergeResult result;
+ViewLegacyWorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<ViewLegacyWorldCloudInput> &inputs, const ViewLegacyIcpOptions &icp) {
+    ViewLegacyWorldCloudMergeResult result;
     if (inputs.isEmpty()) { result.error = QStringLiteral("未选择 PLY 文件"); return result; }
     for (int index = 0; index < inputs.size(); ++index) {
         QString matrixError;
@@ -471,7 +471,7 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
     qsizetype total = 0;
     std::vector<std::future<LoadResult>> futures;
     futures.reserve(inputs.size());
-    for (const WorldCloudInput &input : inputs) {
+    for (const ViewLegacyWorldCloudInput &input : inputs) {
         futures.push_back(std::async(std::launch::async, [path = input.filePath]() {
             return loadPlyCachedResult(path);
         }));
@@ -559,7 +559,7 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
         float worldOverlapForIcp = 1.0f;
         bool lowWorldOverlapForIcp = false;
         if (cloudId > 0 && accumulatedBounds.valid && worldBounds.valid) {
-            WorldCloudMergeResult::OverlapDiagnostic overlap;
+            ViewLegacyWorldCloudMergeResult::OverlapDiagnostic overlap;
             overlap.cloudId = cloudId;
             overlap.intersectionArea = xyOverlapArea(worldBounds, accumulatedBounds,
                                                      &overlap.movingArea, &overlap.unionArea,
@@ -578,7 +578,7 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
         }
         QVector<Point3D> pointsBeforeIcp;
         if (icp.enabled && cloudId > 0) pointsBeforeIcp = points;
-        IcpDiagnostics diag;
+        ViewLegacyIcpDiagnostics diag;
         diag.filePath = inputs[cloudId].filePath;
         if (icp.enabled && cloudId > 0 && !result.points.isEmpty() && lowWorldOverlapForIcp) {
             diag.attempted = false;
@@ -687,7 +687,7 @@ WorldCloudMergeResult mergePlyCloudsInWorldImpl(const QVector<WorldCloudInput> &
 
     result.pointsBeforeCrossCloudFusion = result.points.size();
     float fusionVoxelSize = std::numeric_limits<float>::max();
-    for (const WorldCloudInput &input : inputs) {
+    for (const ViewLegacyWorldCloudInput &input : inputs) {
         if (input.voxelDownsample && input.voxelSize > 0.0f)
             fusionVoxelSize = qMin(fusionVoxelSize, input.voxelSize);
     }
@@ -2406,8 +2406,8 @@ QVector<QVector<QVector2D>> marchingSquaresContours(const QVector<quint8> &mask,
 
 } // namespace
 
-WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inputs,
-                                             const IcpOptions &icp) {
+ViewLegacyWorldCloudMergeResult mergePlyCloudsInWorld(const QVector<ViewLegacyWorldCloudInput> &inputs,
+                                             const ViewLegacyIcpOptions &icp) {
     return mergePlyCloudsInWorldImpl(inputs, icp);
 }
 

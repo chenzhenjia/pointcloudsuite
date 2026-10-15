@@ -1,9 +1,11 @@
 #include "mainwindow.h"
 #include "renderdialog.h"
+#include "process_memory_usage_v1.h"
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
 #include "cameradialog.h"
 #endif
-#include "registrationdialog.h"
+#include <stitchingwindow.h>
+#include "selected_plane_launcher.h"
 #include "ui_mainwindow.h"
 #include <pcv/interface/temp_workpiece_interface.h>
 #include <pcv/io/artifact_transaction.h>
@@ -63,6 +65,7 @@
 #include <QKeyEvent>
 #include <QCloseEvent>
 #include <QThread>
+#include <QTimer>
 #include <QDialog>
 #include <QSignalBlocker>
 #include <QtMath>
@@ -417,6 +420,8 @@ MainWindow::MainWindow(QWidget *parent) : MainWindow(pcv::config::PointCloudView
 MainWindow::MainWindow(const pcv::config::PointCloudViewDefaults &defaults, QWidget *parent)
     : QMainWindow(parent), m_defaults(defaults) {
     buildUi();
+    updateMemoryUsage();
+    m_memoryTimer->start();
 }
 
 MainWindow::~MainWindow() {
@@ -425,6 +430,8 @@ MainWindow::~MainWindow() {
     // to run during teardown can access vectors/widgets whose lifetime has
     // already ended.
     m_closing = true;
+    cancelAndWaitWorkpieceTemplate();
+    if (m_memoryTimer) m_memoryTimer->stop();
     if (m_planeCancelToken) m_planeCancelToken->store(true);
     if (m_prepareCancelToken) m_prepareCancelToken->store(true);
     if (m_scanPlanningCancelToken) m_scanPlanningCancelToken->store(true);
@@ -436,6 +443,10 @@ MainWindow::~MainWindow() {
     if (m_planeImageWatcher) disconnect(m_planeImageWatcher, nullptr, this, nullptr);
     if (m_scanPlanningWatcher) disconnect(m_scanPlanningWatcher, nullptr, this, nullptr);
     if (m_textureMappingWatcher) disconnect(m_textureMappingWatcher, nullptr, this, nullptr);
+    if (m_stitchingWindow) {
+        m_stitchingWindow->cancelAndWait();
+        disconnect(m_stitchingWindow, nullptr, this, nullptr);
+    }
     if (m_loadWatcher && m_loadWatcher->isRunning()) {
         m_loadWatcher->waitForFinished();
     }
@@ -481,7 +492,22 @@ void MainWindow::buildUi() {
     m_canvasInfo = ui->lbl_canvas_info;
     ui->vbl_canvas->removeWidget(m_canvasInfo);
     m_canvasInfo->setParent(statusBar());
+    // Preserve the preferred text width, but let the status bar shrink it
+    // when the permanent memory readout needs space.
+    m_canvasInfo->setMinimumWidth(1);
+    m_canvasInfo->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     statusBar()->addPermanentWidget(m_canvasInfo);
+    m_memoryInfo = new QLabel(statusBar());
+    m_memoryInfo->setObjectName(QStringLiteral("lbl_memory_info"));
+    m_memoryInfo->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_memoryInfo->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
+    m_memoryInfo->setToolTip(tr("当前 pointcloudview.exe 进程内存。\n工作集：当前驻留物理内存，包含共享页。\n私有提交量：进程独占的已提交内存，可能部分已换出。\n每 1 秒刷新，GUI 阻塞时会延迟。\n包含本进程的窗口、后台任务和缓存；不包含独立进程或 GPU 专用显存。\n1 MiB = 1024² 字节，1 GiB = 1024³ 字节。"));
+    statusBar()->addPermanentWidget(m_memoryInfo);
+    m_memoryTimer = new QTimer(this);
+    m_memoryTimer->setObjectName(QStringLiteral("memory_monitor_timer"));
+    m_memoryTimer->setInterval(1000);
+    m_memoryTimer->setTimerType(Qt::CoarseTimer);
+    connect(m_memoryTimer, &QTimer::timeout, this, &MainWindow::updateMemoryUsage);
     m_progress = ui->pbar_progress;
     m_pointSize = ui->spb_point_size;
     m_colorMode = ui->cb_color_mode;
@@ -721,7 +747,7 @@ void MainWindow::buildUi() {
     connect(m_operationConfirm, &QPushButton::clicked, this, &MainWindow::confirmPickingOperation);
 
     ui->toolbar_workflow->hide();
-    ui->btn_multiframe_registration->hide();
+    ui->btn_multiframe_registration->show();
     ui->btn_camera_device->hide();
     ui->splitter_main->setStretchFactor(0, 0);
     ui->splitter_main->setStretchFactor(1, 1);
@@ -738,6 +764,10 @@ void MainWindow::buildUi() {
     addToolAction(tr("平面与 WObj1"), &MainWindow::showPlaneDialog);
     addToolAction(tr("边缘与输出"), &MainWindow::showEdgeDialog);
     addToolAction(tr("扫描规划"), &MainWindow::showScanDialog);
+    addToolAction(tr("所选平面拼接"), [this] {
+        if (pointTaskRunning()) return;
+        showSelectedPlaneDialog(float(m_defaults.planeDistanceToleranceMm), this);
+    });
     toolsMenu->addSeparator();
     addToolAction(tr("渲染设置"), &MainWindow::openRenderSettings);
     auto *resetAction = toolsMenu->addAction(tr("重置视角"));
@@ -749,7 +779,10 @@ void MainWindow::buildUi() {
     auto *cameraToolAction = toolsMenu->addAction(tr("相机设备"));
     cameraToolAction->setEnabled(false);
 #endif
-    addToolAction(tr("多帧配准"), &MainWindow::openMultiFrameRegistration);
+    addToolAction(tr("多帧点云拼接"), &MainWindow::openMultiFrameRegistration);
+    toolsMenu->addSeparator();
+    addToolAction(tr("创建工件模板"), &MainWindow::createWorkpieceTemplate);
+    addToolAction(tr("打开工件模板"), &MainWindow::openWorkpieceTemplate);
     connect(m_fileList, &QListWidget::currentRowChanged, this, &MainWindow::loadSelectedSource);
     connect(m_pointSize, qOverload<int>(&QSpinBox::valueChanged), m_canvas, &PointCloudCanvas::setPointSize);
     connect(m_pointSize, qOverload<int>(&QSpinBox::valueChanged), this,
@@ -762,7 +795,7 @@ void MainWindow::buildUi() {
     connect(m_noiseApply, &QPushButton::clicked, this, &MainWindow::applyNoiseRemoval);
     connect(ui->btn_restore_cloud, &QPushButton::clicked, this, [this]() {
         if (pointTaskRunning()) { statusBar()->showMessage(tr("点云处理任务正在运行")); return; }
-        publishCanvasCache(m_rawPoints); statusBar()->showMessage(tr("已恢复原始点云"));
+        publishCanvasCache(m_rawPoints, false, m_rawCloudSource); statusBar()->showMessage(tr("已恢复原始点云"));
     });
     connect(m_pickPointsButton, &QPushButton::clicked, this, &MainWindow::startPlanePointSelection);
     connect(m_abandonPointsButton, &QPushButton::clicked, this, &MainWindow::abandonPlanePointSelection);
@@ -815,6 +848,12 @@ void MainWindow::buildUi() {
     statusBar()->showMessage(tr("就绪"));
 }
 
+void MainWindow::updateMemoryUsage() {
+    if (m_closing || !m_memoryInfo) return;
+    m_memoryInfo->setText(pcv::view::formatProcessMemoryUsage(
+        pcv::view::readProcessMemoryUsage()));
+}
+
 void MainWindow::applyConfiguredDefaults() {
     m_pointSize->setValue(m_defaults.pointSize);
     m_colorMode->setCurrentIndex(m_defaults.colorMode);
@@ -831,11 +870,13 @@ void MainWindow::applyConfiguredDefaults() {
 
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
 void MainWindow::openCameraStream() {
+    if (m_templateTaskActive || m_templateFormActive) return;
     if (!m_cameraDialog) {
         m_cameraDialog = new CameraDialog(this);
         m_cameraDialog->cloudPublished =
             [this](const QVector<pointcloud::Point3D> &points) {
-                if (m_closing || !m_canvas) return;
+                if (m_closing || !m_canvas || m_templateTaskActive || m_templateFormActive
+                    || (m_stitchingWindow && m_stitchingWindow->isBusy())) return;
                 // Pipeline canvas.publish reaches this callback; streaming
                 // frames bypass the display cache while world overlays remain.
                 m_canvas->setCloudStreaming(points);
@@ -848,9 +889,12 @@ void MainWindow::openCameraStream() {
             };
         m_cameraDialog->cloudFrozen =
             [this](const QVector<pointcloud::Point3D> &points) {
-                if (m_closing || points.isEmpty()) return;
+                if (m_closing || points.isEmpty() || m_templateTaskActive || m_templateFormActive
+                    || (m_stitchingWindow && m_stitchingWindow->isBusy())) return;
                 m_rawPoints = points;
-                publishCanvasCache(points);
+                m_rawCloudSource = {};
+                m_rawCloudSource.entry = QStringLiteral("camera_raw");
+                publishCanvasCache(points, false, m_rawCloudSource);
                 statusBar()->showMessage(tr("已冻结相机帧，可执行去噪和平面处理"));
             };
     }
@@ -1149,6 +1193,10 @@ void MainWindow::loadFinished() {
             << "reader_total_ms=" << result.totalElapsedMs;
     m_pendingSourcePlyEncoding = result.sourcePlyEncoding;
     m_rawPoints = std::move(result.points);
+    m_rawCloudSource = {};
+    m_rawCloudSource.entry = m_pendingTextureExperiment ? QStringLiteral("raw_texture_experiment")
+                                                      : QStringLiteral("external_ply");
+    m_rawCloudSource.files = {m_pendingPath};
     if (m_pendingTextureExperiment) {
         const QFileInfo fileInfo(m_pendingPath);
         m_sourceFiles = {m_pendingPath};
@@ -1169,7 +1217,7 @@ void MainWindow::loadFinished() {
         m_tempWorkpieceRasterCompatible =
             result.declaredPointCount > 0
             && result.declaredPointCount == m_rawPoints.size();
-        publishCanvasCache(m_rawPoints);
+        publishCanvasCache(m_rawPoints, false, m_rawCloudSource);
         // The source mode stays independent of raster eligibility.
         m_textureExperimentActive = true;
         m_pendingTextureExperiment = false;
@@ -1207,7 +1255,7 @@ void MainWindow::loadFinished() {
     float maxZ = result.hasBounds ? result.maximum.z : minZ;
     m_mapMin->setValue(minZ);
     m_mapMax->setValue(maxZ > minZ ? maxZ : minZ + 1.0);
-    publishCanvasCache(m_rawPoints);
+    publishCanvasCache(m_rawPoints, false, m_rawCloudSource);
     qInfo() << "PLY display publication baseline: main_points=" << m_points.size()
             << "raw_points=" << m_rawPoints.size();
     if (!keepFolderSources) {
@@ -1368,7 +1416,8 @@ void MainWindow::applyDepthRenderRange(const QVector<pointcloud::Point3D> &point
 }
 
 void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points,
-                                    bool preserveTempWorkpieceSession) {
+                                    bool preserveTempWorkpieceSession,
+                                    CloudSourceContextV1 source) {
     const qsizetype incomingCount = points.size();
 
     // No GUI or OpenGL state may be touched once closeEvent() has started.
@@ -1379,6 +1428,7 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points,
         return;
     }
     m_livePreviewPointCount = 0;
+    m_stitchingArtifactPaths.clear();
 
     // The CPU display cache is the authoritative input for every downstream
     // operation. A temporarily unavailable OpenGL widget must never discard a
@@ -1399,6 +1449,8 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points,
     if (m_planeCancelToken) m_planeCancelToken->store(true);
     m_planeFramePending = false;
     ++m_canvasRevision;
+    m_currentCloudSource = std::move(source);
+    m_cloudSourceRevision = m_canvasRevision;
     qInfo() << "Main display cache published, points=" << m_points.size()
             << "incoming=" << incomingCount
             << "canvas=" << static_cast<const void *>(m_canvas)
@@ -1436,7 +1488,9 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points,
 }
 
 bool MainWindow::pointTaskRunning() const {
-    return m_loading || (m_noiseWatcher && m_noiseWatcher->isRunning())
+    return m_templateTaskActive || m_templateFormActive || m_loading
+        || (m_noiseWatcher && m_noiseWatcher->isRunning())
+        || (m_stitchingWindow && m_stitchingWindow->isBusy())
         || (m_tempWorkpieceWatcher && m_tempWorkpieceWatcher->isRunning())
         || (m_tempWorkpieceFinalizeWatcher && m_tempWorkpieceFinalizeWatcher->isRunning())
         || (m_threePlaneWatcher && m_threePlaneWatcher->isRunning())
@@ -1894,37 +1948,60 @@ void MainWindow::invalidateTextureOverlay() {
 
 void MainWindow::openMultiFrameRegistration()
 {
-    if (pointTaskRunning()) {
+    if (pointTaskRunning() && (!m_stitchingWindow || !m_stitchingWindow->isBusy())) {
         statusBar()->showMessage(tr("点云处理任务正在运行"));
         return;
     }
-    RegistrationDialog dialog(this);
-    if (dialog.exec() != QDialog::Accepted || !dialog.hasSuccessfulResult()) return;
-
-    QVector<pointcloud::Point3D> points = dialog.takePoints();
-    if (points.isEmpty()) {
-        QMessageBox::critical(this, tr("多帧配准失败"), tr("正式输出不包含可发布的点云"));
-        return;
+    if (!m_stitchingWindow) {
+        m_stitchingWindow = new StitchingWindow(this);
+        m_stitchingWindow->canStartTask = [this] {
+            if (m_closing || pointTaskRunning()) {
+                statusBar()->showMessage(tr("点云处理任务正在运行"));
+                return false;
+            }
+            return confirmReplaceTempWorkpieceSession();
+        };
+        connect(m_stitchingWindow, &StitchingWindow::stitchingSucceeded,
+                this, &MainWindow::stitchingSucceeded);
     }
-    if (!confirmReplaceTempWorkpieceSession()) return;
-    invalidateTempWorkpieceSession();
-    m_rawPoints = std::move(points);
-    m_pendingPath = dialog.outputPly();
-    m_sourceFiles = {m_pendingPath};
-    m_sourceDirectory = QFileInfo(m_pendingPath).absolutePath();
+    m_stitchingWindow->show();
+    m_stitchingWindow->raise();
+    m_stitchingWindow->activateWindow();
+}
+
+void MainWindow::stitchingSucceeded(const StitchingPublication &publication)
+{
+    if (m_closing || publication.points.isEmpty()) return;
+#ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
+    if (m_cameraDialog) m_cameraDialog->close();
+#endif
+    m_pendingPath = publication.formalPly;
+    m_rawPoints = publication.points;
+    m_rawCloudSource = {};
+    m_rawCloudSource.robotBaseConfirmed = true;
+    m_rawCloudSource.entry = QStringLiteral("stitching_robot_base");
+    m_rawCloudSource.files = {publication.formalPly};
+    m_rawCloudSource.manifest = publication.reportJson;
+    m_rawCloudSource.processingSteps.append(QStringLiteral("stitching_or_transform_only"));
+    m_sourceFiles = {publication.formalPly};
+    m_sourceDirectory = publication.outputDirectory;
     m_folderScanOnly = false;
+    m_pendingTextureExperiment = false;
     {
         const QSignalBlocker blocker(m_fileList);
         m_fileList->clear();
-        m_fileList->addItem(QFileInfo(m_pendingPath).fileName());
+        if (!publication.formalPly.isEmpty())
+            m_fileList->addItem(QFileInfo(publication.formalPly).fileName());
         m_fileList->setCurrentRow(0);
     }
-    publishCanvasCache(m_rawPoints);
+    publishCanvasCache(publication.points, false, m_rawCloudSource);
+    m_stitchingArtifactPaths = {publication.formalPly, publication.previewPly,
+        publication.mappingFile, publication.reportJson};
     applyDepthRenderRange(m_points);
-    m_fileInfo->setText(tr("多帧配准\n正式 PLY\n%1\n点数  %2")
-                            .arg(m_pendingPath)
+    m_fileInfo->setText(tr("多帧点云拼接\n正式 PLY\n%1\n点数  %2")
+                            .arg(publication.formalPly)
                             .arg(QLocale().toString(m_rawPoints.size())));
-    statusBar()->showMessage(tr("多帧配准结果已发布到当前画布"));
+    statusBar()->showMessage(tr("多帧点云拼接结果已发布到当前画布"));
 }
 
 void MainWindow::openTempScanningInfo() {
@@ -2078,6 +2155,12 @@ void MainWindow::tempWorkpieceFinished() {
 
     const QString layoutName = QStringLiteral("LineProfileXz");
     m_rawPoints = result.robotBasePoints;
+    m_rawCloudSource = {};
+    m_rawCloudSource.robotBaseConfirmed = result.coordinateFrame == QStringLiteral("robot_base");
+    m_rawCloudSource.entry = QStringLiteral("handeye_conversion");
+    m_rawCloudSource.files = {result.resolvedPointCloudFile, result.resolvedCalibrationFile};
+    m_rawCloudSource.manifest = result.scanningInfoPath;
+    m_rawCloudSource.processingSteps.append(QStringLiteral("handeye_transform_to_robot_base"));
     m_tempWorkpieceSourceIndices = std::move(result.sourceIndices);
     m_tempWorkpieceDeclaredPointCount = result.declaredPointCount;
     m_tempWorkpieceRejectedInvalidPointCount = result.rejectedInvalidPointCount;
@@ -2095,7 +2178,7 @@ void MainWindow::tempWorkpieceFinished() {
     m_pendingPath = result.resolvedPointCloudFile;
     m_sourceFiles = {m_pendingPath};
     m_sourceDirectory = QFileInfo(m_pendingPath).absolutePath();
-    publishCanvasCache(std::move(result.robotBasePoints), true);
+    publishCanvasCache(std::move(result.robotBasePoints), true, m_rawCloudSource);
     applyDepthRenderRange(m_points);
     m_tempWorkpieceSource = m_pendingTempWorkpieceSource;
     m_pendingTempWorkpieceSource = TempWorkpieceSource::None;
@@ -3526,6 +3609,14 @@ void MainWindow::applyNoiseRemoval() {
     const QVector<pointcloud::Point3D> source = m_points;
     m_noiseInputCount = source.size();
     m_noiseInputRevision = m_canvasRevision;
+    m_noiseCloudSource = m_currentCloudSource;
+    m_noiseCloudSource.processingSteps.append(QJsonObject{
+        {QStringLiteral("operation"), QStringLiteral("remove_noise")},
+        {QStringLiteral("voxel_enabled"), options.voxelEnabled},
+        {QStringLiteral("voxel_size_mm"), options.voxelSize},
+        {QStringLiteral("statistical_enabled"), options.statisticalEnabled},
+        {QStringLiteral("mean_k"), options.meanK},
+        {QStringLiteral("stddev_multiplier"), options.stddevMultiplier}});
     m_noiseWatcher->setFuture(QtConcurrent::run([source, options]() {
         return pointcloud::removeNoise(source, options);
     }));
@@ -3543,7 +3634,7 @@ void MainWindow::noiseFinished() {
         statusBar()->showMessage(tr("噪点去除未改变当前点云"));
         return;
     }
-    publishCanvasCache(result.points);
+    publishCanvasCache(result.points, false, m_noiseCloudSource);
     m_canvasInfo->setText(tr("清理后显示 %1 点 · 原始 %2 点")
                           .arg(QLocale().toString(m_points.size()))
                           .arg(QLocale().toString(m_rawPoints.size())));
@@ -3557,6 +3648,13 @@ void MainWindow::noiseFinished() {
 
 void MainWindow::closeEvent(QCloseEvent *event) {
     m_closing = true;
+    cancelAndWaitWorkpieceTemplate();
+    if (m_memoryTimer) m_memoryTimer->stop();
+    if (m_stitchingWindow) {
+        disconnect(m_stitchingWindow, nullptr, this, nullptr);
+        m_stitchingWindow->cancelAndWait();
+        m_stitchingWindow->hide();
+    }
     if (m_planeCancelToken) m_planeCancelToken->store(true);
     m_planeFramePending = false;
     qWarning() << "MainWindow closeEvent, spontaneous=" << event->spontaneous()

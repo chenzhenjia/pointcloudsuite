@@ -59,6 +59,15 @@ if(TARGET pcv_m30_pointcloud_stitch)
 endif()
 add_test(NAME temp_workpiece_interface_tests COMMAND temp_workpiece_interface_tests)
 
+add_executable(workpiece_template_tests_v1 unit/interface/workpiece_template_tests_v1.cpp)
+target_link_libraries(workpiece_template_tests_v1 PRIVATE pcv_m60_geometry_workpiece)
+target_compile_definitions(workpiece_template_tests_v1 PRIVATE PCV_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+if(WIN32)
+    target_link_libraries(workpiece_template_tests_v1 PRIVATE Psapi)
+endif()
+add_test(NAME workpiece_template_tests_v1 COMMAND workpiece_template_tests_v1)
+list(APPEND PCV_APPLICATION_TEST_TARGETS workpiece_template_tests_v1)
+
 if(TARGET pcv_m30_pointcloud_stitch)
     add_executable(stitching_interface_tests unit/interface/stitching_interface_tests.cpp)
     target_link_libraries(stitching_interface_tests PRIVATE Qt::Core Qt::Gui pcv_m30_pointcloud_stitch pcv_m50_coordinate_conversion)
@@ -131,10 +140,25 @@ target_link_libraries(multiframe_registration_tests PRIVATE Qt::Core Qt::Gui pcv
 add_test(NAME multiframe_registration_tests COMMAND multiframe_registration_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS multiframe_registration_tests)
 
+add_executable(selected_plane_stitch_tests_v1 unit/registration/selected_plane_stitch_tests_v1.cpp)
+target_link_libraries(selected_plane_stitch_tests_v1 PRIVATE Qt::Core Qt::Gui pcv_m30_pointcloud_stitch pcv_m60_geometry_workpiece)
+add_test(NAME selected_plane_stitch_tests_v1 COMMAND selected_plane_stitch_tests_v1)
+list(APPEND PCV_APPLICATION_TEST_TARGETS selected_plane_stitch_tests_v1)
+
 add_executable(plane_fitting_tests unit/planefitting/plane_fitting_tests.cpp)
 target_link_libraries(plane_fitting_tests PRIVATE Qt::Core Qt::Gui pcv_m60_geometry_workpiece)
 add_test(NAME plane_fitting_tests COMMAND plane_fitting_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS plane_fitting_tests)
+
+add_executable(single_click_plane_selection_tests_v1 unit/planefitting/single_click_plane_selection_tests_v1.cpp)
+target_link_libraries(single_click_plane_selection_tests_v1 PRIVATE Qt::Core Qt::Gui pcv_m60_geometry_workpiece)
+add_test(NAME single_click_plane_selection_tests_v1 COMMAND single_click_plane_selection_tests_v1)
+list(APPEND PCV_APPLICATION_TEST_TARGETS single_click_plane_selection_tests_v1)
+
+add_executable(single_click_plane_selection_tests_v2 unit/planefitting/single_click_plane_selection_tests_v2.cpp)
+target_link_libraries(single_click_plane_selection_tests_v2 PRIVATE Qt::Core Qt::Gui pcv_m60_geometry_workpiece)
+add_test(NAME single_click_plane_selection_tests_v2 COMMAND single_click_plane_selection_tests_v2)
+list(APPEND PCV_APPLICATION_TEST_TARGETS single_click_plane_selection_tests_v2)
 
 add_executable(plane_fitting_equivalence_tests_v2 unit/planefitting/plane_fitting_equivalence_tests_v2.cpp)
 target_link_libraries(plane_fitting_equivalence_tests_v2 PRIVATE Qt::Core Qt::Gui pcv_m60_geometry_workpiece)
@@ -152,6 +176,41 @@ add_test(NAME texture_mapping_tests COMMAND texture_mapping_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS texture_mapping_tests)
 
 if(PCV_BUILD_POINTCLOUDVIEW)
+    add_executable(workpiece_template_view_tests_v1
+        unit/pointcloudview/workpiece_template_view_tests_v1.cpp
+        ../apps/pointcloudview/mainwindow.cpp
+        ../apps/pointcloudview/mainwindow.h
+        ../apps/pointcloudview/workpiece_template_ui_v1.cpp
+        ../apps/pointcloudview/features/workpiece_template_dialog_v1.cpp
+        ../apps/pointcloudview/process_memory_usage_v1.cpp
+        ../apps/pointcloudview/pointcloudprocessor.cpp
+        ../apps/pointcloudview/renderdialog.cpp
+        ../apps/pointcloudview/renderdialog.h
+        ../apps/pointcloudview/selectedplanedialog.cpp
+        ../apps/pointcloudview/selectedplanedialog.h
+        ../apps/pointcloudview/ui/mainwindow.ui
+        ../apps/pointcloudview/ui/renderdialog.ui
+        ../apps/pointcloudview/pointcloudview.qrc)
+    set_property(TARGET workpiece_template_view_tests_v1 PROPERTY AUTOUIC_SEARCH_PATHS
+        "${PROJECT_SOURCE_DIR}/apps/pointcloudview/ui")
+    target_include_directories(workpiece_template_view_tests_v1 PRIVATE ../apps/pointcloudview)
+    target_link_libraries(workpiece_template_view_tests_v1 PRIVATE pcv_stitching_ui
+        pcv_m20_pointcloud_render pcv_m60_geometry_workpiece Qt::OpenGL Qt::OpenGLWidgets)
+    if(WIN32)
+        target_link_libraries(workpiece_template_view_tests_v1 PRIVATE Psapi)
+    endif()
+    add_test(NAME workpiece_template_view_tests_v1 COMMAND workpiece_template_view_tests_v1)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS workpiece_template_view_tests_v1)
+    add_executable(selected_plane_dialog_tests_v1
+        unit/pointcloudview/selected_plane_dialog_tests_v1.cpp
+        ../apps/pointcloudview/selectedplanedialog.cpp
+        ../apps/pointcloudview/selectedplanedialog.h)
+    target_include_directories(selected_plane_dialog_tests_v1 PRIVATE ../apps/pointcloudview)
+    target_link_libraries(selected_plane_dialog_tests_v1 PRIVATE Qt::Core Qt::Gui Qt::Widgets Qt::Concurrent
+        Qt::OpenGL Qt::OpenGLWidgets pcv_m20_pointcloud_render pcv_m30_pointcloud_stitch pcv_m60_geometry_workpiece)
+    add_test(NAME selected_plane_dialog_tests_v1 COMMAND selected_plane_dialog_tests_v1)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS selected_plane_dialog_tests_v1)
+    set_tests_properties(selected_plane_dialog_tests_v1 PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
     add_executable(texture_experiment_tests
         unit/pointcloudview/texture_experiment_tests_v1.cpp
     )
@@ -170,13 +229,78 @@ if(TARGET pcv_m20_pointcloud_render)
     list(APPEND PCV_APPLICATION_TEST_TARGETS pointcloud_canvas_contract_tests)
 endif()
 
+if(TARGET pcv_stitching_ui)
+    add_executable(stitching_ui_tests_v1 unit/pointcloudview/stitching_ui_tests_v1.cpp)
+    target_link_libraries(stitching_ui_tests_v1 PRIVATE pcv_stitching_ui)
+    add_test(NAME stitching_ui_tests_v1 COMMAND stitching_ui_tests_v1)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS stitching_ui_tests_v1)
+    if(PCV_BUILD_POINTCLOUDVIEW)
+        add_executable(stitching_view_tests_v1
+            unit/pointcloudview/stitching_ui_tests_v1.cpp
+            ../apps/pointcloudview/mainwindow.cpp
+            ../apps/pointcloudview/mainwindow.h
+            ../apps/pointcloudview/workpiece_template_ui_v1.cpp
+            ../apps/pointcloudview/features/workpiece_template_dialog_v1.cpp
+            ../apps/pointcloudview/process_memory_usage_v1.cpp
+            ../apps/pointcloudview/process_memory_usage_v1.h
+            ../apps/pointcloudview/pointcloudprocessor.cpp
+            ../apps/pointcloudview/renderdialog.cpp
+            ../apps/pointcloudview/renderdialog.h
+            ../apps/pointcloudview/selectedplanedialog.cpp
+            ../apps/pointcloudview/selectedplanedialog.h
+            ../apps/pointcloudview/ui/mainwindow.ui
+            ../apps/pointcloudview/ui/renderdialog.ui
+            ../apps/pointcloudview/pointcloudview.qrc)
+        set_property(TARGET stitching_view_tests_v1 PROPERTY AUTOUIC_SEARCH_PATHS
+            "${PROJECT_SOURCE_DIR}/apps/pointcloudview/ui")
+        target_include_directories(stitching_view_tests_v1 PRIVATE ../apps/pointcloudview)
+        target_compile_definitions(stitching_view_tests_v1 PRIVATE PCV_TEST_STITCHING_VIEW=1)
+        target_link_libraries(stitching_view_tests_v1 PRIVATE pcv_stitching_ui
+            pcv_m20_pointcloud_render pcv_m60_geometry_workpiece Qt::OpenGL Qt::OpenGLWidgets)
+        if(WIN32)
+            target_link_libraries(stitching_view_tests_v1 PRIVATE Psapi)
+        endif()
+        add_test(NAME stitching_view_tests_v1 COMMAND stitching_view_tests_v1)
+        list(APPEND PCV_APPLICATION_TEST_TARGETS stitching_view_tests_v1)
+    endif()
+endif()
+
+if(PCV_BUILD_POINTCLOUDVIEW)
+    add_executable(process_memory_usage_tests
+        unit/pointcloudview/process_memory_usage_tests_v1.cpp
+        ../apps/pointcloudview/process_memory_usage_v1.cpp
+        ../apps/pointcloudview/process_memory_usage_v1.h)
+    target_include_directories(process_memory_usage_tests PRIVATE ../apps/pointcloudview)
+    target_link_libraries(process_memory_usage_tests PRIVATE Qt::Core)
+    if(WIN32)
+        target_link_libraries(process_memory_usage_tests PRIVATE Psapi)
+    endif()
+    add_test(NAME process_memory_usage_tests COMMAND process_memory_usage_tests)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS process_memory_usage_tests)
+endif()
+
 if(WIN32 AND TARGET Qt6::Core AND PCV_APPLICATION_TEST_TARGETS)
     set(PCV_TEST_PATH "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}")
     set_tests_properties(${PCV_APPLICATION_TEST_TARGETS}
         PROPERTIES ENVIRONMENT "${PCV_TEST_PATH}")
 endif()
+foreach(stitchTest stitching_ui_tests_v1 stitching_view_tests_v1 workpiece_template_view_tests_v1)
+    if(TARGET ${stitchTest})
+        set_property(TEST ${stitchTest} APPEND PROPERTY ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen"
+            "QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins"
+            "QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins/platforms")
+        set_tests_properties(${stitchTest} PROPERTIES TIMEOUT 90)
+    endif()
+endforeach()
 if(TARGET texture_experiment_tests)
     set_property(TEST texture_experiment_tests APPEND PROPERTY ENVIRONMENT
         "QT_QPA_PLATFORM=offscreen")
     set_tests_properties(texture_experiment_tests PROPERTIES TIMEOUT 30)
+endif()
+if(TARGET selected_plane_dialog_tests_v1)
+    set_property(TEST selected_plane_dialog_tests_v1 APPEND PROPERTY ENVIRONMENT
+        "QT_QPA_PLATFORM=offscreen"
+        "QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins"
+        "QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins/platforms")
 endif()

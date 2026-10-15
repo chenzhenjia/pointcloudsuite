@@ -543,6 +543,7 @@ void PointCloudCanvas::mouseReleaseEvent(QMouseEvent *event)  {
             && edgeRectanglePicked) {
             edgeRectanglePicked(QRectF(m_selectionOrigin, event->position()).normalized());
         } else if (event->button() == Qt::LeftButton && !m_mouseMoved) {
+            if (pointPickingStarted) pointPickingStarted();
             const int index = pickPoint(event->position());
             if (index >= 0) {
                 m_coordinatePointIndex = index;

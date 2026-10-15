@@ -1,4 +1,6 @@
 #include <pcv/stitching/multiframe_registration.h>
+#include "selected_plane_refinement.h"
+#include <pcv/registration/handeye_transform.h>
 #include <pcv/filtering/downsample.h>
 
 #include <QElapsedTimer>
@@ -2624,6 +2626,146 @@ MultiFrameRegistrationResult registerRobotBaseFrames(QVector<RobotBaseFrame> inp
     update(1.0f,icp.enabled
         ?QStringLiteral("%1 帧坐标转换和相邻帧配准完成").arg(inputs.size())
         :QStringLiteral("%1 帧手眼坐标转换完成，未执行 ICP").arg(inputs.size()));
+    return result;
+}
+
+pcv::stitching::SelectedPlanePairDiagnostic refineSelectedPlanePair(
+    const pcv::stitching::SelectedPlaneFrame &source,
+    const pcv::stitching::SelectedPlaneFrame &target,
+    const pcv::stitching::SelectedPlaneOptions &options,
+    const std::function<bool()> &cancelled,
+    const ProgressCallback &progress)
+{
+    pcv::stitching::SelectedPlanePairDiagnostic result;
+    const auto fallback = [&result](const QString &reason) {
+        result.fineApplied = false;
+        result.poseFallback = result.chainAnchorReset = true;
+        result.pairCorrection.setToIdentity();
+        result.reason = reason;
+        return result;
+    };
+    if (!options.fineEnabled) return fallback(QStringLiteral("pose_only_requested"));
+    const QVector3D n = target.normal.normalized();
+    const QVector3D anchor = target.center;
+    QVector3D u = QVector3D(1,0,0) - n * n.x();
+    if (u.lengthSquared() < 0.01f) u = QVector3D(0,1,0) - n * n.y();
+    u.normalize();
+    const QVector3D v = QVector3D::crossProduct(n,u).normalized();
+    const auto localBounds = [anchor,u,v,n](const QVector<Point3D> &points) {
+        Bounds b; b.valid = true; b.oriented = true;
+        b.origin = anchor; b.axisU = u; b.axisV = v; b.axisN = n;
+        for (const Point3D &p : points) {
+            const QVector3D d = vectorOf(p)-anchor;
+            const QVector3D q(QVector3D::dotProduct(d,u),QVector3D::dotProduct(d,v),QVector3D::dotProduct(d,n));
+            for (int a=0;a<3;++a) { b.minimum[a]=qMin(b.minimum[a],q[a]); b.maximum[a]=qMax(b.maximum[a],q[a]); }
+        }
+        return b;
+    };
+    const Bounds sb = localBounds(source.cloud.fullPoints), tb = localBounds(target.cloud.fullPoints);
+    Bounds overlap = tb;
+    for (int a=0;a<3;++a) {
+        overlap.minimum[a]=qMax(sb.minimum[a],tb.minimum[a])-3.0f;
+        overlap.maximum[a]=qMin(sb.maximum[a],tb.maximum[a])+3.0f;
+        if (overlap.minimum[a]>overlap.maximum[a]) return fallback(QStringLiteral("no_overlap"));
+    }
+    QVector<Point3D> sourceCrop, targetCrop;
+    for (const Point3D &p : source.cloud.fullPoints) if (insideBounds(vectorOf(p),overlap)) sourceCrop.push_back(p);
+    for (const Point3D &p : target.cloud.fullPoints) if (insideBounds(vectorOf(p),overlap)) targetCrop.push_back(p);
+    if (sourceCrop.size()<100 || targetCrop.size()<100) return fallback(QStringLiteral("overlap_correspondences_insufficient"));
+    const int tasks = options.parallelEnabled
+        ? qBound(1, options.maxParallelTasks==0 ? qMin(4,qMax(1,QThread::idealThreadCount()-1)) : options.maxParallelTasks, 4) : 1;
+    const float voxels[2]{0.5f,0.2f}, distances[2]{3.0f,0.6f};
+    const int limits[2]{20,15};
+    // Absolute three-parameter state avoids introducing forbidden tangent/yaw
+    // components by composing incremental rotations about different centers.
+    double state[3]{};
+    QMatrix4x4 correction;
+    for (int level=0;level<2;++level) {
+        if (cancelled && cancelled()) return fallback(QStringLiteral("cancelled"));
+        QVector<Point3D> movingBase = voxelDownsample(sourceCrop,voxels[level]);
+        QVector<Point3D> reference = voxelDownsample(targetCrop,voxels[level]);
+        for (Point3D &p : reference) { p.nx=n.x(); p.ny=n.y(); p.nz=n.z(); }
+        const SpatialIndex index = buildIndex(reference,distances[level]);
+        int stable=0, iterations=0;
+        bool converged=false;
+        const auto correspond = [&reference,&index,&overlap,distances,level,tasks](const QVector<Point3D> &moving) {
+            QVector<CorrespondencePair> pairs;
+            if (tasks>1 && moving.size()>=20000) {
+                QThreadPool pool; pool.setMaxThreadCount(tasks);
+                QVector<QFuture<CorrespondenceChunk>> futures;
+                const qsizetype size=(moving.size()+tasks-1)/tasks;
+                for (int task=0;task<tasks;++task) {
+                    const qsizetype begin=task*size,end=qMin(begin+size,moving.size());
+                    futures.push_back(QtConcurrent::run(&pool,[&moving,&reference,&index,&overlap,distances,level,begin,end] {
+                        return findCorrespondences(moving,reference,index,distances[level],overlap,-1.0f,begin,end);
+                    }));
+                }
+                for (auto &future : futures) { const auto chunk=future.result(); for (const auto &p : chunk.pairs) pairs.push_back(p); }
+            } else pairs=findCorrespondences(moving,reference,index,distances[level],overlap,-1.0f,0,moving.size()).pairs;
+            return pairs;
+        };
+        for (;iterations<limits[level];++iterations) {
+            if (cancelled && cancelled()) return fallback(QStringLiteral("cancelled"));
+            if (progress) progress(float(level*limits[0]+iterations)/35.0f,QStringLiteral("所选平面精配准：层 %1，迭代 %2").arg(level+1).arg(iterations+1));
+            QVector<Point3D> moving=movingBase; applyTransform(&moving,correction);
+            const auto pairs=correspond(moving);
+            if (pairs.size()<100) return fallback(QStringLiteral("correspondences_insufficient"));
+            double matrix[6][6]{}, rhs[3]{};
+            double radius=0;
+            for (const auto &p : pairs) radius+=(p.source-anchor).lengthSquared();
+            const double scale=qMax(1.0,std::sqrt(radius/pairs.size()));
+            const auto matrixFor = [anchor,u,v,n](const double *s) {
+                QMatrix4x4 m;
+                const QVector3D r=u*float(s[0])+v*float(s[1]);
+                m.translate(anchor);
+                if (r.length()>1e-12f) m.rotate(qRadiansToDegrees(r.length()),r.normalized());
+                m.translate(-anchor); m(0,3)+=n.x()*float(s[2]); m(1,3)+=n.y()*float(s[2]); m(2,3)+=n.z()*float(s[2]);
+                return m;
+            };
+            // Numerical derivatives of the absolute rotation parameterization
+            // retain the exact tangent/yaw lock even after several iterations.
+            QMatrix4x4 derivative[2];
+            constexpr double epsilon=1e-4;
+            for (int a=0;a<2;++a) { double s[3]{state[0],state[1],state[2]}; s[a]+=epsilon; derivative[a]=matrixFor(s)*correction.inverted(); }
+            for (const auto &p : pairs) {
+                const double residual=QVector3D::dotProduct(n,p.source-p.target);
+                const double j[3]{QVector3D::dotProduct(n,derivative[0].map(p.source)-p.source)/(epsilon*scale),
+                                  QVector3D::dotProduct(n,derivative[1].map(p.source)-p.source)/(epsilon*scale),1.0};
+                const double weight=1.0/qMax(1.0,std::abs(residual)/distances[level]);
+                for (int a=0;a<3;++a) { rhs[a]-=weight*j[a]*residual; for(int b=0;b<3;++b) matrix[a][b]+=weight*j[a]*j[b]; }
+            }
+            double values[6]{}, vectors[6][6]{}; symmetricEigen6(matrix,values,vectors);
+            double largest=0,update[3]{};
+            for (double x : values) largest=qMax(largest,x);
+            result.observableDof=0;
+            for (int a=0;a<6;++a) {
+                if (values[a]<=qMax(1e-12,largest*1e-3)) continue;
+                ++result.observableDof;
+                double projected=0; for(int b=0;b<3;++b) projected+=vectors[b][a]*rhs[b];
+                for (int b=0;b<3;++b) update[b]+=vectors[b][a]*projected/values[a];
+            }
+            if (!result.observableDof) return fallback(QStringLiteral("no_observable_solution"));
+            state[0]+=update[0]/scale; state[1]+=update[1]/scale; state[2]+=update[2];
+            correction=matrixFor(state);
+            if (!validateRigidTransform(correction) || translationLength(correction)>options.maximumTranslationMm
+                || rotationAngle(correction)>options.maximumAngleDegrees) return fallback(QStringLiteral("correction_budget_exceeded"));
+            if (std::abs(update[2])<=0.005 && qRadiansToDegrees(std::hypot(update[0],update[1])/scale)<=0.0005) ++stable;
+            else stable=0;
+            if (stable>=3) { ++iterations; converged=true; break; }
+        }
+        QVector<Point3D> finalMoving=movingBase; applyTransform(&finalMoving,correction);
+        const auto finalPairs=correspond(finalMoving);
+        if (finalPairs.size()<100) return fallback(QStringLiteral("final_correspondences_insufficient"));
+        double squared=0;
+        for (const auto &p : finalPairs) { const double r=QVector3D::dotProduct(n,p.source-p.target); squared+=r*r; }
+        result.correspondences=finalPairs.size(); result.rmseMm=float(std::sqrt(squared/finalPairs.size()));
+        result.matchedRatio=float(finalPairs.size())/qMax(qsizetype(1),finalMoving.size());
+        result.iterations.push_back(iterations); ++result.completedLevels;
+        result.converged=converged;
+    }
+    result.fineApplied=true; result.pairCorrection=correction;
+    result.reason=result.converged ? QStringLiteral("observable_directions_only")
+                                  : QStringLiteral("observable_directions_only;iteration_limit_reached");
     return result;
 }
 

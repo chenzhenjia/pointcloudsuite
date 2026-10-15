@@ -16,6 +16,7 @@ PLY 按属性名读 XYZ/法向，支持 ASCII、binary little-endian、binary bi
 |---|---|---|
 | 扫描 JSON 输入 | 点云/标定/Start-End 描述 | schema_version=sr2026-temp-scanning-info-mvp-2；kind=single_frame_scanning_info |
 | 临时工件 | baseline_robot_base.ply、roi_template_robot_base.ply、plane_mask.png、temp_workpiece_info.json | schema_version=sr2026-temp-workpiece-info-mvp-2；kind=single_frame_workpiece_roi |
+| 三维工件模板 | workpiece_template_robot_base.ply、workpiece_template_info.json | schema_version=pcv-workpiece-template-v1；kind=workpiece_template_3d |
 | 旧平面 writer | base.png、base.json、base_plane_robot_base.ply | schema_version=sr2026-temp-workpiece-info-mvp-2 |
 | 整帧拼接/仅转换 | stitched_robot_base.ply、stitched_robot_base_preview.ply、stitched_robot_base.pcvmap、stitching_manifest.json | schema=pcv-stitching-manifest-v0.4 |
 | 所选平面 | selected_plane_robot_base.ply、selected_plane_robot_base.pcvmap、selected_plane_manifest.json | processing_mode=selected_plane_stitch；当前没有独立 schema/schema_version 字段 |
@@ -28,6 +29,16 @@ PLY 按属性名读 XYZ/法向，支持 ASCII、binary little-endian、binary bi
 临时工件 JSON 的顶层为 schema_version、kind、created_at、plane、image、roi、outputs；created_at 沿用扫描输入。plane.equation 是 WObj1 的 `[X,Y,Z,A,B,C]`，不是四参数平面方程，plane.wobj_num=1。image 记录 name、width_px/height_px、width_mm/height_mm、pixel_size_mm（0.05）；roi=rectangle；outputs 的 robot_base_point_cloud、roi_point_cloud、plane_mask 是绝对产物路径。
 
 旧 writePlaneOutput 同 schema 的 plane 另含 name=WObj1，created_at 使用写出时间；默认目录 runtime_data/jobs/job_id/point_cloud/plane，destinationDirectory 可指定直接目录。旧 API 与临时工件 JSON 的字段差别必须保留，不能因共用 schema 名称合并字段或新增诊断。
+
+## 三维工件模板 v1
+
+模板包独立于临时工件四件套；完整保存当前全部点与已有法向，不代表全表面覆盖或几何质量验收。schema_version=pcv-workpiece-template-v1、kind=workpiece_template_3d，coordinate_frame=robot_base、units=mm；名称 name 保留用户原文，version_id 为 UTC 保存时间戳及可选冲突序号，created_at 为 ISO 时间（写出使用 UTC）。格式版本与工件版本分别记录，不升级旧 schema 或软件版本。
+
+point_count 为正整数；bounds_mm={minimum:[x,y,z],maximum:[x,y,z]}，单位 mm，读取时与实际点云核对。point_cloud_file 为包内相对路径，默认 workpiece_template_robot_base.ply；source 为文件级来源对象，应用写入 entry、files、manifest、processing_steps，原来源不存在仍可打开模板。无逐点映射、WObj1、Mask、纹理或匹配结果。
+
+v1 PLY 固定为 Binary Little Endian，字段顺序为 float x/y/z/nx/ny/nz；全零法向合法，不新增估计或归一化。拒绝非有限数据、未知版本/坐标/单位、非法包内路径及越界链接、缺失/截断/字段不符、点数或包围盒不一致，不静默过滤/补点。文件夹整体搬迁后按 JSON 所在目录解析 PLY。
+
+保存目录为 `<规范化工件名>_v1_<UTC时间戳>`，冲突追加序号；新建版本默认拒绝覆盖，运行/导出目录必须源码树外。保存和读取复用稳定 PCV_CONTRACT_001、PCV_INPUT_001/002、PCV_OUTPUT_001/002；cancelled 单独判断。普通失败/commit 前取消不发布部分包，commit 已成功后仍返回保存成功。进程崩溃/断电原子性不新增承诺。
 
 ## 整帧与所选平面拼接
 
