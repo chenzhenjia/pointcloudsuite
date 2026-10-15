@@ -1,22 +1,15 @@
-# 公共头文件
+# 公共头与兼容入口
 
-> 文档状态：当前参考。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../docs/requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../docs/README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
-
-`include/pcv/` 保存共享模块的公共头文件和迁移期 forwarding header。
-
-当前规范头路径按模块组织，例如：
+v0.5，2026-10-15。include/pcv保存core/infrastructure及迁移期forwarding，模块公共头位于各modules的include。使用实际公共路径：
 
 ```cpp
 #include <pcv/io/ply_reader.h>
-#include <pcv/stitching/multiframe_registration.h>
-#include <pcv/interface/stitching_interface.h>
-#include <pcv/planefitting/plane_fitting.h> // compatibility namespace; implementation is module 60
-#include <pcv/render/pointcloud_canvas.h>
 #include <pcv/io/artifact_transaction.h>
+#include <pcv/interface/stitching_interface.h>
+#include <pcv/stitching/selected_plane_stitch.h>
+#include <pcv/registration/handeye_transform.h>
+#include <pcv/planefitting/single_click_plane_selection_v1.h>
+#include <pcv/render/pointcloud_canvas.h>
 ```
 
-公共头必须保持与规范模块 API 一致。兼容头仅用于迁移，不得新增重复实现，也不代表独立 SDK 的长期兼容承诺。
-
-新 API 优先使用 `pcv::io`、`pcv::stitching`、`pcv::coordinates`、`pcv::geometry` 和 `pcv::workpiece`。旧 `pointcloud::`、`pcv::detail::*` 和 forwarding header 的保留/弃用是迁移规则，不能理解为已经全部标记 `[[deprecated]]`。当前实际 namespace 还包括 `pcv::interface`、`pcv::output`、`pcv::planefitting`、`pcv::roi` 和 `pcv::matching`；完整映射与待办见 [v0.4 协同文档](../docs/architecture/module_ui_integration_v0.4.md)。
-
-最后核对日期：2026-10-09（文档静态核对）。
+v1选面头承载当前v2行为以保兼容；PointCloudCanvas是全局类，头路径render不是namespace。IO、整帧、坐标等旧namespace仍在，不能声称已统一或全部deprecated。[实际映射](../docs/architecture/software_architecture_v0.5.md)与[迁移规则](../docs/architecture/module_ui_integration_v0.5.md)。兼容头不得新增第二套实现。

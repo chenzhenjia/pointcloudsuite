@@ -1,34 +1,7 @@
 # 依赖与构建环境
 
-> 文档状态：当前参考。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](docs/requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](docs/README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
+v0.5，核对日期2026-10-15。C++17、Windows/MSVC x64、Qt6.5+；根CMake最低3.19，preset version6需3.25+。Qt Core/Gui/Concurrent支持算法与CLI，Widgets/OpenGL/OpenGLWidgets支持画布和GUI；Threads供60并行，Windows Psapi供进程内存查询。
 
-## 必需环境
+不依赖Python、Open3D、PCL、VTK或CUDA算法运行时。实验相机SDK可选，探测Mv3dLpApi.h/Mv3dLp.lib后编译真机源；SDK DLL和VC/Qt运行库部署另验，无SDK仍有Mock/纯函数。
 
-- Windows 10 或 Windows 11
-- CMake 3.19 或更高版本
-- 支持 C++17 的 MSVC x64
-- Qt 6.5 或更高版本，需提供 Core、Gui、Widgets、Concurrent、OpenGL 和 OpenGLWidgets
-
-## 构建方式
-
-推荐使用仓库脚本：
-
-```powershell
-.\scripts\build_windows.ps1 -Config Debug -BuildTests -QtDir <QtDir> -BuildDir <BuildDir> -CMakePath <cmake.exe>
-```
-
-也可以在 Qt Creator 中打开根目录 `CMakeLists.txt`，由 Kit 提供 Qt 路径。命令行环境可通过 `CMAKE_PREFIX_PATH`、`Qt6_DIR` 或 `-QtDir` 指定 Qt。
-
-`scripts/build_windows.ps1` 默认使用 `NMake Makefiles`；需要实验相机时追加 `-ExperimentalCamera`。根 CMake 的 `PCV_BUILD_EXPERIMENTAL_CAMERA` 默认值为 `ON`，脚本会显式传入 `OFF` 以保持普通构建稳定。`PCV_BUILD_CLI=ON` 可单独构建 `pointcloudcli`；CLI-only 仅依赖 Qt Core/Gui/Concurrent，不配置 Widgets/OpenGL。`-CliOnly -Config Release -Deploy` 还需要同一 Qt 安装中的 `windeployqt` 与 MSVC x64 Runtime，用于生成并验证便携目录。
-
-## 运行时部署
-
-Windows 构建会使用 Qt 的 `windeployqt` 部署运行库和插件。构建、缓存、日志、导出和运行数据应放在源码树之外。
-
-## 不使用的外部依赖
-
-项目不要求 Python、PCL、Open3D、VTK、CUDA、数据库或云服务。
-
-v0.4 模块重整未增加外部依赖；模块与 UI 交接边界见 `docs/architecture/module_ui_integration_v0.4.md`。
-
-最后核对日期：2026-10-09（文档静态核对）。
+[Windows构建](docs/development/build-windows.md)提供脚本、生成器、依赖跟踪、CLI和部署条件；[架构](docs/architecture/software_architecture_v0.5.md)提供target依赖。历史Qt6.8.3/MSVC19.51不等于所有版本已验证；本轮不构建或部署。

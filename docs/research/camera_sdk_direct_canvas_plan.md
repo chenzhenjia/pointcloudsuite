@@ -1,6 +1,6 @@
 # 海康 3D 激光轮廓传感器点云取流直连 OpenGL 画布方案（调研 + 实施记录）
 
-> 文档状态：实验调研与历史记录。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
+> 文档状态：历史研究/实验记录。v0.5整理日期2026-10-15；正文的研究日期、参数与现场记录保留原时点，不作为现行稳定能力。当前实现见[软件架构](../architecture/software_architecture_v0.5.md)、[数据契约](../contracts/data_contracts_v0.5.md)和[开发路线](../development/roadmap_v0.5.md)。旧配准模式已回滚；相机坐标/重连/关闭和现场性能需独立验收。
 
 日期：2026-09
 状态：实验实现；核心单测与构建通过，尚未接入生产 JSON pipeline，真实相机验收待完成。

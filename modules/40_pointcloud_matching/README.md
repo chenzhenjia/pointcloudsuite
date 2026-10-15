@@ -1,19 +1,5 @@
 # 40_pointcloud_matching
 
-> 文档状态：规划占位与兼容边界。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../../docs/requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../../docs/README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
+v0.5，核对2026-10-15。职责：位置确认规划占位，INTERFACE聚合30/60。target为pcv_m40_pointcloud_matching；当前接口、依赖、默认行为、测试归属与风险只维护在[模块文档](../../docs/modules/40_pointcloud_matching.md)。
 
-## 当前状态
-
-规划占位。40 的正式声明是工件位置确认能力，但本版不实现移动判定或新输出闭环。多帧 ICP 已迁入 30，ROI/临时工件几何已迁入 60；`pcv_m40_pointcloud_matching` 与 `pcv_m40_pointcloudregistration` 仅为兼容聚合入口。
-
-## 规划声明
-
-对经过点云处理和平面/坐标转换后的数据，生成含 `robot_base` 坐标信息的平面点云数据和坐标元数据，用于确定机器人坐标系中的工件信息；后续可通过基准模板或参考扫描比较，判断工件是否被挪动。
-
-本版不实现基准模板持久化、当前/基准扫描比较、移动阈值与 6DoF 偏差判定、机器人执行/坐标修正下发或新正式输出闭环。
-
-## 依赖与测试
-
-不得依赖应用或 Qt Widgets。现有多帧 ICP/结构校验测试归 30，ROI/临时工件测试归 60；40 当前没有可声明为通过的移动判定测试。
-
-最后核对日期：2026-10-09（文档静态核对）（40 调整为规划占位后复核）。
+[整体架构](../../docs/architecture/software_architecture_v0.5.md) · [数据契约](../../docs/contracts/data_contracts_v0.5.md) · [版本日志](../../docs/changelog/v0.5.md)。共享模块不依赖apps；旧target/header仅兼容转发，不新增重复实现。本轮只静态文档整理，历史测试不代表重新通过。

@@ -1,20 +1,7 @@
 # 配置说明
 
-> 文档状态：当前参考。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../docs/requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../docs/README.md)。当前实现与目标状态分开记录，带日期的构建/测试结果仅对应当次变更。
+v0.5，2026-10-15。pointcloudview.config.json为配置模板；字段以当前infrastructure解析为准。本次不改JSON配置。
 
-`pointcloudview.config.json` 是版本化配置模板。配置用于指定业务数据目录和点云处理默认参数。
+配置优先级为pointcloudview --config绝对路径、PCV_CONFIG_FILE、程序目录config/pointcloudview.json、Qt用户配置目录。首次无配置生成用户模板；字段独立校验，非法项回内置默认并记启动日志。JSON配置不支持注释。
 
-配置查找顺序：
-
-1. `pointcloudview --config <absolute path>`
-2. 环境变量 `PCV_CONFIG_FILE=<absolute path>`
-3. 程序目录下的 `config/pointcloudview.json`
-4. Qt 用户配置目录
-
-首次启动且没有配置时会生成用户配置模板。每个字段独立校验；缺失或非法字段回退到内置默认值，并写入启动日志。
-
-默认数据目录由模板和程序默认值定义，运行数据应包含 `runtime_data`、`cache`、`logs` 和 `exports`，不得写入源码树。JSON 配置不支持注释。
-
-模块路径、target 和 UI 交接边界以 `docs/architecture/module_ui_integration_v0.4.md` 为准；配置字段与数据目录契约不因模块重整改变。
-
-最后核对日期：2026-10-09（文档静态核对）。
+运行数据、cache/logs/exports均放源码树外。CLI业务--data-dir有独立优先级，不能和GUI配置混用。[数据契约](../docs/contracts/data_contracts_v0.5.md) · [架构](../docs/architecture/software_architecture_v0.5.md)。

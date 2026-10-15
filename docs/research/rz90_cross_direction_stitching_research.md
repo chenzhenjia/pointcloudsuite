@@ -1,6 +1,6 @@
 # 基于相机姿态旋转（RZ 90°）的多方向点云拼接方案调研报告
 
-> 文档状态：历史归档。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../README.md)。正文和带日期的验证结论保留用于追溯，当前实现请查规范入口。
+> 文档状态：历史研究/实验记录。v0.5整理日期2026-10-15；正文的研究日期、参数与现场记录保留原时点，不作为现行稳定能力。当前实现见[软件架构](../architecture/software_architecture_v0.5.md)、[数据契约](../contracts/data_contracts_v0.5.md)和[开发路线](../development/roadmap_v0.5.md)。旧配准模式已回滚；相机坐标/重连/关闭和现场性能需独立验收。
 
 > 状态：历史调研归档。本文仅记录当时的分析和验证，不代表当前实现或发布结论。当前架构/UI 边界请参阅 `docs/architecture/module_ui_integration_v0.4.md`，数据契约请参阅 `docs/requirements/pointcloudview_v0.3.md`。最后核对日期：2026-09-17。
 

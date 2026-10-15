@@ -1,21 +1,7 @@
-# minimal plane output v0.1
+# minimal plane output v0.1：历史示例
 
-> 文档状态：历史归档。整理日期：2026-10-09（仅静态核对）。规范入口：[pointcloudview_v0.4.md](../../../docs/requirements/pointcloudview_v0.4.md)；总索引：[docs/README.md](../../../docs/README.md)。正文和带日期的验证结论保留用于追溯，当前实现请查规范入口。
+整理2026-10-15，保留v0.1标识与示例数据；不是当前生产输入或验收夹具。[当前契约](../../../docs/contracts/data_contracts_v0.5.md) · [历史](../../../docs/archive/history_pre_v0.5.md)。
 
-> 状态：历史示例归档。该示例用于说明 v0.1 文件结构，不代表当前生产输入或 v0.4 验收。当前模块/输出边界请参阅 `docs/architecture/module_ui_integration_v0.4.md`，字段契约请参阅 `docs/requirements/pointcloudview_v0.3.md`。最后核对日期：2026-09-17。
+输入为已在robot_base的PLY平面，pixel_size_mm=0.05；历史任务runtime_root=runtime_data、job_id=job_demo_001、workpiece_id=workpiece_demo_001、base_name=demo。plane.equation为控制器[X,Y,Z,A,B,C]，非四参数方程。
 
-这是 `sr2026-temp-workpiece-info-mvp-2` 契约的最小非生产示例。
-
-输入：一个已位于 `robot_base` 的 PLY 平面点云；`pixel_size_mm` 固定为 `0.05`。
-
-任务参数：`runtime_root=runtime_data`、`job_id=job_demo_001`、`workpiece_id=workpiece_demo_001`、`base_name=demo`。JSON 的 `plane.equation` 使用控制器顺序 `[X,Y,Z,A,B,C]`（A=Rx、B=Ry、C=Rz）。
-
-生成目录：`runtime_data/jobs/job_demo_001/`。
-
-三项输出（PNG 前景为 `255`，背景为 `0`）：
-
-* `point_cloud/plane/demo.png`
-* `point_cloud/plane/demo.json`
-* `point_cloud/plane/demo_plane_robot_base.ply`
-
-主程序登记 `demo.json`、`demo.png` 和 `demo_plane_robot_base.ply` 三个相对引用即可；点云模块不会修改 `workpiece_list.json`。
+历史目录runtime_data/jobs/job_demo_001/point_cloud/plane/下为demo.png、demo.json、demo_plane_robot_base.ply；PNG前景255背景0。程序登记相对引用，模块不修改workpiece_list.json。当前写入位置/字段以现行契约和源码为准；本轮未执行示例。
