@@ -27,11 +27,22 @@ struct CachedCloudResult {
     qint64 boundaryScanElapsedMs = 0;
     qint64 parseElapsedMs = 0;
     qint64 totalElapsedMs = 0;
+    qint64 fingerprintMs = 0;
+    qint64 cacheReadMs = 0;
+    qint64 cacheWriteMs = 0;
+};
+
+struct CloudCachePolicy {
+    bool prepareCanonicalPly = true; // Existing callers retain canonical verification.
 };
 
 CachedCloudResult readPlyCached(const QString &sourceFile,
                                 const QString &cacheDirectory = {},
                                 const PlyReadOptions &options = {});
+CachedCloudResult readPlyCached(const QString &sourceFile,
+                                const QString &cacheDirectory,
+                                const PlyReadOptions &options,
+                                const CloudCachePolicy &policy);
 QString cacheFilePath(const QString &sourceFile,
                       const QString &cacheDirectory = {});
 

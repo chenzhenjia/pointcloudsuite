@@ -4,11 +4,13 @@
 
 ## 坐标、单位与来源
 
+连续采集v2经用户授权新增独立pcv-camera-session-v2：boundary_mode=sdk_image、boundary_verification=operator_confirmed_device_configuration，逐帧独立height，不将session的统一rows作为门槛；旧v1固定行数读写保留。逐帧frame-v1/PLY/索引格式复用，追加边界来源及原始类型/计时诊断，既有正式拼接manifest不升级。CaptureConfiguration显式选择边界模式，默认仍FixedRows；CameraFrame新增来源字段默认Unspecified，不能由completeScan默认值冒充SDK确认。[定义与验收](../development/camera_capture_sdk_frame_v2.md)。
+
 长度 mm、角度 deg。控制器位姿为 `[X,Y,Z,A,B,C]`，`A=Rx/B=Ry/C=Rz`，旋转 `Rz(C)*Ry(B)*Rx(A)`。手眼 XML 的 `RTmatDepth2robot=T_flange_depth`；`T_base_depth=T_base_flange*T_flange_depth`。不得默认求逆或增加固定 Z 翻转/镜像/180° 补丁。
 
 LineProfileXz 相机点为 `[X,0,Z]`，输入 Y 仅表示 `ratio=y/signedTravel`；负行程合法，方向由 Start/End 决定。FullXyz 保留 XYZ；点和法向共用旋转，法向不平移。所选平面公共请求已在 robot_base，绝不再次手眼；原始纹理实验保持输入 XYZ，不声明 robot_base。
 
-PLY 按属性名读 XYZ/法向，支持 ASCII、binary little-endian、binary big-endian；正式点云写 binary little-endian。保留原点序及 sourceIndices，读取过滤统计、bounds、非有限与取消行为由 reader 定义。readPly 不写新文件；readPlyCached 的 canonical Binary LE 写入/回读失败导致缓存入口失败。
+PLY 按属性名读 XYZ/法向，支持 ASCII、binary little-endian、binary big-endian；正式点云写 binary little-endian。保留原点序及 sourceIndices，读取过滤统计、bounds、非有限与取消行为由 reader 定义。readPly 不写新文件；readPlyCached 默认策略的 canonical Binary LE 写入/回读失败导致缓存入口失败。
 
 ## 产物与版本目录
 
@@ -42,6 +44,8 @@ v1 PLY 固定为 Binary Little Endian，字段顺序为 float x/y/z/nx/ny/nz；�
 
 ## 整帧与所选平面拼接
 
+连续采集v1新增独立pcv-camera-session-v1/frame-v1/parameters-v1，不替代既有manifest/schema。原相机有效XYZ与原栅格下标成套保存，栅格映射LE格式及会话相对路径见[定义](../development/camera_capture_pose_stitch_v1.md)。captureFrameDirectory仅用于位姿直拼，row/(height-1)显式进度不更改旧PLY的Y/signedTravel；报告not_run不代表几何通过。XML快照与参数保存在会话内，所有正式点及映射完整保留。
+
 整帧请求按 input/registration/seam/artifacts 分组，sampleStride=8、parallelEnabled=true、maxParallelTasks=0、collectDiagnosticFrames=true；seam.enabled=false、halfWidthMm=8、mutualDistanceMm=0.6、decisionCellSizeMm=0.5；previewRatio=0.1。其余 ICP 默认值以 multiframe_registration.h 为准。
 
 新请求 allowOverwrite=false，旧 StitchingOptions=true；映射时显式保留差别。正式四件产物和可选 source/pre/post ICP 文件在同一事务；可选文件名为 diagnostic_pre_icp_frame_NN.ply、diagnostic_post_icp_frame_NN.ply、序号_输入名_robot_base.ply。整帧 manifest 保留既有 schema、coordinate_frame、formal_ply、preview_ply、mapping_file、success、diagnostics；不套用选面字段。
@@ -57,6 +61,12 @@ PCVMAP 用 LittleEndian、SinglePrecision：quint32 magic=0x314D4350、quint32 v
 单击 v2 的 selection_parameters 记录 algorithm_version=single_click_plane_selection_v2、surface_tolerance_mm、maximum_gap_mm、sampling_spacing_u_mm/v_mm、connectivity_radius_u_mm/v_mm、merged_region_count、refinement_iterations、refinement_converged、gap_merge_ms 等现有诊断。默认 maximumGapMm=3，范围 0～50；0 关闭额外跨带，正常采样连接仍保留。gap_merge_ms 已包含在 connectivity_ms，不重复相加。
 
 持久选面报告 output_stage_ms 只计 PLY/map staging，total_precommit_ms 截止 manifest 提交前，timing_scope 明示不含 manifest staging/commit。返回 report 另有 output_commit_wall_ms/total_wall_ms；磁盘 JSON 不在事务后重写。selection_ms 不含人工思考、拾取、排队和 GUI 绘制，不当作点击至完整高亮指标。
+
+## 当前帧展示映射（2026-10-16，v2）
+
+展示点/`displayToFullIndices` 只存在于应用加载任务与画布，映射指向当前完整 `RobotBaseFrame.fullPoints` 下标，不是 PLY `sourceIndex`。展示最多 300,000 个确定性均匀抽取的真实点，长度/范围/重复及非有限数据不合法时画布拒绝发布；未显示的点不补画。拾取和高亮以完整下标为对外语义，选面/确认/拼接均访问完整数据。
+
+上一轮 v1 新增的 `SelectedPlaneStitchResult` 预览字段和 manifest 预览字段已撤回，不构成当前契约。拼接返回/画布结果和正式 PLY/PCVMAP 恢复完整点集；本次加载/抽样/索引/首帧耗时仅写会话日志，不新增正式 manifest 字段或 preview PLY。
 
 ## 扫描轨迹与纹理
 
@@ -77,3 +87,8 @@ PCVMAP 用 LittleEndian、SinglePrecision：quint32 magic=0x314D4350、quint32 v
 CLI 退出码 0/2/10/20/30/40/130 对应成功、契约、输入、转换、平面/工件、输出、取消。PLY/业务阶段失败 JSON 写 stderr，成功摘要 stdout；基础用法错误仍为错误文本和用法。数据目录只用于 temp-workpiece run，顺序为 --data-dir、PCV_DATA_DIR、exe 同级 data、LOCALAPPDATA/PointCloudSuite/data。
 
 外部高点/刀路 DTO、schema 和页面仍待冻结，本文件不新增正式占位协议。本轮未运行动态验证。
+
+2026-10-16 六分屏整合：展示映射契约逐格复用，稳定帧身份/revision不写正式产物；完整候选、确认、所选平面PLY/PCVMAP、模板点云均不降采样。跳过仅作用于应用输入顺序，模板source.skipped_files记录跳过路径；模板v1/schema/文件名不变。readPlyCached三参默认仍要求canonical，新增四参CloudCachePolicy可关闭该步骤但不关闭完整指纹/缓存校验。50/60可选预算/并行与诊断为内存API扩展，默认语义保持；公共头变动需完整重建。见[整合说明](../development/batch_plane_selection_template_integration_v1.md)。
+
+
+2026-10-16 整合v2：新增RobotCloudResult.mergeMs/actualWorkerCount、SingleClickResult.projectionMs/normalConnectivityMs均为内存诊断字段，仅应用会话日志使用。正式PLY/PCVMAP/manifest与模板v1协议不变。提交跳过释放旧快照，撤销重载重选；过期结果不更改新请求。见[当前整合](../development/batch_plane_selection_template_integration_v2.md)。

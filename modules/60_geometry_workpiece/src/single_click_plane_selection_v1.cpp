@@ -8,10 +8,12 @@
 #include <algorithm>
 #include <array>
 #include <future>
+#include <system_error>
 #include <limits>
 #include <random>
 #include <unordered_map>
 #include <vector>
+#include <utility>
 
 namespace pcv::planefitting {
 namespace {
@@ -74,6 +76,8 @@ struct Bucket {
 class PlaneSelectionIndex {
 public:
     QVector<pointcloud::Point3D> points;
+    QVector<int> pointBuckets;
+    std::shared_ptr<pcv::ProcessingBudget::Lease> bucketLease;
     QVector3D origin;
     float cellSize = 1;
     std::unordered_map<Key,int,KeyHash> lookup;
@@ -86,21 +90,27 @@ public:
 };
 
 PlaneSelectionIndexResult preparePlaneSelectionIndex(const QVector<pointcloud::Point3D> &points,
-                                                    const std::function<bool()> &cancelled) {
+                                                    const std::function<bool()> &cancelled,
+                                                    const IndexPreparationOptions &options) {
     PlaneSelectionIndexResult result; QElapsedTimer timer; timer.start();
     const auto stopped=[&] { if(cancelled && cancelled()) {result.cancelled=true;result.error=QStringLiteral("cancelled");return true;} return false; };
     if(stopped()) return result;
     if(points.size()<100 || points.size()>std::numeric_limits<int>::max()) {result.error=QStringLiteral("单击选面至少需要100个点，点数不得超过int索引范围");return result;}
     try {
         auto index=std::make_shared<PlaneSelectionIndex>(); index->points=points;
+        if(options.cachePointBuckets) {
+            const size_t bytes=size_t(points.size())*sizeof(int);
+            if(options.processingBudget)index->bucketLease=options.processingBudget->acquire(bytes);
+            if(!options.processingBudget||index->bucketLease)index->pointBuckets.fill(-1,points.size());
+        }
         QVector3D low(std::numeric_limits<float>::max(),std::numeric_limits<float>::max(),std::numeric_limits<float>::max());
-        QVector3D high=-low; int count=0;
+        QVector3D high=-low; int validSampleCount=0;
         const int step=qMax(1,int(points.size()/4096));
         for(int i=0;i<points.size();i+=step) if(finite(points.at(i))) {
-            const auto p=position(points.at(i)); ++count;
+            const auto p=position(points.at(i)); ++validSampleCount;
             for(int axis=0;axis<3;++axis) {low[axis]=qMin(low[axis],p[axis]);high[axis]=qMax(high[axis],p[axis]);}
         }
-        if(count<3) {result.error=QStringLiteral("有效点不足");return result;}
+        if(validSampleCount<3) {result.error=QStringLiteral("有效点不足");return result;}
         index->origin=low;
         std::array<float,3> spans{high.x()-low.x(),high.y()-low.y(),high.z()-low.z()};
         std::sort(spans.begin(),spans.end(),std::greater<float>());
@@ -111,22 +121,97 @@ PlaneSelectionIndexResult preparePlaneSelectionIndex(const QVector<pointcloud::P
             const auto p=position(points.at(i)); const auto key=index->key(p);
             auto [it,inserted]=index->lookup.emplace(key,int(index->buckets.size()));
             if(inserted) index->buckets.push_back({key,{},{}});
+            if(!index->pointBuckets.isEmpty())index->pointBuckets[i]=it->second;
             auto &bucket=index->buckets[size_t(it->second)];bucket.indices.push_back(i);bucket.moments.add(p-index->origin);
         }
-        // Neighborhood normals are immutable and independent of a clicked
-        // plane. Prepare them once, outside click-to-preview timing.
-        for(auto &bucket:index->buckets) {
-            if(stopped())return result;
-            Moments moments;
-            for(int dz=-1;dz<=1;++dz)for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx) {
-                const int neighbor=index->find({bucket.key.x+dx,bucket.key.y+dy,bucket.key.z+dz});
-                if(neighbor>=0)moments.append(index->buckets[size_t(neighbor)].moments);
+        result.gridMs=timer.nsecsElapsed()/1e6;
+        QElapsedTimer normalTimer;normalTimer.start();
+        // Read the finished grid through a const view. Each worker owns its
+        // models; the original dz/dy/dx reduction order is unchanged.
+        const PlaneSelectionIndex *view=index.get();
+        struct Normal { Model model;bool valid=false; };
+        // A worker that observes cancellation reports it, so its remaining
+        // buckets are never published with default models.
+        struct NormalChunk { std::vector<Normal> output;bool cancelled=false; };
+        const auto normals=[view,&cancelled](size_t begin,size_t end) {
+            NormalChunk chunk;
+            chunk.output.resize(end-begin);
+            for(size_t i=begin;i<end;++i) {
+                if(cancelled&&cancelled()) {chunk.cancelled=true;break;}
+                const auto &bucket=view->buckets.at(i);Moments moments;
+                for(int dz=-1;dz<=1;++dz)for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx) {
+                    const int neighbor=view->find({bucket.key.x+dx,bucket.key.y+dy,bucket.key.z+dz});
+                    if(neighbor>=0)moments.append(view->buckets.at(size_t(neighbor)).moments);
+                }
+                auto &normal=chunk.output.at(i-begin);normal.valid=pca(moments,view->origin,&normal.model);
             }
-            bucket.hasLocalModel=pca(moments,index->origin,&bucket.localModel);
+            return chunk;
+        };
+        const auto normalsSerial=[&](size_t begin,size_t end) {
+            for(size_t i=begin;i<end;++i) {
+                if(stopped())return false;
+                auto &bucket=index->buckets.at(i);
+                Moments moments;
+                for(int dz=-1;dz<=1;++dz)for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx) {
+                    const int neighbor=view->find({bucket.key.x+dx,bucket.key.y+dy,bucket.key.z+dz});
+                    if(neighbor>=0)moments.append(view->buckets.at(size_t(neighbor)).moments);
+                }
+                bucket.hasLocalModel=pca(moments,index->origin,&bucket.localModel);
+            }
+            return true;
+        };
+        int workers=options.parallelEnabled?qBound(1,options.maxParallelTasks,4):1;
+        const size_t bucketCount=index->buckets.size();
+        constexpr size_t windowSize=4096;
+        std::shared_ptr<pcv::ProcessingBudget::Lease> normalLease;
+        if(options.processingBudget) {
+            normalLease=options.processingBudget->acquire(windowSize*size_t(workers)*sizeof(Normal));
+            if(!normalLease)workers=1;
         }
+        if(workers==1) {
+            for(size_t begin=0;begin<bucketCount;) {
+                const size_t end=qMin(bucketCount,begin+windowSize);
+                if(!normalsSerial(begin,end))return result;
+                begin=end;
+            }
+        } else {
+            for(size_t begin=0;begin<bucketCount;) {
+                std::vector<std::pair<size_t,std::future<NormalChunk>>> futures;
+                size_t serialBegin=bucketCount,serialEnd=bucketCount;
+                for(int worker=0;worker<workers&&begin<bucketCount;++worker) {
+                    const size_t end=qMin(bucketCount,begin+windowSize);
+                    try {
+                        futures.emplace_back(begin,std::async(std::launch::async,[&normals,begin,end]{return normals(begin,end);}));
+                    } catch(const std::system_error &) {
+                        serialBegin=begin;serialEnd=end;workers=1;
+                    }
+                    begin=end;
+                    if(serialBegin<bucketCount)break;
+                }
+                std::vector<std::pair<size_t,NormalChunk>> chunks;chunks.reserve(futures.size());
+                bool chunkCancelled=false;
+                for(auto &entry:futures) {
+                    auto chunk=entry.second.get();chunkCancelled=chunkCancelled||chunk.cancelled;
+                    chunks.emplace_back(entry.first,std::move(chunk));
+                }
+                if(chunkCancelled) {result.cancelled=true;result.error=QStringLiteral("cancelled");return result;}
+                if(stopped())return result;
+                for(const auto &entry:chunks)for(size_t i=0;i<entry.second.output.size();++i) {
+                    auto &bucket=index->buckets.at(entry.first+i);
+                    bucket.localModel=entry.second.output.at(i).model;bucket.hasLocalModel=entry.second.output.at(i).valid;
+                }
+                if(serialBegin<bucketCount) {
+                    if(!normalsSerial(serialBegin,serialEnd)||!normalsSerial(begin,bucketCount))return result;
+                    break;
+                }
+            }
+        }
+        result.normalsMs=normalTimer.nsecsElapsed()/1e6;
+        result.pointBucketCacheUsed=!index->pointBuckets.isEmpty();
+        result.optimizationBytes=size_t(index->pointBuckets.size())*sizeof(int);
         if(stopped()) return result;
         result.index=std::move(index);result.preparationMs=timer.nsecsElapsed()/1e6;
-    } catch(const std::bad_alloc &) {result.error=QStringLiteral("内存不足，无法准备单击选面索引");}
+    } catch(const std::bad_alloc &) {result.outOfMemory=true;result.error=QStringLiteral("内存不足，无法准备单击选面索引");}
     return result;
 }
 
@@ -301,32 +386,59 @@ SingleClickResult selectPlaneAtPoint(const QVector<pointcloud::Point3D> &points,
             if(bucket.hasLocalModel && bucket.localModel.thinness<=0.01f && !sameDirection(bucket.localModel,initial,25))usableCells[qsizetype(cell)]=0;
         }
         result.timings.candidateMs=stage.nsecsElapsed()/1e6;stage.restart();
+        int classificationTasks=options.parallelEnabled?qBound(1,options.maxParallelTasks,4):1;
+        std::shared_ptr<pcv::ProcessingBudget::Lease> classifyLease;
+        if(classificationTasks>1&&options.processingBudget) {
+            classifyLease=options.processingBudget->acquire(size_t(points.size())*sizeof(int)*2);
+            if(!classifyLease)classificationTasks=1;
+        }
+        // Private reusable range buffers; worker t writes only scratch[t].
+        // Reserving the exact maximum prevents QVector growth from escaping
+        // the optional memory reservation. Reduction remains original order.
+        std::vector<QVector<int>> scratch(static_cast<size_t>(classificationTasks));
+        if(classificationTasks>1)for(int t=0;t<classificationTasks;++t)
+            scratch.at(size_t(t)).reserve(qsizetype(qint64(points.size())*(t+1)/classificationTasks-qint64(points.size())*t/classificationTasks));
         const auto classify=[&]() {
-            const int tasks=options.parallelEnabled?options.maxParallelTasks:1;
-            const auto work=[&points,&index,&cancelled,usableView,model,tolerance=options.surfaceToleranceMm](int begin,int end) {
-                QVector<int> output;
+            const auto work=[&points,&index,&cancelled,usableView,model,tolerance=options.surfaceToleranceMm](int begin,int end,QVector<int> &output) {
+                output.clear();
                 for(int i=begin;i<end;++i) {
-                    if((i&4095)==0 && cancelled())return QVector<int>{};
+                    if((i&4095)==0&&cancelled()){output.clear();return;}
                     const auto &p=points.at(i);if(!finite(p)||residual(model,p)>tolerance)continue;
-                    const int cell=index->find(index->key(position(p)));
+                    const int cell=index->pointBuckets.isEmpty()?index->find(index->key(position(p))):index->pointBuckets.at(i);
                     if(cell<0)continue;
                     if(!usableView->at(cell)) {
-                        const auto &local=index->buckets[size_t(cell)].localModel;
+                        const auto &local=index->buckets.at(size_t(cell)).localModel;
                         if(residual(model,p)>residual(local,p)+tolerance*0.25f)continue;
                     }
                     output.push_back(i);
                 }
-                return output;
             };
-            std::vector<std::future<QVector<int>>> futures;
-            // Declare outputs after futures: work captures live until every
-            // async task is joined, including exceptional allocation exits.
-            for(int task=1;task<tasks;++task) {
-                const int begin=int(qint64(points.size())*task/tasks),end=int(qint64(points.size())*(task+1)/tasks);
-                futures.push_back(std::async(std::launch::async,[&work,begin,end]{return work(begin,end);}));
+            if(classificationTasks==1) {QVector<int> output;work(0,int(points.size()),output);return output;}
+            std::vector<std::future<void>> futures;
+            bool launchFailed=false;
+            for(int t=1;t<classificationTasks;++t) {
+                const int begin=int(qint64(points.size())*t/classificationTasks),end=int(qint64(points.size())*(t+1)/classificationTasks);
+                auto *output=&scratch.at(size_t(t));
+                try {futures.push_back(std::async(std::launch::async,[&work,begin,end,output]{work(begin,end,*output);}));}
+                catch(const std::system_error &) {launchFailed=true;break;}
             }
-            auto output=work(0,int(points.size()/tasks));for(auto &future:futures)output.append(future.get());return output;
+            if(launchFailed) {
+                for(auto &future:futures)future.get();
+                classificationTasks=1;QVector<int> output;work(0,int(points.size()),output);return output;
+            }
+            work(0,int(points.size()/classificationTasks),scratch.at(0));
+            for(auto &future:futures)future.get();
+            QVector<int> output;
+            qsizetype count=0;for(const auto &range:scratch)count+=range.size();output.reserve(count);
+            for(const auto &range:scratch)output.append(range);
+            return output;
         };
+        std::shared_ptr<pcv::ProcessingBudget::Lease> reuseLease;
+        if(options.processingBudget)reuseLease=options.processingBudget->acquire(size_t(points.size())*(sizeof(QVector2D)+sizeof(float)+sizeof(int)));
+        const bool reuseBuffers=!options.processingBudget||bool(reuseLease);
+        QVector<QVector2D> projected;
+        QVector<float> distances;
+        QVector<int> connectivityQueue;
         QVector<int> previousClassified;
         QVector3D previousNormal;
         for(int iteration=0;iteration<6;++iteration) {
@@ -341,18 +453,62 @@ SingleClickResult selectPlaneAtPoint(const QVector<pointcloud::Point3D> &points,
             previousClassified=classified;previousNormal=model.n;
             const auto projectionU=(axes.u-model.n*QVector3D::dotProduct(axes.u,model.n)).normalized();
             const auto projectionV=QVector3D::crossProduct(model.n,projectionU).normalized();
-            QVector<QVector2D> projected;projected.reserve(classified.size());int seedLocal=-1;
-            for(int local=0;local<classified.size();++local) {
-                if((local&4095)==0 && cancelled())return fail(SingleClickStatus::Cancelled,QStringLiteral("cancelled"));
-                const int id=classified.at(local);const auto p=position(points.at(id))-seedPosition;
-                projected.push_back({QVector3D::dotProduct(p,projectionU),QVector3D::dotProduct(p,projectionV)});
-                if(id==seed)seedLocal=local;
+            QElapsedTimer projectionTimer;projectionTimer.start();
+            projected.clear();projected.reserve(classified.size());int seedLocal=-1;
+            constexpr int projectionChunkSize=65536;
+            int projectionTasks=options.parallelEnabled&&classified.size()>=100000?qBound(1,options.maxParallelTasks,4):1;
+            std::shared_ptr<pcv::ProcessingBudget::Lease> projectionLease;
+            if(options.processingBudget)while(projectionTasks>1) {
+                projectionLease=options.processingBudget->acquire(size_t(projectionTasks)*projectionChunkSize*sizeof(QVector2D));
+                if(projectionLease)break;
+                --projectionTasks;
             }
+            // One scalar expression for both paths. Workers only return private
+            // contiguous ranges; the coordinator merges after every future joins.
+            const auto projectRange=[&points,&classified,seedPosition,projectionU,projectionV,&cancelled,seed]
+                (int begin,int end,QVector<QVector2D> &output,int &foundSeed) {
+                for(int local=begin;local<end;++local) {
+                    if((local&4095)==0&&cancelled())return;
+                    const int id=classified.at(local);const auto p=position(points.at(id))-seedPosition;
+                    output.push_back({QVector3D::dotProduct(p,projectionU),QVector3D::dotProduct(p,projectionV)});
+                    if(id==seed)foundSeed=local;
+                }
+            };
+            if(projectionTasks==1)projectRange(0,int(classified.size()),projected,seedLocal);
+            else {
+                struct ProjectionChunk {QVector<QVector2D> points;int seed=-1;};
+                for(int begin=0;begin<classified.size();) {
+                    std::vector<std::future<ProjectionChunk>> futures;
+                    bool launchFailed=false;
+                    for(int task=0;task<projectionTasks&&begin<classified.size();++task) {
+                        const int end=int(qMin<qsizetype>(classified.size(),qsizetype(begin)+projectionChunkSize));
+                        try {
+                            futures.push_back(std::async(std::launch::async,[&projectRange,begin,end] {
+                                ProjectionChunk chunk;chunk.points.reserve(end-begin);
+                                projectRange(begin,end,chunk.points,chunk.seed);return chunk;
+                            }));
+                        } catch(const std::system_error &) {launchFailed=true;break;}
+                        begin=end;
+                    }
+                    std::vector<ProjectionChunk> chunks;chunks.reserve(futures.size());
+                    for(auto &future:futures)chunks.push_back(future.get());
+                    for(const auto &chunk:chunks) {
+                        projected.append(chunk.points);if(chunk.seed>=0)seedLocal=chunk.seed;
+                    }
+                    if(cancelled())break;
+                    if(launchFailed) {projectRange(begin,int(classified.size()),projected,seedLocal);break;}
+                }
+            }
+            projectionLease.reset();
+            result.projectionMs+=projectionTimer.nsecsElapsed()/1e6;
+            if(cancelled())return fail(SingleClickStatus::Cancelled,QStringLiteral("cancelled"));
             if(seedLocal<0)return fail(SingleClickStatus::Ambiguous,QStringLiteral("点击点不在目标平面内，请重选"));
             const auto component=detail::selectProjectedComponents(projected,seedLocal,result.connectivityRadiusUMm,
-                result.connectivityRadiusVMm,options.maximumGapMm,cancelled);
+                result.connectivityRadiusVMm,options.maximumGapMm,cancelled,reuseBuffers?&connectivityQueue:nullptr);
+            result.normalConnectivityMs+=component.normalMs;
             result.timings.connectivityMs+=stage.nsecsElapsed()/1e6;result.gapMergeMs+=component.gapMs;stage.restart();
             if(cancelled())return fail(SingleClickStatus::Cancelled,QStringLiteral("cancelled"));
+            if(!reuseBuffers)projected={};
             QVector<int> selected;selected.reserve(component.localIndices.size());
             for(int local:component.localIndices)selected.push_back(classified.at(local));
             result.mergedRegionCount=component.mergedRegions;result.refinementIterations=iteration+1;
@@ -362,7 +518,7 @@ SingleClickResult selectPlaneAtPoint(const QVector<pointcloud::Point3D> &points,
             if(iteration==5)break; // The final set always belongs to the published model.
             // Trim high residuals for model estimation only; classification
             // still uses the user's full tolerance and can recover those points.
-            QVector<float> distances;distances.reserve(result.planeIndices.size());
+            distances.clear();distances.reserve(result.planeIndices.size());
             for(int id:result.planeIndices) {
                 if((distances.size()&4095)==0 && cancelled())return fail(SingleClickStatus::Cancelled,QStringLiteral("cancelled"));
                 distances.push_back(residual(model,points.at(id)));
@@ -378,6 +534,7 @@ SingleClickResult selectPlaneAtPoint(const QVector<pointcloud::Point3D> &points,
             if(!pca(moments,seedPosition,&refined) || !sameDirection(refined,initial,5) || refined.thinness>0.05f
                || residual(refined,points.at(seed))>options.surfaceToleranceMm)
                 return fail(SingleClickStatus::Ambiguous,QStringLiteral("完整区域与点击处平面不一致，请重选"));
+            if(!reuseBuffers)distances={};
             model=refined;result.timings.pcaMs+=stage.nsecsElapsed()/1e6;stage.restart();
         }
         double squared=0;float maximum=0;
@@ -389,6 +546,6 @@ SingleClickResult selectPlaneAtPoint(const QVector<pointcloud::Point3D> &points,
         result.model={model.n.x(),model.n.y(),model.n.z(),model.d,int(result.planeIndices.size()),result.rmsMm,maximum};
         result.status=SingleClickStatus::Success;result.timings.assemblyMs=stage.nsecsElapsed()/1e6;result.timings.totalMs=total.nsecsElapsed()/1e6;
         return result;
-    } catch(const std::bad_alloc &) {return fail(SingleClickStatus::InsufficientSupport,QStringLiteral("内存不足，保留原选择"));}
+    } catch(const std::bad_alloc &) {result.outOfMemory=true;return fail(SingleClickStatus::InsufficientSupport,QStringLiteral("内存不足，保留原选择"));}
 }
 } // namespace pcv::planefitting

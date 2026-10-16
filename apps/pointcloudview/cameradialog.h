@@ -19,6 +19,8 @@ class QLabel;
 class QPushButton;
 class QThread;
 class QTimer;
+class CameraCaptureWizard;
+namespace pcv::interface { struct StitchingResult; }
 
 namespace pointcloud { struct Point3D; }
 
@@ -37,13 +39,23 @@ public:
     // The application binds this to PointCloudCanvas::setCloudStreaming.
     std::function<void(const QVector<pointcloud::Point3D> &)> cloudPublished;
     std::function<void(const QVector<pointcloud::Point3D> &)> cloudFrozen;
+    std::function<bool()> canStartCapture;
+    std::function<bool()> canStartStitching;
+    std::function<void(const pcv::interface::StitchingResult &)> stitchingPublished;
+    bool isCaptureBusy() const;
+    void cancelAndWait();
 
 protected:
     void closeEvent(QCloseEvent *event) override;
     void showEvent(QShowEvent *event) override;
 
 private:
+    friend struct CameraDialogTestAccess;
     void refreshDevices();
+    void updateWorkflowUi();
+    void toggleAdvancedPreview();
+    bool connectSelectedDevice();
+    void autoConnectSingleDevice();
     void toggleConnection();
     void toggleStreaming();
     void freezeCurrentFrame();
@@ -71,6 +83,9 @@ private:
     QLabel *m_status = nullptr;
     QLabel *m_frameInfo = nullptr;
     QLabel *m_rateInfo = nullptr;
+    QPushButton *m_advancedPreview = nullptr;
+    bool m_showAdvancedPreview = false;
+    bool m_autoConnectPending = false;
     QLabel *m_deviceModel = nullptr;
     QLabel *m_deviceSerial = nullptr;
     QLabel *m_deviceIp = nullptr;
@@ -95,6 +110,8 @@ private:
     std::uint32_t m_lastConvertedFragments = 0;
     bool m_lastConvertedComplete = false;
     bool m_receivedFrameEvent = false;
+    bool m_captureActive = false;
+    CameraCaptureWizard *m_capturePanel = nullptr;
     QVector<pointcloud::Point3D> m_lastConvertedPoints;
     Ui::CameraDialog *ui = nullptr;
 };

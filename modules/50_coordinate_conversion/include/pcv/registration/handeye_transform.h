@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pcv/core/point_types.h>
+#include <pcv/core/processing_budget.h>
 
 #include <QMatrix4x4>
 #include <QString>
@@ -85,6 +86,15 @@ struct CloudTransformOptions {
     float progressMinimum = -0.02f;
     float progressMaximum = 1.02f;
     std::function<bool()> isCancelled;
+    bool collectSamplePoints = true;
+    bool parallelEnabled = false;
+    int maxParallelTasks = 4;
+    std::shared_ptr<pcv::ProcessingBudget> processingBudget;
+    // Explicit opt-in for complete camera scans. Legacy input-Y semantics stay unchanged.
+    bool useRasterRowProgress = false;
+    quint32 rasterWidth = 0;
+    quint32 rasterHeight = 0;
+    QVector<qsizetype> rasterSourceIndices;
 };
 
 struct RobotCloudResult {
@@ -102,6 +112,8 @@ struct RobotCloudResult {
     QString error;
     bool cancelled = false;
     bool ok = false;
+    double mergeMs = 0.0; // Diagnostics only, excludes worker computation.
+    int actualWorkerCount = 1;
 };
 
 // Rejects non-finite values, a bottom row other than [0,0,0,1], non-unit or

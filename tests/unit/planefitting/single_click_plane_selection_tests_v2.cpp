@@ -135,6 +135,44 @@ bool cancellation() {
     }
     return true;
 }
+bool optimizedIndexEquivalence() {
+    QVector<pointcloud::Point3D> points;patch(points,40,40,0);patch(points,40,40,22);
+    const auto shared=points;const auto referenceIndex=preparePlaneSelectionIndex(points);
+    const auto reference=selectPlaneAtPoint(points,referenceIndex.index,820);
+    if(!check(reference.ok(),"index reference failed"))return false;
+    for(int workers:{1,2,4})for(size_t bytes:{size_t(0),size_t(16)*1024*1024}) {
+        auto budget=std::make_shared<pcv::ProcessingBudget>(bytes);
+        {
+            IndexPreparationOptions prepare;prepare.parallelEnabled=true;prepare.maxParallelTasks=workers;
+            prepare.cachePointBuckets=true;prepare.processingBudget=budget;
+            const auto index=preparePlaneSelectionIndex(shared,{},prepare);
+            if(!check(bool(index.index)&&index.pointBucketCacheUsed==(bytes>0),"point bucket budget fallback invalid"))return false;
+            SingleClickOptions options;options.parallelEnabled=true;options.maxParallelTasks=workers;options.processingBudget=budget;
+            if(!check(same(reference,selectPlaneAtPoint(shared,index.index,820,options)),"optimized grid/model/result changed"))return false;
+            std::atomic_int calls{0};
+            const auto stopped=preparePlaneSelectionIndex(shared,[&calls]{return ++calls>=4;},prepare);
+            if(!check(stopped.cancelled&&!stopped.index,"index cancellation published partial grid"))return false;
+        }
+        if(!check(budget->used()==0,"index budget lease leaked"))return false;
+    }
+    return true;
+}
+bool parallelProjectionEquivalence() {
+    // Exceeds the dispatch threshold and spans more than one bounded window.
+    QVector<pointcloud::Point3D> points;patch(points,320,320,0);
+    const auto shared=points;
+    const auto index=preparePlaneSelectionIndex(points);
+    const auto reference=selectPlaneAtPoint(points,index.index,51360);
+    if(!check(reference.ok()&&reference.planeIndices.size()==points.size(),"projection reference incomplete"))return false;
+    for(int workers:{1,2,4})for(size_t bytes:{size_t(0),size_t(16)*1024*1024}) {
+        auto budget=std::make_shared<pcv::ProcessingBudget>(bytes);
+        SingleClickOptions options;options.parallelEnabled=true;options.maxParallelTasks=workers;options.processingBudget=budget;
+        const auto selected=selectPlaneAtPoint(shared,index.index,51360,options);
+        if(!check(same(reference,selected)&&budget->used()==0,"parallel projection changed selected model/indices or leaked budget"))return false;
+        if(!check(selected.projectionMs>=0&&selected.normalConnectivityMs>=0,"projection diagnostics invalid"))return false;
+    }
+    return check(points.constData()==shared.constData(),"projection detached shared input");
+}
 int benchmark() {
     QVector<pointcloud::Point3D> points;points.reserve(6300000);patch(points,1000,6300,0,0.1f,0.1f);
     const auto prepared=preparePlaneSelectionIndex(points);if(!prepared.index)return 1;
@@ -152,5 +190,5 @@ int benchmark() {
 int main(int argc,char **argv) {
     QCoreApplication app(argc,argv);
     if(app.arguments().contains("--benchmark"))return benchmark();
-    return gaps()&&surfaces()&&cancellation()?0:1;
+    return gaps()&&surfaces()&&cancellation()&&optimizedIndexEquivalence()&&parallelProjectionEquivalence()?0:1;
 }

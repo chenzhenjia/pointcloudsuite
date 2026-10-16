@@ -1,4 +1,5 @@
 #include <pcv/camera/frame_source.h>
+#include <pcv/camera/capture_session_v1.h>
 
 namespace pcv::camera {
 
@@ -8,6 +9,7 @@ bool LatestFrameSlot::publish(std::shared_ptr<const CameraFrame> frame)
     bool dropped = false;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_captureQueue) m_captureQueue->push(frame);
         dropped = static_cast<bool>(m_latest);
         ++m_publishedCount;
         if (dropped) ++m_droppedCount;
@@ -59,6 +61,17 @@ void LatestFrameSlot::resetStatistics()
     std::lock_guard<std::mutex> lock(m_mutex);
     m_publishedCount = 0;
     m_droppedCount = 0;
+}
+
+void LatestFrameSlot::setCaptureQueue(std::shared_ptr<CaptureFrameQueue> queue)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_captureQueue = std::move(queue);
+}
+void LatestFrameSlot::failCapture(const QString &reason)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_captureQueue) m_captureQueue->fail(reason);
 }
 
 } // namespace pcv::camera

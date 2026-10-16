@@ -7,6 +7,7 @@
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QFutureWatcher>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -41,6 +42,13 @@ struct WorkpieceTemplateViewTestAccess {
     static bool run()
     {
         using namespace pcv::workpiece;
+        // The production window and this target must compile the same QRC.
+        // Merely listing a .qrc source without AUTORCC leaves these unavailable.
+        for (const char *icon : {"device", "layout", "transform", "file", "save", "stream", "reset"}) {
+            const QString path = QStringLiteral(":/pointcloudview/icons/%1.svg").arg(QString::fromLatin1(icon));
+            CHECK(QFile::exists(path));
+            CHECK(!QPixmap(path).isNull());
+        }
         QTemporaryDir temporary;
         CHECK(temporary.isValid());
         SaveWorkpieceTemplateRequest request;

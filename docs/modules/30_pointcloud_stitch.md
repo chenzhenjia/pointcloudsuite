@@ -1,5 +1,9 @@
 # 30_pointcloud_stitch：整帧与所选平面拼接
 
+2026-10-16 SDK整图采集v2复用现有captureFrameDirectory和位姿直拼：每帧从10读自己的width/height及原始栅格下标，经50转换一次；不增加ICP/seam或改变正式manifest。本轮30源码不变，新增不同高度串并行/映射回归。[当前说明](../development/camera_capture_sdk_frame_v2.md)。
+
+2026-10-16 连续采集直拼：StitchingFrameInput.captureFrameDirectory读取10保存的相机点云/栅格映射，经50行序插值复用仅转换和事务四件套。此输入拒绝ICP/seam，点序和来源保留，诊断明确pose_only/not_run；旧PLY与选面默认不变。[实现与验收](../development/camera_capture_pose_stitch_v1.md)。
+
 版本 v0.5，核对日期 2026-10-15。target pcv_m30_pointcloud_stitch，依赖 10/50、Qt Core/Gui/Concurrent，不依赖 60 或 apps。[架构](../architecture/software_architecture_v0.5.md) · [契约](../contracts/data_contracts_v0.5.md) · [详细日志](../changelog/v0.5.md)。
 
 ## 整帧唯一编排入口
@@ -18,6 +22,12 @@ pcv/stitching/selected_plane_stitch.h 提供 pcv::stitching::SelectedPlaneStitch
 
 quality_policy=warn_only，strict_validation_status=not_run；formal_output 仅表示文件事务成功，旧未运行验收为 null。独立三件产物、PCVMAP、选择方式/参数和持久/返回计时范围见数据契约。单击与三点都必须预览确认，不能沿用 v1 的“第三点直接加入”历史操作说明。
 
+## 当前帧展示加速 v2（2026-10-16）
+
+当前帧降采样归选面对话框的展示流程：完整读取/坐标转换后，最多显示 300,000 个按原点序均匀抽取的实测点，完整索引另在后台准备。选面算法、确认快照和本模块输入仍为完整点集；拼接完成使用 `setCloud(result.points)` 完整显示。
+
+上一轮 v1 的私有帧缓存、pair 接口改动、`SelectedPlaneStitchResult` 预览字段和 manifest 预览诊断已撤回，恢复原先完整点裁剪及两层配准路径，原体素参数和约束不变。不新增 preview PLY，不改变正式文件契约。现行行为见[开发说明](../development/current_frame_display_acceleration_v2.md)，[v1](../development/selected_plane_stitch_preview_acceleration_v1.md) 仅供历史追溯；本轮构建及动态验证由用户执行。
+
 ## 应用、兼容与并行
 
 pcv_stitching_ui 在应用层为 View/Stitch 共用窗口，调用分组入口；view 选面对话框调独立选面入口。旧 RegistrationDialog 停止编译，原 stitch 窗口为 forwarding；regressionrunner/registration_diagnostic 保留旧命令，诊断工具仍用旧 Options 和兼容 target。
@@ -29,3 +39,8 @@ worker const 读取 Qt 隐式共享容器并返回私有片段；全部 join 后
 测试：stitching_interface_tests、multiframe_registration_tests、seam_fusion_tests、selected_plane_stitch_tests_v1；应用另有 selected_plane_dialog/stitching_ui/stitching_view。历史构建、500 次重复和 26/26 仅见日志的当次记录。本轮不构建/CTest/GUI。
 
 真实平面错选/漏选、平面内机器人误差、回退残余错位、累计漂移、GUI 性能及生产质量未验收；所选平面 warn_only 不替代现场质量判断。构建组合与 API 债务见[开发方案](../development/development_plan_v0.5.md)。
+
+六分屏/模板整合（2026-10-16）：30继续接收按原列表顺序排除跳过帧后的完整确认快照，原配准/预算/回退和PLY/PCVMAP/manifest契约不改；拼接结果完整显示。选面跳过、会话和拼接到60模板的调用都由应用编排，30不新增60依赖、预览缓存或结果降采样字段。见[整合说明](../development/batch_plane_selection_template_integration_v1.md)，未重新构建或测试。
+
+
+2026-10-16 整合v2：继续不改本模块算法、公开类型或manifest；应用任意轮满足全局完成条件即可按原序提交完整快照，结果setCloud完整显示并由应用交60保存模板。模块30不新增60依赖，不恢复配准缓存/previewPoints/preview PLY。见[当前整合](../development/batch_plane_selection_template_integration_v2.md)。

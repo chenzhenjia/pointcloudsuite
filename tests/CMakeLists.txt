@@ -1,6 +1,30 @@
 set(PCV_APPLICATION_TEST_TARGETS)
 
 if(PCV_BUILD_EXPERIMENTAL_CAMERA)
+    get_target_property(PCV_CAMERA_TEST_DEFINITIONS pcv_m10_pointcloud_io INTERFACE_COMPILE_DEFINITIONS)
+    if("PCV_CAMERA_HAVE_HIKSDK=1" IN_LIST PCV_CAMERA_TEST_DEFINITIONS)
+        # Compile the actual driver with SDK declarations but local fake symbols.
+        # Its definitions resolve before the static archive's real SDK driver.
+        get_target_property(PCV_CAMERA_TEST_INCLUDES pcv_m10_pointcloud_io INCLUDE_DIRECTORIES)
+        add_executable(mv3d_startup_tests_v1 unit/camera/mv3d_startup_tests_v1.cpp
+            ../modules/10_pointcloud_io/src/mv3d_lp_camera.cpp)
+        target_include_directories(mv3d_startup_tests_v1 PRIVATE ${PCV_CAMERA_TEST_INCLUDES})
+        target_compile_definitions(mv3d_startup_tests_v1 PRIVATE MV3D_LP_API=)
+        target_link_libraries(mv3d_startup_tests_v1 PRIVATE pcv_m10_pointcloud_io)
+        add_test(NAME mv3d_startup_tests_v1 COMMAND mv3d_startup_tests_v1)
+        set_tests_properties(mv3d_startup_tests_v1 PROPERTIES TIMEOUT 30)
+        list(APPEND PCV_APPLICATION_TEST_TARGETS mv3d_startup_tests_v1)
+    endif()
+    add_executable(capture_pose_tests_v1 unit/camera/capture_pose_tests_v1.cpp)
+    target_include_directories(capture_pose_tests_v1 PRIVATE ${PROJECT_SOURCE_DIR}/modules/10_pointcloud_io/src)
+    target_link_libraries(capture_pose_tests_v1 PRIVATE pcv_m10_pointcloud_io pcv_m30_pointcloud_stitch pcv_m50_coordinate_conversion)
+    add_test(NAME capture_pose_tests_v1 COMMAND capture_pose_tests_v1)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS capture_pose_tests_v1)
+    add_executable(capture_sdk_frame_tests_v2 unit/camera/capture_sdk_frame_tests_v2.cpp)
+    target_include_directories(capture_sdk_frame_tests_v2 PRIVATE ${PROJECT_SOURCE_DIR}/modules/10_pointcloud_io/src)
+    target_link_libraries(capture_sdk_frame_tests_v2 PRIVATE pcv_m10_pointcloud_io pcv_m30_pointcloud_stitch pcv_m50_coordinate_conversion)
+    add_test(NAME capture_sdk_frame_tests_v2 COMMAND capture_sdk_frame_tests_v2)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS capture_sdk_frame_tests_v2)
     add_executable(frame_converter_tests unit/camera/frame_converter_tests.cpp)
     target_link_libraries(frame_converter_tests PRIVATE Qt::Core pcv_m10_pointcloud_io)
     add_test(NAME frame_converter_tests COMMAND frame_converter_tests)
@@ -88,6 +112,21 @@ if(TARGET stitching_interface_tests)
 endif()
 
 if(PCV_BUILD_POINTCLOUDVIEW AND PCV_BUILD_EXPERIMENTAL_CAMERA)
+    add_executable(camera_capture_panel_tests_v1
+        unit/pointcloudview/camera_capture_panel_tests_v1.cpp
+        ../apps/pointcloudview/features/camera_capture_panel_v1.cpp
+        ../apps/pointcloudview/cameradialog.cpp
+        ../apps/pointcloudview/cameradialog.h
+        ../apps/pointcloudview/live_pipeline.cpp
+        ../apps/pointcloudview/ui/cameradialog.ui)
+    set_property(TARGET camera_capture_panel_tests_v1 PROPERTY AUTOUIC_SEARCH_PATHS
+        "${PROJECT_SOURCE_DIR}/apps/pointcloudview/ui")
+    target_include_directories(camera_capture_panel_tests_v1 PRIVATE ../apps/pointcloudview)
+    target_compile_definitions(camera_capture_panel_tests_v1 PRIVATE PCV_CAPTURE_UI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
+    target_link_libraries(camera_capture_panel_tests_v1 PRIVATE Qt::Widgets Qt::Concurrent pcv_m30_pointcloud_stitch)
+    add_test(NAME camera_capture_panel_tests_v1 COMMAND camera_capture_panel_tests_v1)
+    set_tests_properties(camera_capture_panel_tests_v1 PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    list(APPEND PCV_APPLICATION_TEST_TARGETS camera_capture_panel_tests_v1)
     add_executable(live_pipeline_tests
         unit/pointcloudview/live_pipeline_tests.cpp
         ../apps/pointcloudview/live_pipeline.cpp
@@ -193,6 +232,7 @@ if(PCV_BUILD_POINTCLOUDVIEW)
         ../apps/pointcloudview/pointcloudview.qrc)
     set_property(TARGET workpiece_template_view_tests_v1 PROPERTY AUTOUIC_SEARCH_PATHS
         "${PROJECT_SOURCE_DIR}/apps/pointcloudview/ui")
+    set_property(TARGET workpiece_template_view_tests_v1 PROPERTY AUTORCC ON)
     target_include_directories(workpiece_template_view_tests_v1 PRIVATE ../apps/pointcloudview)
     target_link_libraries(workpiece_template_view_tests_v1 PRIVATE pcv_stitching_ui
         pcv_m20_pointcloud_render pcv_m60_geometry_workpiece Qt::OpenGL Qt::OpenGLWidgets)
@@ -204,7 +244,9 @@ if(PCV_BUILD_POINTCLOUDVIEW)
     add_executable(selected_plane_dialog_tests_v1
         unit/pointcloudview/selected_plane_dialog_tests_v1.cpp
         ../apps/pointcloudview/selectedplanedialog.cpp
-        ../apps/pointcloudview/selectedplanedialog.h)
+        ../apps/pointcloudview/selectedplanedialog.h
+        ../apps/pointcloudview/features/workpiece_template_dialog_v1.cpp
+        ../apps/pointcloudview/features/workpiece_template_dialog_v1.h)
     target_include_directories(selected_plane_dialog_tests_v1 PRIVATE ../apps/pointcloudview)
     target_link_libraries(selected_plane_dialog_tests_v1 PRIVATE Qt::Core Qt::Gui Qt::Widgets Qt::Concurrent
         Qt::OpenGL Qt::OpenGLWidgets pcv_m20_pointcloud_render pcv_m30_pointcloud_stitch pcv_m60_geometry_workpiece)
@@ -253,6 +295,7 @@ if(TARGET pcv_stitching_ui)
             ../apps/pointcloudview/pointcloudview.qrc)
         set_property(TARGET stitching_view_tests_v1 PROPERTY AUTOUIC_SEARCH_PATHS
             "${PROJECT_SOURCE_DIR}/apps/pointcloudview/ui")
+        set_property(TARGET stitching_view_tests_v1 PROPERTY AUTORCC ON)
         target_include_directories(stitching_view_tests_v1 PRIVATE ../apps/pointcloudview)
         target_compile_definitions(stitching_view_tests_v1 PRIVATE PCV_TEST_STITCHING_VIEW=1)
         target_link_libraries(stitching_view_tests_v1 PRIVATE pcv_stitching_ui
@@ -280,11 +323,22 @@ if(PCV_BUILD_POINTCLOUDVIEW)
 endif()
 
 if(WIN32 AND TARGET Qt6::Core AND PCV_APPLICATION_TEST_TARGETS)
-    set(PCV_TEST_PATH "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}")
+    set(PCV_TEST_RUNTIME_PATH "$<TARGET_FILE_DIR:Qt6::Core>")
+    if(PCV_BUILD_EXPERIMENTAL_CAMERA)
+        foreach(cameraRuntime
+            "C:/Program Files (x86)/Common Files/Mv3dLpSDK/Runtime/Win64_x64"
+            "C:/Program Files (x86)/Common Files/MV3D/Runtime/Win64_x64")
+            if(EXISTS "${cameraRuntime}")
+                string(APPEND PCV_TEST_RUNTIME_PATH ";${cameraRuntime}")
+            endif()
+        endforeach()
+    endif()
+    # ENVIRONMENT is a CMake list: PATH semicolons must stay inside one entry.
+    string(REPLACE ";" "\\;" PCV_TEST_PATH "PATH=${PCV_TEST_RUNTIME_PATH};$ENV{PATH}")
     set_tests_properties(${PCV_APPLICATION_TEST_TARGETS}
         PROPERTIES ENVIRONMENT "${PCV_TEST_PATH}")
 endif()
-foreach(stitchTest stitching_ui_tests_v1 stitching_view_tests_v1 workpiece_template_view_tests_v1)
+foreach(stitchTest stitching_ui_tests_v1 stitching_view_tests_v1 workpiece_template_view_tests_v1 camera_capture_panel_tests_v1)
     if(TARGET ${stitchTest})
         set_property(TEST ${stitchTest} APPEND PROPERTY ENVIRONMENT
             "QT_QPA_PLATFORM=offscreen"

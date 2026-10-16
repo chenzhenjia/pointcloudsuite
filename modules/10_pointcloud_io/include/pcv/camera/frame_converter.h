@@ -25,6 +25,7 @@ struct PointCloudConvertResult {
     qsizetype skipped = 0;
     bool ok = false;
     QString error;
+    QVector<qsizetype> sourceIndices; // Original row-major raster indices after filtering.
 };
 
 // Converts an ImageType_PointCloud (ABC32f) frame into QVector<Point3D>.

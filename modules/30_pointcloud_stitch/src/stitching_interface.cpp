@@ -1,4 +1,5 @@
 #include <pcv/interface/stitching_interface.h>
+#include <pcv/camera/capture_session_v1.h>
 
 #include <pcv/io/cloud_cache.h>
 #include <pcv/io/artifact_transaction.h>
@@ -121,6 +122,7 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         return failure(QStringLiteral("PCV_TRANSFORM_001"), detail);
 
     QSet<QString> paths;
+    bool hasCaptureInputs = false;
     QVector<pointcloud::RobotBaseFrame> frames(options.frames.size());
     QVector<QString> sourcePaths(options.frames.size());
     const int requestedParallelTasks = options.maxParallelTasks;
@@ -137,8 +139,13 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
             return result;
         }
         const StitchingFrameInput &input = options.frames[index];
-        const QString sourcePath = QFileInfo(input.plyPath).absoluteFilePath();
-        if (input.plyPath.trimmed().isEmpty() || !QFileInfo::exists(sourcePath))
+        const bool capture = !input.captureFrameDirectory.isEmpty();
+        hasCaptureInputs = hasCaptureInputs || capture;
+        if (capture && (options.registrationOptions.enabled || options.seamEnabled))
+            return failure(QStringLiteral("PCV_CONTRACT_001"), QStringLiteral("采集会话首版只支持位姿直拼，不执行 ICP/seam"));
+        const QString sourcePath = QFileInfo(capture
+            ? QDir(input.captureFrameDirectory).filePath("camera.ply") : input.plyPath).absoluteFilePath();
+        if ((!capture && input.plyPath.trimmed().isEmpty()) || !QFileInfo::exists(sourcePath))
             return failure(QStringLiteral("PCV_INPUT_001"), QStringLiteral("第 %1 帧 PLY 不存在").arg(index + 1));
         const QString cleanSourcePath = QDir::cleanPath(sourcePath);
         if (paths.contains(cleanSourcePath))
@@ -159,7 +166,7 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         bool cancelled = false;
         bool hardFailure = false;
     };
-    const auto processFrame = [&](int index) {
+    const auto processFrame = [&options, &sourcePaths, &calibration, &cancellationToken, &tokenCancelled](int index) {
         FrameTaskResult task;
         const StitchingFrameInput &input = options.frames[index];
         if (tokenCancelled()) {
@@ -171,13 +178,17 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         pcv::detail::io::PlyReadOptions readOptions;
         readOptions.isCancelled = tokenCancelled;
         stageClock.start();
-        const auto cloud = pcv::detail::io::readPlyCached(sourcePaths[index], {}, readOptions);
+        pcv::camera::CaptureFrameData captured;
+        const bool fromCapture = !input.captureFrameDirectory.isEmpty();
+        if (fromCapture) captured = pcv::camera::readCapturedFrame(input.captureFrameDirectory, tokenCancelled);
+        const auto cloud = fromCapture ? pcv::detail::io::CachedCloudResult{}
+            : pcv::detail::io::readPlyCached(sourcePaths.at(index), {}, readOptions);
         task.readMs = stageClock.elapsed();
-        if (!cloud.ok) {
-            task.cancelled = cloud.cancelled;
-            task.hardFailure = !cloud.cancelled;
-            task.errorCode = cloud.cancelled ? QString() : QStringLiteral("PCV_INPUT_002");
-            task.error = cloud.error;
+        if (fromCapture ? !captured.ok : !cloud.ok) {
+            task.cancelled = fromCapture ? tokenCancelled() : cloud.cancelled;
+            task.hardFailure = !task.cancelled;
+            task.errorCode = task.cancelled ? QString() : QStringLiteral("PCV_INPUT_002");
+            task.error = fromCapture ? captured.error : cloud.error;
             if (task.hardFailure) cancellationToken->store(true, std::memory_order_relaxed);
             return task;
         }
@@ -185,19 +196,27 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         transformOptions.layout = pointcloud::DepthPointLayout::LineProfileXz;
         transformOptions.sampleStride = options.sampleStride;
         transformOptions.isCancelled = tokenCancelled;
+        if (fromCapture) {
+            transformOptions.parallelEnabled = options.parallelEnabled;
+            transformOptions.maxParallelTasks = options.maxParallelTasks > 0 ? options.maxParallelTasks : 4;
+            transformOptions.useRasterRowProgress = true;
+            transformOptions.rasterWidth = captured.record.width;
+            transformOptions.rasterHeight = captured.record.height;
+            transformOptions.rasterSourceIndices = captured.sourceIndices;
+        }
         stageClock.restart();
         auto transformed = pointcloud::transformLineScanToRobotBase(
-            cloud.points, calibration, input.startPose, input.endPose, transformOptions);
+            fromCapture ? captured.points : cloud.points, calibration, input.startPose, input.endPose, transformOptions);
         task.transformMs = stageClock.elapsed();
-        if (!transformed.ok) {
+        if (!transformed.ok || (fromCapture && (transformed.rejectedInvalid || transformed.rejectedRange))) {
             task.cancelled = transformed.cancelled;
             task.hardFailure = !transformed.cancelled;
             task.errorCode = transformed.cancelled ? QString() : QStringLiteral("PCV_TRANSFORM_001");
-            task.error = transformed.error;
+            task.error = transformed.error.isEmpty() ? QStringLiteral("采集帧转换产生无效点，拒绝部分转换结果") : transformed.error;
             if (task.hardFailure) cancellationToken->store(true, std::memory_order_relaxed);
             return task;
         }
-        task.frame.sourceFile = sourcePaths[index];
+        task.frame.sourceFile = sourcePaths.at(index);
         task.frame.fullPoints = std::move(transformed.points);
         task.frame.samplePoints = std::move(transformed.samplePoints);
         task.frame.sourceIndices = std::move(transformed.sourceIndices);
@@ -205,7 +224,7 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         task.frame.startBaseFromFlange = pointcloud::robotPoseToMatrix(input.startPose);
         task.frame.endBaseFromFlange = pointcloud::robotPoseToMatrix(input.endPose);
         task.frame.flangeFromDepth = calibration.flangeFromDepth;
-        task.frame.declaredCount = cloud.points.size();
+        task.frame.declaredCount = fromCapture ? qsizetype(captured.record.width) * captured.record.height : cloud.points.size();
         task.frame.rejectedInvalid = transformed.rejectedInvalid;
         task.frame.rejectedRange = transformed.rejectedRange;
         task.frame.inputYMinimum = transformed.inputYMinimum;
@@ -290,6 +309,8 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
     result.registrationMs = registrationMs;
     result.icpDiagnostics = registration.icpDiagnostics;
     result.diagnostics = registration.diagnostics;
+    if (hasCaptureInputs)
+        result.diagnostics += QStringLiteral("processing_mode=pose_only; ICP/seam/structure validation not_run; geometry quality not verified\n");
     result.merge = registration;
     qInfo() << "Stitching ICP completed, ok=" << registration.ok
             << "points=" << registration.points.size();

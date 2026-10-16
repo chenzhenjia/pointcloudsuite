@@ -36,6 +36,16 @@ enum class FrameKind : std::uint8_t {
     Exception = 1    // Device event (offline etc.), not a data frame.
 };
 
+enum class CaptureBoundaryMode : std::uint8_t { FixedRows, SdkImageFrame };
+enum class ScanBoundarySource : std::uint8_t { Unspecified, FixedRows, SdkImageFrame };
+
+struct CaptureConfiguration {
+    CaptureBoundaryMode boundaryMode = CaptureBoundaryMode::FixedRows;
+    std::uint32_t fixedRows = 0; // Zero retains the existing preview path.
+    // Operator confirmation for this device/configuration, not inferred from payload shape.
+    bool sdkImageBoundaryVerified = false;
+};
+
 // Owned copy of one camera frame. The callback thread copies the raw bytes
 // out of the SDK buffer into this struct before handing it to the latest
 // frame slot, so the SDK buffer lifetime never escapes the callback.
@@ -72,6 +82,11 @@ struct CameraFrame {
     std::uint32_t scanFragmentCount = 0;
     std::uint32_t discardedScanCount = 0;
     bool completeScan = true;
+
+    ScanBoundarySource boundarySource = ScanBoundarySource::Unspecified;
+    FrameType rawFrameType = FrameType::Undefined;
+    qint64 receiveWorkNs = 0; // Callback work through owned copy, excluding queue insertion.
+    qint64 sdkConversionNs = 0;
 
     // Expected point count for the raw data block.
     qsizetype dataPointCount() const

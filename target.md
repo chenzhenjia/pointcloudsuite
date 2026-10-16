@@ -45,6 +45,8 @@ P0 核对构建组合与 target 条件；P1 验收现有整帧/选面/临时工�
 | 2026-10-15 | 主线 | 共享拼接 UI、进程内存监测、单击 v1→v2 与来源参数 | [版本日志](docs/changelog/v0.5.md) |
 | 2026-10-15 | 本轮文档整理 | v0.5 五层架构、契约、记录合并与文档清理；无源码变更 | [整理与验证](docs/changelog/v0.5.md#documentation-audit) |
 | 2026-10-15 | 主线/Codex | 工件模板 v1：模块 60 独立版本事务保存/读取、GUI 基准确认及来源/revision 生命周期；保留既有修改 | [实现与验证](docs/changelog/v0.5.md#workpiece-template-v1) |
+| 2026-10-16 | 主线/Codex | 模块 30 多段所选平面预览缓存与结果显示 v1；已被当前帧展示 v2 纠正，相关源码增量撤回 | [历史记录](docs/changelog/v0.5.md#selected-plane-preview-acceleration-v1) |
+| 2026-10-16 | 主线/Codex | 当前帧先显示最多 300,000 个均匀抽取点，再后台建完整索引；选面/正式输出及拼接结果显示完整，用户负责构建和动态验收 | [实现记录](docs/changelog/v0.5.md#current-frame-display-acceleration-v2) |
 
 所有代码更新必须在本表追加简要登记，详细日期、owner、文件/API、行为、实际验证、风险与回滚点只维护在版本日志；模块文档同步当前接口，不复制完整历史。[旧历史](docs/archive/history_pre_v0.5.md)及[文档去向](docs/archive/document_migration_v0.5.md)保留追溯。
 
@@ -59,3 +61,26 @@ P0 核对构建组合与 target 条件；P1 验收现有整帧/选面/临时工�
 ## GitHub 上传登记（2026-10-15）
 
 用户授权将当前项目（含现有源码、测试和文档修改）提交并上传至 github remote 的 chenzhenjia/pointcloudsuite，目标 develop。未新增业务代码；本轮仅执行 Git 差异、文件体积、常见凭据模式和远程同步检查，不重跑构建/CTest，既有验证记录不作为本轮结果。详细记录见 docs/changelog/v0.5.md。
+
+2026-10-16 六分屏选面/完整处理优化/模板整合 v1：应用新增每轮最多六格、两帧任务、整轮确认/可撤销跳过和完整结果保存模板；10/50/60增加兼容的可选加速与256 MiB优化预算，30求解/完整结果不变。回归源码已补，尚未构建/运行；见[开发说明](docs/development/batch_plane_selection_template_integration_v1.md)。
+
+
+2026-10-16 整合纠偏 v2：修正真实操作调度优先级、过期结果/OOM门禁和任意已完成轮次拼接；提交跳过释放缓存，撤销重载重选；补齐实际排队/GUI等待及解析/归并/投影/连通/快照诊断，完整投影窗口并行保留原序。保留六分屏与完整拼接/模板，模块30不变。回归源码已补，未构建/运行、未更新可执行程序；见[当前说明](docs/development/batch_plane_selection_template_integration_v2.md)。
+
+2026-10-16 构建与运行修复 v1（owner：主线/Codex）：修复60索引变量重定义、主窗口QRC未编译；补资源加载和原生六画布绘制/拾取回归。全新Debug/Release全量构建成功，各43/43 CTest、原生六画布及两个桌面入口启动退出通过；正式数据/模块30不变。新EXE与真实样本/便携部署边界见[修复说明](docs/development/build_runtime_repair_v1.md)，详细记录见[版本日志](docs/changelog/v0.5.md#build-runtime-repair-v1)。此前未构建结论保留为历史，旧EXE未覆盖，未提交/推送。
+
+2026-10-16 用户确认测试完成、报错解决且功能正常，本轮收敛，停止功能扩展及追加测试；修复记录和验证边界见上方条目。
+
+2026-10-16 新任务：连续采集与位姿直拼v1。10完整扫描队列/事务保存/回放，50显式原栅格行序进度，30复用仅转换，CameraDialog直接填写XML/逐帧位姿并发布主界面；不改选面/旧ICP。构建与测试实际结果见[版本日志](docs/changelog/v0.5.md#camera-capture-pose-v1)，操作和风险见[说明](docs/development/camera_capture_pose_stitch_v1.md)。
+
+2026-10-16 连续采集优化v2：10新增显式SDK图像边界/触发保留、逐帧可变高度v2会话和队列/保存统计；相机面板默认自动行数、兼容固定行数、显式现场确认。复用30/50既有直拼，不新增PLC/ICP；新增回归和全新源码外验证。[当前说明](docs/development/camera_capture_sdk_frame_v2.md)，实际结果见[日志](docs/changelog/v0.5.md#camera-capture-sdk-frame-v2)。保留所有既有工作，不提交/推送/上传。
+
+2026-10-16 相机连续采集UI简化v1：主线/Codex按用户授权实施四步向导、单次现场预检、后台排空、位姿复制与实时校验、高级预览及自动发布返回工作台；不修改相机/坐标/拼接算法和schema，不实现纹理。验证及风险见[开发说明](docs/development/camera_capture_ui_simplification_v1.md)，详细记录见[日志](docs/changelog/v0.5.md#camera-capture-ui-simplification-v1)。保留既有工作，不提交/推送/上传。
+
+2026-10-16 相机UI向导收尾：用户确认“测试通过，收尾吧”，停止追加功能和测试，仅补交付记录及静态检查。用户验收与本地自动验证分别记录；首轮Debug/Release构建日志完成，本地UI测试曾有启动故障，未补记为全量CTest通过。验证边界详见上述开发说明。
+
+2026-10-16 相机取流启动顺序修复v1（owner：主线/Codex）：按新授权修复SDK整图测量前清缓存导致CALLORDER，改为测量后清理并门禁图像，保留异常上报/严格失败和资源释放；新增生产驱动SDK替身回归、修正CTest运行PATH。公共接口/格式/算法不变，保留所有既有工作。验证及真机边界见[说明](docs/development/camera_startup_order_fix_v1.md)和[日志](docs/changelog/v0.5.md#camera-startup-order-fix-v1)。
+
+2026-10-16 上述修复最终验证：源码外Debug/Release全量构建及最终重编成功，各52/52 CTest，两个GUI共4次原生启动退出通过；真机三次扫描与干净机部署待验收。新Release路径、实际日志和首轮测试夹具修正见上述说明；旧程序未覆盖，未提交/推送/上传。
+
+2026-10-16 本地版本归档：用户授权将当前源码、测试及文档改动提交到本地 Git 并输出提交号，明确不推送远端。本轮未新增业务代码，仅执行 Git 差异检查；不重跑构建/CTest，既有验证及真机风险以各任务记录为准。

@@ -2,6 +2,9 @@
 
 #include "overlay_geometry.h"
 
+#include <QHash>
+#include <QSet>
+
 PointCloudCanvas::PointCloudCanvas(QWidget *parent)
         : QOpenGLWidget(parent), m_vertexBuffer(QOpenGLBuffer::VertexBuffer),
           m_stateBuffer(QOpenGLBuffer::VertexBuffer),
@@ -40,6 +43,10 @@ void PointCloudCanvas::setCloud(QVector<pointcloud::Point3D> points) {
             return;
         }
           m_points = std::move(points);
+          m_hasDisplayMapping = false;
+          m_displayToFullIndices.clear();
+          m_fullToDisplayIndices.clear();
+          m_fullPointCount = m_points.size();
           m_pointStates.fill(NormalPoint, m_points.size());
           // Point-index overlays refer to the previous frame and are invalid
           // after a streaming replacement. World-coordinate overlays remain.
@@ -64,6 +71,65 @@ void PointCloudCanvas::setCloud(QVector<pointcloud::Point3D> points) {
         update();
     }
 
+void PointCloudCanvas::setDisplayCloud(QVector<pointcloud::Point3D> points,
+                                       QVector<int> displayToFullIndices,
+                                       qsizetype fullPointCount) {
+        if (QThread::currentThread() != thread()) {
+            QMetaObject::invokeMethod(this,
+                [this, points = std::move(points), mapping = std::move(displayToFullIndices), fullPointCount]() mutable {
+                    setDisplayCloud(std::move(points), std::move(mapping), fullPointCount);
+                }, Qt::QueuedConnection);
+            return;
+        }
+        if (fullPointCount < 0 || points.size() != displayToFullIndices.size()
+            || points.size() > fullPointCount || points.size() > std::numeric_limits<int>::max()) {
+            qWarning() << "PointCloudCanvas rejected display cloud mapping size" << points.size()
+                       << displayToFullIndices.size() << fullPointCount;
+            return;
+        }
+        QHash<int,int> fullToDisplay;
+        fullToDisplay.reserve(displayToFullIndices.size());
+        for (int index : displayToFullIndices) {
+            if (index < 0 || qsizetype(index) >= fullPointCount || fullToDisplay.contains(index)) {
+                qWarning() << "PointCloudCanvas rejected display cloud mapping index" << index;
+                return;
+            }
+            fullToDisplay.insert(index,int(fullToDisplay.size()));
+        }
+        for (const auto &point : points) {
+            if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)
+                || !std::isfinite(point.nx) || !std::isfinite(point.ny) || !std::isfinite(point.nz)) {
+                qWarning() << "PointCloudCanvas rejected non-finite display point";
+                return;
+            }
+        }
+        m_points = std::move(points);
+        m_hasDisplayMapping = true;
+        m_displayToFullIndices = std::move(displayToFullIndices);
+        m_fullToDisplayIndices = std::move(fullToDisplay);
+        m_fullPointCount = fullPointCount;
+        m_pointStates.fill(NormalPoint, m_points.size());
+        m_selectedIndices.clear();
+        m_selectedEdgeIndices.clear();
+        m_edgeIndices.clear();
+        m_planeResultIndices.clear();
+        m_edgeResultIndices.clear();
+        m_coordinatePointIndex = -1;
+        m_workpieceCoordinate = {};
+        clearTextureGrayOverlay();
+        m_contourVertices.clear();
+        m_contourRanges.clear();
+        m_contourUploadPending = true;
+        ++m_renderRevision;
+        updateBounds();
+        m_uploadError.clear();
+        m_uploadPending = true;
+        m_stateUploadPending = true;
+        qInfo() << "PointCloudCanvas display cloud published, points=" << m_points.size()
+                << "full points=" << m_fullPointCount;
+        update();
+    }
+
 void PointCloudCanvas::setCloudStreaming(QVector<pointcloud::Point3D> points) {
         if (QThread::currentThread() != thread()) {
             qWarning() << "PointCloudCanvas::setCloudStreaming queued to GUI thread, points="
@@ -77,6 +143,10 @@ void PointCloudCanvas::setCloudStreaming(QVector<pointcloud::Point3D> points) {
             return;
         }
         m_points = std::move(points);
+        m_hasDisplayMapping = false;
+        m_displayToFullIndices.clear();
+        m_fullToDisplayIndices.clear();
+        m_fullPointCount = m_points.size();
         m_pointStates.fill(NormalPoint, m_points.size());
         ++m_renderRevision;
         validateRenderSnapshot();
@@ -99,6 +169,7 @@ void PointCloudCanvas::setCloudStreaming(QVector<pointcloud::Point3D> points) {
 
 void PointCloudCanvas::setSelectionMode(bool enabled) {
         if (QThread::currentThread() != thread()) return;
+        if(m_selectionMode==enabled)return;
         m_selectionMode = enabled;
         setToolTip(enabled ? tr("左键选择点，右键平移，Esc 取消，Backspace 撤销")
                            : tr("左键旋转，右键平移，滚轮缩放"));
@@ -108,7 +179,11 @@ void PointCloudCanvas::setSelectionMode(bool enabled) {
 void PointCloudCanvas::setEdgeSelectionMode(bool enabled, const QVector<int> &edgeIndices) {
         if (QThread::currentThread() != thread()) return;
         m_edgeSelectionMode = enabled;
-        m_edgeIndices = edgeIndices;
+        m_edgeIndices.clear();
+        for (int index : edgeIndices) {
+            const int display = displayIndexForFullIndex(index);
+            if (display >= 0) m_edgeIndices.push_back(display);
+        }
         setToolTip(enabled ? tr("左键选择边缘真实点，Esc 取消")
                            : tr("左键旋转，右键平移，滚轮缩放"));
         setFocus();
@@ -116,7 +191,11 @@ void PointCloudCanvas::setEdgeSelectionMode(bool enabled, const QVector<int> &ed
 
 void PointCloudCanvas::setSelectedEdgeIndices(const QVector<int> &indices) {
         if (QThread::currentThread() != thread()) return;
-        m_selectedEdgeIndices = indices;
+        m_selectedEdgeIndices.clear();
+        for (int index : indices) {
+            const int display = displayIndexForFullIndex(index);
+            if (display >= 0) m_selectedEdgeIndices.push_back(display);
+        }
         update();
     }
 
@@ -126,7 +205,11 @@ QVector<int> PointCloudCanvas::pickRectangleForSelection(const QRectF &selection
 
 void PointCloudCanvas::setSelectedIndices(const QVector<int> &indices) {
         if (QThread::currentThread() != thread()) return;
-        m_selectedIndices = indices;
+        m_selectedIndices.clear();
+        for (int index : indices) {
+            const int display = displayIndexForFullIndex(index);
+            if (display >= 0) m_selectedIndices.push_back(display);
+        }
         update();
     }
 
@@ -138,9 +221,18 @@ void PointCloudCanvas::setPlaneResult(const QVector<int> &planeIndices, const QV
             qWarning() << "PointCloudCanvas rejected contour snapshot:" << renderError;
             return;
         }
-        const bool planeChanged = m_planeResultIndices != planeIndices;
-        m_planeResultIndices = planeIndices;
-        m_edgeResultIndices = edgeIndices;
+        QVector<int> mappedPlane, mappedEdge;
+        for (int index : planeIndices) {
+            const int display = displayIndexForFullIndex(index);
+            if (display >= 0) mappedPlane.push_back(display);
+        }
+        for (int index : edgeIndices) {
+            const int display = displayIndexForFullIndex(index);
+            if (display >= 0) mappedEdge.push_back(display);
+        }
+        const bool planeChanged = m_planeResultIndices != mappedPlane;
+        m_planeResultIndices = std::move(mappedPlane);
+        m_edgeResultIndices = std::move(mappedEdge);
         m_pointStates.fill(NormalPoint, m_points.size());
         for (int index : m_planeResultIndices)
             if (index >= 0 && index < m_pointStates.size()) m_pointStates[index] = PlanePoint;
@@ -155,6 +247,7 @@ void PointCloudCanvas::setPlaneResult(const QVector<int> &planeIndices, const QV
                 m_contourVertices.push_back({point.x(), point.y(), point.z()});
             m_contourRanges.push_back({start, int(contour.points.size())});
         }
+        ++m_renderRevision;
         m_stateUploadPending = true;
         m_contourUploadPending = true;
         if (planeChanged) clearTextureGrayOverlay();
@@ -168,6 +261,7 @@ void PointCloudCanvas::setExtractedPlane(const QVector<int> &planeIndices) {
 
 void PointCloudCanvas::clearPlaneResult() {
         if (QThread::currentThread() != thread()) return;
+        ++m_renderRevision;
         m_pointStates.fill(NormalPoint, m_points.size());
         m_planeResultIndices.clear();
         m_edgeResultIndices.clear();
@@ -182,13 +276,19 @@ void PointCloudCanvas::clearPlaneResult() {
 void PointCloudCanvas::setTextureGrayOverlay(const QVector<quint8> &grayscale,
                                              const QVector<quint8> &valid) {
         if (QThread::currentThread() != thread()) return;
+        if (grayscale.size() != m_fullPointCount || valid.size() != m_fullPointCount) {
+            qWarning() << "PointCloudCanvas rejected texture overlay size";
+            return;
+        }
         pcv::render::PointColorOverlay overlay;
-        overlay.valid = valid;
-        overlay.colors.resize(grayscale.size());
-        for (int i = 0; i < grayscale.size(); ++i) {
-            const float value = float(grayscale.at(i)) / 255.0f;
+        overlay.valid.resize(m_points.size());
+        overlay.colors.resize(m_points.size());
+        for (int i = 0; i < m_points.size(); ++i) {
+            const int full = fullIndexForDisplayIndex(i);
+            const float value = float(grayscale.at(full)) / 255.0f;
+            overlay.valid[i] = valid.at(full);
             overlay.colors[i] = QVector4D(value, value, value,
-                                          valid.value(i, 0) ? 1.0f : 0.0f);
+                                          valid.at(full) ? 1.0f : 0.0f);
         }
         QString error;
         if (!pcv::render::validatePointColorOverlay(overlay, m_points.size(), &error)) {
@@ -196,7 +296,7 @@ void PointCloudCanvas::setTextureGrayOverlay(const QVector<quint8> &grayscale,
             return;
         }
         m_textureColors = std::move(overlay.colors);
-        m_textureValid = valid;
+        m_textureValid = std::move(overlay.valid);
         m_textureUploadPending = true;
         update();
     }
@@ -472,6 +572,7 @@ void PointCloudCanvas::paintGL()  {
                 m_program.setUniformValue("renderPass", 0);
                 m_vertexArray.bind();
                 glDrawArrays(GL_POINTS, 0, int(m_points.size()));
+                m_lastPaintedRevision = m_renderRevision;
                 if (!m_selectedIndices.isEmpty()) {
                     glDepthFunc(GL_LEQUAL);
                     m_program.setUniformValue("renderPass", 1);
@@ -546,7 +647,7 @@ void PointCloudCanvas::mouseReleaseEvent(QMouseEvent *event)  {
             if (pointPickingStarted) pointPickingStarted();
             const int index = pickPoint(event->position());
             if (index >= 0) {
-                m_coordinatePointIndex = index;
+                m_coordinatePointIndex = displayIndexForFullIndex(index);
                 update();
             }
             if (pointPicked) pointPicked(index);
@@ -849,7 +950,8 @@ int PointCloudCanvas::pickPoint(const QPointF &position) {
                 }
             }
         }
-        return id > 0 && id <= quint32(m_points.size()) ? int(id - 1) : -1;
+        return id > 0 && id <= quint32(m_points.size())
+            ? fullIndexForDisplayIndex(int(id - 1)) : -1;
     }
 
 QVector<int> PointCloudCanvas::pickRectangle(const QRectF &selection) {
@@ -901,10 +1003,22 @@ QVector<int> PointCloudCanvas::pickRectangle(const QRectF &selection) {
                 | (quint32(rgba[2]) << 16) | (quint32(rgba[3]) << 24);
             if (id > 0 && id <= quint32(m_points.size())) unique.insert(int(id - 1));
         }
-        result = unique.values().toVector();
+        for (int display : unique)
+            result.push_back(fullIndexForDisplayIndex(display));
         std::sort(result.begin(), result.end());
         return result;
     }
+
+int PointCloudCanvas::displayIndexForFullIndex(int fullIndex) const {
+    if (!m_hasDisplayMapping)
+        return fullIndex >= 0 && fullIndex < m_points.size() ? fullIndex : -1;
+    return m_fullToDisplayIndices.value(fullIndex, -1);
+}
+
+int PointCloudCanvas::fullIndexForDisplayIndex(int displayIndex) const {
+    if (displayIndex < 0 || displayIndex >= m_points.size()) return -1;
+    return m_hasDisplayMapping ? m_displayToFullIndices.at(displayIndex) : displayIndex;
+}
 
 QMatrix4x4 PointCloudCanvas::rotationTransform() const {
         QMatrix4x4 rotation;
@@ -1082,8 +1196,10 @@ void PointCloudCanvas::drawOverlay() {
             painter.setPen(QColor(150, 164, 184));
             const QString pointText = m_points.isEmpty()
                 ? tr("未加载数据")
-                : tr("工作点数  %1  |  全量绘制")
-                      .arg(QLocale().toString(m_points.size()));
+                : (m_hasDisplayMapping
+                    ? tr("当前帧展示  %1 / 完整点数 %2")
+                        .arg(QLocale().toString(m_points.size())).arg(QLocale().toString(m_fullPointCount))
+                    : tr("工作点数  %1  |  全量绘制").arg(QLocale().toString(m_points.size())));
             painter.drawText(18, 49, pointText);
         }
 
@@ -1102,7 +1218,7 @@ void PointCloudCanvas::drawOverlay() {
             if (m_coordinatePointIndex >= 0 && m_coordinatePointIndex < m_points.size()) {
                 const pointcloud::Point3D &point = m_points[m_coordinatePointIndex];
                 const QString positionText = tr("点 #%1  X %2  Y %3  Z %4 mm")
-                    .arg(m_coordinatePointIndex)
+                    .arg(fullIndexForDisplayIndex(m_coordinatePointIndex))
                     .arg(QString::number(point.x, 'f', 3))
                     .arg(QString::number(point.y, 'f', 3))
                     .arg(QString::number(point.z, 'f', 3));

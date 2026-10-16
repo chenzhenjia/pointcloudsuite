@@ -85,6 +85,10 @@ std::shared_ptr<const CameraFrame> MockFrameSource::makeSyntheticFrame(std::uint
     frame->frameNumber = frameNumber;
     frame->timeStamp = qint64(frameNumber) * 1000;
     frame->valid = true;
+    frame->rawFrameType = FrameType::PointCloudABC32f;
+    frame->boundarySource = m_capture.boundaryMode == CaptureBoundaryMode::SdkImageFrame
+        ? ScanBoundarySource::SdkImageFrame : (m_capture.fixedRows
+            ? ScanBoundarySource::FixedRows : ScanBoundarySource::Unspecified);
 
     const qsizetype pointCount = qsizetype(m_width) * m_height;
     QByteArray payload;

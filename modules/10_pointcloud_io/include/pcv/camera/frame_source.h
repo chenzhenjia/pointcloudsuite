@@ -12,6 +12,7 @@
 #include <mutex>
 
 namespace pcv::camera {
+class CaptureFrameQueue;
 
 // A frame source publishes the latest point-cloud frame to a single consumer.
 // The producer side runs on the SDK callback thread; consumers are notified
@@ -47,6 +48,8 @@ public:
     quint64 publishedCount() const;
     quint64 droppedCount() const;
     void resetStatistics();
+    void setCaptureQueue(std::shared_ptr<CaptureFrameQueue> queue);
+    void failCapture(const QString &reason);
 
 private:
     mutable std::mutex m_mutex;
@@ -54,6 +57,7 @@ private:
     std::function<void()> m_onFramePublished;
     quint64 m_publishedCount = 0;
     quint64 m_droppedCount = 0;
+    std::shared_ptr<CaptureFrameQueue> m_captureQueue;
 };
 
 // Abstract device-level acquisition interface shared by the real SDK wrapper
@@ -84,6 +88,13 @@ public:
         const PointCloudConvertOptions &options = {}) = 0;
 
     virtual bool supportsSoftTrigger() const { return false; }
+    // Configure before start(), after stopping any previous measurement.
+    virtual CameraError configureCaptureRows(std::uint32_t) { return {QStringLiteral("fixed scan rows unsupported")}; }
+    virtual CameraError configureCapture(const CaptureConfiguration &configuration) {
+        if (configuration.boundaryMode != CaptureBoundaryMode::FixedRows)
+            return {QStringLiteral("SDK image frame capture unsupported")};
+        return configureCaptureRows(configuration.fixedRows);
+    }
     virtual CameraError softTrigger() { return {QStringLiteral("soft trigger is not supported")}; }
     virtual bool supportsReconnect() const { return false; }
     virtual CameraError reconnectOnce()

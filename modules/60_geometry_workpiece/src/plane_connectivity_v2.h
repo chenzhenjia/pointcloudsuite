@@ -26,15 +26,17 @@ struct ProjectedSelection {
     QVector<int> localIndices;
     int mergedRegions = 0;
     double gapMs = 0;
+    double normalMs = 0;
 };
 
 // First label normal sampling components with an anisotropic metric. Then
 // connect components by real boundary-point distances, without filling holes.
 inline ProjectedSelection selectProjectedComponents(
     const QVector<QVector2D> &projected, int seed, float radiusU, float radiusV,
-    float maximumGap, const std::function<bool()> &cancelled)
+    float maximumGap, const std::function<bool()> &cancelled, QVector<int> *reusableQueue = nullptr)
 {
     ProjectedSelection result;
+    QElapsedTimer normalTimer; normalTimer.start();
     struct Bucket {
         int pending = -1;
         int original = -1;
@@ -70,7 +72,9 @@ inline ProjectedSelection selectProjectedComponents(
             }
         }
     }
-    QVector<int> labels(projected.size(), -1), queue;
+    QVector<int> labels(projected.size(), -1), localQueue;
+    QVector<int> &queue=reusableQueue?*reusableQueue:localQueue;
+    if(reusableQueue)queue.reserve(projected.size());
     int components = 0;
     // Intrusive lists use contiguous arrays rather than allocating two small
     // Qt buffers per spatial cell. Removing a visited point remains O(1).
@@ -104,6 +108,7 @@ inline ProjectedSelection selectProjectedComponents(
         ++components;
     }
     QVector<quint8> included(components, 0); included[labels.at(seed)] = 1;
+    result.normalMs=normalTimer.nsecsElapsed()/1e6;
     if (maximumGap > 0 && components > 1) {
         QElapsedTimer timer; timer.start();
         // A bucket is on a component boundary if a neighbor is absent or has

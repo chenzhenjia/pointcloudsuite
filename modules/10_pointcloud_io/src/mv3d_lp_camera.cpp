@@ -9,6 +9,7 @@
 
 #include <QDateTime>
 #include <QDebug>
+#include <QElapsedTimer>
 #include <QString>
 
 #include <Mv3dLpApi.h>
@@ -67,6 +68,8 @@ QString statusText(MV3D_LP_STATUS status)
     case quint32(MV3D_LP_OK): name = QStringLiteral("MV3D_LP_OK"); break;
     case quint32(MV3D_LP_E_HANDLE): name = QStringLiteral("MV3D_LP_E_HANDLE"); break;
     case quint32(MV3D_LP_E_SUPPORT): name = QStringLiteral("MV3D_LP_E_SUPPORT"); break;
+    case quint32(MV3D_LP_E_CALLORDER): name = QStringLiteral("MV3D_LP_E_CALLORDER"); break;
+    case quint32(MV3D_LP_E_ACCESS_DENIED): name = QStringLiteral("MV3D_LP_E_ACCESS_DENIED"); break;
     case quint32(MV3D_LP_E_PARAMETER): name = QStringLiteral("MV3D_LP_E_PARAMETER"); break;
     case quint32(MV3D_LP_E_ABNORMAL_IMAGE): name = QStringLiteral("MV3D_LP_E_ABNORMAL_IMAGE"); break;
     case quint32(MV3D_LP_E_ALGORITHM): name = QStringLiteral("MV3D_LP_E_ALGORITHM"); break;
@@ -74,6 +77,18 @@ QString statusText(MV3D_LP_STATUS status)
     default: name = QStringLiteral("MV3D_LP_STATUS_UNKNOWN"); break;
     }
     return QStringLiteral("0x%1 (%2)").arg(code, 8, 16, QLatin1Char('0')).arg(name);
+}
+
+CameraError sdkStageResult(const char *stage, MV3D_LP_STATUS status)
+{
+    qInfo().noquote() << "Mv3dLpCamera: SDK stage=" << stage << "status=" << statusText(status);
+    if (status == MV3D_LP_OK) return {};
+    QString message = QStringLiteral("%1 failed: %2").arg(QString::fromLatin1(stage), statusText(status));
+    if (status == MV3D_LP_E_CALLORDER)
+        message += QStringLiteral("；SDK调用顺序错误，请保留日志并检查测量与清缓存阶段");
+    else if (status == MV3D_LP_E_ACCESS_DENIED)
+        message += QStringLiteral("；设备无访问权限，请在3DMVS或其他采集客户端中断开该相机后重试");
+    return {message};
 }
 
 bool hasExactRasterPayload(const MV3D_LP_IMAGE_DATA &image,
@@ -100,6 +115,7 @@ std::shared_ptr<CameraFrame> copyFrame(const MV3D_LP_IMAGE_DATA &image,
     frame->frameNumber = metadata.nFrameNum;
     frame->timeStamp = qint64(metadata.nTimeStamp);
     frame->valid = metadata.bValid != 0;
+    frame->rawFrameType = FrameType(metadata.enImageType);
     frame->xScale = metadata.fXScale;
     frame->yScale = metadata.fYScale;
     frame->zScale = metadata.fZScale;
@@ -133,6 +149,9 @@ std::shared_ptr<CameraFrame> makeInvalidFrame(const MV3D_LP_IMAGE_DATA &image,
 
 struct CallbackContext {
     std::atomic<bool> accepting{false};
+    // Separate image publication from callback lifetime: device exceptions
+    // remain observable while SDK-image startup clears its transport buffer.
+    std::atomic<bool> imagesReady{false};
     std::atomic<int> inFlight{0};
     std::mutex mutex;
     std::condition_variable condition;
@@ -140,6 +159,7 @@ struct CallbackContext {
     std::mutex conversionMutex;
     std::mutex assemblyMutex;
     detail::ScanFrameAssembler assembler;
+    CaptureConfiguration capture;
     std::optional<ImageMode> activeImageMode;
     std::mutex diagnosticsMutex;
     QString lastConversionKey;
@@ -182,7 +202,7 @@ struct CallbackContext {
     void configureAssembly(std::uint32_t expectedRows)
     {
         std::lock_guard<std::mutex> lock(assemblyMutex);
-        assembler.configure(expectedRows);
+        assembler.configure(expectedRows, expectedRows != 0);
     }
 
     void configureActiveImageMode(std::optional<ImageMode> mode)
@@ -254,6 +274,25 @@ struct CallbackContext {
     void publishNormalizedFrame(std::shared_ptr<CameraFrame> frame)
     {
         if (!frame || !slot) return;
+        if (capture.boundaryMode == CaptureBoundaryMode::SdkImageFrame) {
+            const QString error = detail::sdkImageBoundaryError(*frame, capture);
+            frame->completeScan = error.isEmpty();
+            if (error.isEmpty()) {
+                frame->boundarySource = ScanBoundarySource::SdkImageFrame;
+                frame->expectedScanRows = frame->accumulatedScanRows = frame->height;
+                frame->scanFragmentCount = 1;
+                qInfo() << "Mv3dLpCamera: SDK image boundary, rawType=" << quint32(frame->rawFrameType)
+                        << "sdkFrame=" << frame->frameNumber << "timestamp=" << frame->timeStamp
+                        << "size=" << frame->width << frame->height
+                        << "receiveWorkNs=" << frame->receiveWorkNs << "sdkConversionNs=" << frame->sdkConversionNs;
+            } else {
+                frame->valid = false;
+                frame->exceptionDescription = error;
+                frame->data.clear(); frame->intensityData.clear();
+            }
+            slot->publish(std::move(frame));
+            return;
+        }
         detail::ScanAssemblyResult assembly;
         {
             std::lock_guard<std::mutex> lock(assemblyMutex);
@@ -310,9 +349,17 @@ void __stdcall imageDataCallback(MV3D_LP_IMAGE_DATA *image, void *pUser)
 {
     auto *context = static_cast<CallbackContext *>(pUser);
     CallbackGuard guard(context);
-    if (!guard || !image || !context->slot) return;
+    if (!guard || !image || !context->slot
+        || !context->imagesReady.load(std::memory_order_acquire)) return;
+    QElapsedTimer callbackClock; callbackClock.start();
 
     const FrameType rawType = FrameType(image->enImageType);
+    if (context->capture.boundaryMode == CaptureBoundaryMode::SdkImageFrame
+        && rawType != FrameType::DepthC16 && rawType != FrameType::PointCloudABC32f) {
+        context->slot->publish(makeInvalidFrame(*image,
+            QStringLiteral("未确认的轮廓分片类型不支持自动完整扫描接收")));
+        return;
+    }
     if (!context->acceptsRawType(rawType)) {
         context->resetAssembly();
         context->slot->publish(makeInvalidFrame(
@@ -337,7 +384,9 @@ void __stdcall imageDataCallback(MV3D_LP_IMAGE_DATA *image, void *pUser)
             return;
         }
         context->logConversion(*image, image, MV3D_LP_OK);
-        context->publishNormalizedFrame(copyFrame(*image));
+        auto owned = copyFrame(*image);
+        owned->receiveWorkNs = callbackClock.nsecsElapsed();
+        context->publishNormalizedFrame(std::move(owned));
         return;
     }
 
@@ -358,21 +407,22 @@ void __stdcall imageDataCallback(MV3D_LP_IMAGE_DATA *image, void *pUser)
     std::memset(&output, 0, sizeof(output));
     output.enImageType = ImageType_PointCloud;
     MV3D_LP_STATUS status = MV3D_LP_E_PARAMETER;
-    {
-        // The vendor image-processing API has no documented reentrancy
-        // contract. Serialize conversion if the SDK invokes callbacks in
-        // parallel while preserving the raw frame lifetime in this scope.
-        std::lock_guard<std::mutex> lock(context->conversionMutex);
-        status = action == detail::CallbackFrameAction::ConvertProfileToPointCloud
-            ? MV3D_LP_ImageConvert(image, &output)
-            : MV3D_LP_MapDepthToPointCloud(image, &output);
-    }
+    QElapsedTimer conversionClock;
+    // Keep the output copy under the same lock: SDK output memory may be reused.
+    std::unique_lock<std::mutex> conversionLock(context->conversionMutex);
+    conversionClock.start();
+    status = action == detail::CallbackFrameAction::ConvertProfileToPointCloud
+        ? MV3D_LP_ImageConvert(image, &output)
+        : MV3D_LP_MapDepthToPointCloud(image, &output);
+    const qint64 conversionNs = conversionClock.nsecsElapsed();
     if (status != MV3D_LP_OK
         || output.enImageType != ImageType_PointCloud
-        || !hasExactRasterPayload(output, 12)) {
+        || !hasExactRasterPayload(output, 12)
+        || (context->capture.boundaryMode == CaptureBoundaryMode::SdkImageFrame
+            && (output.nWidth != image->nWidth || output.nHeight != image->nHeight))) {
         context->logConversion(*image, &output, status);
         context->slot->publish(makeInvalidFrame(
-            *image, QStringLiteral("SDK callback conversion to ABC32f failed: %1")
+            *image, QStringLiteral("SDK callback conversion to ABC32f failed or changed raster shape: %1")
                         .arg(statusText(status))));
         return;
     }
@@ -381,7 +431,11 @@ void __stdcall imageDataCallback(MV3D_LP_IMAGE_DATA *image, void *pUser)
     if (rawType == FrameType::ProfileABC16) {
         context->logProfileBounds(output, image->nFrameNum);
     }
-    context->publishNormalizedFrame(copyFrame(output, image));
+    auto owned = copyFrame(output, image);
+    owned->sdkConversionNs = conversionNs;
+    owned->receiveWorkNs = callbackClock.nsecsElapsed();
+    conversionLock.unlock();
+    context->publishNormalizedFrame(std::move(owned));
 }
 
 void __stdcall exceptionCallback(MV3D_LP_EXCEPTION_INFO *info, void *pUser)
@@ -509,13 +563,24 @@ struct Mv3dLpCamera::Impl {
                        << statusText(status);
         }
         // Adaptive assembly: first complete callback anchors the row count.
-        callbackContext.configureAssembly(0);
+        callbackContext.configureAssembly(captureRows);
         return {};
     }
 
     CameraError configureTriggerMode()
     {
         softTriggerSupported = false;
+        if (detail::preservesDeviceTrigger(callbackContext.capture)) {
+            // Read only: never overwrite the gate configuration supplied by the site.
+            for (const char *key : {MV3D_LP_ENUM_TRIGGERMODE, MV3D_LP_ENUM_TRIGGERSOURCE,
+                                    MV3D_LP_ENUM_TRIGGERSELECTOR}) {
+                MV3D_LP_PARAM value{}; value.enParamType = ParamType_Enum;
+                const auto status = MV3D_LP_GetParam(handle, key, &value);
+                if (status == MV3D_LP_OK) qInfo() << "Mv3dLpCamera: preserved" << key << value.ParamInfo.stEnumParam.nCurValue;
+                else qInfo() << "Mv3dLpCamera: preserved" << key << "unknown" << statusText(status);
+            }
+            return {};
+        }
 
         auto setEnum = [this](const char *key, std::uint32_t value,
                               const char *label) -> CameraError {
@@ -682,10 +747,17 @@ struct Mv3dLpCamera::Impl {
         });
     }
 
+    std::uint32_t captureRows = 0;
     void shutdown()
     {
         slot.clearFramePublishedCallback();
+        callbackContext.imagesReady.store(false, std::memory_order_release);
         waitForCallbacks();
+        {
+            std::lock_guard<std::mutex> lock(callbackContext.assemblyMutex);
+            if (captureRows && callbackContext.assembler.accumulatedRows() != 0)
+                slot.failCapture(QStringLiteral("停止时存在不完整的尾部扫描，未加入有效帧"));
+        }
         callbackContext.slot = nullptr;
         callbackContext.resetAssembly();
         if (running.load() && handle != nullptr) {
@@ -767,10 +839,11 @@ CameraError Mv3dLpCamera::start()
     m_impl->sdkLeaseHeld = true;
 
     const QByteArray sn = m_impl->serialNumber.toUtf8();
-    if (MV3D_LP_OpenDeviceBySN(&m_impl->handle, sn.constData()) != MV3D_LP_OK) {
+    const CameraError openError = sdkStageResult("MV3D_LP_OpenDeviceBySN",
+        MV3D_LP_OpenDeviceBySN(&m_impl->handle, sn.constData()));
+    if (!openError.ok()) {
         m_impl->shutdown();
-        return {QStringLiteral("MV3D_LP_OpenDeviceBySN failed for %1")
-                    .arg(m_impl->serialNumber)};
+        return {openError.message + QStringLiteral("；设备：%1").arg(m_impl->serialNumber)};
     }
     m_impl->deviceOpen.store(true);
 
@@ -790,29 +863,49 @@ CameraError Mv3dLpCamera::start()
         m_impl->shutdown();
         return triggerError;
     }
+    const bool sdkImage = detail::preservesDeviceTrigger(m_impl->callbackContext.capture);
     m_impl->callbackContext.configureActiveImageMode(m_impl->activeMode);
 
     // Register callbacks before measurement starts.
     m_impl->callbackContext.slot = &m_impl->slot;
+    m_impl->callbackContext.imagesReady.store(!sdkImage, std::memory_order_release);
     m_impl->callbackContext.accepting.store(true, std::memory_order_release);
-    const auto imageCallbackStatus = MV3D_LP_RegisterImageDataCallBack(
-        m_impl->handle, imageDataCallback, &m_impl->callbackContext);
-    const auto exceptionCallbackStatus = MV3D_LP_RegisterExceptionCallBack(
-        m_impl->handle, exceptionCallback, &m_impl->callbackContext);
-    if (imageCallbackStatus != MV3D_LP_OK || exceptionCallbackStatus != MV3D_LP_OK) {
+    const CameraError imageCallbackError = sdkStageResult("MV3D_LP_RegisterImageDataCallBack",
+        MV3D_LP_RegisterImageDataCallBack(m_impl->handle, imageDataCallback, &m_impl->callbackContext));
+    if (!imageCallbackError.ok()) {
         m_impl->shutdown();
-        return {QStringLiteral("Mv3dLp callback registration failed")};
+        return imageCallbackError;
+    }
+    const CameraError exceptionCallbackError = sdkStageResult("MV3D_LP_RegisterExceptionCallBack",
+        MV3D_LP_RegisterExceptionCallBack(m_impl->handle, exceptionCallback, &m_impl->callbackContext));
+    if (!exceptionCallbackError.ok()) {
+        m_impl->shutdown();
+        return exceptionCallbackError;
     }
 
-    const MV3D_LP_STATUS startStatus = MV3D_LP_StartMeasure(m_impl->handle);
-    if (startStatus != MV3D_LP_OK) {
+    const CameraError startError = sdkStageResult("MV3D_LP_StartMeasure",
+        MV3D_LP_StartMeasure(m_impl->handle));
+    if (!startError.ok()) {
         m_impl->shutdown();
-        return {QStringLiteral("MV3D_LP_StartMeasure failed: %1").arg(statusText(startStatus))};
+        return startError;
     }
-    qInfo() << "Mv3dLpCamera: MV3D_LP_StartMeasure succeeded"
-            << "trigger=" << (m_impl->softwareTriggerRequested ? "software" : "continuous")
-            << "softTriggerSupported=" << m_impl->softTriggerSupported;
+    // Record measurement before any later fallible call so shutdown always
+    // stops an SDK acquisition that actually started.
     m_impl->running.store(true);
+    qInfo() << "Mv3dLpCamera: MV3D_LP_StartMeasure succeeded"
+            << "trigger=" << (detail::preservesDeviceTrigger(m_impl->callbackContext.capture)
+                ? "preserved/SDK image" : (m_impl->softwareTriggerRequested ? "software" : "continuous"))
+            << "softTriggerSupported=" << m_impl->softTriggerSupported;
+    if (sdkImage) {
+        const CameraError clearError = sdkStageResult("MV3D_LP_ClearDataBuffer",
+            MV3D_LP_ClearDataBuffer(m_impl->handle));
+        if (!clearError.ok()) {
+            m_impl->shutdown();
+            return clearError;
+        }
+        m_impl->callbackContext.imagesReady.store(true, std::memory_order_release);
+        qInfo() << "Mv3dLpCamera: SDK image reception ready";
+    }
     return {};
 }
 
@@ -826,6 +919,26 @@ void Mv3dLpCamera::stop()
 bool Mv3dLpCamera::isRunning() const
 {
     return m_impl->running.load();
+}
+
+CameraError Mv3dLpCamera::configureCaptureRows(std::uint32_t rows)
+{
+    if (isRunning() || rows == 1) return {QStringLiteral("请停止取流后设置完整扫描行数（至少两行）")};
+    m_impl->captureRows = rows;
+    m_impl->callbackContext.capture = {};
+    m_impl->callbackContext.capture.fixedRows = rows;
+    return {};
+}
+
+CameraError Mv3dLpCamera::configureCapture(const CaptureConfiguration &configuration)
+{
+    if (configuration.boundaryMode == CaptureBoundaryMode::FixedRows)
+        return configureCaptureRows(configuration.fixedRows);
+    if (isRunning() || !configuration.sdkImageBoundaryVerified)
+        return {QStringLiteral("请停止取流并确认当前设备的一次门控扫描对应一幅完整SDK图像")};
+    m_impl->captureRows = 0;
+    m_impl->callbackContext.capture = configuration;
+    return {};
 }
 
 bool Mv3dLpCamera::supportsSoftTrigger() const

@@ -45,6 +45,8 @@ public:
         const CameraFrame &frame,
         const PointCloudConvertOptions &options = {}) override;
     bool supportsSoftTrigger() const override;
+    CameraError configureCaptureRows(std::uint32_t rows) override;
+    CameraError configureCapture(const CaptureConfiguration &configuration) override;
     CameraError softTrigger() override;
     bool supportsReconnect() const override { return true; }
     CameraError reconnectOnce() override;

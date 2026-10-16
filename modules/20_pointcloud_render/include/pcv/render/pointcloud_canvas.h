@@ -5,6 +5,7 @@
 
 #include <QCoreApplication>
 #include <QFont>
+#include <QHash>
 #include <QKeyEvent>
 #include <QMatrix4x4>
 #include <QMouseEvent>
@@ -47,6 +48,16 @@ public:
     ~PointCloudCanvas() override;
 
     void setCloud(QVector<pointcloud::Point3D> points);
+
+    // Display-only cloud. Each display point maps to one point in the full
+    // source cloud; picking and all overlays continue to use full indices.
+    void setDisplayCloud(QVector<pointcloud::Point3D> points,
+                         QVector<int> displayToFullIndices,
+                         qsizetype fullPointCount);
+    // Check from frameSwapped to exclude a swap for the preceding cloud.
+    bool hasRenderedCurrentCloud() const {
+        return !m_points.isEmpty() && m_lastPaintedRevision == m_renderRevision;
+    }
 
     // Lightweight streaming variant for live camera frames: replaces the
     // cloud and refreshes bounds/depth colormap only. Keeps selection,
@@ -105,6 +116,7 @@ protected:
     void wheelEvent(QWheelEvent *event) override;
 
 private:
+    friend struct PointCloudCanvasTestAccess;
     void validateRenderSnapshot();
 
     void updateBounds();
@@ -128,6 +140,10 @@ private:
     void drawOverlay();
 
     QVector<pointcloud::Point3D> m_points;
+    bool m_hasDisplayMapping = false;
+    QVector<int> m_displayToFullIndices;
+    QHash<int, int> m_fullToDisplayIndices;
+    qsizetype m_fullPointCount = 0;
     int m_coordinatePointIndex = -1;
     pcv::render::CoordinateFrame m_workpieceCoordinate;
     QVector<quint8> m_pointStates;
@@ -181,6 +197,7 @@ private:
     bool m_edgeSelectionMode = false;
     bool m_mouseMoved = false;
     quint64 m_renderRevision = 0;
+    quint64 m_lastPaintedRevision = 0;
     qsizetype m_vertexBufferCapacityBytes = 0;
     qsizetype m_stateBufferCapacityBytes = 0;
     qsizetype m_textureBufferCapacityBytes = 0;
@@ -188,4 +205,7 @@ private:
     QVector<quint8> m_textureValid;
     bool m_textureUploadPending = false;
     int m_textureFallbackColorMode = 0;
+
+    int displayIndexForFullIndex(int fullIndex) const;
+    int fullIndexForDisplayIndex(int displayIndex) const;
 };

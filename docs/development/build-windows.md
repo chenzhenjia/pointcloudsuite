@@ -49,3 +49,7 @@ pointcloudview 自关闭变量为 POINTCLOUDVIEW_SELFTEST_CLOSE=1；pointcloudst
 ```
 
 历史 Release 缺本机Visual Studio redistributable，便携部署未验收；本机启动不代表干净机器可运行。CLI运行目录/退出码见[数据契约](../contracts/data_contracts_v0.5.md)与[CLI文档](../modules/pointcloudcli.md)。
+
+## 2026-10-16 构建与运行复验
+
+用户本轮明确要求实际修复/构建/运行，本文开头“不执行”仅是文档整理轮历史。Qt6.8.3/MSVC19.51/NMake、两个GUI/CLI/Tools/Tests开启、相机关闭的全新Debug/Release全量构建均成功，各43/43 CTest及Windows原生六画布/两个GUI启动均通过。旧build目录未覆盖；新EXE路径、工具链环境、完整命令、日志及未验证项见[修复说明](build_runtime_repair_v1.md)。Release redistributable定位告警仍在，干净机便携部署未验收。

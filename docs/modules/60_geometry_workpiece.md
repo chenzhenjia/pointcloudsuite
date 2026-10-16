@@ -52,3 +52,10 @@ plane_fitting_tests、plane_fitting_equivalence_tests_v2、single_click_plane_se
 本轮仅静态审计。历史 630 万点模块中位数不代表真实 GUI 两秒；真实选面完整性、复杂缺失带、row-major、WObj1 朝向、Start/End 和机器人安全待验收。
 
 后续工件模板增量另有 workpiece_template_tests_v1 / workpiece_template_view_tests_v1，覆盖文件往返、搬迁、非法数据、事务/取消、来源继承、过期结果和关闭生命周期；本次实际构建、CTest 和规模记录统一见版本日志的工件模板 v1 条目，不沿用上段文档整理轮的静态结论。
+
+批量选面优化（2026-10-16）：IndexPreparationOptions提供可选point→bucket缓存与独立网格法向并行；单击复用分类/投影/距离/连通队列缓冲，内存由可选ProcessingBudget租约共享，预算不足保持原判断并退回串行/阶段释放。保留网格编号/点序、邻域累计及PCA/RMS顺序、v2容差/跨带/六轮规则。索引与单击结果追加outOfMemory诊断。应用将完整拼接结果直接交现有saveWorkpieceTemplate，主窗口仍loadWorkpieceTemplate，不新增模板schema/匹配功能。见[整合说明](../development/batch_plane_selection_template_integration_v1.md)；本轮回归源码未执行。
+
+
+2026-10-16 整合v2：完整候选投影使用65536点连续窗口私有输出，独立预算预留、全join后原序归并；低于100000点/预算不足串行，线程创建失败join后串行剩余区间。网格法向同样先join再提交。SingleClickResult尾部追加projectionMs/normalConnectivityMs诊断，不改v2数学/拓扑/六轮/正式字段；102400点串行/1/2/4/零预算对照源码已补未运行。见[完整处理v3](../development/full_resolution_processing_acceleration_v3.md)。
+
+2026-10-16 构建修复：preparePlaneSelectionIndex内样本计数和网格计数分别使用validSampleCount/bucketCount，修复同作用域重复声明C2373及连带C2737，不改数学/顺序/接口。此次实际全新Debug/Release全量构建和各43项CTest通过，包含完整性v2及并行/预算对照；原生六画布流程另通过。真实工件精度和性能仍独立验收，见[修复说明](../development/build_runtime_repair_v1.md)。

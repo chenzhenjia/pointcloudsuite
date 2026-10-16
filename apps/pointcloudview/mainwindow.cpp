@@ -873,6 +873,30 @@ void MainWindow::openCameraStream() {
     if (m_templateTaskActive || m_templateFormActive) return;
     if (!m_cameraDialog) {
         m_cameraDialog = new CameraDialog(this);
+        m_cameraDialog->canStartCapture = [this] {
+            return !m_closing && !pointTaskRunning(false) && !m_templateTaskActive && !m_templateFormActive;
+        };
+        m_cameraDialog->canStartStitching = [this] {
+            if (m_closing || pointTaskRunning(false) || m_templateTaskActive || m_templateFormActive) return false;
+            if (!confirmReplaceTempWorkpieceSession()) return false;
+            // Restore the authoritative processing cloud before starting a task;
+            // failure/cancellation must not leave a raw camera preview as its result.
+            if (m_canvas) m_canvas->setCloud(m_points);
+            m_livePreviewPointCount = 0;
+            return true;
+        };
+        m_cameraDialog->stitchingPublished = [this](const pcv::interface::StitchingResult &result) {
+            StitchingPublication publication;
+            publication.points = result.points;
+            publication.formalPly = result.manifest.formalPly;
+            publication.previewPly = result.manifest.previewPly;
+            publication.mappingFile = result.manifest.mappingFile;
+            publication.reportJson = result.manifest.reportJson;
+            publication.outputDirectory = QFileInfo(result.outputPly).absolutePath();
+            stitchingSucceeded(publication);
+            statusBar()->showMessage(tr("连续采集位姿直拼已发布：%1 点；结果目录：%2")
+                .arg(QLocale().toString(result.points.size())).arg(publication.outputDirectory));
+        };
         m_cameraDialog->cloudPublished =
             [this](const QVector<pointcloud::Point3D> &points) {
                 if (m_closing || !m_canvas || m_templateTaskActive || m_templateFormActive
@@ -1487,7 +1511,12 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points,
     refreshRenderDialogContent();
 }
 
-bool MainWindow::pointTaskRunning() const {
+bool MainWindow::pointTaskRunning(bool includeCamera) const {
+#ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
+    if (includeCamera && m_cameraDialog && m_cameraDialog->isCaptureBusy()) return true;
+#else
+    Q_UNUSED(includeCamera);
+#endif
     return m_templateTaskActive || m_templateFormActive || m_loading
         || (m_noiseWatcher && m_noiseWatcher->isRunning())
         || (m_stitchingWindow && m_stitchingWindow->isBusy())

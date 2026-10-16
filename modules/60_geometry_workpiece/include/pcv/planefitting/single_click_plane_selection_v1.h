@@ -2,6 +2,7 @@
 
 #include <pcv/planefitting/plane_fitting.h>
 #include <memory>
+#include <pcv/core/processing_budget.h>
 
 namespace pcv::planefitting {
 
@@ -15,6 +16,11 @@ struct PlaneSelectionIndexResult {
     QString error;
     bool cancelled = false;
     double preparationMs = 0.0;
+    double gridMs = 0.0;
+    double normalsMs = 0.0;
+    bool pointBucketCacheUsed = false;
+    size_t optimizationBytes = 0;
+    bool outOfMemory = false;
 };
 
 struct SingleClickOptions {
@@ -23,6 +29,7 @@ struct SingleClickOptions {
     int maxParallelTasks = 4;
     std::function<bool()> isCancelled;
     float maximumGapMm = 3.0f;
+    std::shared_ptr<pcv::ProcessingBudget> processingBudget;
 };
 
 struct SingleClickResult {
@@ -45,14 +52,25 @@ struct SingleClickResult {
     int refinementIterations = 0;
     bool refinementConverged = false;
     double gapMergeMs = 0.0;
+    bool outOfMemory = false;
     bool ok() const { return status == SingleClickStatus::Success; }
+    double projectionMs = 0.0;
+    double normalConnectivityMs = 0.0;
+};
+
+struct IndexPreparationOptions {
+    bool parallelEnabled = false;
+    int maxParallelTasks = 4;
+    bool cachePointBuckets = false;
+    std::shared_ptr<pcv::ProcessingBudget> processingBudget;
 };
 
 // The immutable index retains a const shared view of this exact point buffer.
 // Replaced/edited buffers must be prepared again. No original point is modified.
 PlaneSelectionIndexResult preparePlaneSelectionIndex(
     const QVector<pointcloud::Point3D> &points,
-    const std::function<bool()> &isCancelled = {});
+    const std::function<bool()> &isCancelled = {},
+    const IndexPreparationOptions &options = {});
 
 SingleClickResult selectPlaneAtPoint(
     const QVector<pointcloud::Point3D> &points,

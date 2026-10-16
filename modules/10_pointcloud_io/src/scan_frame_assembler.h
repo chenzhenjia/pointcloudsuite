@@ -63,9 +63,10 @@ public:
     {
     }
 
-    void configure(std::uint32_t expectedRows)
+    void configure(std::uint32_t expectedRows, bool strict = false)
     {
         m_expectedRows = expectedRows;
+        m_strict = strict;
         reset();
     }
 
@@ -96,6 +97,11 @@ public:
             return reject(QStringLiteral("normalized scan chunk is not a valid ABC32f raster"));
         }
 
+        if (m_strict && (m_expectedRows < 2 || chunk->height > m_expectedRows
+                        || (m_active && chunk->height == m_expectedRows))) {
+            discardActiveScan();
+            return reject(QStringLiteral("fixed scan rows mismatch or interrupted partial scan"));
+        }
         // A single callback may already carry the complete scan (DP-series
         // depth frames are emitted whole). When no fragment is being
         // accumulated, treat any self-contained chunk as complete and adopt
@@ -156,18 +162,20 @@ public:
         completed->height = m_expectedRows;
         completed->data = std::move(m_data);
         completed->intensityData = std::move(m_intensityData);
-        completed->frameNumber = ++m_completedScanCount;
+        completed->frameNumber = m_strict ? m_lastChunk->frameNumber : ++m_completedScanCount;
         completed->expectedScanRows = m_expectedRows;
         completed->accumulatedScanRows = m_expectedRows;
         completed->scanFragmentCount = m_fragmentCount;
         completed->discardedScanCount = m_discardedScanCount;
         completed->completeScan = true;
+        if (m_strict) completed->boundarySource = ScanBoundarySource::FixedRows;
         reset();
         m_lastChunk.reset();
         return {ScanAssemblyOutcome::Complete, std::move(completed), {}};
     }
 
 private:
+    bool m_strict = false;
     bool begin(const std::shared_ptr<CameraFrame> &chunk)
     {
         const std::uint64_t expectedBytes = std::uint64_t(chunk->width)
@@ -209,7 +217,8 @@ private:
             return reject(QStringLiteral("complete scan payload exceeds assembly memory limit"));
         }
         auto completed = std::make_shared<CameraFrame>(*chunk);
-        completed->frameNumber = ++m_completedScanCount;
+        completed->frameNumber = m_strict ? chunk->frameNumber : ++m_completedScanCount;
+        if (m_strict) completed->boundarySource = ScanBoundarySource::FixedRows;
         completed->expectedScanRows = m_expectedRows;
         completed->accumulatedScanRows = chunk->height;
         completed->scanFragmentCount = 1;

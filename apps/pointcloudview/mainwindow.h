@@ -161,7 +161,7 @@ private:
     bool tempWorkpieceFinalizeReady(QString *error = nullptr) const;
     void validateSecondPlaneSelection();
     void runPlaneExtraction(bool deferFinalClassification, bool fromThirdPick = false);
-    bool pointTaskRunning() const;
+    bool pointTaskRunning(bool includeCamera = true) const;
     void applyConfiguredDefaults();
     void applyRenderDialogSettings();
     void refreshRenderDialogContent();

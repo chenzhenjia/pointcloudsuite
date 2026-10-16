@@ -21,16 +21,21 @@ qt_add_executable(pointcloudview
     pointcloudview.qrc
 )
 if(PCV_BUILD_EXPERIMENTAL_CAMERA)
+    target_compile_definitions(pointcloudview PRIVATE PCV_CAPTURE_UI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
     target_sources(pointcloudview PRIVATE
         live_pipeline.cpp
         live_pipeline.h
         cameradialog.cpp
         cameradialog.h
+        features/camera_capture_panel_v1.cpp
+        features/camera_capture_panel_v1.h
+        features/camera_capture_wizard.h
         ui/cameradialog.ui
     )
 endif()
 set_property(TARGET pointcloudview PROPERTY AUTOUIC_SEARCH_PATHS
     "${CMAKE_CURRENT_SOURCE_DIR}/ui")
+set_property(TARGET pointcloudview PROPERTY AUTORCC ON)
 
 # Localized MSVC /showIncludes output can leave an empty dependency file with
 # this Qt Creator Makefile kit. Keep this ABI-critical dependency explicit.

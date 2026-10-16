@@ -7,6 +7,9 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <cstring>
+#include <atomic>
+#include <future>
 
 namespace {
 
@@ -546,6 +549,43 @@ int main(int argc, char **argv) {
         const pointcloud::ScanTravelInfo degenerate = pointcloud::computeScanTravel(
             pointcloud::robotPoseToMatrix(origin), pointcloud::robotPoseToMatrix(origin));
         if (!require(!degenerate.valid, "a degenerate travel must not be valid")) return 1;
+    }
+
+    // Bounded full-data conversion: exact serial / 1 / 2 / 4 equivalence,
+    // including changing rotation, rejected samples and extra Qt sharing.
+    {
+        QVector<pointcloud::Point3D> points;
+        for(int i=0;i<150100;++i)points.push_back({float(i%31)+1,float(i%1101)/100,30,0,0,1});
+        points[123].x=std::numeric_limits<float>::quiet_NaN();
+        const auto shared=points;
+        pointcloud::RobotPose moving=plainEnd;moving.rx=0.3;moving.rz=0.5;
+        pointcloud::CloudTransformOptions serial;serial.sampleStride=7;
+        const auto reference=pointcloud::transformLineScanToRobotBase(points,translated,origin,moving,serial);
+        if(!require(reference.ok,"parallel equivalence reference failed"))return 1;
+        const auto equalPoints=[](const auto &a,const auto &b) {
+            return a.size()==b.size()&&(a.isEmpty()||std::memcmp(a.constData(),b.constData(),size_t(a.size())*sizeof(pointcloud::Point3D))==0);
+        };
+        for(int workers:{1,2,4})for(size_t bytes:{size_t(0),size_t(16)*1024*1024}) {
+            auto parallel=serial;parallel.parallelEnabled=true;parallel.maxParallelTasks=workers;
+            parallel.processingBudget=std::make_shared<pcv::ProcessingBudget>(bytes);
+            const auto result=pointcloud::transformLineScanToRobotBase(shared,translated,origin,moving,parallel);
+            if(!require(result.ok&&equalPoints(result.points,reference.points)&&equalPoints(result.samplePoints,reference.samplePoints)
+                &&result.sourceIndices==reference.sourceIndices&&result.scanRatios==reference.scanRatios
+                &&result.rejectedInvalid==reference.rejectedInvalid&&result.rejectedRange==reference.rejectedRange
+                &&result.inputYMinimum==reference.inputYMinimum&&result.inputYMaximum==reference.inputYMaximum,
+                "full conversion differs for workers/budget fallback"))return 1;
+            if(!require(result.actualWorkerCount>=1&&result.actualWorkerCount<=workers&&result.mergeMs>=0,
+                "conversion diagnostics invalid"))return 1;
+            if(bytes==0&&!require(result.actualWorkerCount==1,"zero-budget conversion did not fall back"))return 1;
+            parallel.collectSamplePoints=false;
+            const auto lean=pointcloud::transformLineScanToRobotBase(shared,translated,origin,moving,parallel);
+            if(!require(lean.ok&&lean.samplePoints.isEmpty()&&equalPoints(lean.points,reference.points),"sample collection changed formal points"))return 1;
+            if(!require(parallel.processingBudget->used()==0,"conversion budget leaked"))return 1;
+            std::atomic_int checks{0};parallel.isCancelled=[&checks]{return ++checks>=2;};
+            const auto stopped=pointcloud::transformLineScanToRobotBase(shared,translated,origin,moving,parallel);
+            if(!require(stopped.cancelled&&!stopped.ok&&stopped.points.isEmpty()&&stopped.sourceIndices.isEmpty()
+                &&stopped.scanRatios.isEmpty()&&parallel.processingBudget->used()==0,"cancelled conversion published partial arrays"))return 1;
+        }
     }
 
     std::cout << "Hand-eye transform tests passed.\n";

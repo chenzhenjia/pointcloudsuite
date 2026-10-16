@@ -1,6 +1,7 @@
 #include <pcv/registration/handeye_transform.h>
 
 #include <QFile>
+#include <QElapsedTimer>
 #include <QQuaternion>
 #include <QVector3D>
 #include <QXmlStreamReader>
@@ -9,6 +10,10 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <future>
+#include <vector>
+#include <utility>
+#include <system_error>
 
 namespace pointcloud {
 namespace {
@@ -430,11 +435,29 @@ RobotCloudResult transformLineScanToRobotBase(
         return result;
     }
 
+    if (options.useRasterRowProgress) {
+        const quint64 total = quint64(options.rasterWidth) * options.rasterHeight;
+        if (options.layout != DepthPointLayout::LineProfileXz || options.rasterWidth == 0
+            || options.rasterHeight < 2 || options.rasterSourceIndices.size() != source.size()) {
+            setFailure(&result, RobotCloudStatus::LineProfileContractViolation,
+                       QStringLiteral("扫描行进度要求有效宽高及等长原始栅格下标"));
+            return result;
+        }
+        qsizetype previous = -1;
+        for (qsizetype index : options.rasterSourceIndices) {
+            if (index <= previous || index < 0 || quint64(index) >= total) {
+                setFailure(&result, RobotCloudStatus::LineProfileContractViolation,
+                           QStringLiteral("原始栅格下标越界或不递增"));
+                return result;
+            }
+            previous = index;
+        }
+    }
     const int sampleStride = qMax(1, options.sampleStride);
     result.points.reserve(source.size());
     result.sourceIndices.reserve(source.size());
     result.scanRatios.reserve(source.size());
-    result.samplePoints.reserve((source.size() + sampleStride - 1) / sampleStride);
+    if(options.collectSamplePoints)result.samplePoints.reserve((source.size() + sampleStride - 1) / sampleStride);
     result.inputYMinimum = std::numeric_limits<float>::max();
     result.inputYMaximum = std::numeric_limits<float>::lowest();
 
@@ -450,17 +473,19 @@ RobotCloudResult transformLineScanToRobotBase(
         }
     }
 
-    qsizetype validSeen = 0;
-    for (qsizetype sourceIndex = 0; sourceIndex < source.size(); ++sourceIndex) {
-        if ((sourceIndex % 150000) == 0 && options.isCancelled && options.isCancelled()) {
-            result.cancelled = true;
-            setFailure(&result, RobotCloudStatus::Cancelled, QStringLiteral("已取消"));
-            return result;
+    const auto convertRange=[&source,&calibration,&startBaseFromFlange,&endBaseFromFlange,
+                             &options,&travel,&transformLut,rotationChanges](qsizetype begin,qsizetype end,RobotCloudResult &chunk) {
+    for (qsizetype sourceIndex = begin; sourceIndex < end; ++sourceIndex) {
+        if ((sourceIndex % 4096) == 0 && options.isCancelled && options.isCancelled()) {
+            chunk.cancelled = true;
+            setFailure(&chunk, RobotCloudStatus::Cancelled, QStringLiteral("已取消"));
+            return;
         }
-        const Point3D &input = source[sourceIndex];
+        const Point3D &input = source.at(sourceIndex);
         if (!finitePoint(input) || !finiteRotation(input)
-            || (options.layout == DepthPointLayout::LineProfileXz && !nonzeroPoint(input))) {
-            ++result.rejectedInvalid;
+            || (options.layout == DepthPointLayout::LineProfileXz
+                && !options.useRasterRowProgress && !nonzeroPoint(input))) {
+            ++chunk.rejectedInvalid;
             continue;
         }
 
@@ -470,10 +495,13 @@ RobotCloudResult transformLineScanToRobotBase(
         if (options.layout == DepthPointLayout::LineProfileXz) {
             // Contract: the input Y only expresses the scan progress, the rigid
             // transform receives [X,0,Z].
-            ratio = lineProfileScanRatio(input.y, travel.signedTravel);
+            ratio = options.useRasterRowProgress
+                ? float(options.rasterSourceIndices.at(sourceIndex) / options.rasterWidth)
+                    / float(options.rasterHeight - 1)
+                : lineProfileScanRatio(input.y, travel.signedTravel);
             if (!std::isfinite(ratio)
                 || ratio < options.progressMinimum || ratio > options.progressMaximum) {
-                ++result.rejectedRange;
+                ++chunk.rejectedRange;
                 continue;
             }
             depthPoint = lineProfileCameraPoint(input);
@@ -484,7 +512,7 @@ RobotCloudResult transformLineScanToRobotBase(
         if (rotationChanges) {
             const int lutIndex = qBound(0, int(std::lround(ratio * RotationLutResolution)),
                                         RotationLutResolution);
-            baseFromFlange = transformLut[lutIndex];
+            baseFromFlange = transformLut.at(lutIndex);
         } else {
             baseFromFlange = lerpTranslation(startBaseFromFlange, endBaseFromFlange, ratio);
         }
@@ -492,17 +520,84 @@ RobotCloudResult transformLineScanToRobotBase(
         Point3D converted;
         if (!applyBaseFromDepth(depthPoint, composeBaseFromDepth(baseFromFlange, calibration),
                                 &converted)) {
-            ++result.rejectedInvalid;
+            ++chunk.rejectedInvalid;
             continue;
         }
-        result.points.push_back(converted);
-        result.sourceIndices.push_back(sourceIndex);
-        result.scanRatios.push_back(ratio);
-        if ((validSeen % sampleStride) == 0) result.samplePoints.push_back(converted);
-        ++validSeen;
-        result.inputYMinimum = qMin(result.inputYMinimum, input.y);
-        result.inputYMaximum = qMax(result.inputYMaximum, input.y);
+        chunk.points.push_back(converted);
+        chunk.sourceIndices.push_back(options.useRasterRowProgress
+            ? options.rasterSourceIndices.at(sourceIndex) : sourceIndex);
+        chunk.scanRatios.push_back(ratio);
+        chunk.inputYMinimum = qMin(chunk.inputYMinimum, input.y);
+        chunk.inputYMaximum = qMax(chunk.inputYMaximum, input.y);
     }
+    };
+    const auto merge=[&result](const RobotCloudResult &chunk) {
+        QElapsedTimer timer;timer.start();
+        result.points.append(chunk.points);result.sourceIndices.append(chunk.sourceIndices);
+        result.scanRatios.append(chunk.scanRatios);
+        result.rejectedInvalid+=chunk.rejectedInvalid;result.rejectedRange+=chunk.rejectedRange;
+        result.inputYMinimum=qMin(result.inputYMinimum,chunk.inputYMinimum);
+        result.inputYMaximum=qMax(result.inputYMaximum,chunk.inputYMaximum);
+        result.mergeMs+=timer.nsecsElapsed()/1e6;
+    };
+    int workers=options.parallelEnabled?qBound(1,options.maxParallelTasks,4):1;
+    // A bounded window avoids a second full converted cloud. The shared lease
+    // covers every worker's private points/source/ratio arrays in the window.
+    constexpr qsizetype chunkSize=65536;
+    std::shared_ptr<pcv::ProcessingBudget::Lease> lease;
+    if(options.processingBudget) {
+        while(workers>1) {
+            lease=options.processingBudget->acquire(size_t(workers)*size_t(chunkSize)
+                *(sizeof(Point3D)+sizeof(qsizetype)+sizeof(float)));
+            if(lease)break;
+            --workers;
+        }
+    }
+    // With no lease use the original serial append path, with no second point
+    // buffer. Optional optimization memory never exceeds the shared budget.
+    if(options.processingBudget&&!lease)workers=1;
+    result.actualWorkerCount=1;
+    const auto makeChunk=[&convertRange](qsizetype begin,qsizetype end) {
+        RobotCloudResult chunk;
+        chunk.points.reserve(end-begin);chunk.sourceIndices.reserve(end-begin);chunk.scanRatios.reserve(end-begin);
+        chunk.inputYMinimum=std::numeric_limits<float>::max();chunk.inputYMaximum=std::numeric_limits<float>::lowest();
+        convertRange(begin,end,chunk);return chunk;
+    };
+    bool stopped=false;
+    if(workers==1) {
+        convertRange(0,source.size(),result);stopped=result.cancelled;
+    } else for(qsizetype begin=0;begin<source.size();) {
+        std::vector<std::future<RobotCloudResult>> futures;
+        qsizetype serialBegin=-1,serialEnd=-1;
+        for(int worker=0;worker<workers&&begin<source.size();++worker) {
+            const qsizetype end=qMin(source.size(),begin+chunkSize);
+            try {
+                futures.push_back(std::async(std::launch::async,[&makeChunk,begin,end]{return makeChunk(begin,end);}));
+            } catch(const std::system_error &) {
+                // Drain the earlier ranges first so a thread-creation failure
+                // cannot put the serial range ahead of its predecessors.
+                serialBegin=begin;serialEnd=end;workers=1;
+            }
+            begin=end;
+            if(serialBegin>=0)break;
+        }
+        result.actualWorkerCount=qMax(result.actualWorkerCount,int(futures.size()));
+        std::vector<RobotCloudResult> chunks;chunks.reserve(futures.size());
+        for(auto &future:futures)chunks.push_back(future.get());
+        for(const auto &chunk:chunks) {stopped=stopped||chunk.cancelled;merge(chunk);}
+        if(serialBegin>=0) {
+            convertRange(serialBegin,serialEnd,result);stopped=stopped||result.cancelled;
+            if(!stopped)convertRange(begin,source.size(),result);
+            stopped=stopped||result.cancelled;break;
+        }
+        if(stopped||(options.isCancelled&&options.isCancelled()))break;
+    }
+    if(stopped||(options.isCancelled&&options.isCancelled())) {
+        result.points.clear();result.samplePoints.clear();result.sourceIndices.clear();result.scanRatios.clear();
+        result.cancelled=true;setFailure(&result,RobotCloudStatus::Cancelled,QStringLiteral("已取消"));return result;
+    }
+    if(options.collectSamplePoints)
+        for(qsizetype i=0;i<result.points.size();i+=sampleStride)result.samplePoints.push_back(std::as_const(result.points).at(i));
 
     if (result.points.isEmpty()) {
         // Distinguish "the scan window rejected everything" from "the cloud does

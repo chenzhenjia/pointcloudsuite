@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QDebug>
 #include <QFile>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QSaveFile>
@@ -28,7 +29,7 @@ struct SourceIdentity {
     bool valid = false;
 };
 
-SourceIdentity sourceIdentity(const QString &sourceFile) {
+SourceIdentity sourceIdentity(const QString &sourceFile, const std::function<bool()> &cancelled = {}) {
     SourceIdentity identity;
     const QFileInfo info(sourceFile);
     identity.absolutePath = info.absoluteFilePath();
@@ -38,6 +39,7 @@ SourceIdentity sourceIdentity(const QString &sourceFile) {
     if (!file.open(QIODevice::ReadOnly)) return identity;
     QCryptographicHash hash(QCryptographicHash::Sha256);
     while (!file.atEnd()) {
+        if(cancelled && cancelled()) return identity;
         const QByteArray chunk = file.read(1024 * 1024);
         if (chunk.isEmpty() && !file.atEnd()) return identity;
         hash.addData(chunk);
@@ -68,7 +70,7 @@ QString cacheFilePathForIdentity(const SourceIdentity &source,
 }
 
 bool readCache(const SourceIdentity &source, const QString &path,
-               QVector<pointcloud::Point3D> *points) {
+               QVector<pointcloud::Point3D> *points, const std::function<bool()> &cancelled) {
     QFile cache(path);
     if (!cache.open(QIODevice::ReadOnly) || cache.size() < 32) return false;
     if (!source.valid || QFileInfo(path).lastModified().toMSecsSinceEpoch() < source.modifiedMs)
@@ -90,17 +92,21 @@ bool readCache(const SourceIdentity &source, const QString &path,
         || count > quint64(std::numeric_limits<qint64>::max() / qint64(sizeof(pointcloud::Point3D))))
         return false;
 
-    points->resize(qsizetype(count));
     const qint64 bytes = qint64(count) * qint64(sizeof(pointcloud::Point3D));
-    if (cache.read(reinterpret_cast<char *>(points->data()), bytes) != bytes) {
-        points->clear();
-        return false;
+    if(cache.size()-cache.pos()!=bytes)return false;
+    points->resize(qsizetype(count));
+    char *output=reinterpret_cast<char *>(points->data());
+    for(qint64 offset=0;offset<bytes;) {
+        if(cancelled && cancelled()){points->clear();return false;}
+        const qint64 length=qMin<qint64>(1024*1024,bytes-offset);
+        if(cache.read(output+offset,length)!=length){points->clear();return false;}
+        offset+=length;
     }
     return true;
 }
 
 bool writeCache(const SourceIdentity &source, const QString &path,
-                const QVector<pointcloud::Point3D> &points) {
+                const QVector<pointcloud::Point3D> &points, const std::function<bool()> &cancelled) {
     if (!source.valid) return false;
     if (points.size() > qsizetype(std::numeric_limits<qint64>::max()
                                   / qint64(sizeof(pointcloud::Point3D)))) return false;
@@ -111,8 +117,15 @@ bool writeCache(const SourceIdentity &source, const QString &path,
     stream << CacheMagic << CacheVersion << quint64(points.size())
            << quint64(source.size) << source.modifiedMs << source.sha256;
     const qint64 bytes = qint64(points.size()) * qint64(sizeof(pointcloud::Point3D));
-    if (cache.write(reinterpret_cast<const char *>(points.constData()), bytes) != bytes
-        || stream.status() != QDataStream::Ok) return false;
+    const char *input=reinterpret_cast<const char *>(points.constData());
+    if(stream.status()!=QDataStream::Ok)return false;
+    for(qint64 offset=0;offset<bytes;) {
+        if(cancelled && cancelled())return false;
+        const qint64 length=qMin<qint64>(1024*1024,bytes-offset);
+        if(cache.write(input+offset,length)!=length)return false;
+        offset+=length;
+    }
+    if(cancelled && cancelled())return false;
     return cache.commit();
 }
 
@@ -142,15 +155,23 @@ QString cacheFilePath(const QString &sourceFile, const QString &cacheDirectory) 
 
 CachedCloudResult readPlyCached(const QString &sourceFile, const QString &cacheDirectory,
                                 const PlyReadOptions &options) {
+    return readPlyCached(sourceFile,cacheDirectory,options,CloudCachePolicy{});
+}
+
+CachedCloudResult readPlyCached(const QString &sourceFile, const QString &cacheDirectory,
+                                const PlyReadOptions &options, const CloudCachePolicy &policy) {
     CachedCloudResult result;
     if (options.isCancelled && options.isCancelled()) {
         result.cancelled = true;
         result.error = QStringLiteral("PLY reading cancelled");
         return result;
     }
-    const SourceIdentity source = sourceIdentity(sourceFile);
+    QElapsedTimer phase;phase.start();
+    const SourceIdentity source = sourceIdentity(sourceFile,options.isCancelled);
+    result.fingerprintMs=phase.elapsed();
     if (!source.valid) {
-        result.error = QStringLiteral("无法读取 PLY 源文件指纹");
+        result.cancelled=options.isCancelled && options.isCancelled();
+        result.error = result.cancelled?QStringLiteral("PLY reading cancelled"):QStringLiteral("无法读取 PLY 源文件指纹");
         return result;
     }
     const PlyHeaderInfo sourceHeader = inspectPlyHeader(sourceFile);
@@ -162,7 +183,8 @@ CachedCloudResult readPlyCached(const QString &sourceFile, const QString &cacheD
     result.format = sourceHeader.format;
     result.canonicalPlyPath = canonicalPlyFilePath(sourceFile, cacheDirectory);
     const QString path = cacheFilePathForIdentity(source, sourceFile, cacheDirectory);
-    if (readCache(source, path, &result.points)) {
+    phase.restart();
+    if (readCache(source, path, &result.points,options.isCancelled)) {
         result.usedCache = true;
         result.ok = true;
         // Preserve the source PLY header count even when the decoded point
@@ -176,7 +198,16 @@ CachedCloudResult readPlyCached(const QString &sourceFile, const QString &cacheD
             result.usedCache = false;
         }
     }
+    result.cacheReadMs=phase.elapsed();
+    if(options.isCancelled && options.isCancelled()) {
+        result.points.clear();result.ok=false;result.cancelled=true;
+        result.error=QStringLiteral("PLY reading cancelled");return result;
+    }
     if (result.ok) {
+        if(!policy.prepareCanonicalPly) {
+            if(options.progress)options.progress(result.points.size(),result.points.size());
+            return result;
+        }
         if (!canonicalReady(result.canonicalPlyPath, result.points)) {
             BinaryPlyWriteOptions writeOptions;
             writeOptions.includeNormals = true;
@@ -215,10 +246,19 @@ CachedCloudResult readPlyCached(const QString &sourceFile, const QString &cacheD
     result.boundaryScanElapsedMs = parsed.boundaryScanElapsedMs;
     result.parseElapsedMs = parsed.parseElapsedMs;
     result.totalElapsedMs = parsed.totalElapsedMs;
-    if (!writeCache(source, path, result.points)) {
+    phase.restart();
+    if (!writeCache(source, path, result.points,options.isCancelled)) {
+        result.cancelled=options.isCancelled && options.isCancelled();
         result.error = QStringLiteral("无法写入 PLY 点云缓存");
         result.points.clear();
         return result;
+    }
+    result.cacheWriteMs=phase.elapsed();
+    if(!policy.prepareCanonicalPly) {
+        if(options.isCancelled&&options.isCancelled()) {
+            result.points.clear();result.cancelled=true;result.error=QStringLiteral("PLY reading cancelled");return result;
+        }
+        result.ok=true;return result;
     }
     const QString canonical = result.canonicalPlyPath;
     BinaryPlyWriteOptions writeOptions;

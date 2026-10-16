@@ -9,6 +9,8 @@
 #include <QTemporaryDir>
 
 #include <iostream>
+#include <cstring>
+#include <atomic>
 
 namespace {
 bool writeCloud(const QString &path, float value) {
@@ -161,6 +163,29 @@ int main(int argc, char **argv) {
         || withoutNormals.points[0].x != 1.0f || withoutNormals.points[0].y != 2.0f
         || withoutNormals.points[0].z != 3.0f)
         return fail("binary PLY xyz fields did not round trip");
+
+    // Batch policy keeps fingerprints/decoded order while avoiding the unused
+    // canonical artifact. Test both miss/hit, corruption and chunk cancellation.
+    const QString leanSource=directory.filePath(QStringLiteral("batch_source.ply"));
+    if(!writeLargeCloud(leanSource,90000))return fail("batch fixture failed");
+    const pcv::detail::io::CloudCachePolicy leanPolicy{false};
+    const auto lean=pcv::detail::io::readPlyCached(leanSource,cache,{},leanPolicy);
+    if(!lean.ok||lean.usedCache||lean.canonicalReady||QFileInfo::exists(lean.canonicalPlyPath))return fail("batch policy generated canonical PLY");
+    const auto leanHit=pcv::detail::io::readPlyCached(leanSource,cache,{},leanPolicy);
+    if(!leanHit.ok||!leanHit.usedCache||leanHit.points.size()!=lean.points.size()
+        ||std::memcmp(leanHit.points.constData(),lean.points.constData(),size_t(lean.points.size())*sizeof(pointcloud::Point3D)))return fail("batch cache hit differs");
+    QFile damaged(pcv::detail::io::cacheFilePath(leanSource,cache));
+    if(!damaged.open(QIODevice::ReadWrite)||!damaged.resize(damaged.size()-1))return fail("cache corruption setup failed");
+    damaged.close();
+    const auto repaired=pcv::detail::io::readPlyCached(leanSource,cache,{},leanPolicy);
+    if(!repaired.ok||repaired.usedCache||repaired.points.size()!=lean.points.size())return fail("damaged batch cache not rebuilt");
+    std::atomic_int calls{0};pcv::detail::io::PlyReadOptions stop;
+    stop.isCancelled=[&calls]{return ++calls>=4;};
+    const auto cancelled=pcv::detail::io::readPlyCached(leanSource,cache,stop,leanPolicy);
+    if(!cancelled.cancelled||cancelled.ok||!cancelled.points.isEmpty())return fail("chunk cancellation published cache points");
+    const auto compatible=pcv::detail::io::readPlyCached(leanSource,cache);
+    if(!compatible.ok||!compatible.canonicalReady||compatible.points.size()!=lean.points.size()
+        ||std::memcmp(compatible.points.constData(),lean.points.constData(),size_t(lean.points.size())*sizeof(pointcloud::Point3D)))return fail("batch/default decode mismatch");
 
     return 0;
 }

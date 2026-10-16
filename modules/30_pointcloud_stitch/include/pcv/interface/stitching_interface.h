@@ -16,6 +16,8 @@ struct StitchingFrameInput {
     QString plyPath;
     pointcloud::RobotPose startPose;
     pointcloud::RobotPose endPose;
+    // Optional committed camera capture frame directory. Only supported for pose-only stitching.
+    QString captureFrameDirectory;
 };
 
 struct StitchingInputGroup {

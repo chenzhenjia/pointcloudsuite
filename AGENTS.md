@@ -50,6 +50,19 @@ worker 只经 const QVector 视图、at()/->at() 读取共享 Qt 容器，捕获
 
 ## 兼容清理与本轮例外
 
+2026-10-16 连续采集v2：用户授权实施、构建与测试。新入口默认SDK整图/自动行数，人工确认当前配置一次门控对应一整图；保留触发，未知轮廓拒绝，v2会话逐帧高度独立，v1固定行数兼容。异常只停软件接收，不控制机器人；30/50数学及选面不改。[说明](docs/development/camera_capture_sdk_frame_v2.md)与[本轮记录](docs/changelog/v0.5.md#camera-capture-sdk-frame-v2)。保留已有修改，不提交/推送/上传。
+
+2026-10-16 连续采集与位姿直拼v1：用户授权实施及实际构建测试。主责10/30/50，CameraDialog直接采集/填XML和位姿/直拼并发布主界面；固定行数、原栅格行序进度、完整逐帧事务保存，非预览点云输入。首版无ICP/seam，不改选面算法。接口、会话格式及最终验证见[说明](docs/development/camera_capture_pose_stitch_v1.md)和[日志](docs/changelog/v0.5.md#camera-capture-pose-v1)。保留已有用户修改，不提交/推送/上传。
+
+2026-10-16 当前帧展示加速 v2：选面对话框在完整读取/转换后，先显示最多 300,000 个确定性均匀抽取的实测点，再后台建立完整选面索引。画布拾取回译完整下标，完整候选只在展示子集上高亮，正式选面/快照/输出保持完整。已撤回上一轮模块 30 缓存及结果预览字段，拼接结果恢复完整显示，不新增 manifest 字段。按本任务用户安排不运行构建/CTest/GUI/性能测试；验收步骤见[开发说明](docs/development/current_frame_display_acceleration_v2.md)，上一轮 v1 说明仅保留历史。
+
 旧 target/header/namespace 不新增重复实现；保留兼容周期。删除前须生产和工具引用清零、公共 include 迁移、无重复算法/流水线、构建/CTest/GUI/现场验收及弃用期或明确批准；删除独立评审/提交，不与迁移混合。
 
 本次用户已授权按 v0.5 清单重写文档、合并历史、删除18份重复 Markdown 和1份 txt，源码兼容层不删。本轮只静态审计，不构建/CTest/GUI/性能测试、不提交/push/上传。[详细结果](docs/changelog/v0.5.md#documentation-audit)与[文档迁移表](docs/archive/document_migration_v0.5.md)为本次记录；先前规则和变更可在历史归档追溯。
+
+2026-10-16 六分屏整合 v1：当前轮最多六帧完整数据和索引，每格展示≤300000确定性均匀实测点；两个帧级任务、每任务≤2计算worker，单任务≤4，共享256 MiB可选优化存储预算（不含业务数据/原有索引）。正式选面/结果/模板始终完整，30不依赖60。模板复用v1 PLY+JSON与主窗口读取。按用户安排仅静态检查，构建/CTest/GUI/性能由用户执行；见[开发说明](docs/development/batch_plane_selection_template_integration_v1.md)。
+
+
+2026-10-16 整合v2纠偏：以[当前说明](docs/development/batch_plane_selection_template_integration_v2.md)替代v1当前执行规则，历史保留。默认活动格不抢索引，完整选面请求优先；过期id/revision/token/kind结果不改变队列或内存暂停；所有轮次提交后任意轮可拼接；提交跳过释放旧快照/缓存，撤销重载重选。投影连续窗口并行、全join后原序归并，新增分阶段耗时仅会话日志。按用户安排本轮不构建/CTest/GUI/性能、不更新程序、不提交推送。
+
+2026-10-16 构建/运行修复：用户本轮明确授权实际构建与运行，以上静态交付限制仅属历史。修复60索引同作用域count重定义、应用/两主窗口测试target未启用AUTORCC导致图标缺失；新增资源加载及--native-gl六画布GPU拾取回归。全新源码树外Debug/Release全量构建成功，各43/43 CTest，原生六画布及两GUI自关闭均通过；不含相机/真实大样本/干净机部署。旧构建目录不覆盖，具体EXE、命令及风险见[修复记录](docs/development/build_runtime_repair_v1.md)。

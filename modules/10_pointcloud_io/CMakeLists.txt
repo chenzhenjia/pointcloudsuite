@@ -25,6 +25,8 @@ add_library(pcv_m10_pointcloud_io STATIC
     src/frame_converter.cpp
     src/intensity_image.cpp
     src/latest_frame_slot.cpp
+    src/capture_session_v1.cpp
+    include/pcv/camera/capture_session_v1.h
     src/mock_frame_source.cpp
     src/ply_reader.cpp
     src/ply_writer.cpp
@@ -52,6 +54,7 @@ target_include_directories(pcv_m10_pointcloud_io PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(pcv_m10_pointcloud_io PUBLIC pcv_core pcv_infrastructure Qt::Core Qt::Gui)
+target_compile_definitions(pcv_m10_pointcloud_io PRIVATE PCV_CAPTURE_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
 
 if(PCV_CAMERA_HAVE_HIKSDK)
     target_sources(pcv_m10_pointcloud_io PRIVATE src/mv3d_lp_camera.cpp)

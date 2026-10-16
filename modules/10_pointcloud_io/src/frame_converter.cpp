@@ -69,6 +69,7 @@ PointCloudConvertResult convertPointCloudToPoints(
             continue;
         }
         result.points.push_back({x, y, z});
+        result.sourceIndices.push_back(i);
     }
     result.ok = true;
     return result;
@@ -121,7 +122,9 @@ PointCloudConvertResult convertDepthToPoints(
         const float x = float(col) * frame.xScale + float(frame.xOffset);
         const float y = float(row) * frame.yScale + float(frame.yOffset);
         const float z = float(raw[i]) * frame.zScale + float(frame.zOffset);
+        const auto before = result.points.size();
         emitPoint(result.points, result.skipped, x, y, z, options);
+        if (result.points.size() != before) result.sourceIndices.push_back(i);
     }
     result.ok = true;
     return result;
@@ -153,7 +156,9 @@ PointCloudConvertResult convertProfileToPoints(
         const float x = float(raw[i * 3]) * frame.xScale + float(frame.xOffset);
         const float y = float(raw[i * 3 + 1]) * frame.yScale + float(frame.yOffset);
         const float z = float(raw[i * 3 + 2]) * frame.zScale + float(frame.zOffset);
+        const auto before = result.points.size();
         emitPoint(result.points, result.skipped, x, y, z, options);
+        if (result.points.size() != before) result.sourceIndices.push_back(i);
     }
     result.ok = true;
     return result;

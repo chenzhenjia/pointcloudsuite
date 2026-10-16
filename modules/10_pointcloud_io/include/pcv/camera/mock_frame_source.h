@@ -34,6 +34,21 @@ public:
         const PointCloudConvertOptions &options = {}) override;
     bool supportsSoftTrigger() const override { return false; }
     bool supportsReconnect() const override { return false; }
+    CameraError configureCaptureRows(std::uint32_t rows) override {
+        if (isRunning() || rows == 1) return {QStringLiteral("stop before configuring scan rows")};
+        m_capture = {};
+        m_capture.fixedRows = rows;
+        if (rows) m_height = rows;
+        return {};
+    }
+    CameraError configureCapture(const CaptureConfiguration &configuration) override {
+        if (configuration.boundaryMode == CaptureBoundaryMode::FixedRows)
+            return configureCaptureRows(configuration.fixedRows);
+        if (isRunning() || !configuration.sdkImageBoundaryVerified)
+            return {QStringLiteral("stop and confirm SDK image boundary before capture")};
+        m_capture = configuration;
+        return {};
+    }
 
 private:
     std::shared_ptr<const CameraFrame> makeSyntheticFrame(std::uint32_t frameNumber) const;
@@ -43,6 +58,7 @@ private:
     std::atomic<bool> m_running{false};
     std::uint32_t m_frameCounter = 0;
     LatestFrameSlot m_slot;
+    CaptureConfiguration m_capture;
 };
 
 } // namespace pcv::camera
