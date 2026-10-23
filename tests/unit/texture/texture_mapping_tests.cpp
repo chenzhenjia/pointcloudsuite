@@ -118,5 +118,27 @@ int main(int argc, char **argv) {
         points, {}, testImage(), validOptions());
     if (!require(!emptyPlane.ok, "empty plane indices must be rejected")) return 1;
 
+    pcv::texture::MultiFrameBrightnessInput multi;
+    multi.points = points;
+    multi.cloudIds = {0, 0, 1, 1};
+    multi.sourceIndices = {0, 1, 2, 3};
+    multi.frameMono8 = {QByteArray::fromHex("01020304"), QByteArray::fromHex("A0A1A2A3")};
+    multi.frameWidths = {2, 2};
+    multi.frameHeights = {2, 2};
+    const auto multiResult = pcv::texture::mapMultiFrameBrightness(multi);
+    if (!require(multiResult.ok && multiResult.mappedPointCount == 4
+                 && multiResult.grayscale == QVector<quint8>({1, 2, 0xA2, 0xA3})
+                 && multiResult.valid == QVector<quint8>({1, 1, 1, 1}),
+                 "multi-frame mapping must use cloud id and source index")) return 1;
+    multi.sourceIndices[3] = 9;
+    const auto skipped = pcv::texture::mapMultiFrameBrightness(multi);
+    if (!require(skipped.ok && skipped.mappedPointCount == 3 && skipped.skippedPointCount == 1,
+                 "invalid multi-frame source indices must be skipped")) return 1;
+    multi.sourceIndices[3] = 3;
+    multi.frameMono8[1].chop(1);
+    const auto badRaster = pcv::texture::mapMultiFrameBrightness(multi);
+    if (!require(!badRaster.ok && badRaster.error.contains(QStringLiteral("长度无效")),
+                 "invalid multi-frame raster must be rejected")) return 1;
+
     return 0;
 }

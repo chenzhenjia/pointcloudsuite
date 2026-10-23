@@ -1,6 +1,6 @@
 # PointCloudSuite Agent 工作手册
 
-适用本仓库，更新 2026-10-15，文档/架构 v0.5。[索引](docs/README.md) · [需求](docs/requirements/pointcloudview_v0.5.md) · [协同规范](docs/architecture/module_ui_integration_v0.5.md)。本次经用户明确授权重整原正文与历史区，历史迁往集中归档。
+适用本仓库，更新 2026-10-22，文档/架构 v0.5。[索引](docs/README.md) · [需求](docs/requirements/pointcloudview_v0.5.md) · [协同规范](docs/architecture/module_ui_integration_v0.5.md) · [pointcloudview 架构与算法导读](docs/development/pointcloudview_architecture_analysis_v1.md)。原正文与历史区重整记录见集中归档。
 
 ## 沟通、范围与安全
 
@@ -24,6 +24,34 @@
 30→10/50，60→10/50，40→30/60，20→core；70/80 兼容转发 60/10。共享模块不得依赖 apps；20 是唯一允许 Widgets/OpenGL 的领域模块，apps/stitching_ui 是应用层共享库。core/infrastructure 位于基础层。40/90/100 不得写成功能已实现。
 
 算法实现放模块 src，公共头 include；wrapper 只做参数/结果映射。50 是唯一坐标数学，不复制 XML/SLERP/矩阵转换。30 不新增 60 依赖，应用负责选面 DTO；MainWindow 壳、任务生命周期、共享拼接 UI 和模块依赖由主线维护。同事白名单、临时 adapter 与交接冻结按协同规范执行。
+
+### pointcloudview 架构与函数速查
+
+pointcloudview 的分层是：入口 `apps/pointcloudview/main.cpp` → 应用编排 `MainWindow`/`SelectedPlaneDialog`/`apps/stitching_ui` → 领域模块 10/20/30/50/60 → `pcv_core`/`pcv_infrastructure`。PLY、JSON、PNG、PCVMAP、相机 SDK 是数据/外部边界，不是领域模块。`MainWindow` 持有当前点云、来源、revision 和临时工件会话；`SelectedPlaneDialog` 持有多帧顺序、六分屏、选面快照与调度状态；`PointCloudCanvas` 负责 GPU 显示、拾取及 overlay；共享拼接窗口只做整帧任务 UI/编排。相机 UI 仅在 `PCV_BUILD_EXPERIMENTAL_CAMERA` 开启时编译。
+
+| owner | 关键入口 | 责任 |
+|---|---|---|
+| `MainWindow` | `openPointCloud`、`loadSelectedSource`、`loadFinished`、`publishCanvasCache` | 读取输入、确认异步结果仍有效、发布画布与来源状态 |
+| `MainWindow` | `applyNoiseRemoval`、`noiseFinished` | 发起过滤并按输入 revision 接受/丢弃结果 |
+| `MainWindow` | `determinePlaneCandidate`、`confirmPlaneCandidate`、`runPlaneExtraction` | 三点平面候选、用户确认和正式平面处理编排 |
+| `MainWindow` | `planScanTrajectory`、`textureMappingFinished`、模板读写入口 | 调用 60 的扫描/纹理/模板 API 并更新 UI |
+| `SelectedPlaneDialog` | `loadRound`、`requestFit`、`picked`、`confirmRound` | 多帧加载、选面索引/候选、拾取回译与整轮快照确认 |
+| `SelectedPlaneDialog` | `schedule`、`startJob`、`finishJob`、`finishGlobal` | 有界后台任务调度、身份校验和结果收敛 |
+| `SelectedPlaneDialog` | `stitch`、`saveTemplate`、`cancelAndWait` | 完整快照拼接、成功模板保存、取消/join |
+| 模块 20 `PointCloudCanvas` | `setCloud`、`setDisplayCloud`、`setSelectedIndices`、`setTextureGrayOverlay` | 完整/展示点集、拾取映射、选择和灰度覆盖显示 |
+| 模块 10 | `pcv::detail::io::readPly`、`readPlyCached`、`voxelDownsample`、`removeStatisticalOutliers`、`ArtifactTransaction::commit` | PLY/缓存、预处理和正式文件事务 |
+| 模块 30 | `pcv::interface::stitch`、`stitchRawLineProfiles`、`pcv::stitching::stitchSelectedPlanes` | 整帧配准/仅转换，以及所选平面相邻精配准、合并和输出 |
+| 模块 50 | `loadHandEyeCalibration`、`robotPoseToMatrix`、`interpolateRobotTransform`、`composeBaseFromDepth`、`transformLineScanToRobotBase` | 唯一标定解析、位姿数学和点云坐标转换 |
+| 模块 60 | `fit`、`preparePlaneSelectionIndex`、`selectPlaneAtPoint`、`prepareTempWorkpiece`、`finalizeTempWorkpiece` | 平面、单击选面、临时工件几何及四件套输出 |
+| 模块 60 | `mapPlaneBrightness`、`planScanTrajectory`、`saveWorkpieceTemplate`、`loadWorkpieceTemplate` | 灰度映射、扫描轨迹和模板读写 |
+
+算法实现和精确数据流程见[架构与算法导读](docs/development/pointcloudview_architecture_analysis_v1.md)。编码时按以下事实理解算法：
+
+- 单击选面先对完整点云建不可变索引，局部多尺度 RANSAC/PCA 找初始平面，全帧垂距分类，再投影网格连通、边界跨小缺失带并稳健精化；候选必须满足容差，不补点/加厚/压平，仍需用户预览确认。
+- 六分屏最多展示每格 300,000 个确定性抽样实测点；拾取映射回完整点下标，正式索引、确认快照、拼接和模板输入保留完整点集。
+- 整帧 ICP 的输入转换、降采样/法向、相邻帧多层级配准、结构验证/回退和原序合并归 30；关闭 ICP 时是仅转换。所选平面路径只收 robot_base 坐标，不得再次手眼转换；配准修正受预算约束，`formal_output` 只表示事务成功，不等于严格质量通过。
+- 60 临时工件以两组平面和来源信息生成 baseline/ROI/Mask/info；纹理依赖严格 row-major `source_raster_index` 对应，不做图像配准；扫描规划不等于刀路规划，不做 IK/碰撞/机器人控制。
+- PLY 读取、过滤、事务语义归 10；画布/拾取归 20；所有坐标数学归 50。UI wrapper 负责适配 DTO 和发布，不复制模块算法。
 
 ## 稳定契约与线程
 

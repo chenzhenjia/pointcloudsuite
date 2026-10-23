@@ -9,6 +9,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QSaveFile>
+#include <QBuffer>
+#include <QImage>
 #include <cmath>
 #include <limits>
 #include <QFileInfo>
@@ -28,13 +30,39 @@ QJsonObject jsonFile(const QString &path) {
     return file.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(file.readAll()).object() : QJsonObject{};
 }
 bool saveFrame(const QString &root, quint64 id, const CameraFrame &frame,
-               CaptureFrameRecord *record, QVector<pointcloud::Point3D> *preview, QString *error) {
+               bool requireIntensity, CaptureFrameRecord *record,
+               QVector<pointcloud::Point3D> *preview, QString *error) {
     QElapsedTimer timer; timer.start();
     const auto converted = convertPointCloudToPoints(frame);
     const qint64 pointConversionNs = timer.nsecsElapsed();
     if (!converted.ok || converted.points.isEmpty()) {
         *error = converted.error.isEmpty() ? QStringLiteral("扫描没有有效点") : converted.error;
         return false;
+    }
+    const bool hasIntensity = frame.intensityWidth > 0 && frame.intensityHeight > 0
+        && frame.intensityData.size() == qsizetype(frame.intensityWidth) * frame.intensityHeight;
+    if (requireIntensity && hasIntensity != !frame.intensityData.isEmpty()) {
+        *error = QStringLiteral("亮度图 Mono8 尺寸或数据长度无效");
+        return false;
+    }
+    if (requireIntensity && !hasIntensity && frame.intensityData.isEmpty()) {
+        *error = QStringLiteral("当前采集帧缺少有效 Mono8 亮度图");
+        return false;
+    }
+    if (requireIntensity && (frame.intensityWidth != frame.width || frame.intensityHeight != frame.height)) {
+        *error = QStringLiteral("亮度图尺寸与点云栅格不一致");
+        return false;
+    }
+    QByteArray pngBytes;
+    if (requireIntensity) {
+        QImage intensityImage(reinterpret_cast<const uchar *>(frame.intensityData.constData()),
+                              int(frame.intensityWidth), int(frame.intensityHeight),
+                              int(frame.intensityWidth), QImage::Format_Grayscale8);
+        QBuffer pngBuffer(&pngBytes);
+        if (!pngBuffer.open(QIODevice::WriteOnly) || !intensityImage.copy().save(&pngBuffer, "PNG")) {
+            *error = QStringLiteral("无法编码亮度图 PNG");
+            return false;
+        }
     }
     timer.restart();
     QByteArray indices;
@@ -43,7 +71,7 @@ bool saveFrame(const QString &root, quint64 id, const CameraFrame &frame,
     stream << quint32(0x31524943) << quint32(1) << quint64(converted.sourceIndices.size());
     for (qsizetype index : converted.sourceIndices) stream << quint64(index);
     const QString folder = QStringLiteral("frame_%1").arg(id, 8, 10, QLatin1Char('0'));
-    const QJsonObject meta{{"schema", "pcv-camera-frame-v1"}, {"id", qint64(id)},
+    QJsonObject meta{{"schema", "pcv-camera-frame-v1"}, {"id", qint64(id)},
         {"width", qint64(frame.width)}, {"height", qint64(frame.height)},
         {"sdk_frame_number", qint64(frame.frameNumber)}, {"timestamp", frame.timeStamp},
         {"total_samples", qint64(converted.totalSamples)}, {"valid_points", qint64(converted.points.size())},
@@ -53,20 +81,34 @@ bool saveFrame(const QString &root, quint64 id, const CameraFrame &frame,
         {"raw_frame_type", qint64(frame.rawFrameType)},
         {"receive_work_ns", frame.receiveWorkNs}, {"sdk_conversion_ns", frame.sdkConversionNs},
         {"created_at", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
-    pcv::io::ArtifactTransaction tx(QDir(root).filePath(folder));
-    if (stream.status() != QDataStream::Ok
-        || !tx.stageBinaryPly("camera.ply", converted.points)
-        || !tx.stageBytes("raster_indices.bin", indices)
-        || !tx.stageJson("frame.json", QJsonDocument(meta).toJson()) || !tx.commit()) {
-        *error = tx.error(); return false;
+    if (requireIntensity) {
+        meta.insert("intensity", "intensity.png");
+        meta.insert("intensity_raw", "intensity.mono8");
+        meta.insert("intensity_format", "Mono8");
+        meta.insert("intensity_width", qint64(frame.intensityWidth));
+        meta.insert("intensity_height", qint64(frame.intensityHeight));
+        meta.insert("intensity_bytes", qint64(frame.intensityData.size()));
+        meta.insert("intensity_valid", true);
     }
+    pcv::io::ArtifactTransaction tx(QDir(root).filePath(folder));
+    if (stream.status() != QDataStream::Ok) { *error = QStringLiteral("来源下标编码失败"); return false; }
+    if (!tx.stageBinaryPly("camera.ply", converted.points)) { *error = tx.error().isEmpty() ? QStringLiteral("camera.ply 事务写入失败") : tx.error(); return false; }
+    if (!tx.stageBytes("raster_indices.bin", indices)) { *error = tx.error().isEmpty() ? QStringLiteral("raster_indices.bin 事务写入失败") : tx.error(); return false; }
+    if (requireIntensity && !tx.stageBytes("intensity.png", pngBytes)) { *error = tx.error().isEmpty() ? QStringLiteral("intensity.png 事务写入失败") : tx.error(); return false; }
+    if (requireIntensity && !tx.stageBytes("intensity.mono8", frame.intensityData)) { *error = tx.error().isEmpty() ? QStringLiteral("intensity.mono8 事务写入失败") : tx.error(); return false; }
+    if (!tx.stageJson("frame.json", QJsonDocument(meta).toJson())) { *error = tx.error().isEmpty() ? QStringLiteral("frame.json 事务写入失败") : tx.error(); return false; }
+    if (!tx.commit()) { *error = tx.error().isEmpty() ? QStringLiteral("采集帧事务提交失败") : tx.error(); return false; }
     *record = {QDir(root).filePath(folder), id, frame.width, frame.height,
                frame.frameNumber, frame.timeStamp, converted.points.size()};
+    record->intensityAvailable = requireIntensity;
     record->pointConversionNs = pointConversionNs;
     record->writeWorkNs = timer.nsecsElapsed();
     const QDir saved(record->directory);
     record->savedBytes = QFileInfo(saved.filePath("camera.ply")).size()
-        + QFileInfo(saved.filePath("raster_indices.bin")).size() + QFileInfo(saved.filePath("frame.json")).size();
+        + QFileInfo(saved.filePath("raster_indices.bin")).size()
+        + (requireIntensity ? QFileInfo(saved.filePath("intensity.png")).size() : 0)
+        + (requireIntensity ? QFileInfo(saved.filePath("intensity.mono8")).size() : 0)
+        + QFileInfo(saved.filePath("frame.json")).size();
     const qsizetype limit = qMin<qsizetype>(300000, converted.points.size());
     preview->reserve(limit);
     for (qsizetype i = 0; i < limit; ++i) preview->push_back(converted.points.at(i * converted.points.size() / limit));
@@ -95,6 +137,12 @@ bool CaptureFrameQueue::push(std::shared_ptr<const CameraFrame> frame) {
         if (reason.isEmpty() && frame->boundarySource != ScanBoundarySource::SdkImageFrame)
             reason = QStringLiteral("驱动未确认SDK整幅图像边界，拒绝按默认completeScan接收");
     }
+    if (reason.isEmpty() && m_configuration.requireIntensity) {
+        const quint64 samples = quint64(frame->width) * frame->height;
+        if (frame->intensityWidth != frame->width || frame->intensityHeight != frame->height
+            || frame->intensityData.size() != qsizetype(samples))
+            reason = QStringLiteral("当前扫描缺少有效 Mono8 亮度图或尺寸与点云不一致");
+    }
     const qsizetype bytes = frame ? frame->data.size() + frame->intensityData.size() : 0;
     if (reason.isEmpty() && (m_frames.size() >= m_maximumFrames || bytes > m_maximumBytes - m_bytes))
         reason = QStringLiteral("连续采集队列已满，已停止接收；请降低采集速度");
@@ -103,6 +151,7 @@ bool CaptureFrameQueue::push(std::shared_ptr<const CameraFrame> frame) {
     }
     m_bytes += bytes; ++m_received;
     m_statistics.receivedBytes += bytes;
+    if (m_configuration.requireIntensity) ++m_statistics.intensityReceived;
     m_statistics.receiveWorkNs += frame->receiveWorkNs;
     m_statistics.sdkConversionNs += frame->sdkConversionNs;
     m_statistics.lastWidth = frame->width; m_statistics.lastHeight = frame->height;
@@ -160,6 +209,9 @@ QString createCaptureSession(const QString &parent, const CaptureConfiguration &
     pcv::io::ArtifactTransaction tx(dir.filePath(name));
     QJsonObject meta{{"schema", sdk ? "pcv-camera-session-v2" : "pcv-camera-session-v1"},
         {"device", device}, {"progress_source", "raster_row"},
+        {"intensity_enabled", configuration.requireIntensity},
+        {"external_light_enabled", configuration.externalLightEnabled},
+        {"external_light_operator_confirmed", configuration.externalLightOperatorConfirmed},
         {"created_at", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
     if (sdk) {
         meta.insert("boundary_mode", "sdk_image");
@@ -192,10 +244,26 @@ QVector<CaptureFrameRecord> readCaptureSession(const QString &directory, QString
             || frame.value("id").toInteger() <= 0 || frame.value("width").toInteger() <= 0) {
             *error = QStringLiteral("采集帧元数据无效：%1").arg(folder); return {};
         }
-        records.push_back({dir.filePath(folder), quint64(frame.value("id").toInteger()),
+        CaptureFrameRecord record{dir.filePath(folder), quint64(frame.value("id").toInteger()),
             quint32(frame.value("width").toInteger()), quint32(frame.value("height").toInteger()),
             quint32(frame.value("sdk_frame_number").toInteger()), frame.value("timestamp").toInteger(),
-            qsizetype(frame.value("valid_points").toInteger())});
+            qsizetype(frame.value("valid_points").toInteger())};
+        const QDir frameDirectory(dir.filePath(folder));
+        const qint64 imageWidth = frame.value("intensity_width").toInteger();
+        const qint64 imageHeight = frame.value("intensity_height").toInteger();
+        const qint64 imageBytes = frame.value("intensity_bytes").toInteger();
+        QFile raw(frameDirectory.filePath("intensity.mono8"));
+        QImage png(frameDirectory.filePath("intensity.png"));
+        const bool rawValid = raw.open(QIODevice::ReadOnly) && raw.size() == imageBytes;
+        record.intensityAvailable = frame.value("intensity_format").toString() == QLatin1String("Mono8")
+            && frame.value("intensity_valid").toBool()
+            && imageWidth == record.width && imageHeight == record.height
+            && imageBytes == imageWidth * imageHeight
+            && rawValid
+            && !png.isNull() && png.width() == imageWidth && png.height() == imageHeight
+            && QFile::exists(frameDirectory.filePath("intensity.mono8"))
+            && QFile::exists(frameDirectory.filePath("intensity.png"));
+        records.push_back(record);
     }
     return records;
 }
@@ -236,6 +304,31 @@ CaptureFrameData readCapturedFrame(const QString &directory, const std::function
         result.error = cloud.error.isEmpty() ? QStringLiteral("采集点云与来源映射点数不一致") : cloud.error; return result;
     }
     result.points = cloud.points;
+    const qint64 intensityWidth = meta.value("intensity_width").toInteger();
+    const qint64 intensityHeight = meta.value("intensity_height").toInteger();
+    const qint64 intensityBytes = meta.value("intensity_bytes").toInteger();
+    if (intensityWidth > 0 || intensityHeight > 0 || intensityBytes > 0) {
+        if (intensityWidth != width || intensityHeight != height
+            || intensityBytes != width * height) {
+            result.error = QStringLiteral("亮度图元数据与点云栅格不一致"); return result;
+        }
+        QFile raw(dir.filePath("intensity.mono8"));
+        if (!raw.open(QIODevice::ReadOnly) || raw.size() != intensityBytes) {
+            result.error = QStringLiteral("采集帧原始亮度图缺失或长度错误"); return result;
+        }
+        result.intensityMono8 = raw.readAll();
+        if (result.intensityMono8.size() != intensityBytes) {
+            result.error = QStringLiteral("采集帧原始亮度图读取不完整"); return result;
+        }
+        QImage png(dir.filePath("intensity.png"));
+        if (png.isNull() || png.width() != width || png.height() != height
+            || png.format() == QImage::Format_Invalid) {
+            result.error = QStringLiteral("采集帧 PNG 亮度图缺失或尺寸错误"); return result;
+        }
+        result.intensityWidth = quint32(intensityWidth);
+        result.intensityHeight = quint32(intensityHeight);
+        result.intensityPngPath = dir.filePath("intensity.png");
+    }
     result.record = {directory, quint64(meta.value("id").toInteger()), quint32(width), quint32(height),
         quint32(meta.value("sdk_frame_number").toInteger()), meta.value("timestamp").toInteger(), count};
     result.ok = true; return result;
@@ -262,12 +355,16 @@ QJsonObject readCaptureParameters(const QString &directory) { return jsonFile(QD
 CaptureRecorder::CaptureRecorder(QString directory, quint32 rows)
     : CaptureRecorder(std::move(directory), CaptureConfiguration{CaptureBoundaryMode::FixedRows, rows, false}) {}
 CaptureRecorder::CaptureRecorder(QString directory, CaptureConfiguration configuration)
-    : m_directory(std::move(directory)), m_queue(std::make_shared<CaptureFrameQueue>(configuration)),
+    : m_directory(std::move(directory)), m_configuration(configuration),
+      m_queue(std::make_shared<CaptureFrameQueue>(configuration)),
       m_thread([this] { run(); }) {}
 CaptureRecorder::~CaptureRecorder() { finish(); }
 void CaptureRecorder::finish() { m_queue->finish(); if (m_thread.joinable()) m_thread.join(); }
 QVector<CaptureFrameRecord> CaptureRecorder::savedFrames() const { std::lock_guard<std::mutex> lock(m_mutex); return m_saved; }
 QVector<pointcloud::Point3D> CaptureRecorder::latestPreview() const { std::lock_guard<std::mutex> lock(m_mutex); return m_preview; }
+QByteArray CaptureRecorder::latestIntensity() const { std::lock_guard<std::mutex> lock(m_mutex); return m_latestIntensity; }
+QSize CaptureRecorder::latestIntensitySize() const { std::lock_guard<std::mutex> lock(m_mutex); return m_latestIntensitySize; }
+quint32 CaptureRecorder::latestIntensityFrameNumber() const { std::lock_guard<std::mutex> lock(m_mutex); return m_latestIntensityFrameNumber; }
 CaptureRecorder::Statistics CaptureRecorder::statistics() const {
     std::lock_guard<std::mutex> lock(m_mutex);
     Statistics result;
@@ -277,6 +374,7 @@ CaptureRecorder::Statistics CaptureRecorder::statistics() const {
         result.writeWorkNs += frame.writeWorkNs;
         result.savedBytes += frame.savedBytes;
     }
+    result.intensitySaved = m_configuration.requireIntensity ? result.saved : 0;
     result.elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - m_started).count();
     return result;
 }
@@ -285,8 +383,15 @@ void CaptureRecorder::run() {
         quint64 id = 1;
         while (auto frame = m_queue->pop()) {
             CaptureFrameRecord record; QString error; QVector<pointcloud::Point3D> preview;
-            if (!saveFrame(m_directory, id++, *frame, &record, &preview, &error)) { m_queue->fail(error); break; }
-            std::lock_guard<std::mutex> lock(m_mutex); m_saved.push_back(record); m_preview = std::move(preview);
+            if (!saveFrame(m_directory, id++, *frame, m_configuration.requireIntensity,
+                           &record, &preview, &error)) { m_queue->fail(error); break; }
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_saved.push_back(record); m_preview = std::move(preview);
+            if (m_configuration.requireIntensity) {
+                m_latestIntensity = frame->intensityData;
+                m_latestIntensitySize = QSize(int(frame->intensityWidth), int(frame->intensityHeight));
+                m_latestIntensityFrameNumber = frame->frameNumber;
+            }
         }
     } catch (const std::exception &e) { m_queue->fail(QStringLiteral("采集保存失败：%1").arg(QString::fromLocal8Bit(e.what()))); }
 }

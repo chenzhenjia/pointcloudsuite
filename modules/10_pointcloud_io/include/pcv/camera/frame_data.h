@@ -44,6 +44,12 @@ struct CaptureConfiguration {
     std::uint32_t fixedRows = 0; // Zero retains the existing preview path.
     // Operator confirmation for this device/configuration, not inferred from payload shape.
     bool sdkImageBoundaryVerified = false;
+    // When enabled, a complete frame must carry a matching Mono8 intensity raster.
+    bool requireIntensity = false;
+    // Operator-only light state recorded with the capture session. The SDK is
+    // never asked to control an external light from these flags.
+    bool externalLightEnabled = false;
+    bool externalLightOperatorConfirmed = false;
 };
 
 // Owned copy of one camera frame. The callback thread copies the raw bytes
@@ -58,6 +64,8 @@ struct CameraFrame {
     QByteArray data;
     // Optional intensity channel (Mono8), same pixel count as the depth frame.
     QByteArray intensityData;
+    std::uint32_t intensityWidth = 0;
+    std::uint32_t intensityHeight = 0;
     std::uint32_t frameNumber = 0;
     qint64 timeStamp = 0;
     bool valid = false;

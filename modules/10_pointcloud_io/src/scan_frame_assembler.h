@@ -160,6 +160,8 @@ public:
         auto completed = std::make_shared<CameraFrame>(*m_lastChunk);
         completed->width = m_width;
         completed->height = m_expectedRows;
+        completed->intensityWidth = m_width;
+        completed->intensityHeight = m_expectedRows;
         completed->data = std::move(m_data);
         completed->intensityData = std::move(m_intensityData);
         completed->frameNumber = m_strict ? m_lastChunk->frameNumber : ++m_completedScanCount;
@@ -217,6 +219,8 @@ private:
             return reject(QStringLiteral("complete scan payload exceeds assembly memory limit"));
         }
         auto completed = std::make_shared<CameraFrame>(*chunk);
+        completed->intensityWidth = chunk->width;
+        completed->intensityHeight = chunk->height;
         completed->frameNumber = m_strict ? chunk->frameNumber : ++m_completedScanCount;
         if (m_strict) completed->boundarySource = ScanBoundarySource::FixedRows;
         completed->expectedScanRows = m_expectedRows;

@@ -7,10 +7,13 @@
 1. [target.md](../target.md)：业务目标、当前状态、责任和简要更新。
 2. [需求基线](requirements/pointcloudview_v0.5.md)：已实现、实验和未实现能力。
 3. [软件整体架构](architecture/software_architecture_v0.5.md)：五层、依赖、四条业务链、取消/发布。
+   [pointcloudview 架构与算法导读](development/pointcloudview_architecture_analysis_v1.md)：窗口职责、关键函数和算法流程图。
 4. [当前数据契约](contracts/data_contracts_v0.5.md)与[UI/模块协同](architecture/module_ui_integration_v0.5.md)。
 5. [用户指南](user-guide/POINTCLOUDVIEW_REQUIREMENTS.md)与[Windows构建](development/build-windows.md)。
 6. [开发方案](development/development_plan_v0.5.md)与[路线图](development/roadmap_v0.5.md)。
 7. [集中版本日志](changelog/v0.5.md)、[历史归档](archive/history_pre_v0.5.md)、[每份文档迁移去向](archive/document_migration_v0.5.md)。
+
+连续采集纹理功能的实现、会话格式、外置光源提示和现场验收边界见[连续采集纹理点云 v1](development/camera_capture_texture_v1.md)。
 
 ## 模块与应用
 

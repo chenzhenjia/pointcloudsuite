@@ -36,3 +36,5 @@ ArtifactTransaction 提供 stageBinaryPly/stageGrayscalePng/stageJson/stageBytes
 
 
 2026-10-16 整合v2：批量调用继续显式CloudCachePolicy{false}，保留canonicalReady=false、完整SHA-256与缓存/头校验；应用会话补记既有parseElapsedMs，不新增正式产物字段。见[当前整合](../development/batch_plane_selection_template_integration_v2.md)，本轮未运行动态验证。
+
+2026-10-22 连续采集纹理点云 v1：`CameraFrame` 在 SDK 回调中深拷贝 `pIntensityData` 及原始栅格尺寸；`CaptureConfiguration::requireIntensity` 仅由连续采集向导开启，队列严格检查 Mono8 载荷长度和点云栅格一致性。采集帧事务增加 `intensity.png`、`intensity.mono8` 及可选 `frame.json` 亮度元数据，`readCapturedFrame` 校验并回读两种格式；旧 v1/v2 会话仍可读取且显示无亮度状态。高级预览、固定行数兼容入口和相机数据契约保持不变。[实现说明](../development/camera_capture_texture_v1.md)

@@ -66,8 +66,9 @@ private:
     QLineEdit *m_directory, *m_xml;
     QSpinBox *m_rows;
     QComboBox *m_boundaryMode;
-    QCheckBox *m_sdkVerified, *m_gateInactive;
-    QLabel *m_actualRows, *m_fixedRowsLabel;
+    QCheckBox *m_sdkVerified, *m_gateInactive, *m_intensityEnabled;
+    QCheckBox *m_externalLight, *m_externalLightConfirmed;
+    QLabel *m_actualRows, *m_fixedRowsLabel, *m_intensityPreview, *m_intensityReview;
     QTableWidget *m_table;
     QPushButton *m_start, *m_stop, *m_open, *m_stitch, *m_cancel, *m_up, *m_down, *m_preview;
     QPushButton *m_browseDirectory, *m_browseXml;

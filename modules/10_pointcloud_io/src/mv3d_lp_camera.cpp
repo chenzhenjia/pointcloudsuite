@@ -130,6 +130,8 @@ std::shared_ptr<CameraFrame> copyFrame(const MV3D_LP_IMAGE_DATA &image,
         frame->intensityData = QByteArray(
             reinterpret_cast<const char *>(metadata.pIntensityData),
             qsizetype(metadata.nIntensityDataLen));
+        frame->intensityWidth = metadata.nWidth;
+        frame->intensityHeight = metadata.nHeight;
     }
     return frame;
 }

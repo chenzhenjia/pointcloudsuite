@@ -24,6 +24,11 @@ struct StitchingPublication {
     QString mappingFile;
     QString reportJson;
     QString outputDirectory;
+    QVector<quint8> textureGrayscale;
+    QVector<quint8> textureValid;
+    qsizetype textureMappedPointCount = 0;
+    qsizetype textureSkippedPointCount = 0;
+    QString textureManifest;
 };
 
 struct StitchTaskResult {

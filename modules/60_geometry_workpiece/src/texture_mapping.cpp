@@ -111,4 +111,49 @@ MappingResult mapPlaneBrightness(const QVector<pointcloud::Point3D> &points,
     return result;
 }
 
+MappingResult mapMultiFrameBrightness(const MultiFrameBrightnessInput &input) {
+    MappingResult result;
+    result.currentPointCount = input.points.size();
+    result.sourcePointCount = input.points.size();
+    result.mappingMode = QStringLiteral("capture_frame_source_index");
+    result.grayscale.fill(0, input.points.size());
+    result.valid.fill(0, input.points.size());
+    if (input.points.isEmpty()) return failure(result, QStringLiteral("拼接点云为空"));
+    if (input.cloudIds.size() != input.points.size()
+        || input.sourceIndices.size() != input.points.size())
+        return failure(result, QStringLiteral("拼接点云缺少完整的帧来源映射"));
+    if (input.frameMono8.size() != input.frameWidths.size()
+        || input.frameMono8.size() != input.frameHeights.size())
+        return failure(result, QStringLiteral("采集帧亮度图元数据长度不一致"));
+    for (int frame = 0; frame < input.frameMono8.size(); ++frame) {
+        const qint64 samples = qint64(input.frameWidths.at(frame)) * input.frameHeights.at(frame);
+        if (input.frameWidths.at(frame) <= 0 || input.frameHeights.at(frame) <= 0
+            || samples != input.frameMono8.at(frame).size())
+            return failure(result, QStringLiteral("第 %1 帧亮度图尺寸或数据长度无效").arg(frame + 1));
+    }
+    for (qsizetype index = 0; index < input.points.size(); ++index) {
+        if ((index & 0x3fff) == 0 && input.isCancelled && input.isCancelled()) {
+            result.cancelled = true;
+            return failure(result, QStringLiteral("亮度图映射已取消"));
+        }
+        const int frame = input.cloudIds.at(index);
+        const qsizetype source = input.sourceIndices.at(index);
+        if (frame < 0 || frame >= input.frameMono8.size()) {
+            ++result.skippedPointCount;
+            continue;
+        }
+        const qint64 samples = qint64(input.frameWidths.at(frame)) * input.frameHeights.at(frame);
+        if (source < 0 || source >= samples) {
+            ++result.skippedPointCount;
+            continue;
+        }
+        result.grayscale[index] = quint8(input.frameMono8.at(frame).at(source));
+        result.valid[index] = 1;
+        ++result.mappedPointCount;
+    }
+    result.ok = result.mappedPointCount > 0;
+    if (!result.ok) result.error = QStringLiteral("没有点成功映射到亮度图");
+    return result;
+}
+
 } // namespace pcv::texture

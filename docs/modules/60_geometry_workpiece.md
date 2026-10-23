@@ -59,3 +59,5 @@ plane_fitting_tests、plane_fitting_equivalence_tests_v2、single_click_plane_se
 2026-10-16 整合v2：完整候选投影使用65536点连续窗口私有输出，独立预算预留、全join后原序归并；低于100000点/预算不足串行，线程创建失败join后串行剩余区间。网格法向同样先join再提交。SingleClickResult尾部追加projectionMs/normalConnectivityMs诊断，不改v2数学/拓扑/六轮/正式字段；102400点串行/1/2/4/零预算对照源码已补未运行。见[完整处理v3](../development/full_resolution_processing_acceleration_v3.md)。
 
 2026-10-16 构建修复：preparePlaneSelectionIndex内样本计数和网格计数分别使用validSampleCount/bucketCount，修复同作用域重复声明C2373及连带C2737，不改数学/顺序/接口。此次实际全新Debug/Release全量构建和各43项CTest通过，包含完整性v2及并行/预算对照；原生六画布流程另通过。真实工件精度和性能仍独立验收，见[修复说明](../development/build_runtime_repair_v1.md)。
+
+2026-10-22 连续采集纹理点云 v1：新增 `pcv::texture::mapMultiFrameBrightness`，按拼接结果的 `cloudIds/sourceIndices` 从逐帧 Mono8 row-major 栅格产生等长 `grayscale/valid` 数组和映射统计。输入尺寸、载荷、来源索引或取消不满足时返回失败；当前位姿直拼不去重点，重复目标由调用方按采集顺序处理，正式点云几何和 PLY schema 不变。实现只依赖 10 的采集回读数据，不依赖 apps。[实现说明](../development/camera_capture_texture_v1.md)

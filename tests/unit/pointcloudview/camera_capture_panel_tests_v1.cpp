@@ -11,6 +11,7 @@
 #include <QPushButton>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QJsonDocument>
 #include <QStackedWidget>
 #include <QTableWidget>
 #include <QTemporaryDir>
@@ -53,6 +54,9 @@ struct CameraCapturePanelTestAccess {
         panel.m_directory->setText(temp.path());
         CHECK(!panel.m_next->isEnabled() && !panel.m_start->isEnabled());
         panel.startCapture(); CHECK(!panel.isBusy() && panel.m_session.isEmpty());
+        panel.m_externalLight->setChecked(true);
+        panel.startCapture(); CHECK(!panel.isBusy() && panel.m_session.isEmpty());
+        panel.m_externalLightConfirmed->setChecked(true);
         panel.m_preflight->setChecked(true);
         CHECK(panel.m_sdkVerified->isChecked() && panel.m_gateInactive->isChecked());
         CHECK(panel.m_next->isEnabled());
@@ -65,6 +69,22 @@ struct CameraCapturePanelTestAccess {
         CHECK(!panel.m_next->isEnabled() && !panel.m_stop->isEnabled());
         CHECK(waitUntil([&] { return !panel.isBusy(); }));
         CHECK(panel.m_frames.size() == 2 && panel.snapshot().step == 3);
+        CHECK(panel.m_frames.at(0).intensityAvailable
+              && QFile::exists(QDir(panel.m_frames.at(0).directory).filePath("intensity.png"))
+              && QFile::exists(QDir(panel.m_frames.at(0).directory).filePath("intensity.mono8")));
+        const auto savedTexture = pcv::camera::readCapturedFrame(panel.m_frames.at(0).directory);
+        CHECK(savedTexture.ok && savedTexture.intensityWidth == 8 && savedTexture.intensityHeight == 4
+              && savedTexture.intensityMono8.size() == 32);
+        QString sessionError;
+        const auto sessionRecords = pcv::camera::readCaptureSession(panel.m_session, &sessionError);
+        CHECK(sessionError.isEmpty() && sessionRecords.size() == 2
+              && sessionRecords.at(0).intensityAvailable);
+        QFile sessionFile(QDir(panel.m_session).filePath("session.json"));
+        CHECK(sessionFile.open(QIODevice::ReadOnly));
+        const auto sessionMeta = QJsonDocument::fromJson(sessionFile.readAll()).object();
+        CHECK(sessionMeta.value("intensity_enabled").toBool()
+              && sessionMeta.value("external_light_enabled").toBool()
+              && sessionMeta.value("external_light_operator_confirmed").toBool());
         CHECK(panel.m_session.contains("capture_v2_") && panel.m_table->item(0, 8)->text().size());
         CHECK(panel.snapshot().state == CameraCapturePanelV1::State::Reviewing);
         CHECK(panel.m_table->item(0, 7)->text() == QString::fromUtf8("未填写"));
@@ -90,6 +110,15 @@ struct CameraCapturePanelTestAccess {
         const auto firstId = panel.m_frames.at(0).id;
         panel.m_table->setCurrentCell(0, 0); panel.moveRow(1);
         CHECK(panel.m_frames.at(1).id == firstId);
+        const QString imagePath = QDir(panel.m_frames.at(0).directory).filePath("intensity.png");
+        QFile imageFile(imagePath); CHECK(imageFile.open(QIODevice::ReadOnly));
+        const QByteArray imageBytes = imageFile.readAll(); imageFile.close();
+        CHECK(imageFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        imageFile.write("broken"); imageFile.close();
+        panel.stitch();
+        CHECK(!panel.isBusy() && panel.m_status->text().contains(QString::fromUtf8("亮度图校验失败")));
+        CHECK(imageFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        CHECK(imageFile.write(imageBytes) == imageBytes.size()); imageFile.close();
         int published = 0;
         panel.canStitch = [] { return true; };
         panel.publishResult = [&published](const auto &result) { if (result.success && result.points.size() == 64) ++published; };

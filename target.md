@@ -47,6 +47,7 @@ P0 核对构建组合与 target 条件；P1 验收现有整帧/选面/临时工�
 | 2026-10-15 | 主线/Codex | 工件模板 v1：模块 60 独立版本事务保存/读取、GUI 基准确认及来源/revision 生命周期；保留既有修改 | [实现与验证](docs/changelog/v0.5.md#workpiece-template-v1) |
 | 2026-10-16 | 主线/Codex | 模块 30 多段所选平面预览缓存与结果显示 v1；已被当前帧展示 v2 纠正，相关源码增量撤回 | [历史记录](docs/changelog/v0.5.md#selected-plane-preview-acceleration-v1) |
 | 2026-10-16 | 主线/Codex | 当前帧先显示最多 300,000 个均匀抽取点，再后台建完整索引；选面/正式输出及拼接结果显示完整，用户负责构建和动态验收 | [实现记录](docs/changelog/v0.5.md#current-frame-display-acceleration-v2) |
+| 2026-10-22 | 主线/Codex | 连续采集向导同步保存 Mono8 亮度图，位姿直拼后生成灰度覆盖并自动发布到工作台；外置光源仅操作员提示，旧入口兼容 | [实现记录](docs/changelog/v0.5.md#camera-capture-texture-v1) |
 
 所有代码更新必须在本表追加简要登记，详细日期、owner、文件/API、行为、实际验证、风险与回滚点只维护在版本日志；模块文档同步当前接口，不复制完整历史。[旧历史](docs/archive/history_pre_v0.5.md)及[文档去向](docs/archive/document_migration_v0.5.md)保留追溯。
 

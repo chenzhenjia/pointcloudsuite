@@ -3,6 +3,7 @@
 #include <pcv/camera/frame_data.h>
 #include <pcv/core/point_types.h>
 #include <QJsonObject>
+#include <QSize>
 #include <QVector>
 #include <condition_variable>
 #include <deque>
@@ -16,6 +17,7 @@ namespace pcv::camera {
 
 struct CaptureQueueStatistics {
     quint64 received = 0, receivedBytes = 0;
+    quint64 intensityReceived = 0;
     size_t pending = 0, peakPending = 0;
     qsizetype pendingBytes = 0, peakBytes = 0;
     qint64 receiveWorkNs = 0, sdkConversionNs = 0, queueWaitNs = 0;
@@ -61,12 +63,17 @@ struct CaptureFrameRecord {
     quint32 width = 0, height = 0, sdkFrameNumber = 0;
     qint64 timeStamp = 0;
     qsizetype pointCount = 0;
+    bool intensityAvailable = false;
     qint64 pointConversionNs = 0, writeWorkNs = 0, savedBytes = 0;
 };
 struct CaptureFrameData {
     CaptureFrameRecord record;
     QVector<pointcloud::Point3D> points;
     QVector<qsizetype> sourceIndices;
+    QByteArray intensityMono8;
+    quint32 intensityWidth = 0;
+    quint32 intensityHeight = 0;
+    QString intensityPngPath;
     QString error;
     bool ok = false;
 };
@@ -92,18 +99,26 @@ public:
     std::shared_ptr<CaptureFrameQueue> queue() const { return m_queue; }
     QVector<CaptureFrameRecord> savedFrames() const;
     QVector<pointcloud::Point3D> latestPreview() const;
+    QByteArray latestIntensity() const;
+    QSize latestIntensitySize() const;
+    quint32 latestIntensityFrameNumber() const;
     struct Statistics {
         qint64 pointConversionNs = 0, writeWorkNs = 0, savedBytes = 0, elapsedNs = 0;
         qsizetype saved = 0;
+        qsizetype intensitySaved = 0;
     };
     Statistics statistics() const;
 private:
     void run();
     QString m_directory;
+    CaptureConfiguration m_configuration;
     std::shared_ptr<CaptureFrameQueue> m_queue;
     mutable std::mutex m_mutex;
     QVector<CaptureFrameRecord> m_saved;
     QVector<pointcloud::Point3D> m_preview;
+    QByteArray m_latestIntensity;
+    QSize m_latestIntensitySize;
+    quint32 m_latestIntensityFrameNumber = 0;
     std::thread m_thread;
     const std::chrono::steady_clock::time_point m_started = std::chrono::steady_clock::now();
 };

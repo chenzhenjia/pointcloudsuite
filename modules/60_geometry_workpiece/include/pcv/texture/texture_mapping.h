@@ -29,15 +29,31 @@ struct MappingResult {
     int planePointCount = 0;
     int mappedPointCount = 0;
     int skippedPointCount = 0;
+    int conflictPointCount = 0;
     QString mappingMode;
     QString error;
     bool cancelled = false;
     bool ok = false;
 };
 
+struct MultiFrameBrightnessInput {
+    QVector<pointcloud::Point3D> points;
+    QVector<int> cloudIds;
+    QVector<qsizetype> sourceIndices;
+    QVector<QByteArray> frameMono8;
+    QVector<int> frameWidths;
+    QVector<int> frameHeights;
+    std::function<bool()> isCancelled;
+};
+
 MappingResult mapPlaneBrightness(const QVector<pointcloud::Point3D> &points,
                                  const QVector<int> &planeIndices,
                                  const QImage &image,
                                  const MappingOptions &options);
+
+// Maps each stitched point back to its source capture raster. The source
+// cloud id is also the deterministic frame-order key; callers that fuse
+// duplicate target points should apply later cloud ids last.
+MappingResult mapMultiFrameBrightness(const MultiFrameBrightnessInput &input);
 
 } // namespace pcv::texture

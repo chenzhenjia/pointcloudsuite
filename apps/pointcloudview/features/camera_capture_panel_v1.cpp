@@ -1,11 +1,15 @@
 #include "camera_capture_wizard.h"
 #include <pcv/registration/handeye_transform.h>
+#include <pcv/texture/texture_mapping.h>
+#include <pcv/io/artifact_transaction.h>
 #include <QDateTime>
 #include <QDir>
 #include <QFileDialog>
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -22,6 +26,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QImage>
+#include <QPixmap>
 #include <QtConcurrent/QtConcurrentRun>
 #include <cmath>
 
@@ -35,6 +41,72 @@ bool parsePose(const QString &text, pointcloud::RobotPose *pose) {
         if (!ok || !std::isfinite(values[i])) return false;
     }
     *pose = {values[0], values[1], values[2], values[3], values[4], values[5]}; return true;
+}
+
+bool attachCaptureTexture(pcv::interface::StitchingResult *result,
+                          const QVector<QString> &frameDirectories,
+                          const std::shared_ptr<std::atomic_bool> &token,
+                          QString *error) {
+    if (!result || !result->success) return true;
+    if (frameDirectories.isEmpty() || result->merge.points.isEmpty()) {
+        if (error) *error = QStringLiteral("纹理映射缺少拼接点云或采集帧");
+        return false;
+    }
+    pcv::texture::MultiFrameBrightnessInput input;
+    input.points = result->merge.points;
+    input.cloudIds = result->merge.cloudIds;
+    input.sourceIndices = result->merge.sourceIndices;
+    input.isCancelled = [token] { return token && token->load(); };
+    for (const QString &directory : frameDirectories) {
+        const auto frame = pcv::camera::readCapturedFrame(directory);
+        if (!frame.ok || frame.intensityMono8.isEmpty()) {
+            if (error) *error = frame.error.isEmpty()
+                ? QStringLiteral("采集帧缺少有效亮度图：%1").arg(directory) : frame.error;
+            return false;
+        }
+        input.frameMono8.push_back(frame.intensityMono8);
+        input.frameWidths.push_back(int(frame.intensityWidth));
+        input.frameHeights.push_back(int(frame.intensityHeight));
+    }
+    const auto mapped = pcv::texture::mapMultiFrameBrightness(input);
+    if (!mapped.ok || mapped.grayscale.size() != result->points.size()
+        || mapped.valid.size() != result->points.size()
+        || mapped.mappedPointCount != result->points.size() || mapped.skippedPointCount != 0) {
+        if (error) *error = mapped.error.isEmpty() ? QStringLiteral("亮度图映射失败") : mapped.error;
+        return false;
+    }
+    const QString outputDirectory = QFileInfo(result->outputPly).absolutePath();
+    pcv::io::ArtifactTransaction transaction(outputDirectory, true);
+    QJsonObject manifest{
+        {"schema", "pcv-capture-texture-v1"},
+        {"mapping_mode", "capture_frame_source_index"},
+        {"overlap_policy", "later_frame_wins"},
+        {"point_count", qint64(result->points.size())},
+        {"mapped_point_count", mapped.mappedPointCount},
+        {"skipped_point_count", mapped.skippedPointCount},
+        {"frame_count", frameDirectories.size()},
+        {"intensity_file", "stitched_robot_base.intensity.bin"},
+        {"valid_file", "stitched_robot_base.intensity_valid.bin"}
+    };
+    if (!transaction.stageBytes(QStringLiteral("stitched_robot_base.intensity.bin"),
+                                QByteArray(reinterpret_cast<const char *>(mapped.grayscale.constData()),
+                                           mapped.grayscale.size()))
+        || !transaction.stageBytes(QStringLiteral("stitched_robot_base.intensity_valid.bin"),
+                                   QByteArray(reinterpret_cast<const char *>(mapped.valid.constData()),
+                                              mapped.valid.size()))
+        || !transaction.stageJson(QStringLiteral("texture_manifest.json"),
+                                  QJsonDocument(manifest).toJson(QJsonDocument::Indented))
+        || !transaction.commit()) {
+        if (error) *error = transaction.error();
+        return false;
+    }
+    result->textureGrayscale = mapped.grayscale;
+    result->textureValid = mapped.valid;
+    result->textureMappedPointCount = mapped.mappedPointCount;
+    result->textureSkippedPointCount = mapped.skippedPointCount;
+    result->textureManifest = QDir(outputDirectory).filePath(QStringLiteral("texture_manifest.json"));
+    result->textureSourceDirectory = QFileInfo(frameDirectories.first()).absolutePath();
+    return true;
 }
 }
 CameraCaptureWizard::CameraCaptureWizard(QWidget *parent) : QWidget(parent) {
@@ -70,6 +142,10 @@ CameraCaptureWizard::CameraCaptureWizard(QWidget *parent) : QWidget(parent) {
     m_sdkVerified = new QCheckBox(tr("当前设备/触发配置的一次门控扫描对应一幅完整图像"));
     m_gateInactive = new QCheckBox(tr("当前门控无效，尚未开始下一次扫描"));
     m_preflight = new QCheckBox(tr("我已完成现场预检：门控已结束，且当前配置一次扫描对应一幅完整SDK图像"));
+    m_intensityEnabled = new QCheckBox(tr("同步采集2D亮度图（Mono8，自动保存 PNG + 原始数据）"));
+    m_intensityEnabled->setChecked(true);
+    m_externalLight = new QCheckBox(tr("本次使用外置光源"));
+    m_externalLightConfirmed = new QCheckBox(tr("外置光源已开启且稳定"));
     m_preflight->setStyleSheet(QStringLiteral("font-weight:600;color:#1769aa;"));
 
     auto *step1 = new QWidget;
@@ -92,6 +168,15 @@ CameraCaptureWizard::CameraCaptureWizard(QWidget *parent) : QWidget(parent) {
         m_advanced->setText(show ? tr("高级设置 ▾") : tr("高级设置 ▸"));
     });
     step1Layout->addWidget(m_preflight);
+    step1Layout->addWidget(m_intensityEnabled);
+    step1Layout->addWidget(m_externalLight);
+    step1Layout->addWidget(m_externalLightConfirmed);
+    m_externalLightConfirmed->setVisible(false);
+    connect(m_externalLight, &QCheckBox::toggled, this, [this](bool enabled) {
+        m_externalLightConfirmed->setVisible(enabled);
+        if (!enabled) m_externalLightConfirmed->setChecked(false);
+        updateActions();
+    });
     auto *preflightHint = new QLabel(tr("开始前请在3DMVS核对：一次门控扫描显示一幅完整图像；当前门控无效，下一次扫描尚未开始。"));
     preflightHint->setWordWrap(true); step1Layout->addWidget(preflightHint);
     // Keep the original controls as compatibility/test hooks while using the
@@ -108,6 +193,11 @@ CameraCaptureWizard::CameraCaptureWizard(QWidget *parent) : QWidget(parent) {
     capture->addWidget(m_start); capture->addWidget(m_stop); capture->addStretch();
     step2Layout->addLayout(capture);
     step2Layout->addWidget(m_actualRows);
+    m_intensityPreview = new QLabel(tr("最新亮度图：—"));
+    m_intensityPreview->setMinimumHeight(100);
+    m_intensityPreview->setAlignment(Qt::AlignCenter);
+    m_intensityPreview->setStyleSheet(QStringLiteral("background:#20242a;color:#d8dee9;"));
+    step2Layout->addWidget(m_intensityPreview);
     m_status = new QLabel(tr("请连接相机，或打开已有采集会话。")); m_status->setWordWrap(true);
     auto *limits = new QLabel(tr("队列最多2帧/512 MiB。异常只停止软件接收，已保存帧会保留；机器人不会由本程序自动停止。"));
     limits->setWordWrap(true); step2Layout->addWidget(limits);
@@ -120,12 +210,19 @@ CameraCaptureWizard::CameraCaptureWizard(QWidget *parent) : QWidget(parent) {
     m_browseXml = new QPushButton(tr("选择 XML…")); xml->addWidget(new QLabel(tr("手眼标定"))); xml->addWidget(m_xml, 1); xml->addWidget(m_browseXml);
     step3Layout->addLayout(xml);
     m_table = new QTableWidget(0, 9);
-    m_table->setHorizontalHeaderLabels({tr("参与"), tr("帧ID"), tr("设备时间戳"), tr("实际宽×高"), tr("有效点数"), tr("Start [X Y Z A B C]"), tr("End [X Y Z A B C]"), tr("状态"), tr("SDK序号")});
+    m_table->setColumnCount(10);
+    m_table->setHorizontalHeaderLabels({tr("参与"), tr("帧ID"), tr("设备时间戳"), tr("实际宽×高"), tr("有效点数"), tr("Start [X Y Z A B C]"), tr("End [X Y Z A B C]"), tr("状态"), tr("SDK序号"), tr("亮度图")});
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     m_table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
     m_table->horizontalHeader()->setSectionResizeMode(6, QHeaderView::Stretch);
+    m_table->horizontalHeader()->setSectionResizeMode(9, QHeaderView::ResizeToContents);
     m_table->setMinimumHeight(170); step3Layout->addWidget(m_table, 1);
+    m_intensityReview = new QLabel(tr("选中帧亮度图：—"));
+    m_intensityReview->setMinimumHeight(90);
+    m_intensityReview->setAlignment(Qt::AlignCenter);
+    m_intensityReview->setStyleSheet(QStringLiteral("background:#20242a;color:#d8dee9;"));
+    step3Layout->addWidget(m_intensityReview);
     auto *tableActions = new QHBoxLayout;
     m_copyPrevious = new QPushButton(tr("复制上一行")); m_copySelected = new QPushButton(tr("复制到选中行")); m_validate = new QPushButton(tr("一键校验"));
     m_up = new QPushButton(tr("上移")); m_down = new QPushButton(tr("下移")); m_preview = new QPushButton(tr("预览当前帧"));
@@ -192,6 +289,8 @@ CameraCaptureWizard::CameraCaptureWizard(QWidget *parent) : QWidget(parent) {
         const bool sdk = m_boundaryMode->currentIndex() == 0;
         m_rows->setVisible(!sdk); m_fixedRowsLabel->setVisible(!sdk);
         m_actualRows->setVisible(sdk);
+        m_intensityEnabled->setEnabled(sdk);
+        if (!sdk) m_intensityEnabled->setChecked(false);
         m_preflight->setText(sdk
             ? tr("我已完成现场预检：门控已结束，且当前配置一次扫描对应一幅完整SDK图像")
             : tr("我已完成现场预检：门控已结束，且固定扫描行数配置正确"));
@@ -202,7 +301,17 @@ CameraCaptureWizard::CameraCaptureWizard(QWidget *parent) : QWidget(parent) {
         const int row = m_table->currentRow(); if (row < 0 || isBusy()) return;
         const auto frame = pcv::camera::readCapturedFrame(m_frames.at(row).directory);
         if (!frame.ok) m_status->setText(frame.error);
-        else if (previewFrame) previewFrame(frame.points);
+        else {
+            if (!frame.intensityMono8.isEmpty()) {
+                const QImage image(reinterpret_cast<const uchar *>(frame.intensityMono8.constData()),
+                                   int(frame.intensityWidth), int(frame.intensityHeight),
+                                   int(frame.intensityWidth), QImage::Format_Grayscale8);
+                m_intensityReview->setPixmap(QPixmap::fromImage(image.copy()).scaled(
+                    m_intensityReview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                m_intensityReview->setToolTip(frame.intensityPngPath);
+            }
+            if (previewFrame) previewFrame(frame.points);
+        }
     });
     const auto changed = [this] {
         ++m_revision;
@@ -254,7 +363,8 @@ bool CameraCaptureWizard::captureSettingsReady() const
         && !resolved.startsWith(source + "/", Qt::CaseInsensitive);
     return m_connectionReady && directory.isDir() && directory.isWritable() && outside
         && m_gateInactive->isChecked()
-        && (m_boundaryMode->currentIndex() != 0 || m_sdkVerified->isChecked());
+        && (m_boundaryMode->currentIndex() != 0 || m_sdkVerified->isChecked())
+        && (!m_externalLight->isChecked() || m_externalLightConfirmed->isChecked());
 }
 void CameraCaptureWizard::goToStep(int step)
 {
@@ -294,7 +404,7 @@ void CameraCaptureWizard::updateStepUi()
 bool CameraCaptureWizard::validatePoses(bool locateError)
 {
     const QSignalBlocker blocker(m_table);
-    int included = 0, invalid = 0, firstInvalid = -1;
+    int included = 0, invalid = 0, textureInvalid = 0, firstInvalid = -1;
     for (int row = 0; row < m_frames.size(); ++row) {
         auto *include = m_table->item(row, 0);
         auto *start = m_table->item(row, 5);
@@ -306,9 +416,15 @@ bool CameraCaptureWizard::validatePoses(bool locateError)
         else {
             ++included;
             pointcloud::RobotPose startPose, endPose;
-            const bool valid = parsePose(start->text(), &startPose) && parsePose(end->text(), &endPose);
-            text = valid ? tr("有效") : (start->text().trimmed().isEmpty() || end->text().trimmed().isEmpty()
-                ? tr("未填写") : tr("格式错误"));
+            const bool poseValid = parsePose(start->text(), &startPose) && parsePose(end->text(), &endPose);
+            const bool imageValid = !m_intensityEnabled->isChecked() || m_frames.at(row).intensityAvailable;
+            const bool valid = poseValid && imageValid;
+            if (!poseValid)
+                text = (start->text().trimmed().isEmpty() || end->text().trimmed().isEmpty())
+                    ? tr("未填写") : tr("格式错误");
+            else
+                text = imageValid ? tr("有效") : tr("亮度图无效");
+            if (!imageValid) { text = tr("亮度图无效"); ++textureInvalid; }
             if (!valid) { ++invalid; if (firstInvalid < 0) firstInvalid = row; }
         }
         status->setText(text);
@@ -323,14 +439,18 @@ bool CameraCaptureWizard::validatePoses(bool locateError)
     }
     const bool xmlReady = !m_validatedXml.isEmpty() && QFileInfo::exists(m_validatedXml);
     const bool ok = included >= 2 && invalid == 0 && xmlReady;
-    m_validationStatus->setText(ok
+    const QString validationMessage = ok
         ? tr("校验通过：%1 帧位姿有效，可拼接并发布。复制的位姿请与真实机器人记录核对。").arg(included)
-        : tr("参与 %1 帧；位姿待修正 %2 帧。%3").arg(included).arg(invalid)
+        : tr("参与 %1 帧；无效 %2 帧（亮度图 %3 帧）。%4")
+            .arg(included).arg(invalid).arg(textureInvalid)
             .arg(!xmlReady ? tr("请选择有效的手眼XML：%1").arg(m_xmlError)
-                : included < 2 ? tr("至少勾选两帧。") : tr("点击一键校验可定位首个错误。")));
+                : included < 2 ? tr("至少勾选两帧。") : tr("请修复位姿格式或对应帧亮度图。"));
+    m_validationStatus->setText(validationMessage);
     if (locateError && firstInvalid >= 0) {
-        m_table->setCurrentCell(firstInvalid, 5);
-        m_table->scrollToItem(m_table->item(firstInvalid, 5));
+        const int column = m_intensityEnabled->isChecked()
+            && !m_frames.at(firstInvalid).intensityAvailable ? 9 : 5;
+        m_table->setCurrentCell(firstInvalid, column);
+        m_table->scrollToItem(m_table->item(firstInvalid, column));
     }
     return ok;
 }
@@ -380,6 +500,9 @@ void CameraCaptureWizard::startCapture() {
         ? pcv::camera::CaptureBoundaryMode::SdkImageFrame : pcv::camera::CaptureBoundaryMode::FixedRows;
     configuration.fixedRows = m_rows->value();
     configuration.sdkImageBoundaryVerified = m_sdkVerified->isChecked();
+    configuration.requireIntensity = m_intensityEnabled->isChecked();
+    configuration.externalLightEnabled = m_externalLight->isChecked();
+    configuration.externalLightOperatorConfirmed = m_externalLightConfirmed->isChecked();
     if (!m_gateInactive->isChecked() || (configuration.boundaryMode == pcv::camera::CaptureBoundaryMode::SdkImageFrame
         && !configuration.sdkImageBoundaryVerified)) {
         m_status->setText(tr("开始前请确认门控无效；SDK模式还需确认当前设备的一次扫描对应一幅完整图像")); return;
@@ -392,13 +515,17 @@ void CameraCaptureWizard::startCapture() {
     m_actualRows->setText(tr("实际接收行数：—"));
     m_recorder = std::make_unique<pcv::camera::CaptureRecorder>(session, configuration);
     m_firstError.clear();
+    if (m_externalLight->isChecked())
+        m_status->setText(tr("请保持外置光源开启且稳定，再启动现场扫描。"));
     m_preflight->setChecked(false); m_sdkVerified->setChecked(false); m_gateInactive->setChecked(false);
     goToStep(2); setState(State::Capturing);
     if (!startAcquisition(m_recorder->queue(), configuration, &error)) {
         m_firstError = error;
         m_recorder->queue()->fail(error); stopCapture(); return;
     }
-    m_status->setText(tr("正在等待完整扫描。请启动现场扫描，结束门控并确认已接收后再停止。"));
+    m_status->setText(m_externalLight->isChecked()
+        ? tr("正在等待完整扫描。外置光源应保持开启；结束门控并确认已接收后再停止。")
+        : tr("正在等待完整扫描。请启动现场扫描，结束门控并确认已接收后再停止。"));
     m_timer->start(); updateActions();
 }
 void CameraCaptureWizard::pollCapture() {
@@ -410,13 +537,30 @@ void CameraCaptureWizard::pollCapture() {
     }
     const auto queue = m_recorder->queue()->statistics();
     const auto storage = m_recorder->statistics();
+    if (m_intensityEnabled->isChecked()) {
+        const auto bytes = m_recorder->latestIntensity();
+        const auto size = m_recorder->latestIntensitySize();
+        if (!bytes.isEmpty() && size.isValid()) {
+            const quint32 sdkFrameNumber = m_recorder->latestIntensityFrameNumber();
+            const QImage image(reinterpret_cast<const uchar *>(bytes.constData()), size.width(), size.height(),
+                               size.width(), QImage::Format_Grayscale8);
+            m_intensityPreview->setPixmap(QPixmap::fromImage(image.copy()).scaled(
+                m_intensityPreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            m_intensityPreview->setToolTip(tr("最新亮度图：%1 × %2 px；Mono8；SDK帧号 %3")
+                .arg(size.width()).arg(size.height()).arg(sdkFrameNumber));
+            m_actualRows->setText(tr("实际点云行数：%1；图像 %2 × %3；亮度 Mono8；SDK帧号 %4")
+                .arg(queue.lastHeight).arg(size.width()).arg(size.height()).arg(sdkFrameNumber));
+        }
+    }
     m_actualRows->setText(queue.received ? tr("实际接收行数：%1；当前图像 %2 × %3").arg(queue.lastHeight)
         .arg(queue.lastWidth).arg(queue.lastHeight) : tr("实际接收行数：—"));
     const double throughput = storage.elapsedNs ? double(storage.savedBytes) * 1.e9 / storage.elapsedNs / (1024 * 1024) : 0;
-    m_status->setText(tr("已接收 %1，等待保存 %2（%3 MiB），已保存 %4；平均写入 %5 MiB/s；队列峰值 %6 帧/%7 MiB\n%8")
-        .arg(queue.received).arg(queue.pending).arg(double(queue.pendingBytes) / (1024 * 1024), 0, 'f', 1)
-        .arg(storage.saved).arg(throughput, 0, 'f', 1).arg(queue.peakPending)
-        .arg(double(queue.peakBytes) / (1024 * 1024), 0, 'f', 1).arg(m_session));
+    m_status->setText(tr("已接收 %1（亮度 %2），等待保存 %3（%4 MiB），已保存 %5（亮度 %6）；平均写入 %7 MiB/s；队列峰值 %8 帧/%9 MiB\n%10")
+        .arg(queue.received).arg(queue.intensityReceived).arg(queue.pending)
+        .arg(double(queue.pendingBytes) / (1024 * 1024), 0, 'f', 1)
+        .arg(storage.saved).arg(storage.intensitySaved).arg(throughput, 0, 'f', 1)
+        .arg(queue.peakPending).arg(double(queue.peakBytes) / (1024 * 1024), 0, 'f', 1)
+        .arg(m_session));
     if (!m_recorder->queue()->error().isEmpty()) stopCapture();
 }
 void CameraCaptureWizard::stopCapture() {
@@ -438,6 +582,7 @@ void CameraCaptureWizard::finishCapture() {
     const auto storage = m_recorder->statistics();
     if (queue.received) m_actualRows->setText(tr("实际接收行数：%1").arg(queue.lastHeight));
     qInfo() << "Capture session metrics" << m_session << "received=" << queue.received << "saved=" << storage.saved
+            << "intensityReceived=" << queue.intensityReceived << "intensitySaved=" << storage.intensitySaved
             << "receiveWorkNs=" << queue.receiveWorkNs << "sdkConversionNs=" << queue.sdkConversionNs
             << "queueWaitNs=" << queue.queueWaitNs << "pointConversionNs=" << storage.pointConversionNs
             << "writeWorkNs=" << storage.writeWorkNs << "elapsedNs=" << storage.elapsedNs
@@ -449,6 +594,8 @@ void CameraCaptureWizard::finishCapture() {
     const double rate = storage.elapsedNs ? double(storage.savedBytes) * 1.e9 / storage.elapsedNs / (1024 * 1024) : 0;
     m_status->setText(m_status->text() + tr("\n已接收 %1；保存吞吐 %2 MiB/s；队列峰值 %3 帧/%4 MiB")
         .arg(queue.received).arg(rate, 0, 'f', 1).arg(queue.peakPending).arg(double(queue.peakBytes) / (1024 * 1024), 0, 'f', 1));
+    if (m_externalLight->isChecked())
+        m_status->setText(m_status->text() + tr("\n如现场扫描已结束，可关闭外置光源。"));
     QString detail; if (!saveParameters(&detail)) m_status->setText(m_status->text() + "\n" + detail);
     if (!m_closing) goToStep(m_frames.isEmpty() ? 0 : 3);
     setState(error.isEmpty() ? State::Reviewing : State::Error);
@@ -460,8 +607,13 @@ void CameraCaptureWizard::rebuildTable() {
     m_table->setRowCount(m_frames.size());
     for (int row = 0; row < m_frames.size(); ++row) {
         const auto &frame = m_frames.at(row);
+        const QString intensityDetails = frame.intensityAvailable
+            ? tr("有效 %1×%2\n%3").arg(frame.width).arg(frame.height)
+                .arg(QDir(frame.directory).filePath(QStringLiteral("intensity.png")))
+            : tr("缺失/不可用");
         const QStringList values{QString(), QString::number(frame.id), QString::number(frame.timeStamp),
-            QStringLiteral("%1×%2").arg(frame.width).arg(frame.height), QString::number(frame.pointCount), {}, {}, tr("已保存"), QString::number(frame.sdkFrameNumber)};
+            QStringLiteral("%1×%2").arg(frame.width).arg(frame.height), QString::number(frame.pointCount), {}, {},
+            frame.intensityAvailable ? tr("已保存/亮度图有效") : tr("已保存/无亮度图"), QString::number(frame.sdkFrameNumber), intensityDetails};
         for (int col = 0; col < values.size(); ++col) {
             if (m_table->item(row, col)) continue;
             auto *item = new QTableWidgetItem(values.at(col));
@@ -478,7 +630,10 @@ bool CameraCaptureWizard::saveParameters(QString *error) {
             {"included", m_table->item(row, 0)->checkState() == Qt::Checked},
             {"start", m_table->item(row, 5)->text()}, {"end", m_table->item(row, 6)->text()}});
     return pcv::camera::writeCaptureParameters(m_session,
-        {{"schema", "pcv-camera-parameters-v1"}, {"calibration", m_xml->text()}, {"frames", frames}}, error);
+        {{"schema", "pcv-camera-parameters-v1"}, {"calibration", m_xml->text()}, {"frames", frames},
+         {"intensity_enabled", m_intensityEnabled->isChecked()},
+         {"external_light_enabled", m_externalLight->isChecked()},
+         {"external_light_operator_confirmed", m_externalLightConfirmed->isChecked()}}, error);
 }
 void CameraCaptureWizard::loadSession() {
     if (isBusy()) return;
@@ -486,6 +641,12 @@ void CameraCaptureWizard::loadSession() {
     QString error; auto records = pcv::camera::readCaptureSession(path, &error);
     if (!error.isEmpty()) { m_status->setText(error); return; }
     const auto parameters = pcv::camera::readCaptureParameters(path);
+    if (parameters.contains(QStringLiteral("intensity_enabled")))
+        m_intensityEnabled->setChecked(parameters.value(QStringLiteral("intensity_enabled")).toBool());
+    if (parameters.contains(QStringLiteral("external_light_enabled")))
+        m_externalLight->setChecked(parameters.value(QStringLiteral("external_light_enabled")).toBool());
+    if (parameters.contains(QStringLiteral("external_light_operator_confirmed")))
+        m_externalLightConfirmed->setChecked(parameters.value(QStringLiteral("external_light_operator_confirmed")).toBool());
     QVector<pcv::camera::CaptureFrameRecord> ordered;
     for (const auto &value : parameters.value("frames").toArray())
         for (const auto &record : records)
@@ -526,8 +687,19 @@ void CameraCaptureWizard::moveRow(int offset) {
 void CameraCaptureWizard::stitch() {
     if (isBusy() || !validatePoses(true)) return;
     pcv::interface::StitchingRequest request; request.input.calibrationPath = m_xml->text();
+    QVector<QString> textureDirectories;
     for (int row = 0; row < m_frames.size(); ++row) {
         if (m_table->item(row, 0)->checkState() != Qt::Checked) continue;
+        if (m_intensityEnabled->isChecked()) {
+            const auto textureFrame = pcv::camera::readCapturedFrame(m_frames.at(row).directory);
+            if (!textureFrame.ok || textureFrame.intensityMono8.isEmpty()) {
+                m_status->setText(tr("第 %1 行亮度图校验失败：%2")
+                    .arg(row + 1).arg(textureFrame.error.isEmpty()
+                        ? tr("亮度图缺失或无效") : textureFrame.error));
+                m_table->setCurrentCell(row, 9);
+                return;
+            }
+        }
         pcv::interface::StitchingFrameInput input;
         if (!parsePose(m_table->item(row, 5)->text(), &input.startPose)
             || !parsePose(m_table->item(row, 6)->text(), &input.endPose)) {
@@ -535,6 +707,7 @@ void CameraCaptureWizard::stitch() {
         }
         input.captureFrameDirectory = m_frames.at(row).directory;
         request.input.frames.push_back(input);
+        textureDirectories.push_back(input.captureFrameDirectory);
     }
     if (request.input.frames.size() < 2) { m_status->setText(tr("至少勾选两帧并填写位姿")); return; }
     pointcloud::HandEyeCalibration calibration; QString error;
@@ -553,9 +726,28 @@ void CameraCaptureWizard::stitch() {
     m_runningRevision = m_revision; m_closing = false;
     m_publishing = true;
     setState(State::Publishing);
-    m_watcher->setFuture(QtConcurrent::run([request] {
-        try { return pcv::interface::stitch(request); }
-        catch (const std::exception &e) { pcv::interface::StitchingResult result; result.message = QString::fromLocal8Bit(e.what()); return result; }
+    const bool textureEnabled = m_intensityEnabled->isChecked();
+    m_watcher->setFuture(QtConcurrent::run([request, textureDirectories, textureEnabled, token] {
+        try {
+            auto result = pcv::interface::stitch(request);
+            if (result.success && textureEnabled && token->load()) {
+                result.success = false;
+                result.cancelled = true;
+                result.message = QStringLiteral("拼接已取消，未发布纹理结果");
+            }
+            if (result.success && textureEnabled) {
+                QString textureError;
+                if (!attachCaptureTexture(&result, textureDirectories, token, &textureError)) {
+                    result.success = false;
+                    result.errorCode = token->load() ? QStringLiteral("PCV_TEXTURE_CANCELLED")
+                                                     : QStringLiteral("PCV_TEXTURE_001");
+                    result.cancelled = token->load();
+                    result.textureError = textureError;
+                    result.message = textureError;
+                }
+            }
+            return result;
+        } catch (const std::exception &e) { pcv::interface::StitchingResult result; result.message = QString::fromLocal8Bit(e.what()); return result; }
     }));
     m_status->setText(tr("正在位姿直拼并事务保存…")); updateActions();
 }
@@ -569,7 +761,9 @@ void CameraCaptureWizard::updateActions() {
     m_cancel->setEnabled(m_watcher->isRunning());
     for (QWidget *widget : std::initializer_list<QWidget *>{m_table, m_directory, m_xml, m_rows,
         m_up, m_down, m_preview, m_browseDirectory, m_browseXml, m_copyPrevious,
-        m_copySelected, m_validate, m_preflight, m_advanced}) widget->setEnabled(!busy);
+        m_copySelected, m_validate, m_preflight, m_advanced,
+        m_externalLight, m_externalLightConfirmed, m_intensityReview}) widget->setEnabled(!busy);
+    m_intensityEnabled->setEnabled(!busy && m_boundaryMode->currentIndex() == 0);
     m_boundaryMode->setEnabled(!busy); m_sdkVerified->setEnabled(!busy); m_gateInactive->setEnabled(!busy);
     m_back->setEnabled(!busy && m_step > 0);
     m_next->setEnabled(!busy && (m_step == 0 ? m_connectionReady : m_step == 1

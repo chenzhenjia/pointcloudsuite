@@ -116,6 +116,15 @@ struct StitchingResult {
     QString outputPly;
     StitchingArtifactManifest manifest;
     QVector<pointcloud::Point3D> points;
+    // Optional application-layer texture overlay. The stitcher itself does
+    // not compute it; the camera wizard fills it from capture provenance.
+    QVector<quint8> textureGrayscale;
+    QVector<quint8> textureValid;
+    qsizetype textureMappedPointCount = 0;
+    qsizetype textureSkippedPointCount = 0;
+    QString textureManifest;
+    QString textureSourceDirectory;
+    QString textureError;
     pointcloud::MultiFrameRegistrationResult merge;
     QVector<pointcloud::IcpDiagnostics> icpDiagnostics;
     QVector<pointcloud::SeamFusionDiagnostic> seamDiagnostics;

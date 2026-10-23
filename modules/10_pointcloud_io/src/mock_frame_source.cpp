@@ -104,6 +104,11 @@ std::shared_ptr<const CameraFrame> MockFrameSource::makeSyntheticFrame(std::uint
         raw[i * 3 + 2] = z;
     }
     frame->data = payload;
+    frame->intensityWidth = m_width;
+    frame->intensityHeight = m_height;
+    frame->intensityData.resize(pointCount);
+    for (qsizetype i = 0; i < pointCount; ++i)
+        frame->intensityData[i] = char((i + frameNumber) & 0xff);
     return frame;
 }
 

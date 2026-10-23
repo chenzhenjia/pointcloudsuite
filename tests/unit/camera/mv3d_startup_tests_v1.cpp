@@ -132,6 +132,8 @@ int main(int argc, char **argv) {
         CHECK(queue->received() == 1 && notifications == 1);
         const auto frame = camera.frameSlot().take();
         CHECK(frame && frame->frameNumber == 100 && frame->completeScan && frame->height == 2);
+        CHECK(frame->intensityWidth == 2 && frame->intensityHeight == 2
+              && frame->intensityData.size() == 4 && quint8(frame->intensityData.at(0)) == 100);
         CHECK(camera.start().ok() && sdk.starts == 1); // Idempotent start.
         camera.stop(); camera.stop();
         sdk.emitImage(101);

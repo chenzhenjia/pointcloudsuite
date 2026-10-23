@@ -893,6 +893,11 @@ void MainWindow::openCameraStream() {
             publication.mappingFile = result.manifest.mappingFile;
             publication.reportJson = result.manifest.reportJson;
             publication.outputDirectory = QFileInfo(result.outputPly).absolutePath();
+            publication.textureGrayscale = result.textureGrayscale;
+            publication.textureValid = result.textureValid;
+            publication.textureMappedPointCount = result.textureMappedPointCount;
+            publication.textureSkippedPointCount = result.textureSkippedPointCount;
+            publication.textureManifest = result.textureManifest;
             stitchingSucceeded(publication);
             statusBar()->showMessage(tr("连续采集位姿直拼已发布：%1 点；结果目录：%2")
                 .arg(QLocale().toString(result.points.size())).arg(publication.outputDirectory));
@@ -2024,13 +2029,23 @@ void MainWindow::stitchingSucceeded(const StitchingPublication &publication)
         m_fileList->setCurrentRow(0);
     }
     publishCanvasCache(publication.points, false, m_rawCloudSource);
+    if (publication.textureGrayscale.size() == publication.points.size()
+        && publication.textureValid.size() == publication.points.size()) {
+        m_canvas->setTextureGrayOverlay(publication.textureGrayscale, publication.textureValid);
+    }
     m_stitchingArtifactPaths = {publication.formalPly, publication.previewPly,
         publication.mappingFile, publication.reportJson};
+    if (!publication.textureManifest.isEmpty())
+        m_stitchingArtifactPaths.append(publication.textureManifest);
     applyDepthRenderRange(m_points);
     m_fileInfo->setText(tr("多帧点云拼接\n正式 PLY\n%1\n点数  %2")
                             .arg(publication.formalPly)
                             .arg(QLocale().toString(m_rawPoints.size())));
-    statusBar()->showMessage(tr("多帧点云拼接结果已发布到当前画布"));
+    statusBar()->showMessage(publication.textureMappedPointCount > 0
+        ? tr("多帧点云及亮度纹理已发布到当前画布：%1/%2 点")
+            .arg(QLocale().toString(publication.textureMappedPointCount))
+            .arg(QLocale().toString(publication.points.size()))
+        : tr("多帧点云拼接结果已发布到当前画布"));
 }
 
 void MainWindow::openTempScanningInfo() {
