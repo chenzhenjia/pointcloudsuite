@@ -8,6 +8,7 @@
 #include "selected_plane_launcher.h"
 #include "ui_mainwindow.h"
 #include <pcv/interface/temp_workpiece_interface.h>
+#include <pcv/interface/process_job_json.h>
 #include <pcv/io/artifact_transaction.h>
 #include <pcv/output/plane_output.h>
 #include <pcv/registration/handeye_transform.h>
@@ -430,6 +431,7 @@ MainWindow::~MainWindow() {
     // to run during teardown can access vectors/widgets whose lifetime has
     // already ended.
     m_closing = true;
+    cancelAndWaitCadImport();
     cancelAndWaitWorkpieceTemplate();
     if (m_memoryTimer) m_memoryTimer->stop();
     if (m_planeCancelToken) m_planeCancelToken->store(true);
@@ -586,6 +588,9 @@ void MainWindow::buildUi() {
     ui->lbl_main_title->setStyleSheet(QStringLiteral("font-size: 12pt; font-weight: 600;"));
     connect(ui->btn_multiframe_registration, &QPushButton::clicked,
             this, &MainWindow::openMultiFrameRegistration);
+    auto *processAction = new QAction(tr("导入点云拼接工序..."), this);
+    connect(processAction, &QAction::triggered, this, &MainWindow::openProcessJob);
+    fileMenu->insertAction(ui->act_exit, processAction);
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
     connect(ui->btn_camera_device, &QPushButton::clicked,
             this, &MainWindow::openCameraStream);
@@ -781,6 +786,9 @@ void MainWindow::buildUi() {
 #endif
     addToolAction(tr("多帧点云拼接"), &MainWindow::openMultiFrameRegistration);
     toolsMenu->addSeparator();
+#ifdef PCV_BUILD_STEP_IMPORT
+    addToolAction(tr("从 STEP 生成模板点云"), &MainWindow::openStepTemplate);
+#endif
     addToolAction(tr("创建工件模板"), &MainWindow::createWorkpieceTemplate);
     addToolAction(tr("打开工件模板"), &MainWindow::openWorkpieceTemplate);
     connect(m_fileList, &QListWidget::currentRowChanged, this, &MainWindow::loadSelectedSource);
@@ -870,14 +878,14 @@ void MainWindow::applyConfiguredDefaults() {
 
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
 void MainWindow::openCameraStream() {
-    if (m_templateTaskActive || m_templateFormActive) return;
+    if (m_cadDialogActive || m_templateTaskActive || m_templateFormActive) return;
     if (!m_cameraDialog) {
         m_cameraDialog = new CameraDialog(this);
         m_cameraDialog->canStartCapture = [this] {
             return !m_closing && !pointTaskRunning(false) && !m_templateTaskActive && !m_templateFormActive;
         };
         m_cameraDialog->canStartStitching = [this] {
-            if (m_closing || pointTaskRunning(false) || m_templateTaskActive || m_templateFormActive) return false;
+            if (m_closing || pointTaskRunning(false) || m_cadDialogActive || m_templateTaskActive || m_templateFormActive) return false;
             if (!confirmReplaceTempWorkpieceSession()) return false;
             // Restore the authoritative processing cloud before starting a task;
             // failure/cancellation must not leave a raw camera preview as its result.
@@ -898,13 +906,12 @@ void MainWindow::openCameraStream() {
             publication.textureMappedPointCount = result.textureMappedPointCount;
             publication.textureSkippedPointCount = result.textureSkippedPointCount;
             publication.textureManifest = result.textureManifest;
+            publication.intensitySourceDirectory = result.textureSourceDirectory;
             stitchingSucceeded(publication);
-            statusBar()->showMessage(tr("连续采集位姿直拼已发布：%1 点；结果目录：%2")
-                .arg(QLocale().toString(result.points.size())).arg(publication.outputDirectory));
         };
         m_cameraDialog->cloudPublished =
             [this](const QVector<pointcloud::Point3D> &points) {
-                if (m_closing || !m_canvas || m_templateTaskActive || m_templateFormActive
+                if (m_closing || !m_canvas || m_cadDialogActive || m_templateTaskActive || m_templateFormActive
                     || (m_stitchingWindow && m_stitchingWindow->isBusy())) return;
                 // Pipeline canvas.publish reaches this callback; streaming
                 // frames bypass the display cache while world overlays remain.
@@ -918,11 +925,14 @@ void MainWindow::openCameraStream() {
             };
         m_cameraDialog->cloudFrozen =
             [this](const QVector<pointcloud::Point3D> &points) {
-                if (m_closing || points.isEmpty() || m_templateTaskActive || m_templateFormActive
+                if (m_closing || points.isEmpty() || m_cadDialogActive || m_templateTaskActive || m_templateFormActive
                     || (m_stitchingWindow && m_stitchingWindow->isBusy())) return;
                 m_rawPoints = points;
                 m_rawCloudSource = {};
                 m_rawCloudSource.entry = QStringLiteral("camera_raw");
+                m_rawCloudSource.coordinateFrame = CloudCoordinateFrameV1::Camera;
+                m_rawCloudSource.processingSteps.append(QJsonObject{{"operation","camera_frame_materialized"},
+                    {"coordinate_frame","camera"},{"units","mm"}});
                 publishCanvasCache(points, false, m_rawCloudSource);
                 statusBar()->showMessage(tr("已冻结相机帧，可执行去噪和平面处理"));
             };
@@ -1479,6 +1489,8 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points,
     m_planeFramePending = false;
     ++m_canvasRevision;
     m_currentCloudSource = std::move(source);
+    for (QWidget *panel : {static_cast<QWidget *>(m_planeDialog), static_cast<QWidget *>(m_edgeDialog), static_cast<QWidget *>(m_scanDialog)})
+        if (panel) panel->setEnabled(!cadSourceActive());
     m_cloudSourceRevision = m_canvasRevision;
     qInfo() << "Main display cache published, points=" << m_points.size()
             << "incoming=" << incomingCount
@@ -1522,7 +1534,7 @@ bool MainWindow::pointTaskRunning(bool includeCamera) const {
 #else
     Q_UNUSED(includeCamera);
 #endif
-    return m_templateTaskActive || m_templateFormActive || m_loading
+    return m_cadDialogActive || m_templateTaskActive || m_templateFormActive || m_loading
         || (m_noiseWatcher && m_noiseWatcher->isRunning())
         || (m_stitchingWindow && m_stitchingWindow->isBusy())
         || (m_tempWorkpieceWatcher && m_tempWorkpieceWatcher->isRunning())
@@ -1601,6 +1613,7 @@ void MainWindow::showCleanDialog()
 
 void MainWindow::showPlaneDialog()
 {
+    if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     if (!m_planeDialog) return;
     m_planeDialog->show();
     m_planeDialog->raise();
@@ -1609,6 +1622,7 @@ void MainWindow::showPlaneDialog()
 
 void MainWindow::showEdgeDialog()
 {
+    if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     if (!m_edgeDialog) return;
     m_edgeDialog->show();
     m_edgeDialog->raise();
@@ -1617,6 +1631,7 @@ void MainWindow::showEdgeDialog()
 
 void MainWindow::showScanDialog()
 {
+    if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     if (!m_scanDialog) return;
     m_scanDialog->show();
     m_scanDialog->raise();
@@ -1755,6 +1770,7 @@ void MainWindow::resetSecondPlaneVerification() {
 }
 
 void MainWindow::startPlanePointSelection() {
+    if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     if (pointTaskRunning()) {
         statusBar()->showMessage(tr("点云处理任务正在运行"));
         return;
@@ -2003,6 +2019,47 @@ void MainWindow::openMultiFrameRegistration()
     m_stitchingWindow->activateWindow();
 }
 
+void MainWindow::openProcessJob()
+{
+    if (cadSourceActive()) { statusBar()->showMessage(tr("CAD 点云不能用于机器人工序输出")); return; }
+    if (m_closing || pointTaskRunning() || m_processJob) return;
+    const QString file = QFileDialog::getOpenFileName(this, tr("打开点云拼接工序"), {},
+        tr("点云工序参数 (*.json)"));
+    if (file.isEmpty()) return;
+    pcv::interface::PcvProcessJob job; QString error;
+    if (!pcv::interface::readProcessJob(file, &job, &error)) {
+        QMessageBox::warning(this, tr("工序 JSON 无效"), error); return;
+    }
+    QString detail = tr("任务：%1\n帧数：%2\n模式：pose_only\n输出：%3\n标定：%4\n")
+        .arg(job.parameters.jobId).arg(job.execution.frames.size())
+        .arg(job.parameters.outputDir, job.parameters.calibration);
+    const auto poseText = [](const pointcloud::RobotPose &p) {
+        return QString("[%1,%2,%3,%4,%5,%6]").arg(p.x).arg(p.y).arg(p.z).arg(p.rx).arg(p.ry).arg(p.rz);
+    };
+    for (const auto &frame : job.execution.frames)
+        detail += tr("\n帧 %1：%2 → %3").arg(frame.id).arg(poseText(frame.startPose), poseText(frame.endPose));
+    detail += tr("\n\n是否开始拼接？");
+    if (QMessageBox::question(this, tr("确认点云拼接工序"), detail,
+                              QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) != QMessageBox::Yes) return;
+    openMultiFrameRegistration();
+    if (!m_stitchingWindow || !confirmReplaceTempWorkpieceSession()) return;
+    m_processJob = std::make_unique<pcv::interface::PcvProcessJob>(job);
+    m_processRoiCloud.clear(); m_processPlaneMask.clear();
+    connect(m_stitchingWindow, &StitchingWindow::processJobFailed,
+            this, &MainWindow::finishProcessJob, Qt::UniqueConnection);
+    m_stitchingWindow->startProcessRequest(job.request, job.parameters.jobId);
+}
+
+void MainWindow::finishProcessJob(const QString &jobId, const QString &code, const QString &message)
+{
+    if (!m_processJob || m_processJob->parameters.jobId != jobId) return;
+    QString error;
+    const QString status = code == "PCV_CANCELLED" ? "cancelled" : "failed";
+    if (!pcv::interface::writeProcessSummary(*m_processJob, status, code, message, &error))
+        qWarning() << "Process summary failed:" << error;
+    m_processJob.reset();
+}
+
 void MainWindow::stitchingSucceeded(const StitchingPublication &publication)
 {
     if (m_closing || publication.points.isEmpty()) return;
@@ -2012,7 +2069,7 @@ void MainWindow::stitchingSucceeded(const StitchingPublication &publication)
     m_pendingPath = publication.formalPly;
     m_rawPoints = publication.points;
     m_rawCloudSource = {};
-    m_rawCloudSource.robotBaseConfirmed = true;
+    m_rawCloudSource.coordinateFrame = CloudCoordinateFrameV1::RobotBase;
     m_rawCloudSource.entry = QStringLiteral("stitching_robot_base");
     m_rawCloudSource.files = {publication.formalPly};
     m_rawCloudSource.manifest = publication.reportJson;
@@ -2029,6 +2086,21 @@ void MainWindow::stitchingSucceeded(const StitchingPublication &publication)
         m_fileList->setCurrentRow(0);
     }
     publishCanvasCache(publication.points, false, m_rawCloudSource);
+    if (m_processJob) {
+        m_processCanvasRevision = m_canvasRevision;
+        m_tempWorkpieceSource = TempWorkpieceSource::Ply;
+        m_tempWorkpieceSessionRevision = m_canvasRevision;
+        m_tempWorkpieceScanId = m_processJob->parameters.jobId;
+        m_tempWorkpieceOutputDirectory = QDir(m_processJob->parameters.outputDir).filePath("workpiece");
+        m_tempWorkpieceCreatedAtIso8601 = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+        m_tempWorkpieceSourceIndices.resize(publication.points.size());
+        for (qsizetype i = 0; i < publication.points.size(); ++i) m_tempWorkpieceSourceIndices[i] = i;
+        m_tempWorkpieceDeclaredPointCount = publication.points.size();
+        m_tempWorkpieceRasterCompatible = false;
+        setWorkflowState(WorkflowState::SelectingPrimaryPlanePoints);
+        updatePlaneExtractionUi(); updatePlaneEdgeUi();
+        showPlaneDialog();
+    }
     if (publication.textureGrayscale.size() == publication.points.size()
         && publication.textureValid.size() == publication.points.size()) {
         m_canvas->setTextureGrayOverlay(publication.textureGrayscale, publication.textureValid);
@@ -2041,11 +2113,19 @@ void MainWindow::stitchingSucceeded(const StitchingPublication &publication)
     m_fileInfo->setText(tr("多帧点云拼接\n正式 PLY\n%1\n点数  %2")
                             .arg(publication.formalPly)
                             .arg(QLocale().toString(m_rawPoints.size())));
-    statusBar()->showMessage(publication.textureMappedPointCount > 0
+    if (publication.textureMappedPointCount > 0) {
+        m_colorMode->setCurrentIndex(3);
+        updateRenderSettings();
+    }
+    QString publicationMessage = publication.textureMappedPointCount > 0
         ? tr("多帧点云及亮度纹理已发布到当前画布：%1/%2 点")
             .arg(QLocale().toString(publication.textureMappedPointCount))
             .arg(QLocale().toString(publication.points.size()))
-        : tr("多帧点云拼接结果已发布到当前画布"));
+        : tr("几何点云已发布到当前画布：%1 点").arg(QLocale().toString(publication.points.size()));
+    publicationMessage += tr("；结果目录：%1").arg(publication.outputDirectory);
+    if (!publication.intensitySourceDirectory.isEmpty())
+        publicationMessage += tr("；逐帧亮度图目录：%1").arg(publication.intensitySourceDirectory);
+    statusBar()->showMessage(publicationMessage);
 }
 
 void MainWindow::openTempScanningInfo() {
@@ -2200,7 +2280,8 @@ void MainWindow::tempWorkpieceFinished() {
     const QString layoutName = QStringLiteral("LineProfileXz");
     m_rawPoints = result.robotBasePoints;
     m_rawCloudSource = {};
-    m_rawCloudSource.robotBaseConfirmed = result.coordinateFrame == QStringLiteral("robot_base");
+    m_rawCloudSource.coordinateFrame = result.coordinateFrame == QStringLiteral("robot_base")
+        ? CloudCoordinateFrameV1::RobotBase : CloudCoordinateFrameV1::Unknown;
     m_rawCloudSource.entry = QStringLiteral("handeye_conversion");
     m_rawCloudSource.files = {result.resolvedPointCloudFile, result.resolvedCalibrationFile};
     m_rawCloudSource.manifest = result.scanningInfoPath;
@@ -2341,6 +2422,7 @@ void MainWindow::invalidateScanTrajectory(const QString &reason) {
 }
 
 void MainWindow::planScanTrajectory() {
+    if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     if (m_closing || (m_scanPlanningWatcher && m_scanPlanningWatcher->isRunning())) return;
     if (pointTaskRunning()) {
         statusBar()->showMessage(tr("点云处理任务正在运行，请稍后规划扫描路径"));
@@ -2446,6 +2528,7 @@ void MainWindow::scanPlanningFinished() {
 }
 
 void MainWindow::exportScanTrajectory() {
+    if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     if (!m_scanTrajectoryResult.ok || !m_exportScanButton->isEnabled()
         || m_scanPlanningCanvasRevision != m_canvasRevision
         || m_scanPlanningCoordinateRevision != m_coordinateFrameRevision
@@ -2482,6 +2565,7 @@ void MainWindow::exportScanTrajectory() {
 }
 
 void MainWindow::exportInoRobotTrajectory() {
+    if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     if (!m_scanTrajectoryResult.ok || !m_exportInoRobotButton->isEnabled()
         || m_scanPlanningCanvasRevision != m_canvasRevision
         || m_scanPlanningCoordinateRevision != m_coordinateFrameRevision
@@ -2519,6 +2603,7 @@ void MainWindow::exportInoRobotTrajectory() {
 }
 
 void MainWindow::extractPlaneImage() {
+    if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     if (pointTaskRunning() || !m_planeCandidateConfirmed || !m_threePlaneResult.ok) return;
     pointcloud::PlaneEdgeOptions options;
     options.edgeGridSize = float(m_edgeGridSize->value());
@@ -2603,6 +2688,7 @@ void MainWindow::planeImageExtractionFinished() {
 }
 
 void MainWindow::selectTextureImage() {
+    if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     QString readinessError;
     if (pointTaskRunning() || !textureRasterMappingReady(&readinessError)
         || !m_planeCandidateConfirmed || !m_threePlaneResult.ok
@@ -2708,6 +2794,7 @@ void MainWindow::textureMappingFinished() {
 }
 
 void MainWindow::finalizeTempWorkpiece() {
+    if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     QString validationError;
     if (!tempWorkpieceFinalizeReady(&validationError)) {
         if (hasTempWorkpieceSession())
@@ -2802,6 +2889,8 @@ void MainWindow::tempWorkpieceFinalizeFinished() {
     if (m_closing) return;
     m_progress->hide();
     if (!result.success) {
+        if (m_processJob)
+            finishProcessJob(m_processJob->parameters.jobId, result.errorCode.isEmpty() ? "PCV_OUTPUT_002" : result.errorCode, result.message);
         const QString detail = result.errorCode.isEmpty()
             ? result.message : QStringLiteral("%1: %2").arg(result.errorCode, result.message);
         // No partial formal result was published; the converted cloud and the
@@ -2821,6 +2910,18 @@ void MainWindow::tempWorkpieceFinalizeFinished() {
     setWorkflowState(WorkflowState::Completed, tr("临时工件四件套已提交：%1\n%2\n%3\n%4")
         .arg(result.tempWorkpieceInfoPath, result.baselineRobotBasePly,
              result.roiTemplateRobotBasePly, result.planeMaskPng));
+    if (m_processJob && m_processCanvasRevision == m_canvasRevision) {
+        m_processRoiCloud = result.roiTemplateRobotBasePly;
+        m_processPlaneMask = result.planeMaskPng;
+        m_processWobjPose = pointcloud::matrixToRobotPose(m_workpieceCoordinate.workpieceToRobotBase);
+        pcv::workpiece::SaveWorkpieceTemplateRequest request;
+        request.name = m_processJob->parameters.jobId;
+        request.outputRoot = QDir(m_processJob->parameters.outputDir).filePath("templates");
+        request.coordinateFrame = "robot_base";
+        request.points = m_points;
+        request.source = m_currentCloudSource.templateSource();
+        startWorkpieceTemplateSave(std::move(request));
+    }
 }
 
 void MainWindow::handleCanvasPointPicked(int index) {
@@ -2884,10 +2985,12 @@ void MainWindow::handleCanvasPointPicked(int index) {
 }
 
 void MainWindow::determinePlaneCandidate() {
+    if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     runPlaneExtraction(false);
 }
 
 void MainWindow::startSecondPlanePointSelection() {
+    if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     if (pointTaskRunning() || !m_threePlaneResult.ok || m_planeCandidateConfirmed) {
         statusBar()->showMessage(tr("请先生成尚未确定的第一平面候选结果"));
         return;
@@ -2924,6 +3027,7 @@ void MainWindow::cancelSecondPlanePointSelection() {
 }
 
 void MainWindow::validateSecondPlaneSelection() {
+    if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     if (m_secondPlanePointIndices.size() != 3 || !m_threePlaneResult.ok) return;
     setWorkflowState(WorkflowState::ValidatingSecondaryPlane);
     const float angleTolerance = float(m_defaults.planeAngleToleranceDeg);
@@ -2999,6 +3103,7 @@ void MainWindow::validateSecondPlaneSelection() {
 }
 
 void MainWindow::startWorkpieceAxisSelection() {
+    if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     m_axisSelectionActive = false;
     statusBar()->showMessage(tr("WObj1 已按机器人基坐标 X/Y 轴投影自动建立，无需人工选轴点"));
 }
@@ -3021,6 +3126,7 @@ void MainWindow::clearWorkpieceAxisSelection() {
 }
 
 void MainWindow::runPlaneExtraction(bool deferFinalClassification, bool fromThirdPick) {
+    if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     if (pointTaskRunning()) return;
     if (m_selectedPointIndices.size() < 3) {
         statusBar()->showMessage(tr("请先在画布中指定至少三个点"));
@@ -3188,6 +3294,7 @@ void MainWindow::planeExtractionFinished() {
 }
 
 void MainWindow::confirmPlaneCandidate() {
+    if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     if (!m_threePlaneResult.ok || pointTaskRunning()) {
         if (hasTempWorkpieceSession())
             failAutomaticTempWorkpieceStage(
@@ -3386,6 +3493,7 @@ void MainWindow::cancelPlaneCandidate() {
 }
 
 void MainWindow::applyPlaneEdgeSegmentation() {
+    if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     if (pointTaskRunning()) {
         const QString detail = tr("已有点云处理任务正在运行");
         if (hasTempWorkpieceSession()) failAutomaticTempWorkpieceStage(tr("边缘分割前置校验"), detail);
@@ -3554,6 +3662,7 @@ void MainWindow::handleCanvasEdgePointPicked(int index) {
 }
 
 void MainWindow::savePlaneImage() {
+    if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     QString validationError;
     if (!planeImageSaveReady(&validationError)) {
         QMessageBox::warning(this, tr("无法保存平面图像"), validationError);
@@ -3692,6 +3801,7 @@ void MainWindow::noiseFinished() {
 
 void MainWindow::closeEvent(QCloseEvent *event) {
     m_closing = true;
+    cancelAndWaitCadImport();
     cancelAndWaitWorkpieceTemplate();
     if (m_memoryTimer) m_memoryTimer->stop();
     if (m_stitchingWindow) {

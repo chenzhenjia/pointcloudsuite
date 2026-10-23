@@ -53,3 +53,7 @@ pointcloudview 自关闭变量为 POINTCLOUDVIEW_SELFTEST_CLOSE=1；pointcloudst
 ## 2026-10-16 构建与运行复验
 
 用户本轮明确要求实际修复/构建/运行，本文开头“不执行”仅是文档整理轮历史。Qt6.8.3/MSVC19.51/NMake、两个GUI/CLI/Tools/Tests开启、相机关闭的全新Debug/Release全量构建均成功，各43/43 CTest及Windows原生六画布/两个GUI启动均通过。旧build目录未覆盖；新EXE路径、工具链环境、完整命令、日志及未验证项见[修复说明](build_runtime_repair_v1.md)。Release redistributable定位告警仍在，干净机便携部署未验收。
+
+## STEP 可选依赖（2026-10-23）
+
+新增 `-StepImport -OcctDir <OpenCASCADEConfig目录>` 对应 `PCV_BUILD_STEP_IMPORT=ON`，严格使用OCCT7.9.3/x64动态库。默认OFF不需要OCCT，CAD模板包读写仍可用；ON缺依赖配置报错。Debug/Release用各自运行库，生成目录/依赖均在源码外。具体命令、运行库与验证见[STEP说明](step_cad_template_v1.md)。

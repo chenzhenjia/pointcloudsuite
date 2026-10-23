@@ -65,6 +65,7 @@ struct CaptureFrameRecord {
     qsizetype pointCount = 0;
     bool intensityAvailable = false;
     qint64 pointConversionNs = 0, writeWorkNs = 0, savedBytes = 0;
+    bool depthAvailable = false;
 };
 struct CaptureFrameData {
     CaptureFrameRecord record;
@@ -76,20 +77,24 @@ struct CaptureFrameData {
     QString intensityPngPath;
     QString error;
     bool ok = false;
+    std::shared_ptr<const CameraFrame> rawFrame;
 };
 
-// All paths are session-relative on disk. Loading does not require an SDK.
+// All paths are session-relative. Raw depth browsing needs no SDK; XYZ does.
 QString createCaptureSession(const QString &parent, quint32 rows,
                              const QString &device, QString *error);
 QString createCaptureSession(const QString &parent, const CaptureConfiguration &configuration,
                              const QString &device, QString *error);
 QVector<CaptureFrameRecord> readCaptureSession(const QString &directory, QString *error);
+enum class CaptureFrameReadMode { WithIntensity, GeometryOnly, PreviewOnly, GeometryPreview };
+// GeometryOnly validates all geometry/provenance but never reads intensity payloads.
 CaptureFrameData readCapturedFrame(const QString &directory,
-                                  const std::function<bool()> &cancelled = {});
+                                  const std::function<bool()> &cancelled = {},
+                                  CaptureFrameReadMode mode = CaptureFrameReadMode::WithIntensity);
 bool writeCaptureParameters(const QString &directory, const QJsonObject &parameters, QString *error);
 QJsonObject readCaptureParameters(const QString &directory);
 
-// Owns no source or GUI object. Only normalized ABC32f frames enter the recorder.
+// Owns no source or GUI object. Raw-depth v3 and legacy ABC32f are explicit modes.
 class CaptureRecorder {
 public:
     CaptureRecorder(QString directory, quint32 rows);
@@ -99,6 +104,7 @@ public:
     std::shared_ptr<CaptureFrameQueue> queue() const { return m_queue; }
     QVector<CaptureFrameRecord> savedFrames() const;
     QVector<pointcloud::Point3D> latestPreview() const;
+    std::shared_ptr<const CameraFrame> latestDepthFrame() const;
     QByteArray latestIntensity() const;
     QSize latestIntensitySize() const;
     quint32 latestIntensityFrameNumber() const;
@@ -116,6 +122,7 @@ private:
     mutable std::mutex m_mutex;
     QVector<CaptureFrameRecord> m_saved;
     QVector<pointcloud::Point3D> m_preview;
+    std::shared_ptr<const CameraFrame> m_depthPreview;
     QByteArray m_latestIntensity;
     QSize m_latestIntensitySize;
     quint32 m_latestIntensityFrameNumber = 0;

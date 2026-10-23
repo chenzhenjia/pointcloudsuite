@@ -1,6 +1,10 @@
 set(PCV_APPLICATION_TEST_TARGETS)
 
 if(PCV_BUILD_EXPERIMENTAL_CAMERA)
+    add_executable(depth_capture_tests_v1 unit/camera/depth_capture_tests_v1.cpp)
+    target_link_libraries(depth_capture_tests_v1 PRIVATE pcv_m10_pointcloud_io pcv_m30_pointcloud_stitch)
+    add_test(NAME depth_capture_tests_v1 COMMAND depth_capture_tests_v1)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS depth_capture_tests_v1)
     get_target_property(PCV_CAMERA_TEST_DEFINITIONS pcv_m10_pointcloud_io INTERFACE_COMPILE_DEFINITIONS)
     if("PCV_CAMERA_HAVE_HIKSDK=1" IN_LIST PCV_CAMERA_TEST_DEFINITIONS)
         # Compile the actual driver with SDK declarations but local fake symbols.
@@ -83,6 +87,18 @@ if(TARGET pcv_m30_pointcloud_stitch)
 endif()
 add_test(NAME temp_workpiece_interface_tests COMMAND temp_workpiece_interface_tests)
 
+add_executable(cad_template_tests_v1 unit/interface/cad_template_tests_v1.cpp)
+target_link_libraries(cad_template_tests_v1 PRIVATE pcv_m60_geometry_workpiece)
+if(PCV_BUILD_STEP_IMPORT)
+    target_include_directories(cad_template_tests_v1 PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+    target_link_libraries(cad_template_tests_v1 PRIVATE TKPrim TKBO TKDESTEP TKXCAF)
+endif()
+if(WIN32)
+    target_link_libraries(cad_template_tests_v1 PRIVATE Psapi)
+endif()
+add_test(NAME cad_template_tests_v1 COMMAND cad_template_tests_v1)
+list(APPEND PCV_APPLICATION_TEST_TARGETS cad_template_tests_v1)
+
 add_executable(workpiece_template_tests_v1 unit/interface/workpiece_template_tests_v1.cpp)
 target_link_libraries(workpiece_template_tests_v1 PRIVATE pcv_m60_geometry_workpiece)
 target_compile_definitions(workpiece_template_tests_v1 PRIVATE PCV_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
@@ -112,10 +128,23 @@ if(TARGET stitching_interface_tests)
 endif()
 
 if(PCV_BUILD_POINTCLOUDVIEW AND PCV_BUILD_EXPERIMENTAL_CAMERA)
+    add_executable(camera_depth_preview_tests_v1
+        unit/pointcloudview/camera_depth_preview_tests_v1.cpp
+        ../apps/pointcloudview/process_memory_usage_v1.cpp
+        ../apps/pointcloudview/features/camera_depth_preview_v1.cpp)
+    target_include_directories(camera_depth_preview_tests_v1 PRIVATE ../apps/pointcloudview)
+    target_compile_definitions(camera_depth_preview_tests_v1 PRIVATE PCV_CAPTURE_UI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
+    target_link_libraries(camera_depth_preview_tests_v1 PRIVATE Qt::Widgets Qt::Concurrent pcv_m20_pointcloud_render pcv_m60_geometry_workpiece)
+    if(WIN32)
+        target_link_libraries(camera_depth_preview_tests_v1 PRIVATE Psapi)
+    endif()
+    add_test(NAME camera_depth_preview_tests_v1 COMMAND camera_depth_preview_tests_v1)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS camera_depth_preview_tests_v1)
     add_executable(camera_capture_panel_tests_v1
         unit/pointcloudview/camera_capture_panel_tests_v1.cpp
         ../apps/pointcloudview/features/camera_capture_panel_v1.cpp
         ../apps/pointcloudview/cameradialog.cpp
+        ../apps/pointcloudview/features/camera_depth_preview_v1.cpp
         ../apps/pointcloudview/cameradialog.h
         ../apps/pointcloudview/live_pipeline.cpp
         ../apps/pointcloudview/ui/cameradialog.ui)
@@ -124,7 +153,7 @@ if(PCV_BUILD_POINTCLOUDVIEW AND PCV_BUILD_EXPERIMENTAL_CAMERA)
     target_include_directories(camera_capture_panel_tests_v1 PRIVATE ../apps/pointcloudview)
     target_compile_definitions(camera_capture_panel_tests_v1 PRIVATE PCV_CAPTURE_UI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
     target_link_libraries(camera_capture_panel_tests_v1 PRIVATE Qt::Widgets Qt::Concurrent
-        pcv_m30_pointcloud_stitch pcv_m60_geometry_workpiece)
+        pcv_m30_pointcloud_stitch pcv_m60_geometry_workpiece pcv_m20_pointcloud_render)
     add_test(NAME camera_capture_panel_tests_v1 COMMAND camera_capture_panel_tests_v1)
     set_tests_properties(camera_capture_panel_tests_v1 PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     list(APPEND PCV_APPLICATION_TEST_TARGETS camera_capture_panel_tests_v1)
@@ -216,10 +245,23 @@ add_test(NAME texture_mapping_tests COMMAND texture_mapping_tests)
 list(APPEND PCV_APPLICATION_TEST_TARGETS texture_mapping_tests)
 
 if(PCV_BUILD_POINTCLOUDVIEW)
+    add_executable(cad_import_view_tests_v1
+        unit/pointcloudview/cad_import_view_tests_v1.cpp
+        ../apps/pointcloudview/features/cad_import_dialog_v1.cpp)
+    target_include_directories(cad_import_view_tests_v1 PRIVATE ../apps/pointcloudview)
+    target_link_libraries(cad_import_view_tests_v1 PRIVATE pcv_m20_pointcloud_render pcv_m60_geometry_workpiece Qt::Concurrent)
+    if(PCV_BUILD_STEP_IMPORT)
+        target_include_directories(cad_import_view_tests_v1 PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+        target_link_libraries(cad_import_view_tests_v1 PRIVATE TKPrim TKDESTEP)
+    endif()
+    add_test(NAME cad_import_view_tests_v1 COMMAND cad_import_view_tests_v1)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS cad_import_view_tests_v1)
     add_executable(workpiece_template_view_tests_v1
         unit/pointcloudview/workpiece_template_view_tests_v1.cpp
         ../apps/pointcloudview/mainwindow.cpp
         ../apps/pointcloudview/mainwindow.h
+        ../apps/pointcloudview/cad_template_ui_v1.cpp
+        ../apps/pointcloudview/features/cad_import_dialog_v1.cpp
         ../apps/pointcloudview/workpiece_template_ui_v1.cpp
         ../apps/pointcloudview/features/workpiece_template_dialog_v1.cpp
         ../apps/pointcloudview/process_memory_usage_v1.cpp
@@ -282,7 +324,9 @@ if(TARGET pcv_stitching_ui)
             unit/pointcloudview/stitching_ui_tests_v1.cpp
             ../apps/pointcloudview/mainwindow.cpp
             ../apps/pointcloudview/mainwindow.h
-            ../apps/pointcloudview/workpiece_template_ui_v1.cpp
+            ../apps/pointcloudview/cad_template_ui_v1.cpp
+        ../apps/pointcloudview/features/cad_import_dialog_v1.cpp
+        ../apps/pointcloudview/workpiece_template_ui_v1.cpp
             ../apps/pointcloudview/features/workpiece_template_dialog_v1.cpp
             ../apps/pointcloudview/process_memory_usage_v1.cpp
             ../apps/pointcloudview/process_memory_usage_v1.h
@@ -339,7 +383,7 @@ if(WIN32 AND TARGET Qt6::Core AND PCV_APPLICATION_TEST_TARGETS)
     set_tests_properties(${PCV_APPLICATION_TEST_TARGETS}
         PROPERTIES ENVIRONMENT "${PCV_TEST_PATH}")
 endif()
-foreach(stitchTest stitching_ui_tests_v1 stitching_view_tests_v1 workpiece_template_view_tests_v1 camera_capture_panel_tests_v1)
+foreach(stitchTest cad_import_view_tests_v1 stitching_ui_tests_v1 stitching_view_tests_v1 workpiece_template_view_tests_v1 camera_capture_panel_tests_v1 camera_depth_preview_tests_v1)
     if(TARGET ${stitchTest})
         set_property(TEST ${stitchTest} APPEND PROPERTY ENVIRONMENT
             "QT_QPA_PLATFORM=offscreen"
@@ -359,3 +403,7 @@ if(TARGET selected_plane_dialog_tests_v1)
         "QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins"
         "QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins/platforms")
 endif()
+
+foreach(cad_runtime_test IN LISTS PCV_APPLICATION_TEST_TARGETS)
+    pcv_deploy_step_runtime(${cad_runtime_test})
+endforeach()

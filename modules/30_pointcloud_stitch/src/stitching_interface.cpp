@@ -143,8 +143,9 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         hasCaptureInputs = hasCaptureInputs || capture;
         if (capture && (options.registrationOptions.enabled || options.seamEnabled))
             return failure(QStringLiteral("PCV_CONTRACT_001"), QStringLiteral("采集会话首版只支持位姿直拼，不执行 ICP/seam"));
-        const QString sourcePath = QFileInfo(capture
-            ? QDir(input.captureFrameDirectory).filePath("camera.ply") : input.plyPath).absoluteFilePath();
+        const QString captureSource = QDir(input.captureFrameDirectory).filePath(
+            QFileInfo::exists(QDir(input.captureFrameDirectory).filePath("depth.c16")) ? "depth.c16" : "camera.ply");
+        const QString sourcePath = QFileInfo(capture ? captureSource : input.plyPath).absoluteFilePath();
         if ((!capture && input.plyPath.trimmed().isEmpty()) || !QFileInfo::exists(sourcePath))
             return failure(QStringLiteral("PCV_INPUT_001"), QStringLiteral("第 %1 帧 PLY 不存在").arg(index + 1));
         const QString cleanSourcePath = QDir::cleanPath(sourcePath);
@@ -180,7 +181,8 @@ StitchingResult stitchRawLineProfilesImpl(const StitchingOptions &options)
         stageClock.start();
         pcv::camera::CaptureFrameData captured;
         const bool fromCapture = !input.captureFrameDirectory.isEmpty();
-        if (fromCapture) captured = pcv::camera::readCapturedFrame(input.captureFrameDirectory, tokenCancelled);
+        if (fromCapture) captured = pcv::camera::readCapturedFrame(input.captureFrameDirectory, tokenCancelled,
+            pcv::camera::CaptureFrameReadMode::GeometryOnly);
         const auto cloud = fromCapture ? pcv::detail::io::CachedCloudResult{}
             : pcv::detail::io::readPlyCached(sourcePaths.at(index), {}, readOptions);
         task.readMs = stageClock.elapsed();

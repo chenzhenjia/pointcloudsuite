@@ -4,6 +4,8 @@
 #include <pcv/interface/temp_workpiece_interface.h>
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
+#include <pcv/render/pointcloud_canvas.h>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QElapsedTimer>
@@ -25,6 +27,12 @@
 #define CHECK(condition) do { if (!(condition)) { std::cerr << "CHECK failed at " << __LINE__ \
     << ": " << #condition << '\n'; return false; } } while (false)
 
+struct PointCloudCanvasTestAccess {
+    static bool hasTexture(const PointCloudCanvas &canvas) {
+        for (const auto value : canvas.m_textureValid) if (value) return true;
+        return false;
+    }
+};
 struct WorkpieceTemplateViewTestAccess {
     static bool waitIdle(MainWindow &view)
     {
@@ -83,7 +91,7 @@ struct WorkpieceTemplateViewTestAccess {
         view.m_rawPoints = snapshot;
         view.publishCanvasCache(snapshot);
         CHECK(!view.workpieceTemplateReady());
-        CHECK(!view.m_currentCloudSource.robotBaseConfirmed);
+        CHECK(view.m_currentCloudSource.coordinateFrame != CloudCoordinateFrameV1::RobotBase);
         const auto initialRevision = view.m_canvasRevision;
         const auto initialPoints = view.m_points;
         view.startWorkpieceTemplateLoad(saved.infoFile);
@@ -160,7 +168,19 @@ struct WorkpieceTemplateViewTestAccess {
         publication.formalPly = saved.pointCloudFile;
         publication.reportJson = "stitching_manifest.json";
         publication.outputDirectory = temporary.path();
+        publication.intensitySourceDirectory = temporary.filePath("capture-images");
+        publication.textureGrayscale.fill(128, snapshot.size());
+        publication.textureValid.fill(1, snapshot.size());
+        publication.textureMappedPointCount = snapshot.size();
+        const auto beforePublication = view.m_canvasRevision;
         view.stitchingSucceeded(publication);
+        CHECK(view.m_canvasRevision > beforePublication && view.m_colorMode->currentIndex() == 3);
+        CHECK(PointCloudCanvasTestAccess::hasTexture(*view.m_canvas));
+        publication.textureGrayscale.clear(); publication.textureValid.clear();
+        publication.textureMappedPointCount = 0;
+        view.stitchingSucceeded(publication);
+        CHECK(!PointCloudCanvasTestAccess::hasTexture(*view.m_canvas) && view.m_colorMode->currentIndex() != 3);
+        CHECK(view.statusBar()->currentMessage().contains(publication.intensitySourceDirectory));
         CHECK(view.workpieceTemplateReady());
         CHECK(view.m_currentCloudSource.entry == "stitching_robot_base");
         view.invalidateTempWorkpieceSession();
@@ -209,11 +229,51 @@ struct WorkpieceTemplateViewTestAccess {
     }
 };
 
+struct CadTemplateViewTestAccess {
+    static bool run() {
+        using namespace pcv::workpiece;
+        MainWindow view;
+        CadCloudResult result; result.success=true;
+        result.points={{1,2,3,0,0,1},{2,3,4,0,1,0}};
+        const QJsonObject cad{{"original_step","gone.step"},{"sha256",QString(64,'a')},
+            {"original_units","millimetre"},{"unit_scale_to_mm",1.0},{"occt_version","7.9.3"},
+            {"algorithm_version","cad_surface_area_v1"},{"selected_faces",QJsonArray{QJsonObject{{"id",1},{"surface_type","plane"},{"area_mm2",.5}}}},
+            {"spacing_mm",.5},{"geometry_tolerance_mm",.01},{"generated_point_count",2},{"edge_sampling",false}};
+        result.source={{"files",QJsonArray{"gone.step"}},{"cad",cad},{"processing_steps",QJsonArray{}}};
+        const auto revision=view.m_canvasRevision;
+        CHECK(!view.publishCadCloud(result,revision+1));
+        CHECK(view.publishCadCloud(result,revision));
+        CHECK(view.cadSourceActive() && view.workpieceTemplateReady());
+        CHECK(!view.m_pickPointsButton->isEnabled());
+        CHECK(view.m_rawCloudSource.coordinateFrame==CloudCoordinateFrameV1::CadModel);
+        view.startPlanePointSelection(); CHECK(!view.m_threePointSelectionActive);
+        view.planScanTrajectory(); CHECK(!view.m_scanPlanningWatcher);
+        view.openProcessJob(); CHECK(!view.m_processJob);
+        view.m_voxelNoise->setChecked(true);view.m_voxelSize->setValue(100);view.m_statisticalNoise->setChecked(false);view.applyNoiseRemoval();
+        CHECK(WorkpieceTemplateViewTestAccess::waitIdle(view));
+        CHECK(view.cadSourceActive() && view.m_currentCloudSource.cad==cad && view.m_points.size()==1);
+        CHECK(view.m_currentCloudSource.processingSteps.size()==1);
+        view.publishCanvasCache(view.m_rawPoints,false,view.m_rawCloudSource);
+        CHECK(view.cadSourceActive() && view.m_currentCloudSource.processingSteps.isEmpty());
+        QTemporaryDir root;CHECK(root.isValid());
+        SaveWorkpieceTemplateRequest save;save.name="CAD";save.outputRoot=root.path();save.coordinateFrame="cad_model";
+        save.points=view.m_points;save.source=view.m_currentCloudSource.templateSource();
+        const auto saved=saveCadTemplate(save);CHECK(saved.success);
+        view.startWorkpieceTemplateLoad(saved.infoFile);CHECK(WorkpieceTemplateViewTestAccess::waitIdle(view));
+        CHECK(view.cadSourceActive() && view.workpieceTemplateReady());
+        CHECK(view.m_currentCloudSource.cad==cad);
+        CHECK(!view.m_workpieceCoordinate.valid && !view.m_scanTrajectoryResult.ok);
+        view.publishCanvasCache(result.points);CHECK(!view.cadSourceActive() && view.m_pickPointsButton->isEnabled());
+        return true;
+    }
+};
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
     if (!WorkpieceTemplateViewTestAccess::run()) return 1;
+    if (!CadTemplateViewTestAccess::run()) return 2;
     std::cout << "Workpiece template GUI lifecycle regression passed\n";
     return 0;
 }

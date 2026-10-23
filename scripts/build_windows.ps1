@@ -5,6 +5,8 @@ param(
     [ValidateSet("Debug", "Release")]
     [string]$Config = "Release",
     [switch]$BuildTests,
+    [switch]$StepImport,
+    [string]$OcctDir = "",
     [switch]$CliOnly,
     [switch]$Deploy,
     [string]$DeployDir = "",
@@ -370,11 +372,13 @@ Write-Host "ExperimentalCamera: $ExperimentalCamera"
 
 $configureArguments = @(
     '-S', $SourceDir, '-B', $BuildDir, '-G', $Generator,
-    ("-DCMAKE_PREFIX_PATH={0}" -f $QtDir),
+    ("-DCMAKE_PREFIX_PATH={0}" -f $(if ($OcctDir) { "$QtDir;$(Split-Path (Split-Path $OcctDir -Parent) -Parent)" } else { $QtDir })),
     ("-DCMAKE_BUILD_TYPE={0}" -f $Config),
     ("-DPCV_BUILD_TESTS={0}" -f $testOption),
+    ("-DPCV_BUILD_STEP_IMPORT={0}" -f $(if ($StepImport) { "ON" } else { "OFF" })),
     ("-DPCV_BUILD_EXPERIMENTAL_CAMERA={0}" -f $cameraOption)
 )
+if ($OcctDir) { $configureArguments += ("-DOpenCASCADE_DIR={0}" -f $OcctDir) }
 if ($CliOnly) {
     $configureArguments += @('-DPCV_BUILD_POINTCLOUDVIEW=OFF',
         '-DPCV_BUILD_POINTCLOUDSTITCH=OFF', '-DPCV_BUILD_CLI=ON')

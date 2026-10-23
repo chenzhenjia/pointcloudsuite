@@ -8,6 +8,14 @@
 
 namespace pcv::camera {
 
+struct CameraConversionEnvironment {
+    QString sdkVersion;
+    QString fingerprint;
+    QString error;
+};
+
+CameraConversionEnvironment cameraConversionEnvironment();
+
 // Options for converting a point-cloud frame into the project point type.
 struct PointCloudConvertOptions {
     // Skip points with any non-finite coordinate (NaN/Inf). The SDK may emit
@@ -27,6 +35,10 @@ struct PointCloudConvertResult {
     QString error;
     QVector<qsizetype> sourceIndices; // Original row-major raster indices after filtering.
 };
+
+// Official SDK for owned C16 frames; never opens a device. ABC32f remains pure.
+PointCloudConvertResult materializeCameraFrame(
+    const CameraFrame &frame, const PointCloudConvertOptions &options = {});
 
 // Converts an ImageType_PointCloud (ABC32f) frame into QVector<Point3D>.
 // Rejects non-point-cloud frame types and malformed payload lengths. This is

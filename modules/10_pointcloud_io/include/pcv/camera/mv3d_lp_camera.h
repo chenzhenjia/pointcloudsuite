@@ -18,7 +18,7 @@ namespace pcv::camera {
 // notification and takes the latest frame.
 //
 // Range_Image is the default for DP-series devices. Callback data is
-// normalized to owned ABC32f complete scans before consumers receive it.
+// retained as owned C16 complete scans; official XYZ conversion is on demand.
 // The SDK types are confined to the .cpp translation unit (pimpl) so this
 // public header has no dependency on the vendor SDK headers.
 class Mv3dLpCamera final : public FrameSource {

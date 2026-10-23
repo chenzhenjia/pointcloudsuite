@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QDir>
 #include <QLineEdit>
 #include <QLabel>
@@ -44,6 +45,7 @@ struct CameraCapturePanelTestAccess {
         CHECK(temp.isValid());
         pcv::camera::MockFrameSource source(8, 4);
         CameraCapturePanelV1 panel;
+        CHECK(panel.m_intensityEnabled->isChecked() && !panel.m_textureEnabled->isChecked());
         CHECK(panel.m_steps->count() == 4 && panel.snapshot().step == 0);
         CHECK(panel.snapshot().state == CameraCapturePanelV1::State::Disconnected);
         CHECK(!panel.m_next->isEnabled());
@@ -69,6 +71,11 @@ struct CameraCapturePanelTestAccess {
         CHECK(!panel.m_next->isEnabled() && !panel.m_stop->isEnabled());
         CHECK(waitUntil([&] { return !panel.isBusy(); }));
         CHECK(panel.m_frames.size() == 2 && panel.snapshot().step == 3);
+        panel.m_intensityEnabled->setChecked(false);
+        QString parameterError;
+        CHECK(panel.saveParameters(&parameterError));
+        CHECK(pcv::camera::readCaptureParameters(panel.m_session).value("intensity_enabled").toBool());
+        panel.m_intensityEnabled->setChecked(true);
         CHECK(panel.m_frames.at(0).intensityAvailable
               && QFile::exists(QDir(panel.m_frames.at(0).directory).filePath("intensity.png"))
               && QFile::exists(QDir(panel.m_frames.at(0).directory).filePath("intensity.mono8")));
@@ -115,37 +122,127 @@ struct CameraCapturePanelTestAccess {
         const QByteArray imageBytes = imageFile.readAll(); imageFile.close();
         CHECK(imageFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
         imageFile.write("broken"); imageFile.close();
+        const auto brokenDirectory = panel.m_frames.at(0).directory;
+        CHECK(!pcv::camera::readCapturedFrame(brokenDirectory).ok);
+        const auto geometry = pcv::camera::readCapturedFrame(brokenDirectory, {},
+            pcv::camera::CaptureFrameReadMode::GeometryOnly);
+        CHECK(geometry.ok && geometry.points.size() == 32 && geometry.sourceIndices.size() == 32
+            && geometry.intensityMono8.isEmpty());
+        CHECK(!pcv::camera::readCapturedFrame(brokenDirectory, [] { return true; },
+            pcv::camera::CaptureFrameReadMode::GeometryOnly).ok);
+        CHECK(panel.validatePoses(true));
+        CHECK(panel.m_table->item(0, 7)->text() == QString::fromUtf8("有效"));
+        CHECK(panel.m_validationStatus->text().contains(QString::fromUtf8("不阻断几何拼接")));
+        panel.m_textureEnabled->setChecked(true);
         panel.stitch();
-        CHECK(!panel.isBusy() && panel.m_status->text().contains(QString::fromUtf8("亮度图校验失败")));
+        CHECK(!panel.isBusy() && panel.m_table->currentRow() == 0 && panel.m_table->currentColumn() == 9);
+        panel.m_textureEnabled->setChecked(false);
+        int published = 0;
+        pcv::interface::StitchingResult publishedResult;
+        panel.canStitch = [] { return true; };
+        panel.publishResult = [&published, &publishedResult](const auto &result) {
+            if (result.success && result.points.size() == 64) { ++published; publishedResult = result; }
+        };
+        panel.stitch();
+        CHECK(waitUntil([&] { return !panel.isBusy(); }));
+        CHECK(published == 1 && publishedResult.textureGrayscale.isEmpty() && publishedResult.textureValid.isEmpty());
+        const QDir geometryOutput(QFileInfo(publishedResult.outputPly).absolutePath());
+        CHECK(!geometryOutput.exists("texture_manifest.json") && !geometryOutput.exists("stitched_robot_base.intensity.bin")
+            && !geometryOutput.exists("stitched_robot_base.intensity_valid.bin"));
+        CHECK(publishedResult.textureSourceDirectory == panel.m_session);
         CHECK(imageFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
         CHECK(imageFile.write(imageBytes) == imageBytes.size()); imageFile.close();
-        int published = 0;
-        panel.canStitch = [] { return true; };
-        panel.publishResult = [&published](const auto &result) { if (result.success && result.points.size() == 64) ++published; };
+        panel.m_textureEnabled->setChecked(true);
+        CHECK(panel.validatePoses(true));
         panel.m_stitch->click();
         CHECK(panel.snapshot().state == CameraCapturePanelV1::State::Publishing);
         CHECK(waitUntil([&] { return !panel.isBusy(); }));
-        CHECK(published == 1 && panel.snapshot().state == CameraCapturePanelV1::State::Completed);
+        CHECK(published == 2 && panel.snapshot().state == CameraCapturePanelV1::State::Completed);
+        CHECK(publishedResult.textureGrayscale.size() == 64 && publishedResult.textureValid.size() == 64
+            && QFile::exists(publishedResult.textureManifest));
+        CameraCapturePanelV1 reopened;
+        reopened.loadSessionDirectory(panel.m_session);
+        CHECK(reopened.m_textureEnabled->isChecked() && reopened.m_sessionIntensityEnabled
+            && reopened.m_frames.size() == 2 && reopened.validatePoses(true));
+        auto oldParameters = pcv::camera::readCaptureParameters(panel.m_session);
+        oldParameters.remove("texture_mapping_enabled");
+        CHECK(pcv::camera::writeCaptureParameters(panel.m_session, oldParameters, &parameterError));
+        reopened.loadSessionDirectory(panel.m_session);
+        CHECK(!reopened.m_textureEnabled->isChecked() && reopened.m_sessionIntensityEnabled);
+        const auto rawPath = QDir(brokenDirectory).filePath("intensity.mono8");
+        QFile rawFile(rawPath); CHECK(rawFile.open(QIODevice::ReadOnly));
+        const auto rawBytes = rawFile.readAll(); rawFile.close();
+        CHECK(rawFile.remove());
+        CHECK(reopened.validatePoses(true));
+        CHECK(!pcv::camera::readCapturedFrame(brokenDirectory).ok);
+        CHECK(pcv::camera::readCapturedFrame(brokenDirectory, {},
+            pcv::camera::CaptureFrameReadMode::GeometryOnly).ok);
+        reopened.m_textureEnabled->setChecked(true);
+        CHECK(!reopened.validatePoses(true));
+        CHECK(rawFile.open(QIODevice::WriteOnly)); CHECK(rawFile.write(rawBytes) == rawBytes.size()); rawFile.close();
         const auto session = panel.m_session;
         panel.m_xml->setText(temp.filePath("missing.xml")); panel.stitch();
-        CHECK(!panel.isBusy() && published == 1 && panel.m_session == session);
+        CHECK(!panel.isBusy() && published == 2 && panel.m_session == session);
         panel.m_xml->setText(xml);
         panel.stitch(); ++panel.m_revision;
-        CHECK(waitUntil([&] { return !panel.isBusy(); })); CHECK(published == 1);
+        CHECK(waitUntil([&] { return !panel.isBusy(); })); CHECK(published == 2);
         panel.stitch(); panel.cancelAndWait(); QApplication::processEvents();
-        CHECK(published == 1 && !panel.isBusy());
+        CHECK(published == 2 && !panel.isBusy());
 
         // Queue failures retain saved frames and navigate to editable review.
         pcv::camera::MockFrameSource errorSource(8, 4);
         CameraCapturePanelV1 errors; bind(errors, errorSource);
         errors.m_directory->setText(temp.path()); errors.m_preflight->setChecked(true);
         errors.startCapture();
-        CHECK(waitUntil([&] { return errors.m_recorder->savedFrames().size() == 1; }));
-        errors.m_recorder->queue()->fail("test queue overflow"); errors.pollCapture();
+        errorSource.emitFrame();
+        CHECK(waitUntil([&] { return errors.m_recorder->savedFrames().size() == 2; }));
+        auto missingImage = std::make_shared<pcv::camera::CameraFrame>(*errorSource.frameSlot().take());
+        missingImage->intensityData.clear();
+        CHECK(!errors.m_recorder->queue()->push(missingImage));
+        const QString firstError = errors.m_recorder->queue()->error();
+        errors.m_recorder->queue()->fail("later error"); errors.pollCapture();
         CHECK(waitUntil([&] { return !errors.isBusy(); }));
         CHECK(errors.snapshot().state == CameraCapturePanelV1::State::Error);
-        CHECK(errors.snapshot().firstError == "test queue overflow" && errors.m_frames.size() == 1);
+        CHECK(!firstError.isEmpty() && errors.snapshot().firstError == firstError && errors.m_frames.size() == 2
+            && !errorSource.isRunning());
         CHECK(errors.snapshot().step == 3 && errors.m_table->isEnabled());
+        errors.m_xml->setText(xml);
+        for (int row = 0; row < 2; ++row) {
+            errors.m_table->item(row, 5)->setText("0 0 0 0 0 0");
+            errors.m_table->item(row, 6)->setText("0 -100 0 0 0 0");
+        }
+        int recoveredPublished = 0;
+        errors.publishResult = [&recoveredPublished](const auto &result) {
+            if (result.success && result.textureGrayscale.isEmpty()) ++recoveredPublished;
+        };
+        errors.stitch(); CHECK(waitUntil([&] { return !errors.isBusy(); }));
+        CHECK(recoveredPublished == 1 && errors.snapshot().firstError == firstError);
+
+        pcv::camera::MockFrameSource geometrySource(8, 4);
+        CameraCapturePanelV1 noImages; bind(noImages, geometrySource);
+        noImages.m_directory->setText(temp.path()); noImages.m_intensityEnabled->setChecked(false);
+        noImages.m_preflight->setChecked(true); noImages.startCapture(); geometrySource.emitFrame();
+        noImages.stopCapture(); CHECK(waitUntil([&] { return !noImages.isBusy(); }));
+        CHECK(noImages.m_frames.size() == 2 && !noImages.m_frames.at(0).intensityAvailable
+            && !QFile::exists(QDir(noImages.m_frames.at(0).directory).filePath("intensity.png")));
+        noImages.m_xml->setText(xml);
+        for (int row = 0; row < 2; ++row) {
+            noImages.m_table->item(row, 5)->setText("0 0 0 0 0 0");
+            noImages.m_table->item(row, 6)->setText("0 -100 0 0 0 0");
+        }
+        int geometryPublished = 0;
+        noImages.publishResult = [&geometryPublished](const auto &result) {
+            if (result.success && result.textureGrayscale.isEmpty()) ++geometryPublished;
+        };
+        noImages.stitch(); CHECK(waitUntil([&] { return !noImages.isBusy(); }));
+        CHECK(geometryPublished == 1);
+        reopened.loadSessionDirectory(noImages.m_session);
+        CHECK(!reopened.m_textureEnabled->isChecked() && !reopened.m_sessionIntensityEnabled);
+        QFile mappingFile(QDir(noImages.m_frames.at(0).directory).filePath("raster_indices.bin"));
+        CHECK(mappingFile.open(QIODevice::WriteOnly)); mappingFile.write("broken"); mappingFile.close();
+        CHECK(!noImages.validatePoses(true) && noImages.m_table->currentColumn() == 7);
+        CHECK(!pcv::camera::readCapturedFrame(noImages.m_frames.at(0).directory, {},
+            pcv::camera::CaptureFrameReadMode::GeometryOnly).ok);
 
         // Fixed-row compatibility and close/join remain available.
         pcv::camera::MockFrameSource legacySource(8, 4);

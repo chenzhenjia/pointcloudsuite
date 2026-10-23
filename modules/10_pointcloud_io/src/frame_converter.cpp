@@ -4,6 +4,23 @@
 
 namespace pcv::camera {
 
+#ifndef PCV_CAMERA_HAVE_HIKSDK
+CameraConversionEnvironment cameraConversionEnvironment()
+{
+    return {{}, {}, QStringLiteral("需要兼容的相机 SDK Runtime 才能转换原始深度")};
+}
+
+PointCloudConvertResult materializeCameraFrame(const CameraFrame &frame,
+                                               const PointCloudConvertOptions &options)
+{
+    if (frame.frameType == FrameType::PointCloudABC32f)
+        return convertPointCloudToPoints(frame, options);
+    PointCloudConvertResult result;
+    result.error = cameraConversionEnvironment().error;
+    return result;
+}
+#endif
+
 namespace {
 
 bool hasExpectedRasterSampleCount(const CameraFrame &frame,
@@ -54,6 +71,7 @@ PointCloudConvertResult convertPointCloudToPoints(
     }
     result.totalSamples = frame.data.size() / bytesPerPoint;
     result.points.reserve(result.totalSamples);
+    result.sourceIndices.reserve(result.totalSamples);
 
     const auto *raw = reinterpret_cast<const float *>(frame.data.constData());
     for (qsizetype i = 0; i < result.totalSamples; ++i) {

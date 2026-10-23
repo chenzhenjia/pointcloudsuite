@@ -30,6 +30,7 @@ option(PCV_BUILD_POINTCLOUDSTITCH
     "Build the point cloud stitching application" ON)
 option(PCV_BUILD_CLI "Build the PointCloudSuite CLI" OFF)
 option(PCV_BUILD_TOOLS "Build diagnostic command-line tools" OFF)
+option(PCV_BUILD_STEP_IMPORT "Enable OCCT STEP import" OFF)
 option(PCV_BUILD_TESTS "Build all automated tests" OFF)
 option(PCV_BUILD_EXPERIMENTAL_CAMERA
     "Build Hikvision camera acquisition and its UI/tests" ON)
@@ -63,6 +64,12 @@ qt_standard_project_setup()
 if(PCV_BUILD_TESTS)
     enable_testing()
 endif()
+
+if(PCV_BUILD_STEP_IMPORT)
+    find_package(OpenCASCADE 7.9.3 EXACT REQUIRED COMPONENTS FoundationClasses ModelingData ModelingAlgorithms Visualization ApplicationFramework DataExchange)
+endif()
+
+include(cmake/step_runtime_v1.cmake)
 
 add_subdirectory(src)
 add_subdirectory(modules)

@@ -16,6 +16,7 @@
 #include <QFileInfo>
 #include <QElapsedTimer>
 #include "live_frame_policy.h"
+#include "depth_capture_storage_v1.h"
 
 namespace pcv::camera {
 namespace {
@@ -33,7 +34,7 @@ bool saveFrame(const QString &root, quint64 id, const CameraFrame &frame,
                bool requireIntensity, CaptureFrameRecord *record,
                QVector<pointcloud::Point3D> *preview, QString *error) {
     QElapsedTimer timer; timer.start();
-    const auto converted = convertPointCloudToPoints(frame);
+    const auto converted = materializeCameraFrame(frame);
     const qint64 pointConversionNs = timer.nsecsElapsed();
     if (!converted.ok || converted.points.isEmpty()) {
         *error = converted.error.isEmpty() ? QStringLiteral("扫描没有有效点") : converted.error;
@@ -125,9 +126,9 @@ bool CaptureFrameQueue::push(std::shared_ptr<const CameraFrame> frame) {
     if (!m_accepting) return false;
     QString reason;
     if (!frame || frame->kind != FrameKind::Frame || !frame->valid || !frame->completeScan
-        || frame->frameType != FrameType::PointCloudABC32f || frame->height < 2 || frame->width == 0
+        || (frame->frameType != FrameType::PointCloudABC32f && frame->frameType != FrameType::DepthC16) || frame->height < 2 || frame->width == 0
         || quint64(frame->width) * frame->height > quint64(256 * 1024 * 1024 / 12)
-        || quint64(frame->width) * frame->height * 12 != quint64(frame->data.size())
+        || quint64(frame->width) * frame->height * (frame->frameType == FrameType::DepthC16 ? 2 : 12) != quint64(frame->data.size())
         || (m_configuration.boundaryMode == CaptureBoundaryMode::FixedRows
             && (m_configuration.fixedRows < 2 || frame->height != m_configuration.fixedRows)))
         reason = frame && !frame->exceptionDescription.isEmpty() ? frame->exceptionDescription
@@ -143,7 +144,8 @@ bool CaptureFrameQueue::push(std::shared_ptr<const CameraFrame> frame) {
             || frame->intensityData.size() != qsizetype(samples))
             reason = QStringLiteral("当前扫描缺少有效 Mono8 亮度图或尺寸与点云不一致");
     }
-    const qsizetype bytes = frame ? frame->data.size() + frame->intensityData.size() : 0;
+    const qsizetype bytes = frame ? frame->data.size() + frame->intensityData.size()
+        + frame->exposureTimeStamps.size() * 8 + frame->encoders.size() * 4 : 0;
     if (reason.isEmpty() && (m_frames.size() >= m_maximumFrames || bytes > m_maximumBytes - m_bytes))
         reason = QStringLiteral("连续采集队列已满，已停止接收；请降低采集速度");
     if (!reason.isEmpty()) {
@@ -169,7 +171,8 @@ std::shared_ptr<const CameraFrame> CaptureFrameQueue::pop() {
     m_statistics.queueWaitNs += std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now() - entry.enqueued).count();
     auto frame = std::move(entry.frame);
-    m_bytes -= frame->data.size() + frame->intensityData.size(); return frame;
+    m_bytes -= frame->data.size() + frame->intensityData.size()
+        + frame->exposureTimeStamps.size() * 8 + frame->encoders.size() * 4; return frame;
 }
 void CaptureFrameQueue::finish() { std::lock_guard<std::mutex> lock(m_mutex); m_accepting = false; m_ready.notify_all(); }
 void CaptureFrameQueue::fail(const QString &reason) {
@@ -199,7 +202,7 @@ QString createCaptureSession(const QString &parent, const CaptureConfiguration &
     if (!outsideSourceTree(parent)) {
         *error = QStringLiteral("请选择已存在且位于源码树外的采集保存目录"); return {};
     }
-    const QString stem = QStringLiteral("capture_v%1_%2").arg(sdk ? 2 : 1)
+    const QString stem = QStringLiteral("capture_v%1_%2").arg(configuration.storeRawDepth ? 3 : sdk ? 2 : 1)
         .arg(QDateTime::currentDateTimeUtc().toString("yyyyMMdd_HHmmss_zzz"));
     QDir dir(parent);
     if (!dir.mkpath(".")) { *error = QStringLiteral("无法创建采集目录"); return {}; }
@@ -207,7 +210,7 @@ QString createCaptureSession(const QString &parent, const CaptureConfiguration &
     for (int i = 1; dir.exists(name); ++i) name = stem + "_" + QString::number(i);
     if (!dir.mkdir(name)) { *error = QStringLiteral("无法创建采集会话"); return {}; }
     pcv::io::ArtifactTransaction tx(dir.filePath(name));
-    QJsonObject meta{{"schema", sdk ? "pcv-camera-session-v2" : "pcv-camera-session-v1"},
+    QJsonObject meta{{"schema", configuration.storeRawDepth ? "pcv-camera-session-v3" : sdk ? "pcv-camera-session-v2" : "pcv-camera-session-v1"},
         {"device", device}, {"progress_source", "raster_row"},
         {"intensity_enabled", configuration.requireIntensity},
         {"external_light_enabled", configuration.externalLightEnabled},
@@ -216,7 +219,7 @@ QString createCaptureSession(const QString &parent, const CaptureConfiguration &
     if (sdk) {
         meta.insert("boundary_mode", "sdk_image");
         meta.insert("boundary_verification", "operator_confirmed_device_configuration");
-    } else meta.insert("rows", qint64(configuration.fixedRows));
+    } else { meta.insert("rows", qint64(configuration.fixedRows)); meta.insert("boundary_mode", "fixed_rows"); }
     if (!tx.stageJson("session.json", QJsonDocument(meta).toJson()) || !tx.commit()) {
         *error = tx.error(); return {};
     }
@@ -226,18 +229,20 @@ QVector<CaptureFrameRecord> readCaptureSession(const QString &directory, QString
     if (error) error->clear();
     QVector<CaptureFrameRecord> records;
     const auto meta = jsonFile(QDir(directory).filePath("session.json"));
-    const bool sdk = meta.value("schema") == "pcv-camera-session-v2";
+    const bool depth = meta.value("schema") == "pcv-camera-session-v3";
+    const bool sdk = meta.value("schema") == "pcv-camera-session-v2"
+        || (depth && meta.value("boundary_mode") == "sdk_image");
     if (sdk ? (meta.value("boundary_mode") != "sdk_image"
                   || meta.value("boundary_verification") != "operator_confirmed_device_configuration")
-            : (meta.value("schema") != "pcv-camera-session-v1" || meta.value("rows").toInteger() < 2)) {
-        *error = QStringLiteral("不是有效的 pcv-camera-session-v1/v2 会话"); return records;
+            : ((!depth && meta.value("schema") != "pcv-camera-session-v1") || meta.value("rows").toInteger() < 2)) {
+        *error = QStringLiteral("不是有效的 pcv-camera-session-v1/v2/v3 会话"); return records;
     }
     const QDir dir(directory);
     for (const QString &folder : dir.entryList({"frame_*"}, QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
         const auto frame = jsonFile(dir.filePath(folder + "/frame.json"));
         // A directory without frame.json was never committed and is not a frame.
         if (!QFile::exists(dir.filePath(folder + "/frame.json"))) continue;
-        if (frame.value("schema") != "pcv-camera-frame-v1"
+        if (frame.value("schema") != (depth ? "pcv-camera-frame-v2" : "pcv-camera-frame-v1")
             || (sdk ? (frame.value("height").toInteger() < 2 || frame.value("boundary_source") != "sdk_image")
                     : frame.value("height").toInteger() != meta.value("rows").toInteger())
             || frame.value("height").toInteger() > UINT32_MAX || frame.value("width").toInteger() > UINT32_MAX
@@ -248,6 +253,7 @@ QVector<CaptureFrameRecord> readCaptureSession(const QString &directory, QString
             quint32(frame.value("width").toInteger()), quint32(frame.value("height").toInteger()),
             quint32(frame.value("sdk_frame_number").toInteger()), frame.value("timestamp").toInteger(),
             qsizetype(frame.value("valid_points").toInteger())};
+        record.depthAvailable = depth;
         const QDir frameDirectory(dir.filePath(folder));
         const qint64 imageWidth = frame.value("intensity_width").toInteger();
         const qint64 imageHeight = frame.value("intensity_height").toInteger();
@@ -267,10 +273,12 @@ QVector<CaptureFrameRecord> readCaptureSession(const QString &directory, QString
     }
     return records;
 }
-CaptureFrameData readCapturedFrame(const QString &directory, const std::function<bool()> &cancelled) {
+CaptureFrameData readCapturedFrame(const QString &directory, const std::function<bool()> &cancelled,
+                                   CaptureFrameReadMode mode) {
     CaptureFrameData result;
     const QDir dir(directory);
     const auto meta = jsonFile(dir.filePath("frame.json"));
+    if (meta.value("schema") == "pcv-camera-frame-v2") return detail::readDepthFrame(directory, cancelled, mode);
     const qint64 width = meta.value("width").toInteger(), height = meta.value("height").toInteger();
     const qint64 count = meta.value("valid_points").toInteger();
     if (meta.value("schema") != "pcv-camera-frame-v1" || meta.value("coordinate_frame") != "camera"
@@ -307,7 +315,8 @@ CaptureFrameData readCapturedFrame(const QString &directory, const std::function
     const qint64 intensityWidth = meta.value("intensity_width").toInteger();
     const qint64 intensityHeight = meta.value("intensity_height").toInteger();
     const qint64 intensityBytes = meta.value("intensity_bytes").toInteger();
-    if (intensityWidth > 0 || intensityHeight > 0 || intensityBytes > 0) {
+    if ((mode == CaptureFrameReadMode::WithIntensity || mode == CaptureFrameReadMode::PreviewOnly)
+        && (intensityWidth > 0 || intensityHeight > 0 || intensityBytes > 0)) {
         if (intensityWidth != width || intensityHeight != height
             || intensityBytes != width * height) {
             result.error = QStringLiteral("亮度图元数据与点云栅格不一致"); return result;
@@ -362,6 +371,7 @@ CaptureRecorder::~CaptureRecorder() { finish(); }
 void CaptureRecorder::finish() { m_queue->finish(); if (m_thread.joinable()) m_thread.join(); }
 QVector<CaptureFrameRecord> CaptureRecorder::savedFrames() const { std::lock_guard<std::mutex> lock(m_mutex); return m_saved; }
 QVector<pointcloud::Point3D> CaptureRecorder::latestPreview() const { std::lock_guard<std::mutex> lock(m_mutex); return m_preview; }
+std::shared_ptr<const CameraFrame> CaptureRecorder::latestDepthFrame() const { std::lock_guard<std::mutex> lock(m_mutex); return m_depthPreview; }
 QByteArray CaptureRecorder::latestIntensity() const { std::lock_guard<std::mutex> lock(m_mutex); return m_latestIntensity; }
 QSize CaptureRecorder::latestIntensitySize() const { std::lock_guard<std::mutex> lock(m_mutex); return m_latestIntensitySize; }
 quint32 CaptureRecorder::latestIntensityFrameNumber() const { std::lock_guard<std::mutex> lock(m_mutex); return m_latestIntensityFrameNumber; }
@@ -383,10 +393,14 @@ void CaptureRecorder::run() {
         quint64 id = 1;
         while (auto frame = m_queue->pop()) {
             CaptureFrameRecord record; QString error; QVector<pointcloud::Point3D> preview;
-            if (!saveFrame(m_directory, id++, *frame, m_configuration.requireIntensity,
-                           &record, &preview, &error)) { m_queue->fail(error); break; }
+            const bool depth = m_configuration.storeRawDepth;
+            const bool saved = depth
+                ? detail::saveDepthFrame(m_directory, id++, *frame, m_configuration.requireIntensity, &record, &error)
+                : saveFrame(m_directory, id++, *frame, m_configuration.requireIntensity, &record, &preview, &error);
+            if (!saved) { m_queue->fail(error); break; }
             std::lock_guard<std::mutex> lock(m_mutex);
             m_saved.push_back(record); m_preview = std::move(preview);
+            m_depthPreview = depth ? frame : nullptr;
             if (m_configuration.requireIntensity) {
                 m_latestIntensity = frame->intensityData;
                 m_latestIntensitySize = QSize(int(frame->intensityWidth), int(frame->intensityHeight));

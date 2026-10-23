@@ -23,7 +23,8 @@ inline QString sdkImageBoundaryError(const CameraFrame &frame,
     constexpr quint64 maximumSamples = (256 * 1024 * 1024) / 12;
     const quint64 samples = quint64(frame.width) * frame.height;
     if (!frame.valid || frame.width == 0 || frame.height < 2 || samples > maximumSamples
-        || frame.frameType != FrameType::PointCloudABC32f || quint64(frame.data.size()) != samples * 12
+        || (frame.frameType != FrameType::PointCloudABC32f && frame.frameType != FrameType::DepthC16)
+        || quint64(frame.data.size()) != samples * (frame.frameType == FrameType::DepthC16 ? 2 : 12)
         || (!frame.intensityData.isEmpty() && quint64(frame.intensityData.size()) != samples))
         return QStringLiteral("SDK整幅图像无效、尺寸/载荷不符或超过单帧负载上限");
     return {};

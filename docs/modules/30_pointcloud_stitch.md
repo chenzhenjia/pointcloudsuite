@@ -34,6 +34,8 @@ pcv_stitching_ui 在应用层为 View/Stitch 共用窗口，调用分组入口�
 
 worker const 读取 Qt 隐式共享容器并返回私有片段；全部 join 后按输入顺序合并。回归必须持有额外共享副本，覆盖串行及 1/2/4 任务等价、取消与 join 生命周期。
 
+2026-10-23 亮度保存/纹理解耦 v2：采集帧输入显式使用模块 10 的 `GeometryOnly`，亮度缺失或损坏不阻断有效几何直拼；仍严格校验 PLY/原栅格来源、取消及转换完整性。纹理开启由应用另行严格校验/映射，不新增 30→60 依赖，不改几何数学及输出格式。[当前说明](../development/camera_capture_intensity_decoupling_v2.md)。
+
 ## 验证与风险
 
 测试：stitching_interface_tests、multiframe_registration_tests、seam_fusion_tests、selected_plane_stitch_tests_v1；应用另有 selected_plane_dialog/stitching_ui/stitching_view。历史构建、500 次重复和 26/26 仅见日志的当次记录。本轮不构建/CTest/GUI。
@@ -44,3 +46,6 @@ worker const 读取 Qt 隐式共享容器并返回私有片段；全部 join 后
 
 
 2026-10-16 整合v2：继续不改本模块算法、公开类型或manifest；应用任意轮满足全局完成条件即可按原序提交完整快照，结果setCloud完整显示并由应用交60保存模板。模块30不新增60依赖，不恢复配准缓存/previewPoints/preview PLY。见[当前整合](../development/batch_plane_selection_template_integration_v2.md)。
+
+
+2026-10-23 深度会话v1：采集来源支持depth.c16，实际拼接经10兼容接口按需转换；保留原栅格、50数学和完整输出，不新增60依赖。[说明](../development/camera_depth_preview_cache_v1.md)。

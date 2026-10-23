@@ -1,5 +1,7 @@
 # 模块、UI 与交接协同规范 v0.5
 
+2026-10-23 连续采集 v2：默认同步保存亮度、仅发布几何点云；第四步独立纹理开关默认关闭。10 提供兼容的严格/几何读取模式，30 显式只读几何；应用负责分列状态、严格纹理校验、参数恢复及工作台 revision 发布/清除旧覆盖，60 算法不变。`StitchingPublication::intensitySourceDirectory` 传递逐帧目录；不修改已有工序 JSON 业务。[当前说明](../development/camera_capture_intensity_decoupling_v2.md)。
+
 日期：2026-10-15。当前基线见[需求](../requirements/pointcloudview_v0.5.md)与[软件架构](software_architecture_v0.5.md)。本文件维护协作规则；详细代码变更集中到[版本日志](../changelog/v0.5.md)，并在 [target.md](../../target.md)登记摘要。
 
 ## 职责与依赖
@@ -119,3 +121,8 @@ CameraDialog负责设备源/SDK通知/高级实时预览；CameraCaptureWizard�
 2026-10-16 SDK启动顺序修复：模块10独占开始测量/清缓存/图像门禁及失败清理，应用仍仅依FrameSource::start返回成功进入取流态；原有错误通道传递阶段、原始状态及处理提示，无新增公共接口/应用依赖。见[说明](../development/camera_startup_order_fix_v1.md)。
 
 2026-10-22 连续采集纹理点云 v1：`CameraCaptureWizard` 默认开启同步 Mono8 亮度采集，并记录 `external_light_enabled`/`external_light_operator_confirmed`；外置光源仅由操作员按提示开关，软件不控制硬件。应用从 10 的 `CaptureRecorder` 回读逐帧亮度图，调用 60 的 `mapMultiFrameBrightness`，在拼接事务成功后通过 `StitchingPublication` 和 `PointCloudCanvas::setTextureGrayOverlay()` 发布灰度覆盖；映射失败、亮度缺失或尺寸错误不发布部分结果。高级实时预览不启用纹理保存。[实现说明](../development/camera_capture_texture_v1.md)
+
+2026-10-23 STEP/CAD模板v1：主责60私有OCCT解析/采样/独立CAD包，20独立CAD面画布仅依赖core DTO，apps负责导入选面任务、revision、来源和发布。新增来源枚举Unknown/RobotBase/CadModel，CAD禁机器人派生流程；保持30→10/50和60→10/50，40未实现匹配。见[实施说明](../development/step_cad_template_v1.md)。
+
+
+2026-10-23 深度主缓存v1：10拥有C16/辅助元数据、SDK按需转换、session-v3/frame-v2；20提供SDK无关深度画布；应用CameraDepthPreviewV1负责固定帧/悬停/确认、revision/token/join及camera/mm发布；30适配深度来源，50/60数学不改，保留同期CAD/STEP修改。[说明](../development/camera_depth_preview_cache_v1.md)。

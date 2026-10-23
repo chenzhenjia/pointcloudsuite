@@ -1,5 +1,7 @@
 # 10_pointcloud_io：IO、预处理与事务输出
 
+2026-10-23 亮度保存/纹理解耦 v2：`readCapturedFrame()` 新增 `CaptureFrameReadMode`，默认 `WithIntensity` 兼容旧调用，显式 `GeometryOnly` 严格读取几何/来源映射且不访问亮度载荷。亮度采集、缺图停采、逐帧 PNG/Mono8 事务保存不变；事后图片损坏不影响几何专用读取。[当前说明](../development/camera_capture_intensity_decoupling_v2.md)。
+
 2026-10-16 启动顺序修复v1：SDK整图在StartMeasure成功后清缓存，再开放内部图像门禁；清缓存失败停止测量并关闭释放，异常回调在启动期间仍可上报。预览/固定行数启动行为及公共接口不变；增加阶段/原始错误码诊断和真实驱动SDK替身回归。[验证与现场步骤](../development/camera_startup_order_fix_v1.md)。
 
 2026-10-16 连续采集v2：新入口显式SdkImageFrame，保留设备触发配置、SDK完整图像一图一帧、实际高度独立；拒绝未确认边界/轮廓分片，v2会话支持不同高度，v1固定行数保留。增加队列/转换/保存统计；物理门控关系仍须现场验收。[当前说明](../development/camera_capture_sdk_frame_v2.md)。
@@ -38,3 +40,6 @@ ArtifactTransaction 提供 stageBinaryPly/stageGrayscalePng/stageJson/stageBytes
 2026-10-16 整合v2：批量调用继续显式CloudCachePolicy{false}，保留canonicalReady=false、完整SHA-256与缓存/头校验；应用会话补记既有parseElapsedMs，不新增正式产物字段。见[当前整合](../development/batch_plane_selection_template_integration_v2.md)，本轮未运行动态验证。
 
 2026-10-22 连续采集纹理点云 v1：`CameraFrame` 在 SDK 回调中深拷贝 `pIntensityData` 及原始栅格尺寸；`CaptureConfiguration::requireIntensity` 仅由连续采集向导开启，队列严格检查 Mono8 载荷长度和点云栅格一致性。采集帧事务增加 `intensity.png`、`intensity.mono8` 及可选 `frame.json` 亮度元数据，`readCapturedFrame` 校验并回读两种格式；旧 v1/v2 会话仍可读取且显示无亮度状态。高级预览、固定行数兼容入口和相机数据契约保持不变。[实现说明](../development/camera_capture_texture_v1.md)
+
+
+2026-10-23 深度缓存v1：owned逐行元数据、SDK版本/配置指纹、materializeCameraFrame设备无关官方转换和进程转换锁；C16及必要辅助亮度保存session-v3/frame-v2，PreviewOnly/GeometryPreview不物化XYZ，旧接口兼容。[说明](../development/camera_depth_preview_cache_v1.md)。

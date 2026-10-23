@@ -20,6 +20,7 @@ class QPushButton;
 class QThread;
 class QTimer;
 class CameraCaptureWizard;
+class CameraDepthPreviewV1;
 namespace pcv::interface { struct StitchingResult; }
 
 namespace pointcloud { struct Point3D; }
@@ -112,6 +113,7 @@ private:
     bool m_receivedFrameEvent = false;
     bool m_captureActive = false;
     CameraCaptureWizard *m_capturePanel = nullptr;
+    CameraDepthPreviewV1 *m_depthPreview = nullptr;
     QVector<pointcloud::Point3D> m_lastConvertedPoints;
     Ui::CameraDialog *ui = nullptr;
 };

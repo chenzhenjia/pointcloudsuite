@@ -92,3 +92,10 @@ CLI 退出码 0/2/10/20/30/40/130 对应成功、契约、输入、转换、平�
 
 
 2026-10-16 整合v2：新增RobotCloudResult.mergeMs/actualWorkerCount、SingleClickResult.projectionMs/normalConnectivityMs均为内存诊断字段，仅应用会话日志使用。正式PLY/PCVMAP/manifest与模板v1协议不变。提交跳过释放旧快照，撤销重载重选；过期结果不更改新请求。见[当前整合](../development/batch_plane_selection_template_integration_v2.md)。
+
+## CAD 模板 v1（2026-10-23）
+
+新增独立schema `pcv-workpiece-cad-template-v1`、kind `workpiece_cad_template_3d`、coordinate_frame `cad_model`、units `mm`，不扩大实测模板v1的robot_base白名单。PLY六字段Binary LE及通用元数据结构复用，文件为workpiece_template_cad_model.ply/workpiece_cad_template_info.json，版本目录`<name>_cad_v1_<UTC>`，事务不覆盖。source.cad记录STEP路径/sha256、原单位/比例、面id/类型/面积、间距、0.01mm容差、无边界补点、生成点数与算法/OCCT版本；过滤步骤另记processing_steps。读取校验有限坐标、单位法向及包边界/点数/布局/包围盒；不依赖原STEP存在。完整字段与限制见[说明](../development/step_cad_template_v1.md)。
+
+
+2026-10-23 新增相机session-v3/frame-v2：C16 Little Endian载荷及SHA-256、owned逐行元数据、原始转换辅助亮度、SDK版本/配置指纹；用户PNG/Mono8可选，PLY按需生成；旧session-v1/v2/frame-v1含义不变。PreviewOnly/GeometryPreview不物化XYZ，独立camera-plane-selection-v1保存0/255掩码、完整模型/参数及源指纹；正式点云camera/mm、原栅格映射保留。[定义](../development/camera_depth_preview_cache_v1.md)。

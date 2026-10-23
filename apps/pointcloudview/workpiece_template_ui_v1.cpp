@@ -59,19 +59,20 @@ pcv::workpiece::WorkpieceTemplateProgress progressCallback(
 bool MainWindow::workpieceTemplateReady() const
 {
     return !m_closing && !pointTaskRunning() && m_livePreviewPointCount == 0
-        && !m_points.isEmpty() && m_currentCloudSource.robotBaseConfirmed
+        && !m_points.isEmpty() && m_currentCloudSource.coordinateFrame != CloudCoordinateFrameV1::Unknown
         && m_cloudSourceRevision == m_canvasRevision;
 }
 
 void MainWindow::createWorkpieceTemplate()
 {
     if (!workpieceTemplateReady()) {
-        statusBar()->showMessage(tr("创建模板需要空闲状态下已确认的 robot_base 点云；请先完成手眼转换或拼接"));
+        statusBar()->showMessage(tr("创建模板需要空闲状态下已确认的 robot_base 或 cad_model 点云"));
         return;
     }
     pcv::workpiece::WorkpieceTemplateInfo summary;
     summary.name = QFileInfo(m_currentCloudSource.files.value(0)).completeBaseName();
     summary.pointCount = m_points.size();
+    summary.coordinateFrame = cadSourceActive() ? QStringLiteral("cad_model") : QStringLiteral("robot_base");
     summary.source = m_currentCloudSource.templateSource();
     bool hasBounds = false;
     const QVector<pointcloud::Point3D> &points = m_points;
@@ -96,7 +97,7 @@ void MainWindow::createWorkpieceTemplate()
     pcv::workpiece::SaveWorkpieceTemplateRequest request;
     request.name = dialog.templateName();
     request.outputRoot = dialog.outputRoot();
-    request.coordinateFrame = QStringLiteral("robot_base");
+    request.coordinateFrame = summary.coordinateFrame;
     request.points = m_points;
     request.source = m_currentCloudSource.templateSource();
     startWorkpieceTemplateSave(std::move(request));
@@ -164,7 +165,8 @@ void MainWindow::startWorkpieceTemplateSave(pcv::workpiece::SaveWorkpieceTemplat
     const auto sharedSnapshot = request.points;
     m_templateWatcher->setFuture(QtConcurrent::run([request = std::move(request), sharedSnapshot] {
         Q_UNUSED(sharedSnapshot);
-        return pcv::workpiece::saveWorkpieceTemplate(request);
+        return request.coordinateFrame == QStringLiteral("cad_model")
+            ? pcv::workpiece::saveCadTemplate(request) : pcv::workpiece::saveWorkpieceTemplate(request);
     }));
 }
 
@@ -178,7 +180,7 @@ void MainWindow::startWorkpieceTemplateLoad(const QString &infoFile)
     request.isCancelled = [cancel] { return cancel->load(); };
     request.progress = progressCallback(m_templateProgress);
     m_templateWatcher->setFuture(QtConcurrent::run([request] {
-        return pcv::workpiece::loadWorkpieceTemplate(request);
+        return pcv::workpiece::loadAnyWorkpieceTemplate(request);
     }));
 }
 
@@ -186,10 +188,15 @@ bool MainWindow::publishWorkpieceTemplateResult(const pcv::workpiece::WorkpieceT
 {
     if (m_closing || !result.success || result.cancelled || result.points.isEmpty()
         || m_templateInputRevision != m_canvasRevision
-        || (m_templateCancelToken && m_templateCancelToken->load())) return false;
+        || (m_templateCancelToken && m_templateCancelToken->load())
+        || (m_processJob && result.info.coordinateFrame == QStringLiteral("cad_model"))) return false;
     CloudSourceContextV1 source;
-    source.robotBaseConfirmed = true;
-    source.entry = QStringLiteral("workpiece_template");
+    source.coordinateFrame = result.info.coordinateFrame == QStringLiteral("cad_model")
+        ? CloudCoordinateFrameV1::CadModel : CloudCoordinateFrameV1::RobotBase;
+    source.cad = result.info.source.value(QStringLiteral("cad")).toObject();
+    source.processingSteps = result.info.source.value(QStringLiteral("processing_steps")).toArray();
+    source.entry = result.info.coordinateFrame == QStringLiteral("cad_model")
+        ? QStringLiteral("cad_template") : QStringLiteral("workpiece_template");
     source.files = {result.pointCloudFile};
     source.manifest = result.infoFile;
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
@@ -212,8 +219,8 @@ bool MainWindow::publishWorkpieceTemplateResult(const pcv::workpiece::WorkpieceT
         m_fileList->setCurrentRow(0);
     }
     applyDepthRenderRange(m_points);
-    m_fileInfo->setText(tr("工件模板：%1\n版本：%2\nrobot_base / mm\n点数：%3")
-        .arg(result.info.name, result.info.versionId).arg(QLocale().toString(result.info.pointCount)));
+    m_fileInfo->setText(tr("工件模板：%1\n版本：%2\n%3 / mm\n点数：%4")
+        .arg(result.info.name, result.info.versionId, result.info.coordinateFrame).arg(QLocale().toString(result.info.pointCount)));
     return true;
 }
 
@@ -228,13 +235,42 @@ void MainWindow::workpieceTemplateFinished()
     m_templateProgressDialog->deleteLater();
     m_templateProgressDialog = nullptr;
     m_templateTaskActive = false;
-    if (result.cancelled) { statusBar()->showMessage(tr("工件模板任务已取消，当前点云保留")); return; }
+    if (result.cancelled) {
+        if (m_processJob)
+            finishProcessJob(m_processJob->parameters.jobId, QStringLiteral("PCV_CANCELLED"),
+                             tr("工件模板任务已取消"));
+        statusBar()->showMessage(tr("工件模板任务已取消，当前点云保留"));
+        return;
+    }
     if (!result.success) {
+        if (m_processJob)
+            finishProcessJob(m_processJob->parameters.jobId,
+                             result.errorCode.isEmpty() ? QStringLiteral("PCV_OUTPUT_002") : result.errorCode,
+                             result.message);
         QMessageBox::warning(this, tr("工件模板任务失败"), result.errorCode + QStringLiteral(": ") + result.message);
         statusBar()->showMessage(tr("工件模板任务失败，当前点云保留"));
         return;
     }
     if (!m_templateLoading) {
+        if (m_processJob && result.info.coordinateFrame == QStringLiteral("robot_base")) {
+            pcv::interface::PcvProcessTemplate processTemplate;
+            processTemplate.jobId = m_processJob->parameters.jobId;
+            processTemplate.name = result.info.name;
+            processTemplate.templateInfo = result.infoFile;
+            processTemplate.pointCloud = result.pointCloudFile;
+            processTemplate.roiCloud = m_processRoiCloud;
+            processTemplate.planeMask = m_processPlaneMask;
+            processTemplate.wobjPose = m_processWobjPose;
+            QString processError;
+            if (!pcv::interface::commitProcessTemplate(*m_processJob, processTemplate, {}, &processError)) {
+                finishProcessJob(m_processJob->parameters.jobId, QStringLiteral("PCV_OUTPUT_002"), processError);
+                QMessageBox::warning(this, tr("工序索引提交失败"), processError);
+                return;
+            }
+            m_processJob.reset();
+            m_processRoiCloud.clear();
+            m_processPlaneMask.clear();
+        }
         statusBar()->showMessage(tr("工件模板已保存：%1").arg(result.outputDirectory));
         QMessageBox::information(this, tr("工件模板已保存"), result.outputDirectory);
     } else {

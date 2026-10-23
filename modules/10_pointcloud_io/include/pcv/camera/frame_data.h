@@ -3,14 +3,14 @@
 #include <QByteArray>
 #include <QString>
 #include <QtGlobal>
+#include <QVector>
 
 #include <cstdint>
 
 namespace pcv::camera {
 
 // Image mode selector understood by the Hikvision 3D laser profile sensor.
-// Only point-cloud mode is supported by this module; other modes are listed
-// for validation and diagnostics.
+// RangeImage is the production default; PointCloudImage is a legacy/diagnostic path.
 enum class ImageMode : std::uint32_t {
     OriginImage = 1,
     PointCloudImage = 4,
@@ -50,6 +50,8 @@ struct CaptureConfiguration {
     // never asked to control an external light from these flags.
     bool externalLightEnabled = false;
     bool externalLightOperatorConfirmed = false;
+    // Explicit new storage contract; legacy callers retain v1/v2 PLY storage.
+    bool storeRawDepth = false;
 };
 
 // Owned copy of one camera frame. The callback thread copies the raw bytes
@@ -95,6 +97,11 @@ struct CameraFrame {
     FrameType rawFrameType = FrameType::Undefined;
     qint64 receiveWorkNs = 0; // Callback work through owned copy, excluding queue insertion.
     qint64 sdkConversionNs = 0;
+    QVector<qint64> exposureTimeStamps;
+    QVector<qint32> encoders;
+    QByteArray sdkReserved;
+    QString sdkVersion;
+    QString conversionFingerprint;
 
     // Expected point count for the raw data block.
     qsizetype dataPointCount() const

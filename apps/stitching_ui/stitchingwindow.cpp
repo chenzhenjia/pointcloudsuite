@@ -1,5 +1,6 @@
 #include "stitchingwindow.h"
 #include <pcv/interface/stitching_interface.h>
+#include <pcv/interface/process_job_json.h>
 #include <pcv/registration/handeye_transform.h>
 #include "ui_stitchingwindow.h"
 #include <pcv/io/ply_writer.h>
@@ -492,7 +493,8 @@ void StitchingWindow::startStitching()
 {
     if (m_watcher || m_stopping) return;
     QString error;
-    auto request = collectRequest(&error);
+    auto request = m_processRequest ? *m_processRequest : collectRequest(&error);
+    m_processRequest.reset();
     if (!error.isEmpty()) {
         QMessageBox::warning(this, tr("输入无效"), error);
         return;
@@ -509,8 +511,10 @@ void StitchingWindow::startStitching()
         QStringLiteral("stitched_robot_base_preview.ply")};
     if (ui->chk_diagnostic_output->isChecked()) {
         for (int index = 0; index < inputs.size(); ++index) {
-            outputNames << QStringLiteral("%1_%2_robot_base.ply").arg(index + 1)
-                .arg(QFileInfo(inputs.at(index).plyPath).completeBaseName());
+            const QString sourceName = inputs.at(index).captureFrameDirectory.isEmpty()
+                ? QFileInfo(inputs.at(index).plyPath).completeBaseName()
+                : QFileInfo(inputs.at(index).captureFrameDirectory).fileName();
+            outputNames << QStringLiteral("%1_%2_robot_base.ply").arg(index + 1).arg(sourceName);
             outputNames << QStringLiteral("diagnostic_pre_icp_frame_%1.ply")
                 .arg(index + 1, 2, 10, QChar('0'));
             outputNames << QStringLiteral("diagnostic_post_icp_frame_%1.ply")
@@ -566,6 +570,19 @@ void StitchingWindow::startStitching()
     }));
 }
 
+void StitchingWindow::startProcessRequest(const pcv::interface::StitchingRequest &request,
+                                          const QString &jobId)
+{
+    if (m_watcher || m_stopping || request.input.frames.size() < 2) return;
+    m_processJobId = jobId;
+    m_processRequest = std::make_unique<pcv::interface::StitchingRequest>(request);
+    ui->le_calibration_path->setText(QDir::toNativeSeparators(request.input.calibrationPath));
+    ui->le_output_directory->setText(QDir::toNativeSeparators(request.artifacts.outputDirectory));
+    ui->cb_processing_mode->setCurrentIndex(1);
+    show(); raise(); activateWindow();
+    QMetaObject::invokeMethod(this, [this] { startStitching(); }, Qt::QueuedConnection);
+}
+
 void StitchingWindow::cancelStitching()
 {
     if (m_cancelRequested) m_cancelRequested->store(true);
@@ -586,11 +603,15 @@ void StitchingWindow::stitchingFinished()
     if (result.cancelled) {
         appendLog(tr("任务已取消；正式输出和当前画布未更新。"));
         statusBar()->showMessage(tr("已取消"));
+        if (!m_processJobId.isEmpty())
+            emit processJobFailed(m_processJobId, QStringLiteral("PCV_CANCELLED"), tr("点云拼接任务已取消"));
         return;
     }
     if (!result.ok) {
         appendLog(tr("失败：%1").arg(result.error));
         QMessageBox::critical(this, tr("配准失败"), result.error);
+        if (!m_processJobId.isEmpty())
+            emit processJobFailed(m_processJobId, QStringLiteral("PCV_STITCH_001"), result.error);
         return;
     }
     appendLog(tr("完成：合并 %1 点；跨点云重复 %2\n输出：%3\n报告：%4\n预览：%5\n来源映射：%6")

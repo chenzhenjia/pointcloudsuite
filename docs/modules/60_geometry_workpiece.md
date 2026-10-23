@@ -61,3 +61,10 @@ plane_fitting_tests、plane_fitting_equivalence_tests_v2、single_click_plane_se
 2026-10-16 构建修复：preparePlaneSelectionIndex内样本计数和网格计数分别使用validSampleCount/bucketCount，修复同作用域重复声明C2373及连带C2737，不改数学/顺序/接口。此次实际全新Debug/Release全量构建和各43项CTest通过，包含完整性v2及并行/预算对照；原生六画布流程另通过。真实工件精度和性能仍独立验收，见[修复说明](../development/build_runtime_repair_v1.md)。
 
 2026-10-22 连续采集纹理点云 v1：新增 `pcv::texture::mapMultiFrameBrightness`，按拼接结果的 `cloudIds/sourceIndices` 从逐帧 Mono8 row-major 栅格产生等长 `grayscale/valid` 数组和映射统计。输入尺寸、载荷、来源索引或取消不满足时返回失败；当前位姿直拼不去重点，重复目标由调用方按采集顺序处理，正式点云几何和 PLY schema 不变。实现只依赖 10 的采集回读数据，不依赖 apps。[实现说明](../development/camera_capture_texture_v1.md)
+
+## STEP/CAD 模板 v1（2026-10-23）
+
+新增 `pcv/workpiece/cad_template_v1.h`（namespace `pcv::workpiece`）：STEP读取、不可变模型、曲面采样及独立CAD模板读写。默认OFF的OCCT7.9.3仅私有解析/几何实现；关闭STEP时CAD包仍可读写。cad_model/mm不冒充robot_base，不增加匹配功能。接口、算法、容差和验证见[实施说明](../development/step_cad_template_v1.md)。
+
+
+2026-10-23 相机深度悬停v1：应用临时展开一帧后复用既有完整索引/单击选面，默认0.4mm/3mm、正式实测点不变；不新增深度选面算法、不接入六分屏拼接。[说明](../development/camera_depth_preview_cache_v1.md)。

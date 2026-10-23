@@ -10,6 +10,14 @@
 #include <QDateTime>
 #include <QDebug>
 #include <QElapsedTimer>
+#include <QCryptographicHash>
+#include <QSettings>
+#include <QFileInfo>
+#include <QDir>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #include <QString>
 
 #include <Mv3dLpApi.h>
@@ -31,8 +39,43 @@ namespace {
 // The SDK initialization/finalization pair is process-global. Keep a module
 // reference count so multiple camera instances share one Initialize().
 std::mutex g_sdkMutex;
+std::mutex g_conversionMutex;
 int g_sdkRefCount = 0;
 bool g_sdkInitialized = false;
+
+CameraConversionEnvironment conversionEnvironment()
+{
+    CameraConversionEnvironment result;
+    result.sdkVersion = QString::fromLatin1(MV3D_LP_GetVersion());
+    wchar_t path[32768]{};
+    if (!GetModuleFileNameW(GetModuleHandleW(L"Mv3dLp.dll"), path, 32768)) {
+        result.error = QStringLiteral("无法定位 SDK 转换配置"); return result;
+    }
+    const QString ini = QDir(QFileInfo(QString::fromWCharArray(path)).absolutePath()).filePath("Mv3dLpCfg.ini");
+    if (!QFileInfo::exists(ini)) {
+        result.error = QStringLiteral("SDK 转换配置 Mv3dLpCfg.ini 缺失"); return result;
+    }
+    QSettings config(ini, QSettings::IniFormat);
+    QByteArray signature = result.sdkVersion.toUtf8();
+    for (const QString &key : {QStringLiteral("CameraConfig/EmptyPointEnable"),
+                              QStringLiteral("CameraConfig/PointCloudUnit"),
+                              QStringLiteral("CameraConfig/AlgorithmInvalidHeight")}) {
+        if (!config.contains(key)) { result.error = QStringLiteral("SDK 转换配置缺少 %1").arg(key); return result; }
+    }
+    // Include vendor conversion sections conservatively; display/log settings
+    // do not affect XYZ and may differ between otherwise compatible machines.
+    for (const QString &key : config.allKeys()) {
+        if (key.startsWith("LogConfig/") || key.startsWith("Debug/")
+            || key.startsWith("DepthToRgb/") || key.startsWith("DepthToMono/")) continue;
+        signature += '\n' + key.toUtf8() + '=' + config.value(key).toString().toUtf8();
+    }
+    if (config.value("CameraConfig/EmptyPointEnable").toInt() != 1
+        || config.value("CameraConfig/PointCloudUnit").toInt() != 1) {
+        result.error = QStringLiteral("SDK 必须保留空点栅格且使用 mm 单位"); return result;
+    }
+    result.fingerprint = QString::fromLatin1(QCryptographicHash::hash(signature, QCryptographicHash::Sha256).toHex());
+    return result;
+}
 
 bool ensureSdkInitialized(CameraError *error)
 {
@@ -122,6 +165,11 @@ std::shared_ptr<CameraFrame> copyFrame(const MV3D_LP_IMAGE_DATA &image,
     frame->xOffset = metadata.nXOffset;
     frame->yOffset = metadata.nYOffset;
     frame->zOffset = metadata.nZOffset;
+    if (metadata.pExposureTimeStamp)
+        frame->exposureTimeStamps = QVector<qint64>(metadata.pExposureTimeStamp, metadata.pExposureTimeStamp + metadata.nHeight);
+    if (metadata.pEncoder)
+        frame->encoders = QVector<qint32>(metadata.pEncoder, metadata.pEncoder + metadata.nHeight);
+    frame->sdkReserved = QByteArray(reinterpret_cast<const char *>(metadata.nReserved), sizeof(metadata.nReserved));
     if (image.pData && image.nDataLen > 0) {
         frame->data = QByteArray(reinterpret_cast<const char *>(image.pData),
                                  qsizetype(image.nDataLen));
@@ -139,7 +187,11 @@ std::shared_ptr<CameraFrame> copyFrame(const MV3D_LP_IMAGE_DATA &image,
 std::shared_ptr<CameraFrame> makeInvalidFrame(const MV3D_LP_IMAGE_DATA &image,
                                               const QString &error)
 {
-    auto frame = copyFrame(image);
+    auto metadata = image;
+    metadata.pData = nullptr; metadata.nDataLen = 0;
+    metadata.pIntensityData = nullptr; metadata.nIntensityDataLen = 0;
+    metadata.pExposureTimeStamp = nullptr; metadata.pEncoder = nullptr;
+    auto frame = copyFrame(metadata);
     frame->data.clear();
     frame->intensityData.clear();
     frame->valid = false;
@@ -162,6 +214,7 @@ struct CallbackContext {
     std::mutex assemblyMutex;
     detail::ScanFrameAssembler assembler;
     CaptureConfiguration capture;
+    CameraConversionEnvironment environment;
     std::optional<ImageMode> activeImageMode;
     std::mutex diagnosticsMutex;
     QString lastConversionKey;
@@ -297,7 +350,14 @@ struct CallbackContext {
         }
         detail::ScanAssemblyResult assembly;
         {
-            std::lock_guard<std::mutex> lock(assemblyMutex);
+        if (frame->frameType == FrameType::DepthC16 && capture.fixedRows == 0) {
+            frame->completeScan = true;
+            frame->expectedScanRows = frame->accumulatedScanRows = frame->height;
+            frame->scanFragmentCount = 1;
+            slot->publish(std::move(frame));
+            return;
+        }
+        std::lock_guard<std::mutex> lock(assemblyMutex);
             assembly = assembler.append(frame);
         }
         if (assembly.outcome == detail::ScanAssemblyOutcome::Complete) {
@@ -403,7 +463,21 @@ void __stdcall imageDataCallback(MV3D_LP_IMAGE_DATA *image, void *pUser)
         return;
     }
 
-    // Image conversion has to run while the SDK-owned input structure is
+    if (rawType == FrameType::DepthC16
+        && (context->capture.boundaryMode == CaptureBoundaryMode::SdkImageFrame || context->capture.fixedRows == 0)) {
+        if (quint64(image->nWidth) * image->nHeight > (256u * 1024u * 1024u) / 12) {
+            context->slot->publish(makeInvalidFrame(*image, QStringLiteral("深度帧超过单帧转换预算")));
+            return;
+        }
+        auto owned = copyFrame(*image);
+        owned->sdkVersion = context->environment.sdkVersion;
+        owned->conversionFingerprint = context->environment.fingerprint;
+        owned->receiveWorkNs = callbackClock.nsecsElapsed();
+        context->publishNormalizedFrame(std::move(owned));
+        return;
+    }
+
+    // Legacy profile/fixed-row conversion while the SDK-owned structure is
     // alive. No device-handle API, QWidget, or project processing runs here.
     MV3D_LP_IMAGE_DATA output;
     std::memset(&output, 0, sizeof(output));
@@ -411,7 +485,7 @@ void __stdcall imageDataCallback(MV3D_LP_IMAGE_DATA *image, void *pUser)
     MV3D_LP_STATUS status = MV3D_LP_E_PARAMETER;
     QElapsedTimer conversionClock;
     // Keep the output copy under the same lock: SDK output memory may be reused.
-    std::unique_lock<std::mutex> conversionLock(context->conversionMutex);
+    std::unique_lock<std::mutex> conversionLock(g_conversionMutex);
     conversionClock.start();
     status = action == detail::CallbackFrameAction::ConvertProfileToPointCloud
         ? MV3D_LP_ImageConvert(image, &output)
@@ -471,7 +545,7 @@ struct Mv3dLpCamera::Impl {
         , ipTimeoutMs(timeoutMs)
     {
         // 3DMVS uses Range_Image for the DP2240 production workflow. The
-        // depth frame is normalized while the callback owns the SDK buffer.
+        // Depth is copied in the callback and converted only on demand.
         requestedMode = ImageMode::RangeImage;
     }
 
@@ -867,6 +941,12 @@ CameraError Mv3dLpCamera::start()
     }
     const bool sdkImage = detail::preservesDeviceTrigger(m_impl->callbackContext.capture);
     m_impl->callbackContext.configureActiveImageMode(m_impl->activeMode);
+    m_impl->callbackContext.environment = conversionEnvironment();
+    if (m_impl->activeMode == ImageMode::RangeImage
+        && !m_impl->callbackContext.environment.error.isEmpty()) {
+        m_impl->shutdown();
+        return {m_impl->callbackContext.environment.error};
+    }
 
     // Register callbacks before measurement starts.
     m_impl->callbackContext.slot = &m_impl->slot;
@@ -1029,11 +1109,74 @@ PointCloudConvertResult Mv3dLpCamera::convertFrame(
     if (frame.frameType == FrameType::PointCloudABC32f) {
         return convertPointCloudToPoints(frame, options);
     }
+    if (frame.frameType == FrameType::DepthC16) return materializeCameraFrame(frame, options);
 
     rejected.error = QStringLiteral(
         "live SDK frame was not normalized to ABC32f in the callback");
     m_impl->logFrameError(rejected.error);
     return rejected;
+}
+
+CameraConversionEnvironment cameraConversionEnvironment()
+{
+    CameraError error;
+    if (!ensureSdkInitialized(&error)) return {{}, {}, error.message};
+    const auto environment = conversionEnvironment();
+    releaseSdk();
+    return environment;
+}
+
+PointCloudConvertResult materializeCameraFrame(const CameraFrame &frame, const PointCloudConvertOptions &options)
+{
+    if (frame.frameType == FrameType::PointCloudABC32f) return convertPointCloudToPoints(frame, options);
+    PointCloudConvertResult result;
+    const quint64 samples = quint64(frame.width) * frame.height;
+    if (frame.kind != FrameKind::Frame || !frame.valid || !frame.completeScan
+        || frame.frameType != FrameType::DepthC16 || !samples || samples > (256u * 1024u * 1024u) / 12
+        || quint64(frame.data.size()) != samples * 2
+        || frame.intensityData.size() != qsizetype(samples)
+        || (!frame.exposureTimeStamps.isEmpty() && frame.exposureTimeStamps.size() != frame.height)
+        || (!frame.encoders.isEmpty() && frame.encoders.size() != frame.height)) {
+        result.error = QStringLiteral("原始深度帧或逐行元数据无效"); return result;
+    }
+    CameraError error;
+    if (!ensureSdkInitialized(&error)) { result.error = error.message; return result; }
+    struct Lease { ~Lease() { releaseSdk(); } } lease;
+    const auto environment = conversionEnvironment();
+    if (!environment.error.isEmpty() || frame.sdkVersion != environment.sdkVersion
+        || frame.conversionFingerprint != environment.fingerprint) {
+        result.error = environment.error.isEmpty() ? QStringLiteral("深度帧 SDK 版本或转换配置不兼容") : environment.error;
+        return result;
+    }
+    MV3D_LP_IMAGE_DATA input{};
+    input.enImageType = ImageType_Depth; input.nWidth = frame.width; input.nHeight = frame.height;
+    input.pData = reinterpret_cast<uint8_t *>(const_cast<char *>(frame.data.constData()));
+    input.nDataLen = uint32_t(frame.data.size()); input.bValid = true;
+    input.nFrameNum = frame.frameNumber; input.nTimeStamp = frame.timeStamp;
+    input.fXScale = frame.xScale; input.fYScale = frame.yScale; input.fZScale = frame.zScale;
+    input.nXOffset = frame.xOffset; input.nYOffset = frame.yOffset; input.nZOffset = frame.zOffset;
+    input.pExposureTimeStamp = frame.exposureTimeStamps.isEmpty() ? nullptr
+        : reinterpret_cast<int64_t *>(const_cast<qint64 *>(frame.exposureTimeStamps.constData()));
+    input.pEncoder = frame.encoders.isEmpty() ? nullptr : const_cast<qint32 *>(frame.encoders.constData());
+    input.pIntensityData = frame.intensityData.isEmpty() ? nullptr
+        : reinterpret_cast<uint8_t *>(const_cast<char *>(frame.intensityData.constData()));
+    input.nIntensityDataLen = uint32_t(frame.intensityData.size());
+    if (frame.sdkReserved.size() == sizeof(input.nReserved))
+        std::memcpy(input.nReserved, frame.sdkReserved.constData(), sizeof(input.nReserved));
+    // SDK owns/reuses its output; consume it under a process-wide lock.
+    std::lock_guard<std::mutex> lock(g_conversionMutex);
+    MV3D_LP_IMAGE_DATA output{};
+    const auto status = MV3D_LP_MapDepthToPointCloud(&input, &output);
+    if (status != MV3D_LP_OK || output.enImageType != ImageType_PointCloud
+        || output.nWidth != input.nWidth || output.nHeight != input.nHeight || !hasExactRasterPayload(output, 12)) {
+        result.error = QStringLiteral("SDK 深度转换失败或改变栅格：%1").arg(statusText(status)); return result;
+    }
+    // A borrowed QByteArray view is read only and cannot outlive this lock.
+    CameraFrame cloud;
+    cloud.valid = true; cloud.frameType = FrameType::PointCloudABC32f;
+    cloud.width = output.nWidth; cloud.height = output.nHeight;
+    cloud.data = QByteArray::fromRawData(reinterpret_cast<const char *>(output.pData), output.nDataLen);
+    return convertPointCloudToPoints(cloud, options);
 }
 
 } // namespace pcv::camera

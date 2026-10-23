@@ -1,6 +1,7 @@
 #include "cameradialog.h"
 #include "ui_cameradialog.h"
 #include "features/camera_capture_wizard.h"
+#include "features/camera_depth_preview_v1.h"
 
 #include <pcv/camera/frame_converter.h>
 #include <pcv/camera/mock_frame_source.h>
@@ -48,6 +49,25 @@ CameraDialog::CameraDialog(QWidget *parent)
     m_modeList->setCurrentIndex(0);
     m_capturePanel = new CameraCaptureWizard(this);
     layout()->addWidget(m_capturePanel);
+    m_depthPreview = new CameraDepthPreviewV1(this);
+    layout()->addWidget(m_depthPreview);
+    m_depthPreview->canPublish = [this] { return !m_closing && (!canStartCapture || canStartCapture()); };
+    m_depthPreview->publishCloud = [this](const QVector<pointcloud::Point3D> &points) {
+        if (!m_closing && cloudFrozen) cloudFrozen(points);
+    };
+    m_capturePanel->previewDepthFrame = [this](std::shared_ptr<const pcv::camera::CameraFrame> frame, const QString &directory, bool reviewing) {
+        if (!m_closing) {
+            if (reviewing) m_depthPreview->cancelAndWait();
+            m_depthPreview->setFrame(std::move(frame),directory);
+        }
+    };
+    m_capturePanel->prefersDepthStorage = [this] {
+#ifdef PCV_CAMERA_HAVE_HIKSDK
+        return dynamic_cast<pcv::camera::Mv3dLpCamera *>(m_source.get()) != nullptr;
+#else
+        return false;
+#endif
+    };
     m_advancedPreview = new QPushButton(tr("高级实时预览 / 设备设置 ▸"), this);
     ui->rootLayout->insertWidget(1, m_advancedPreview);
     connect(m_advancedPreview, &QPushButton::clicked, this, &CameraDialog::toggleAdvancedPreview);
@@ -59,11 +79,13 @@ CameraDialog::CameraDialog(QWidget *parent)
         if (!m_source || !m_connected) { *error = tr("请先连接相机"); return false; }
         if (canStartCapture && !canStartCapture()) { *error = tr("主界面有任务正在执行"); return false; }
         stopSourceSafely();
+        m_depthPreview->cancelAndWait();
         const auto configured = m_source->configureCapture(configuration);
         if (!configured.ok()) { *error = configured.message; return false; }
         m_source->frameSlot().take();
         m_source->frameSlot().setCaptureQueue(std::move(queue));
         m_captureActive = true;
+        if (configuration.storeRawDepth) m_modeList->setCurrentIndex(0);
         toggleStreaming();
         if (!m_streaming) {
             *error = m_status->text(); stopSourceSafely();
@@ -442,7 +464,15 @@ void CameraDialog::onFrameAvailable()
         onException(frame->exceptionDescription);
         return;
     }
-    if (m_captureActive) return; // Recorder owns complete-frame conversion; preview cannot race it.
+    if (frame->frameType == pcv::camera::FrameType::DepthC16 && frame->valid && frame->completeScan) {
+        if (!m_captureActive) m_depthPreview->setFrame(frame);
+        m_lastFrameNumber = frame->frameNumber;
+        m_frameInfo->setText(tr("完整深度帧 #%1  %2 × %3；未展开点云")
+            .arg(frame->frameNumber).arg(frame->width).arg(frame->height));
+        if (m_frameWatchdogTimer) m_frameWatchdogTimer->start();
+        return;
+    }
+    if (m_captureActive) return;
 
     qInfo() << "CameraDialog: frame"
             << "type=" << frameTypeHex(frame->frameType)
@@ -598,6 +628,7 @@ QString CameraDialog::frameTypeHex(pcv::camera::FrameType type)
 
 bool CameraDialog::isCaptureBusy() const { return m_capturePanel && m_capturePanel->isBusy(); }
 void CameraDialog::cancelAndWait() {
+    if (m_depthPreview) m_depthPreview->cancelAndWait();
     if (m_capturePanel) m_capturePanel->cancelAndWait();
     stopSourceSafely();
 }

@@ -4,7 +4,8 @@
 #include <pcv/infrastructure/application_config.h>
 #include <pcv/scan/scan_planner.h>
 #include <pcv/texture/texture_mapping.h>
-#include <pcv/workpiece/workpiece_template_v1.h>
+#include <pcv/workpiece/cad_template_v1.h>
+#include <pcv/interface/process_job_json.h>
 #include "cloud_source_context_v1.h"
 
 #include <QMainWindow>
@@ -30,6 +31,7 @@ class QWidget;
 class QTimer;
 class QProgressDialog;
 struct WorkpieceTemplateTaskProgressV1;
+class CadImportDialogV1;
 class RenderDialog;
 class StitchingWindow;
 struct StitchingPublication;
@@ -43,6 +45,7 @@ namespace pcv::interface {
 struct TempWorkpieceOptions;
 struct TempWorkpiecePreparation;
 struct TempWorkpieceResult;
+struct PcvProcessJob;
 }
 template <typename T> class QFutureWatcher;
 
@@ -63,6 +66,8 @@ private slots:
     void openPointCloudSource();
     void openTempScanningInfo();
     void openMultiFrameRegistration();
+    void openProcessJob();
+    void finishProcessJob(const QString &jobId, const QString &code, const QString &message);
     void stitchingSucceeded(const StitchingPublication &publication);
     void loadSelectedSource();
     void loadFinished();
@@ -99,6 +104,7 @@ private slots:
     void startSecondPlanePointSelection();
     void cancelSecondPlanePointSelection();
     void updateMemoryUsage();
+    void openStepTemplate();
     void createWorkpieceTemplate();
     void openWorkpieceTemplate();
     void workpieceTemplateFinished();
@@ -106,6 +112,7 @@ private slots:
 private:
     friend struct StitchingViewTestAccess;
     friend struct WorkpieceTemplateViewTestAccess;
+    friend struct CadTemplateViewTestAccess;
     // Behavioural state of the single temporary-workpiece workflow. Both data
     // sources (scanning JSON and plain PLY) share it; it gates new data-source
     // opens and keeps cancelled or stale sessions from publishing results.
@@ -142,6 +149,9 @@ private:
     void publishCanvasCache(QVector<pointcloud::Point3D> points,
                             bool preserveTempWorkpieceSession = false,
                             CloudSourceContextV1 source = {});
+    bool cadSourceActive() const;
+    bool publishCadCloud(const pcv::workpiece::CadCloudResult &result, quint64 inputRevision);
+    void cancelAndWaitCadImport();
     bool workpieceTemplateReady() const;
     void startWorkpieceTemplateSave(pcv::workpiece::SaveWorkpieceTemplateRequest request);
     void startWorkpieceTemplateLoad(const QString &infoFile);
@@ -254,6 +264,8 @@ private:
     QTimer *m_templateProgressTimer = nullptr;
     std::shared_ptr<WorkpieceTemplateTaskProgressV1> m_templateProgress;
     pointcloud::CancellationToken m_templateCancelToken;
+    CadImportDialogV1 *m_cadImportDialog = nullptr;
+    bool m_cadDialogActive = false;
     bool m_templateTaskActive = false;
     bool m_templateLoading = false;
     bool m_templateFormActive = false;
@@ -341,5 +353,9 @@ private:
     pointcloud::CancellationToken m_prepareCancelToken;
     pointcloud::CancellationToken m_scanPlanningCancelToken;
     pcv::config::PointCloudViewDefaults m_defaults;
+    std::unique_ptr<pcv::interface::PcvProcessJob> m_processJob;
+    QString m_processRoiCloud, m_processPlaneMask;
+    pointcloud::RobotPose m_processWobjPose;
+    quint64 m_processCanvasRevision = 0;
     Ui::MainWindow *ui = nullptr;
 };

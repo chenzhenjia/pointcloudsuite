@@ -2,6 +2,7 @@
 #include <pcv/camera/capture_session_v1.h>
 #include <pcv/interface/stitching_interface.h>
 #include <QFutureWatcher>
+#include <QHash>
 #include <QWidget>
 #include <atomic>
 
@@ -36,6 +37,8 @@ public:
     std::function<bool()> canStitch;
     std::function<void(const pcv::interface::StitchingResult &)> publishResult;
     std::function<void(const QVector<pointcloud::Point3D> &)> previewFrame;
+    std::function<void(std::shared_ptr<const pcv::camera::CameraFrame>, const QString &, bool)> previewDepthFrame;
+    std::function<bool()> prefersDepthStorage;
     std::function<void()> workflowChanged;
     bool isBusy() const;
     bool isCapturing() const { return bool(m_recorder); }
@@ -50,7 +53,9 @@ private:
     void finishCapture();
     void pollCapture();
     void loadSession();
+    void loadSessionDirectory(const QString &path);
     void rebuildTable();
+    void showSelectedIntensity();
     void moveRow(int offset);
     void stitch();
     void advanceStep();
@@ -67,7 +72,7 @@ private:
     QSpinBox *m_rows;
     QComboBox *m_boundaryMode;
     QCheckBox *m_sdkVerified, *m_gateInactive, *m_intensityEnabled;
-    QCheckBox *m_externalLight, *m_externalLightConfirmed;
+    QCheckBox *m_externalLight, *m_externalLightConfirmed, *m_textureEnabled;
     QLabel *m_actualRows, *m_fixedRowsLabel, *m_intensityPreview, *m_intensityReview;
     QTableWidget *m_table;
     QPushButton *m_start, *m_stop, *m_open, *m_stitch, *m_cancel, *m_up, *m_down, *m_preview;
@@ -94,6 +99,8 @@ private:
     QString m_firstError;
     QString m_validatedXml;
     QString m_xmlError;
+    QHash<QString, QString> m_geometryErrors;
     bool m_draining = false;
     bool m_publishing = false;
+    bool m_sessionIntensityEnabled = false;
 };

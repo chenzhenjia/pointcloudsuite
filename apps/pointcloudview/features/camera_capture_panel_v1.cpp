@@ -58,7 +58,7 @@ bool attachCaptureTexture(pcv::interface::StitchingResult *result,
     input.sourceIndices = result->merge.sourceIndices;
     input.isCancelled = [token] { return token && token->load(); };
     for (const QString &directory : frameDirectories) {
-        const auto frame = pcv::camera::readCapturedFrame(directory);
+        const auto frame = pcv::camera::readCapturedFrame(directory, {}, pcv::camera::CaptureFrameReadMode::PreviewOnly);
         if (!frame.ok || frame.intensityMono8.isEmpty()) {
             if (error) *error = frame.error.isEmpty()
                 ? QStringLiteral("采集帧缺少有效亮度图：%1").arg(directory) : frame.error;
@@ -169,6 +169,8 @@ CameraCaptureWizard::CameraCaptureWizard(QWidget *parent) : QWidget(parent) {
     });
     step1Layout->addWidget(m_preflight);
     step1Layout->addWidget(m_intensityEnabled);
+    auto *intensityHint = new QLabel(tr("亮度图按帧独立保存和预览，不拼接2D图像；默认仅发布几何点云。"));
+    intensityHint->setWordWrap(true); step1Layout->addWidget(intensityHint);
     step1Layout->addWidget(m_externalLight);
     step1Layout->addWidget(m_externalLightConfirmed);
     m_externalLightConfirmed->setVisible(false);
@@ -211,7 +213,7 @@ CameraCaptureWizard::CameraCaptureWizard(QWidget *parent) : QWidget(parent) {
     step3Layout->addLayout(xml);
     m_table = new QTableWidget(0, 9);
     m_table->setColumnCount(10);
-    m_table->setHorizontalHeaderLabels({tr("参与"), tr("帧ID"), tr("设备时间戳"), tr("实际宽×高"), tr("有效点数"), tr("Start [X Y Z A B C]"), tr("End [X Y Z A B C]"), tr("状态"), tr("SDK序号"), tr("亮度图")});
+    m_table->setHorizontalHeaderLabels({tr("参与"), tr("帧ID"), tr("设备时间戳"), tr("实际宽×高"), tr("有效点数"), tr("Start [X Y Z A B C]"), tr("End [X Y Z A B C]"), tr("位姿/几何状态"), tr("SDK序号"), tr("亮度图状态")});
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     m_table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
@@ -229,6 +231,9 @@ CameraCaptureWizard::CameraCaptureWizard(QWidget *parent) : QWidget(parent) {
     for (auto *button : {m_copyPrevious, m_copySelected, m_validate, m_up, m_down, m_preview}) tableActions->addWidget(button);
     step3Layout->addLayout(tableActions);
     m_validationStatus = new QLabel(tr("请填写并校验参与拼接帧的 Start/End 位姿。")); m_validationStatus->setWordWrap(true); step3Layout->addWidget(m_validationStatus);
+    m_textureEnabled = new QCheckBox(tr("生成纹理点云（可选，需要所有参与帧的亮度图有效）"));
+    m_textureEnabled->setChecked(false);
+    step3Layout->addWidget(m_textureEnabled);
     auto *stitchActions = new QHBoxLayout;
     m_stitch = new QPushButton(tr("拼接并自动发布到工作台")); m_cancel = new QPushButton(tr("取消拼接")); stitchActions->addWidget(m_stitch); stitchActions->addWidget(m_cancel); stitchActions->addStretch();
     step3Layout->addLayout(stitchActions); m_steps->addWidget(step3);
@@ -249,7 +254,9 @@ CameraCaptureWizard::CameraCaptureWizard(QWidget *parent) : QWidget(parent) {
         m_publishing = false;
         const auto result = m_watcher->result();
         if (!m_closing && m_runningRevision == m_revision) {
-            m_status->setText(result.success ? tr("位姿直拼文件已保存；未执行几何核验")
+            m_status->setText(result.success ? tr("位姿直拼文件已保存：%1；亮度图目录：%2；未执行几何质量核验")
+                .arg(QFileInfo(result.outputPly).absolutePath(), result.textureSourceDirectory.isEmpty()
+                    ? tr("本次未启用亮度采集") : result.textureSourceDirectory)
                 : (result.cancelled ? tr("拼接已取消，未发布部分结果") : result.message));
             setState(result.success ? State::Completed : (result.cancelled ? State::Reviewing : State::Error));
             if (!result.success && !result.cancelled) m_firstError = result.message;
@@ -299,18 +306,16 @@ CameraCaptureWizard::CameraCaptureWizard(QWidget *parent) : QWidget(parent) {
     });
     connect(m_preview, &QPushButton::clicked, this, [this] {
         const int row = m_table->currentRow(); if (row < 0 || isBusy()) return;
-        const auto frame = pcv::camera::readCapturedFrame(m_frames.at(row).directory);
+        const auto frame = pcv::camera::readCapturedFrame(m_frames.at(row).directory, {},
+            pcv::camera::CaptureFrameReadMode::GeometryPreview);
         if (!frame.ok) m_status->setText(frame.error);
         else {
-            if (!frame.intensityMono8.isEmpty()) {
-                const QImage image(reinterpret_cast<const uchar *>(frame.intensityMono8.constData()),
-                                   int(frame.intensityWidth), int(frame.intensityHeight),
-                                   int(frame.intensityWidth), QImage::Format_Grayscale8);
-                m_intensityReview->setPixmap(QPixmap::fromImage(image.copy()).scaled(
-                    m_intensityReview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-                m_intensityReview->setToolTip(frame.intensityPngPath);
+            showSelectedIntensity();
+            if (frame.rawFrame && previewDepthFrame) {
+                const auto withImage = pcv::camera::readCapturedFrame(m_frames.at(row).directory, {}, pcv::camera::CaptureFrameReadMode::PreviewOnly);
+                previewDepthFrame(withImage.ok ? withImage.rawFrame : frame.rawFrame, m_frames.at(row).directory, true);
             }
-            if (previewFrame) previewFrame(frame.points);
+            else if (previewFrame) { previewFrame(frame.points); m_status->setText(tr("历史帧没有原始深度，使用原有点云预览")); }
         }
     });
     const auto changed = [this] {
@@ -326,6 +331,8 @@ CameraCaptureWizard::CameraCaptureWizard(QWidget *parent) : QWidget(parent) {
         changed();
     });
     connect(m_table, &QTableWidget::itemChanged, this, [changed](QTableWidgetItem *) { changed(); });
+    connect(m_textureEnabled, &QCheckBox::toggled, this, [changed] { changed(); });
+    connect(m_table, &QTableWidget::currentCellChanged, this, [this] { showSelectedIntensity(); });
     connect(m_directory, &QLineEdit::textChanged, this, [this] {
         m_preflight->setChecked(false);
         updateActions();
@@ -404,7 +411,8 @@ void CameraCaptureWizard::updateStepUi()
 bool CameraCaptureWizard::validatePoses(bool locateError)
 {
     const QSignalBlocker blocker(m_table);
-    int included = 0, invalid = 0, textureInvalid = 0, firstInvalid = -1;
+    int included = 0, invalid = 0, textureInvalid = 0, imageWarnings = 0, firstInvalid = -1;
+    int firstColumn = 5;
     for (int row = 0; row < m_frames.size(); ++row) {
         auto *include = m_table->item(row, 0);
         auto *start = m_table->item(row, 5);
@@ -415,17 +423,38 @@ bool CameraCaptureWizard::validatePoses(bool locateError)
         if (include->checkState() != Qt::Checked) text = tr("已排除");
         else {
             ++included;
+            const QString directory = m_frames.at(row).directory;
+            if (locateError) {
+                const auto geometry = pcv::camera::readCapturedFrame(directory, {},
+                    pcv::camera::CaptureFrameReadMode::GeometryPreview);
+                m_geometryErrors.insert(directory, geometry.ok ? QString() : geometry.error);
+                const auto image = pcv::camera::readCapturedFrame(directory, {}, pcv::camera::CaptureFrameReadMode::PreviewOnly);
+                m_frames[row].intensityAvailable = image.ok && !image.intensityMono8.isEmpty();
+                m_table->item(row, 9)->setText(m_frames.at(row).intensityAvailable
+                    ? tr("有效 %1×%2\n%3").arg(m_frames.at(row).width).arg(m_frames.at(row).height)
+                        .arg(QDir(directory).filePath("intensity.png"))
+                    : tr("缺失/损坏/未采集\n%1").arg(image.error));
+            }
             pointcloud::RobotPose startPose, endPose;
             const bool poseValid = parsePose(start->text(), &startPose) && parsePose(end->text(), &endPose);
-            const bool imageValid = !m_intensityEnabled->isChecked() || m_frames.at(row).intensityAvailable;
-            const bool valid = poseValid && imageValid;
+            const bool geometryValid = m_geometryErrors.value(directory).isEmpty();
+            const bool imageValid = !m_textureEnabled->isChecked() || m_frames.at(row).intensityAvailable;
+            const bool valid = poseValid && geometryValid && imageValid;
+            if (!m_frames.at(row).intensityAvailable) ++imageWarnings;
             if (!poseValid)
                 text = (start->text().trimmed().isEmpty() || end->text().trimmed().isEmpty())
                     ? tr("未填写") : tr("格式错误");
             else
-                text = imageValid ? tr("有效") : tr("亮度图无效");
-            if (!imageValid) { text = tr("亮度图无效"); ++textureInvalid; }
-            if (!valid) { ++invalid; if (firstInvalid < 0) firstInvalid = row; }
+                text = tr("有效");
+            if (!geometryValid) text = tr("几何无效：%1").arg(m_geometryErrors.value(directory));
+            if (!imageValid) ++textureInvalid;
+            if (!valid) {
+                ++invalid;
+                if (firstInvalid < 0) {
+                    firstInvalid = row;
+                    firstColumn = !geometryValid ? 7 : !poseValid ? 5 : 9;
+                }
+            }
         }
         status->setText(text);
     }
@@ -440,19 +469,44 @@ bool CameraCaptureWizard::validatePoses(bool locateError)
     const bool xmlReady = !m_validatedXml.isEmpty() && QFileInfo::exists(m_validatedXml);
     const bool ok = included >= 2 && invalid == 0 && xmlReady;
     const QString validationMessage = ok
-        ? tr("校验通过：%1 帧位姿有效，可拼接并发布。复制的位姿请与真实机器人记录核对。").arg(included)
-        : tr("参与 %1 帧；无效 %2 帧（亮度图 %3 帧）。%4")
+        ? tr("校验通过：%1 帧位姿有效，可拼接并发布%2。复制的位姿请与真实机器人记录核对。")
+            .arg(included).arg(m_textureEnabled->isChecked() ? tr("纹理") : tr("几何点云"))
+        : tr("参与 %1 帧；无效 %2 帧（纹理亮度图 %3 帧）。%4")
             .arg(included).arg(invalid).arg(textureInvalid)
             .arg(!xmlReady ? tr("请选择有效的手眼XML：%1").arg(m_xmlError)
-                : included < 2 ? tr("至少勾选两帧。") : tr("请修复位姿格式或对应帧亮度图。"));
-    m_validationStatus->setText(validationMessage);
+                : included < 2 ? tr("至少勾选两帧。") : tr("请修复位姿、几何数据或纹理所需的亮度图。"));
+    m_validationStatus->setText(validationMessage + (!m_textureEnabled->isChecked() && imageWarnings
+        ? tr("\n%1 帧亮度图缺失、损坏或未采集，不阻断几何拼接。").arg(imageWarnings) : QString()));
     if (locateError && firstInvalid >= 0) {
-        const int column = m_intensityEnabled->isChecked()
-            && !m_frames.at(firstInvalid).intensityAvailable ? 9 : 5;
-        m_table->setCurrentCell(firstInvalid, column);
-        m_table->scrollToItem(m_table->item(firstInvalid, column));
+        m_table->setCurrentCell(firstInvalid, firstColumn);
+        m_table->scrollToItem(m_table->item(firstInvalid, firstColumn));
     }
+    if (locateError) m_stitch->setEnabled(!isBusy() && ok);
     return ok;
+}
+void CameraCaptureWizard::showSelectedIntensity()
+{
+    const int row = m_table ? m_table->currentRow() : -1;
+    if (row < 0 || row >= m_frames.size()) {
+        m_intensityReview->setPixmap(QPixmap());
+        m_intensityReview->setText(tr("选中帧亮度图：—"));
+        m_intensityReview->setToolTip(QString());
+        return;
+    }
+    const auto frame = pcv::camera::readCapturedFrame(m_frames.at(row).directory, {}, pcv::camera::CaptureFrameReadMode::PreviewOnly);
+    if (!frame.ok || frame.intensityMono8.isEmpty()) {
+        m_intensityReview->setPixmap(QPixmap());
+        m_intensityReview->setText(tr("选中帧亮度图：缺失/不可用"));
+        m_intensityReview->setToolTip(frame.error);
+        return;
+    }
+    const QImage image(reinterpret_cast<const uchar *>(frame.intensityMono8.constData()),
+                       int(frame.intensityWidth), int(frame.intensityHeight),
+                       int(frame.intensityWidth), QImage::Format_Grayscale8);
+    m_intensityReview->setText(QString());
+    m_intensityReview->setPixmap(QPixmap::fromImage(image.copy()).scaled(
+        m_intensityReview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    m_intensityReview->setToolTip(frame.intensityPngPath);
 }
 void CameraCaptureWizard::copyPoseRow(bool toSelected)
 {
@@ -503,6 +557,8 @@ void CameraCaptureWizard::startCapture() {
     configuration.requireIntensity = m_intensityEnabled->isChecked();
     configuration.externalLightEnabled = m_externalLight->isChecked();
     configuration.externalLightOperatorConfirmed = m_externalLightConfirmed->isChecked();
+    configuration.storeRawDepth = configuration.boundaryMode == pcv::camera::CaptureBoundaryMode::SdkImageFrame
+        && prefersDepthStorage && prefersDepthStorage();
     if (!m_gateInactive->isChecked() || (configuration.boundaryMode == pcv::camera::CaptureBoundaryMode::SdkImageFrame
         && !configuration.sdkImageBoundaryVerified)) {
         m_status->setText(tr("开始前请确认门控无效；SDK模式还需确认当前设备的一次扫描对应一幅完整图像")); return;
@@ -511,7 +567,11 @@ void CameraCaptureWizard::startCapture() {
     const QString session = pcv::camera::createCaptureSession(m_directory->text(), configuration,
         deviceDescription ? deviceDescription() : QStringLiteral("camera.lp"), &error);
     if (session.isEmpty()) { m_status->setText(error); setState(State::Error); return; }
-    m_session = session; m_frames.clear(); m_table->setRowCount(0); rebuildTable(); ++m_revision; m_closing = false;
+    m_session = session; m_sessionIntensityEnabled = configuration.requireIntensity;
+    m_geometryErrors.clear();
+    { const QSignalBlocker blocker(m_textureEnabled); m_textureEnabled->setChecked(false); }
+    m_frames.clear(); m_table->setRowCount(0); rebuildTable(); ++m_revision; m_closing = false;
+    m_intensityPreview->clear(); m_intensityPreview->setToolTip(QString());
     m_actualRows->setText(tr("实际接收行数：—"));
     m_recorder = std::make_unique<pcv::camera::CaptureRecorder>(session, configuration);
     m_firstError.clear();
@@ -533,11 +593,13 @@ void CameraCaptureWizard::pollCapture() {
     m_frames = m_recorder->savedFrames();
     if (m_table->rowCount() != m_frames.size()) {
         rebuildTable();
-        if (previewFrame) previewFrame(m_recorder->latestPreview());
+        const auto depth = m_recorder->latestDepthFrame();
+        if (depth && previewDepthFrame && !m_frames.isEmpty()) previewDepthFrame(depth, m_frames.constLast().directory, false);
+        else if (previewFrame) previewFrame(m_recorder->latestPreview());
     }
     const auto queue = m_recorder->queue()->statistics();
     const auto storage = m_recorder->statistics();
-    if (m_intensityEnabled->isChecked()) {
+    if (m_sessionIntensityEnabled) {
         const auto bytes = m_recorder->latestIntensity();
         const auto size = m_recorder->latestIntensitySize();
         if (!bytes.isEmpty() && size.isValid()) {
@@ -612,8 +674,8 @@ void CameraCaptureWizard::rebuildTable() {
                 .arg(QDir(frame.directory).filePath(QStringLiteral("intensity.png")))
             : tr("缺失/不可用");
         const QStringList values{QString(), QString::number(frame.id), QString::number(frame.timeStamp),
-            QStringLiteral("%1×%2").arg(frame.width).arg(frame.height), QString::number(frame.pointCount), {}, {},
-            frame.intensityAvailable ? tr("已保存/亮度图有效") : tr("已保存/无亮度图"), QString::number(frame.sdkFrameNumber), intensityDetails};
+            QStringLiteral("%1×%2").arg(frame.width).arg(frame.height), frame.depthAvailable ? tr("按需转换") : QString::number(frame.pointCount), {}, {},
+            tr("已保存"), QString::number(frame.sdkFrameNumber), intensityDetails};
         for (int col = 0; col < values.size(); ++col) {
             if (m_table->item(row, col)) continue;
             auto *item = new QTableWidgetItem(values.at(col));
@@ -631,18 +693,29 @@ bool CameraCaptureWizard::saveParameters(QString *error) {
             {"start", m_table->item(row, 5)->text()}, {"end", m_table->item(row, 6)->text()}});
     return pcv::camera::writeCaptureParameters(m_session,
         {{"schema", "pcv-camera-parameters-v1"}, {"calibration", m_xml->text()}, {"frames", frames},
-         {"intensity_enabled", m_intensityEnabled->isChecked()},
+         {"intensity_enabled", m_sessionIntensityEnabled},
          {"external_light_enabled", m_externalLight->isChecked()},
-         {"external_light_operator_confirmed", m_externalLightConfirmed->isChecked()}}, error);
+         {"external_light_operator_confirmed", m_externalLightConfirmed->isChecked()},
+         {"texture_mapping_enabled", m_textureEnabled->isChecked()}}, error);
 }
 void CameraCaptureWizard::loadSession() {
     if (isBusy()) return;
     const QString path = QFileDialog::getExistingDirectory(this, tr("选择采集会话目录")); if (path.isEmpty()) return;
+    loadSessionDirectory(path);
+}
+void CameraCaptureWizard::loadSessionDirectory(const QString &path) {
+    if (isBusy()) return;
     QString error; auto records = pcv::camera::readCaptureSession(path, &error);
     if (!error.isEmpty()) { m_status->setText(error); return; }
     const auto parameters = pcv::camera::readCaptureParameters(path);
-    if (parameters.contains(QStringLiteral("intensity_enabled")))
-        m_intensityEnabled->setChecked(parameters.value(QStringLiteral("intensity_enabled")).toBool());
+    const QSignalBlocker textureBlocker(m_textureEnabled);
+    m_textureEnabled->setChecked(parameters.value(QStringLiteral("texture_mapping_enabled")).toBool(false));
+    QFile sessionFile(QDir(path).filePath("session.json"));
+    QJsonObject sessionMetadata;
+    if (sessionFile.open(QIODevice::ReadOnly)) sessionMetadata = QJsonDocument::fromJson(sessionFile.readAll()).object();
+    m_sessionIntensityEnabled = sessionMetadata.value("intensity_enabled").toBool(
+        parameters.value("intensity_enabled").toBool(false));
+    m_intensityEnabled->setChecked(m_sessionIntensityEnabled);
     if (parameters.contains(QStringLiteral("external_light_enabled")))
         m_externalLight->setChecked(parameters.value(QStringLiteral("external_light_enabled")).toBool());
     if (parameters.contains(QStringLiteral("external_light_operator_confirmed")))
@@ -655,7 +728,7 @@ void CameraCaptureWizard::loadSession() {
         bool found = false; for (const auto &item : ordered) if (item.id == record.id) found = true;
         if (!found) ordered.push_back(record);
     }
-    m_session = path; m_frames = ordered;
+    m_session = path; m_frames = ordered; m_geometryErrors.clear();
     m_actualRows->setText(m_frames.isEmpty() ? tr("实际接收行数：—") : tr("实际接收行数：%1").arg(m_frames.last().height));
     const QSignalBlocker tableBlocker(m_table), xmlBlocker(m_xml);
     m_table->setRowCount(0); rebuildTable();
@@ -690,8 +763,8 @@ void CameraCaptureWizard::stitch() {
     QVector<QString> textureDirectories;
     for (int row = 0; row < m_frames.size(); ++row) {
         if (m_table->item(row, 0)->checkState() != Qt::Checked) continue;
-        if (m_intensityEnabled->isChecked()) {
-            const auto textureFrame = pcv::camera::readCapturedFrame(m_frames.at(row).directory);
+        if (m_textureEnabled->isChecked()) {
+            const auto textureFrame = pcv::camera::readCapturedFrame(m_frames.at(row).directory, {}, pcv::camera::CaptureFrameReadMode::PreviewOnly);
             if (!textureFrame.ok || textureFrame.intensityMono8.isEmpty()) {
                 m_status->setText(tr("第 %1 行亮度图校验失败：%2")
                     .arg(row + 1).arg(textureFrame.error.isEmpty()
@@ -726,14 +799,16 @@ void CameraCaptureWizard::stitch() {
     m_runningRevision = m_revision; m_closing = false;
     m_publishing = true;
     setState(State::Publishing);
-    const bool textureEnabled = m_intensityEnabled->isChecked();
-    m_watcher->setFuture(QtConcurrent::run([request, textureDirectories, textureEnabled, token] {
+    const bool textureEnabled = m_textureEnabled->isChecked();
+    const QString intensityDirectory = m_sessionIntensityEnabled ? m_session : QString();
+    m_watcher->setFuture(QtConcurrent::run([request, textureDirectories, textureEnabled, token, intensityDirectory] {
         try {
             auto result = pcv::interface::stitch(request);
-            if (result.success && textureEnabled && token->load()) {
+            result.textureSourceDirectory = intensityDirectory;
+            if (result.success && token->load()) {
                 result.success = false;
                 result.cancelled = true;
-                result.message = QStringLiteral("拼接已取消，未发布纹理结果");
+                result.message = QStringLiteral("拼接已取消，未发布结果");
             }
             if (result.success && textureEnabled) {
                 QString textureError;
@@ -762,7 +837,7 @@ void CameraCaptureWizard::updateActions() {
     for (QWidget *widget : std::initializer_list<QWidget *>{m_table, m_directory, m_xml, m_rows,
         m_up, m_down, m_preview, m_browseDirectory, m_browseXml, m_copyPrevious,
         m_copySelected, m_validate, m_preflight, m_advanced,
-        m_externalLight, m_externalLightConfirmed, m_intensityReview}) widget->setEnabled(!busy);
+        m_externalLight, m_externalLightConfirmed, m_intensityReview, m_textureEnabled}) widget->setEnabled(!busy);
     m_intensityEnabled->setEnabled(!busy && m_boundaryMode->currentIndex() == 0);
     m_boundaryMode->setEnabled(!busy); m_sdkVerified->setEnabled(!busy); m_gateInactive->setEnabled(!busy);
     m_back->setEnabled(!busy && m_step > 0);

@@ -41,6 +41,7 @@ P0 核对构建组合与 target 条件；P1 验收现有整帧/选面/临时工�
 
 | date | owner | change_summary | detailed_record |
 |---|---|---|---|
+| 2026-10-23 | 主线/Codex | 连续采集亮度默认保存、纹理独立且默认关闭；事后图片损坏不阻断几何直拼，保留可选纹理与光源操作提示 | [实现与验证](docs/changelog/v0.5.md#camera-capture-intensity-v2) |
 | 2026-10-09 | 主线 | 整帧算法定向回滚后新增独立所选平面拼接 | [版本日志](docs/changelog/v0.5.md) |
 | 2026-10-15 | 主线 | 共享拼接 UI、进程内存监测、单击 v1→v2 与来源参数 | [版本日志](docs/changelog/v0.5.md) |
 | 2026-10-15 | 本轮文档整理 | v0.5 五层架构、契约、记录合并与文档清理；无源码变更 | [整理与验证](docs/changelog/v0.5.md#documentation-audit) |
@@ -85,3 +86,15 @@ P0 核对构建组合与 target 条件；P1 验收现有整帧/选面/临时工�
 2026-10-16 上述修复最终验证：源码外Debug/Release全量构建及最终重编成功，各52/52 CTest，两个GUI共4次原生启动退出通过；真机三次扫描与干净机部署待验收。新Release路径、实际日志和首轮测试夹具修正见上述说明；旧程序未覆盖，未提交/推送/上传。
 
 2026-10-16 本地版本归档：用户授权将当前源码、测试及文档改动提交到本地 Git 并输出提交号，明确不推送远端。本轮未新增业务代码，仅执行 Git 差异检查；不重跑构建/CTest，既有验证及真机风险以各任务记录为准。
+2026-10-23 process-job JSON v1: process_job_json parser, capture-session validation, GUI import, pose_only stitching, template index and terminal summary added; Debug build passed; real camera/robot/production samples remain unverified.
+
+2026-10-23 STEP/CAD模板v1：新增可选OCCT7.9.3 STEP单实体导入、三维多面选择、曲面/单位法向采样与独立cad_model模板包；来源与机器人功能门禁分离，原实测v1不变。验证与风险见 [实施说明](docs/development/step_cad_template_v1.md) 和 [本轮日志](docs/changelog/v0.5.md#step-cad-template-v1)。
+
+2026-10-23 STEP/CAD模板v1验证完成：STEP开启Debug/Release及关闭Debug全新源码外完整构建通过，各30/30 CTest；ON原生CAD窗口及两配置双GUI自关闭通过，百万/千万点合成生成/读写/取消与峰值内存已记录。真实工件由用户后续验收，详见上述本轮日志；保留已有工作，未提交/推送。
+
+
+2026-10-23 相机深度主缓存v1：SDK整图保留C16及必要辅助亮度，session-v3/frame-v2、伪彩预览、固定帧悬停/锁定/确认、按需点云发布/导出；旧会话/固定行数保留。开发及验证见 docs/development/camera_depth_preview_cache_v1.md。当前552万虚拟帧首次高亮约12.5s，2秒门槛未通过，不宣称物理精度通过。
+
+2026-10-23 功能基线保存：最终Debug/Release完整构建及各41/41 CTest通过，无SDK定向2/2、双配置双GUI原生自关闭、Release六画布/相机向导与官方SDK无损重载回归通过。最新552万虚拟帧完整高亮9865ms，2秒及新候选300ms未通过，多轮内存保留与现场验收待复核。按用户授权将当前全部已审阅功能源码/测试/文档保存为本地Git基线，保留亮度/CAD/STEP/工序JSON工作，不打包、不推送、不继续优化算法。详见[最终证据](docs/development/camera_depth_preview_cache_v1.md#2026-10-23-功能基线最终验证与保存)。
+
+2026-10-23 2.5D深度栅格选面优化方案v2：保持C16主缓存和官方SDK临时XYZ精度，拟用原始像素邻接替代当前三维投影连通瓶颈；默认只选鼠标所在连通区域，保留0.4/3mm容差、不补点/不跨面。本轮仅保存方案，未修改优化算法，见 [方案](docs/development/camera_depth_plane_selection_optimization_v2.md)。

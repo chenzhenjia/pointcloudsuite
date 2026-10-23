@@ -29,6 +29,7 @@ struct StitchingPublication {
     qsizetype textureMappedPointCount = 0;
     qsizetype textureSkippedPointCount = 0;
     QString textureManifest;
+    QString intensitySourceDirectory;
 };
 
 struct StitchTaskResult {
@@ -69,6 +70,7 @@ public:
 
     bool isBusy() const;
     void cancelAndWait();
+    void startProcessRequest(const pcv::interface::StitchingRequest &request, const QString &jobId);
     std::function<bool()> canStartTask;
 
 protected:
@@ -76,6 +78,7 @@ protected:
 
 signals:
     void stitchingSucceeded(const StitchingPublication &publication);
+    void processJobFailed(const QString &jobId, const QString &code, const QString &message);
 
 private slots:
     void browseCalibration();
@@ -105,4 +108,6 @@ private:
     std::shared_ptr<std::atomic_bool> m_cancelRequested;
     quint64 m_taskRevision = 0;
     bool m_stopping = false;
+    std::unique_ptr<pcv::interface::StitchingRequest> m_processRequest;
+    QString m_processJobId;
 };

@@ -1,4 +1,8 @@
 add_library(pcv_m20_pointcloud_render STATIC
+    src/depth_image_canvas_v1.cpp
+    include/pcv/render/depth_image_canvas_v1.h
+    src/cad_mesh_canvas_v1.cpp
+    include/pcv/render/cad_mesh_canvas_v1.h
     src/pointcloud_canvas.cpp
     src/pointcloud_canvas_contract.cpp
     src/overlay_geometry.h

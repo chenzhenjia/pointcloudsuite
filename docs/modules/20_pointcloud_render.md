@@ -26,3 +26,10 @@ PointColorOverlay 接收 60 的严格 source raster 映射，渲染层校验后�
 2026-10-16 整合v2：沿用setDisplayCloud映射和绘制revision，真实鼠标/滚轮在应用激活格；默认格不抢索引。结果仍setCloud完整显示，主窗口模板读取完整显示。画布公共API本轮未另改，六实例真实OpenGL待用户验收。见[当前整合](../development/batch_plane_selection_template_integration_v2.md)。
 
 2026-10-16 运行验证：新增selected_plane_dialog_tests_v1 --native-gl独立原生模式，在Windows desktop OpenGL 3.3下实际显示六画布，验证GPU拾取完整索引、完整候选绘制、放大恢复与完整拼接结果绘制；Debug/Release均通过，RTX4060/OpenGL3.3日志已记录。本模块生产代码/API本轮未修改，应用图标QRC由应用及相应主窗口测试target的AUTORCC补齐。常规offscreen回归仍保留；真实大点云、手工视角操作和性能不能由小夹具替代，见[修复说明](../development/build_runtime_repair_v1.md)。
+
+## CAD 面画布 v1（2026-10-23）
+
+新增 `pcv::render::CadMeshCanvasV1`：只接收core `CadMeshV1`（顶点/三角形/faceId），独立OpenGL面显示、深度拾取、旋转/平移/缩放及面高亮，不依赖60/OCCT。输入拒绝非法顶点/索引；选面状态在应用，正式曲面采样不取显示网格点作为最终点。见[STEP实施说明](../development/step_cad_template_v1.md)。
+
+
+2026-10-23 深度画布v1：SDK无关pcv::render::DepthImageDisplayV1/DepthImageCanvasV1，C16直接伪彩、掩码覆盖、亮度切换、原像素拾取、滚轮缩放/右键平移；20不依赖10/60。[说明](../development/camera_depth_preview_cache_v1.md)。

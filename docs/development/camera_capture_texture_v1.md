@@ -2,6 +2,8 @@
 
 日期：2026-10-22；owner：主线/Codex。范围是连续采集向导；高级实时预览和固定行数兼容入口不启用纹理采集。
 
+2026-10-23 默认行为已由[亮度保存与纹理解耦 v2](camera_capture_intensity_decoupling_v2.md)调整：亮度默认保存，纹理映射独立选择且默认关闭；图片事后损坏不阻断几何拼接。下文是 v1 实现历史，格式、SDK 数据来源和光源提示仍有效。
+
 ## 数据流程
 
 ```mermaid
@@ -42,8 +44,6 @@ SDK 的 `MV3D_LP_IMAGE_DATA::pIntensityData` 是本功能唯一亮度来源。�
 - `CameraFrame` 增加亮度栅格尺寸；`CaptureFrameData` 增加 Mono8 数据和尺寸。
 - `StitchingResult` 增加可选纹理覆盖数组、映射统计和清单路径；点云坐标和拼接算法不变。
 - `StitchingPublication` 传递纹理覆盖到主工作台；正式 PLY 仍只写 XYZ/法向。
-
-## 验证与现场边界
 
 ## 验证与现场边界
 

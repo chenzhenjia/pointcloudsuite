@@ -54,6 +54,7 @@ void selectMode(pcv::camera::Mv3dLpCamera &camera) {
 }
 
 extern "C" {
+const char *MV3D_LP_GetVersion() { return "test-sdk"; }
 MV3D_LP_STATUS MV3D_LP_Initialize() { ++sdk.leases; return sdk.call("Initialize"); }
 MV3D_LP_STATUS MV3D_LP_Finalize() { --sdk.leases; return sdk.call("Finalize"); }
 MV3D_LP_STATUS MV3D_LP_GetDeviceNumber(uint32_t *count) { *count = 0; return MV3D_LP_OK; }

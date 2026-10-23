@@ -4,6 +4,9 @@ qt_add_executable(pointcloudview
     mainwindow.cpp
     mainwindow.h
     cloud_source_context_v1.h
+    cad_template_ui_v1.cpp
+    features/cad_import_dialog_v1.cpp
+    features/cad_import_dialog_v1.h
     workpiece_template_ui_v1.cpp
     features/workpiece_template_dialog_v1.cpp
     features/workpiece_template_dialog_v1.h
@@ -30,6 +33,8 @@ if(PCV_BUILD_EXPERIMENTAL_CAMERA)
         features/camera_capture_panel_v1.cpp
         features/camera_capture_panel_v1.h
         features/camera_capture_wizard.h
+        features/camera_depth_preview_v1.cpp
+        features/camera_depth_preview_v1.h
         ui/cameradialog.ui
     )
 endif()
@@ -103,3 +108,5 @@ qt_generate_deploy_app_script(
     NO_UNSUPPORTED_PLATFORM_ERROR
 )
 install(SCRIPT ${deploy_script})
+
+pcv_deploy_step_runtime(pointcloudview)

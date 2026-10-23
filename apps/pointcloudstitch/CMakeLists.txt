@@ -36,3 +36,5 @@ if(WIN32)
         COMMENT "Deploying Qt runtime next to pointcloudstitch.exe"
         VERBATIM)
 endif()
+
+pcv_deploy_step_runtime(pointcloudstitch)

@@ -34,7 +34,7 @@ WorkpieceTemplateDialogV1::WorkpieceTemplateDialogV1(
         .arg(summary.minimum.y(), 0, 'g', 8).arg(summary.maximum.y(), 0, 'g', 8)
         .arg(summary.minimum.z(), 0, 'g', 8).arg(summary.maximum.z(), 0, 'g', 8);
     form->addRow(tr("全部点数"), new QLabel(QLocale().toString(summary.pointCount), this));
-    form->addRow(tr("坐标 / 单位"), new QLabel(QStringLiteral("robot_base / mm"), this));
+    form->addRow(tr("坐标 / 单位"), new QLabel(summary.coordinateFrame + QStringLiteral(" / mm"), this));
     auto *boundsLabel = new QLabel(bounds, this);
     boundsLabel->setWordWrap(true);
     form->addRow(tr("包围盒"), boundsLabel);
@@ -50,11 +50,12 @@ WorkpieceTemplateDialogV1::WorkpieceTemplateDialogV1(
     source->setTextInteractionFlags(Qt::TextSelectableByMouse);
     form->addRow(tr("来源"), source);
     layout->addLayout(form);
-    auto *note = new QLabel(tr("保存当前全部 XYZ 和已有法向，每次创建新版本。\n"
+    const bool cad = summary.coordinateFrame == QStringLiteral("cad_model");
+    auto *note = new QLabel(cad ? tr("保存当前全部 CAD 点云和法向；这不是 robot_base 实测模板。\n不包含原始 STEP，重新选面需要原始文件。") : tr("保存当前全部 XYZ 和已有法向，每次创建新版本。\n"
         "遮挡、未扫描表面和区域内背景会保留；不自动检查几何质量。"), this);
     note->setWordWrap(true);
     layout->addWidget(note);
-    m_confirm = new QCheckBox(tr("确认当前整幅点云就是目标工件的基准状态"), this);
+    m_confirm = new QCheckBox(cad ? tr("确认当前 CAD 点云及所选曲面作为工件设计基准") : tr("确认当前整幅点云就是目标工件的基准状态"), this);
     m_confirm->setObjectName(QStringLiteral("template_baseline_confirmed"));
     layout->addWidget(m_confirm);
     m_buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);

@@ -23,3 +23,5 @@ PLY/扫描JSON临时工件保留两组三点、WObj1、边缘/ROI和四件套；
 Windows每1000ms采样当前进程WorkingSetSize/PrivateUsage，MiB/GiB；失败显示不可用，关闭停采。包含本进程窗口/任务/缓存，不含独立进程或GPU专用显存，无峰值/历史/告警。真实读数/DPI、GUI点选/纹理/性能和现场数据尚待人工验收。
 
 MainWindow/依赖/生命周期由主线维护，同事仅在登记features/UI资源工作区。历史自动化结果只在版本日志按日期记录，本轮仅文档静态审计。
+
+STEP可选入口：工具→从STEP生成模板点云，点击/列表多选CAD面→按间距生成→替换画布→创建工件模板。CAD来源为cad_model/mm，保留原点/轴向，不是robot_base。支持显示、去噪、恢复、保存；不支持机器人派生流程。启用PCV_BUILD_STEP_IMPORT并链接OCCT7.9.3；关闭时仍可打开CAD模板JSON。见[说明](../../docs/development/step_cad_template_v1.md)。

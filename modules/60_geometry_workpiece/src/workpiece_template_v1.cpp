@@ -1,4 +1,4 @@
-#include <pcv/workpiece/workpiece_template_v1.h>
+#include <pcv/workpiece/cad_template_v1.h>
 #include <pcv/infrastructure/runtime_paths.h>
 #include <pcv/io/artifact_transaction.h>
 #include <pcv/io/ply_reader.h>
@@ -76,11 +76,11 @@ QJsonArray vectorJson(const QVector3D &value)
     return {double(value.x()), double(value.y()), double(value.z())};
 }
 
-QByteArray serialize(const WorkpieceTemplateInfo &info)
+QByteArray serialize(const WorkpieceTemplateInfo &info, bool cad)
 {
     return QJsonDocument(QJsonObject{
-        {QStringLiteral("schema_version"), QString::fromLatin1(kWorkpieceTemplateSchema)},
-        {QStringLiteral("kind"), QString::fromLatin1(kWorkpieceTemplateKind)},
+        {QStringLiteral("schema_version"), QString::fromLatin1(cad ? kCadTemplateSchema : kWorkpieceTemplateSchema)},
+        {QStringLiteral("kind"), QString::fromLatin1(cad ? kCadTemplateKind : kWorkpieceTemplateKind)},
         {QStringLiteral("name"), info.name}, {QStringLiteral("version_id"), info.versionId},
         {QStringLiteral("created_at"), info.createdAt},
         {QStringLiteral("coordinate_frame"), info.coordinateFrame},
@@ -108,16 +108,17 @@ bool parseVector(const QJsonValue &value, QVector3D *out)
     return true;
 }
 
-bool parseInfo(const QByteArray &bytes, WorkpieceTemplateInfo *info)
+bool parseInfo(const QByteArray &bytes, WorkpieceTemplateInfo *info, bool cad)
 {
     QJsonParseError error;
     const QJsonDocument doc = QJsonDocument::fromJson(bytes, &error);
     if (error.error != QJsonParseError::NoError || !doc.isObject()) return false;
     const QJsonObject object = doc.object();
-    if (object.value(QStringLiteral("schema_version")).toString() != QLatin1String(kWorkpieceTemplateSchema)
-        || object.value(QStringLiteral("kind")).toString() != QLatin1String(kWorkpieceTemplateKind)
-        || object.value(QStringLiteral("coordinate_frame")).toString() != QStringLiteral("robot_base")
+    if (object.value(QStringLiteral("schema_version")).toString() != QLatin1String(cad ? kCadTemplateSchema : kWorkpieceTemplateSchema)
+        || object.value(QStringLiteral("kind")).toString() != QLatin1String(cad ? kCadTemplateKind : kWorkpieceTemplateKind)
+        || object.value(QStringLiteral("coordinate_frame")).toString() != (cad ? QStringLiteral("cad_model") : QStringLiteral("robot_base"))
         || object.value(QStringLiteral("units")).toString() != QStringLiteral("mm")) return false;
+    info->coordinateFrame = cad ? QStringLiteral("cad_model") : QStringLiteral("robot_base");
     info->name = object.value(QStringLiteral("name")).toString();
     info->versionId = object.value(QStringLiteral("version_id")).toString();
     info->createdAt = object.value(QStringLiteral("created_at")).toString();
@@ -209,6 +210,42 @@ bool validTemplatePly(const QString &path, qsizetype expectedCount)
         && file.size() - file.pos() == qint64(expectedCount) * 6 * sizeof(float);
 }
 
+bool validCadPoints(const QVector<pointcloud::Point3D> &points, const QJsonObject &source,
+                    const std::function<bool()> &cancel)
+{
+    const auto cad = source.value(QStringLiteral("cad")).toObject();
+    const double spacing = cad.value("spacing_mm").toDouble();
+    const double scale = cad.value("unit_scale_to_mm").toDouble();
+    const double generated = cad.value("generated_point_count").toDouble();
+    if (points.size() > kCadMaximumPoints
+        || !QRegularExpression(QStringLiteral("^[0-9a-f]{64}$")).match(cad.value("sha256").toString()).hasMatch()
+        || cad.value("original_step").toString().isEmpty() || cad.value("original_units").toString().isEmpty()
+        || cad.value("occt_version").toString().isEmpty()
+        || cad.value("algorithm_version").toString() != QStringLiteral("cad_surface_area_v1")
+        || !std::isfinite(spacing) || spacing <= 0 || !std::isfinite(scale) || scale <= 0
+        || generated < points.size() || generated > kCadMaximumPoints || std::floor(generated) != generated
+        || !source.value("processing_steps").isArray()
+        || cad.value("geometry_tolerance_mm").toDouble() != 0.01
+        || !cad.value("edge_sampling").isBool() || cad.value("edge_sampling").toBool()) return false;
+    const auto faces = cad.value("selected_faces").toArray();
+    if (faces.isEmpty()) return false;
+    int previousId = 0;
+    for (const auto &value : faces) {
+        const auto face = value.toObject();
+        const double id = face.value("id").toDouble(), area = face.value("area_mm2").toDouble();
+        if (id <= previousId || id > std::numeric_limits<int>::max() || std::floor(id) != id
+            || !std::isfinite(area) || area <= 0 || face.value("surface_type").toString().isEmpty()) return false;
+        previousId = int(id);
+    }
+    for (qsizetype i=0; i<points.size(); ++i) {
+        if ((i & 16383)==0 && isCancelled(cancel)) return false;
+        const auto &p=points.at(i);
+        const double n=double(p.nx)*p.nx+double(p.ny)*p.ny+double(p.nz)*p.nz;
+        if (!std::isfinite(n) || std::abs(n-1.0)>0.001) return false;
+    }
+    return true;
+}
+
 } // namespace
 
 QString defaultWorkpieceTemplateRoot()
@@ -216,17 +253,21 @@ QString defaultWorkpieceTemplateRoot()
     return QDir(pcv::runtime::dataDirectory()).filePath(QStringLiteral("workpiece_templates"));
 }
 
-WorkpieceTemplateResult saveWorkpieceTemplate(const SaveWorkpieceTemplateRequest &request)
+static WorkpieceTemplateResult saveTemplateFormat(const SaveWorkpieceTemplateRequest &request, bool cad)
 {
     if (isCancelled(request.isCancelled)) return failure("PCV_CONTRACT_001", QStringLiteral("已取消"), true);
-    if (request.name.trimmed().isEmpty() || request.coordinateFrame != QStringLiteral("robot_base"))
-        return failure("PCV_CONTRACT_001", QStringLiteral("需要工件名称及已确认的 robot_base 点云"));
+    if (request.name.trimmed().isEmpty() || request.coordinateFrame != (cad ? QStringLiteral("cad_model") : QStringLiteral("robot_base")))
+        return failure("PCV_CONTRACT_001", QStringLiteral("需要工件名称及匹配模板类型的已确认坐标"));
     WorkpieceTemplateInfo info;
+    info.coordinateFrame = cad ? QStringLiteral("cad_model") : QStringLiteral("robot_base");
+    info.pointCloudFile = QString::fromLatin1(cad ? kCadTemplatePly : kWorkpieceTemplatePly);
     info.name = request.name;
     info.source = request.source;
     QString error;
     if (!inspectPoints(request.points, &info, request.isCancelled, request.progress, &error))
         return failure("PCV_INPUT_002", error, error == QStringLiteral("已取消"));
+    if (cad && !validCadPoints(request.points, request.source, request.isCancelled))
+        return failure("PCV_CONTRACT_001", QStringLiteral("CAD 模板来源、点数或单位法向无效"), isCancelled(request.isCancelled));
     const QString rootPath = request.outputRoot.isEmpty() ? defaultWorkpieceTemplateRoot() : request.outputRoot;
     const QString resolvedRoot = resolvedPath(rootPath);
     if (within(resolvedRoot, resolvedPath(QString::fromUtf8(PCV_WORKPIECE_TEMPLATE_SOURCE_DIR))))
@@ -237,7 +278,7 @@ WorkpieceTemplateResult saveWorkpieceTemplate(const SaveWorkpieceTemplateRequest
     const QDateTime now = QDateTime::currentDateTimeUtc();
     info.createdAt = now.toString(Qt::ISODateWithMs);
     const QString stamp = now.toString(QStringLiteral("yyyyMMdd_HHmmss_zzz"));
-    const QString base = safeName(request.name) + QStringLiteral("_v1_") + stamp;
+    const QString base = safeName(request.name) + (cad ? QStringLiteral("_cad_v1_") : QStringLiteral("_v1_")) + stamp;
     QString directoryName;
     for (int suffix = 0; suffix < 10000; ++suffix) {
         if (isCancelled(request.isCancelled)) return failure("PCV_OUTPUT_002", QStringLiteral("已取消"), true);
@@ -254,10 +295,10 @@ WorkpieceTemplateResult saveWorkpieceTemplate(const SaveWorkpieceTemplateRequest
     const QString output = root.filePath(directoryName);
     pcv::io::ArtifactTransaction transaction(output, false, request.isCancelled);
     report(request.progress, WorkpieceTemplateStage::WritingCloud);
-    bool ok = transaction.stageBinaryPly(QString::fromLatin1(kWorkpieceTemplatePly), request.points, true);
+    bool ok = transaction.stageBinaryPly(QString::fromLatin1(cad ? kCadTemplatePly : kWorkpieceTemplatePly), request.points, true);
     if (ok) {
         report(request.progress, WorkpieceTemplateStage::WritingMetadata);
-        ok = transaction.stageJson(QString::fromLatin1(kWorkpieceTemplateJson), serialize(info));
+        ok = transaction.stageJson(QString::fromLatin1(cad ? kCadTemplateJson : kWorkpieceTemplateJson), serialize(info, cad));
     }
     if (ok) {
         report(request.progress, WorkpieceTemplateStage::Committing);
@@ -274,20 +315,22 @@ WorkpieceTemplateResult saveWorkpieceTemplate(const SaveWorkpieceTemplateRequest
     result.success = true;
     result.info = info;
     result.outputDirectory = output;
-    result.infoFile = QDir(output).filePath(QString::fromLatin1(kWorkpieceTemplateJson));
-    result.pointCloudFile = QDir(output).filePath(QString::fromLatin1(kWorkpieceTemplatePly));
+    result.infoFile = QDir(output).filePath(QString::fromLatin1(cad ? kCadTemplateJson : kWorkpieceTemplateJson));
+    result.pointCloudFile = QDir(output).filePath(QString::fromLatin1(cad ? kCadTemplatePly : kWorkpieceTemplatePly));
     return result;
 }
 
-WorkpieceTemplateResult loadWorkpieceTemplate(const LoadWorkpieceTemplateRequest &request)
+static WorkpieceTemplateResult loadTemplateFormat(const LoadWorkpieceTemplateRequest &request, bool cad)
 {
     if (isCancelled(request.isCancelled)) return failure("PCV_INPUT_002", QStringLiteral("已取消"), true);
     report(request.progress, WorkpieceTemplateStage::ReadingMetadata);
     QFile file(request.infoFile);
     if (!file.open(QIODevice::ReadOnly)) return failure("PCV_INPUT_001", file.errorString());
     WorkpieceTemplateInfo info;
-    if (!parseInfo(file.readAll(), &info))
+    if (!parseInfo(file.readAll(), &info, cad))
         return failure("PCV_CONTRACT_001", QStringLiteral("模板 JSON 契约无效或版本不支持"));
+    if (cad && info.pointCount > kCadMaximumPoints)
+        return failure("PCV_CONTRACT_001", QStringLiteral("CAD 模板超过 10000000 点"));
     const QString root = QFileInfo(request.infoFile).absolutePath();
     const QString relative = QDir::fromNativeSeparators(info.pointCloudFile);
     if (QFileInfo(relative).isAbsolute() || relative.contains(QLatin1Char(':'))
@@ -312,6 +355,8 @@ WorkpieceTemplateResult loadWorkpieceTemplate(const LoadWorkpieceTemplateRequest
     QString error;
     if (!inspectPoints(cloud.points, &measured, request.isCancelled, request.progress, &error))
         return failure("PCV_INPUT_002", error, error == QStringLiteral("已取消"));
+    if (cad && !validCadPoints(cloud.points, info.source, request.isCancelled))
+        return failure("PCV_CONTRACT_001", QStringLiteral("CAD 模板来源、点数或单位法向无效"), isCancelled(request.isCancelled));
     if (measured.minimum != info.minimum || measured.maximum != info.maximum)
         return failure("PCV_CONTRACT_001", QStringLiteral("模板包围盒与点云不一致"));
     if (isCancelled(request.isCancelled)) return failure("PCV_INPUT_002", QStringLiteral("已取消"), true);
@@ -325,4 +370,17 @@ WorkpieceTemplateResult loadWorkpieceTemplate(const LoadWorkpieceTemplateRequest
     return result;
 }
 
+WorkpieceTemplateResult saveWorkpieceTemplate(const SaveWorkpieceTemplateRequest &r) { return saveTemplateFormat(r, false); }
+WorkpieceTemplateResult loadWorkpieceTemplate(const LoadWorkpieceTemplateRequest &r) { return loadTemplateFormat(r, false); }
+WorkpieceTemplateResult saveCadTemplate(const SaveWorkpieceTemplateRequest &r) { return saveTemplateFormat(r, true); }
+WorkpieceTemplateResult loadCadTemplate(const LoadWorkpieceTemplateRequest &r) { return loadTemplateFormat(r, true); }
+WorkpieceTemplateResult loadAnyWorkpieceTemplate(const LoadWorkpieceTemplateRequest &r)
+{
+    QFile f(r.infoFile);
+    if (!f.open(QIODevice::ReadOnly)) return failure("PCV_INPUT_001", f.errorString());
+    const auto schema=QJsonDocument::fromJson(f.readAll()).object().value("schema_version").toString();
+    if (schema==QLatin1String(kCadTemplateSchema)) return loadCadTemplate(r);
+    if (schema==QLatin1String(kWorkpieceTemplateSchema)) return loadWorkpieceTemplate(r);
+    return failure("PCV_CONTRACT_001", QStringLiteral("未知模板 schema"));
+}
 } // namespace pcv::workpiece

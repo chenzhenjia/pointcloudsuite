@@ -10,6 +10,8 @@ add_library(pcv_m60_geometry_workpiece STATIC
     src/scan_planner.cpp
     src/texture_mapping.cpp
     src/workpiece_template_v1.cpp
+    src/cad_template_v1.cpp
+    include/pcv/workpiece/cad_template_v1.h
     include/pcv/planefitting/plane_fitting.h
     include/pcv/planefitting/single_click_plane_selection_v1.h
     include/pcv/workpiece/roi_matching.h
@@ -32,3 +34,11 @@ target_link_libraries(pcv_m60_plane_fitting INTERFACE pcv_m60_geometry_workpiece
 
 add_library(pcv_m60_planefitting INTERFACE)
 target_link_libraries(pcv_m60_planefitting INTERFACE pcv_m60_geometry_workpiece)
+
+if(PCV_BUILD_STEP_IMPORT)
+    target_include_directories(pcv_m60_geometry_workpiece PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+    target_link_libraries(pcv_m60_geometry_workpiece PRIVATE
+        TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim
+        TKBO TKMesh TKShHealing TKCDF TKLCAF TKCAF TKXCAF TKDESTEP TKXSBase)
+    target_compile_definitions(pcv_m60_geometry_workpiece PUBLIC PCV_BUILD_STEP_IMPORT=1)
+endif()
