@@ -453,6 +453,24 @@ RobotCloudResult transformLineScanToRobotBase(
             previous = index;
         }
     }
+    if (options.useFullXyzRasterRowProgress) {
+        const quint64 total = quint64(options.rasterWidth) * options.rasterHeight;
+        if (options.layout != DepthPointLayout::FullXyz || options.rasterWidth == 0
+            || options.rasterHeight < 2 || options.rasterSourceIndices.size() != source.size()) {
+            setFailure(&result, RobotCloudStatus::LineProfileContractViolation,
+                       QStringLiteral("FullXyz 栅格行进度要求有效宽高及等长原始栅格下标"));
+            return result;
+        }
+        qsizetype previous = -1;
+        for (qsizetype index : options.rasterSourceIndices) {
+            if (index <= previous || index < 0 || quint64(index) >= total) {
+                setFailure(&result, RobotCloudStatus::LineProfileContractViolation,
+                           QStringLiteral("FullXyz 原始栅格下标越界或不递增"));
+                return result;
+            }
+            previous = index;
+        }
+    }
     const int sampleStride = qMax(1, options.sampleStride);
     result.points.reserve(source.size());
     result.sourceIndices.reserve(source.size());
@@ -491,6 +509,10 @@ RobotCloudResult transformLineScanToRobotBase(
 
         float ratio = source.size() > 1
             ? float(sourceIndex) / float(source.size() - 1) : 0.0f;
+        if (options.useFullXyzRasterRowProgress) {
+            ratio = float(options.rasterSourceIndices.at(sourceIndex) / options.rasterWidth)
+                / float(options.rasterHeight - 1);
+        }
         Point3D depthPoint = input;
         if (options.layout == DepthPointLayout::LineProfileXz) {
             // Contract: the input Y only expresses the scan progress, the rigid
@@ -524,7 +546,7 @@ RobotCloudResult transformLineScanToRobotBase(
             continue;
         }
         chunk.points.push_back(converted);
-        chunk.sourceIndices.push_back(options.useRasterRowProgress
+        chunk.sourceIndices.push_back(options.useRasterRowProgress || options.useFullXyzRasterRowProgress
             ? options.rasterSourceIndices.at(sourceIndex) : sourceIndex);
         chunk.scanRatios.push_back(ratio);
         chunk.inputYMinimum = qMin(chunk.inputYMinimum, input.y);

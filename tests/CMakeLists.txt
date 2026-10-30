@@ -76,6 +76,10 @@ add_executable(plane_output_tests unit/output/plane_output_tests.cpp)
 target_link_libraries(plane_output_tests PRIVATE Qt::Core Qt::Gui pcv_m10_pointcloud_io)
 add_test(NAME plane_output_tests COMMAND plane_output_tests)
 
+add_executable(plane_mask_tests_v1 unit/planefitting/plane_mask_tests_v1.cpp)
+target_link_libraries(plane_mask_tests_v1 PRIVATE Qt::Core Qt::Gui pcv_m60_geometry_workpiece)
+add_test(NAME plane_mask_tests_v1 COMMAND plane_mask_tests_v1)
+
 add_executable(temp_workpiece_interface_tests unit/interface/temp_workpiece_interface_tests.cpp)
 target_link_libraries(temp_workpiece_interface_tests PRIVATE
     Qt::Core Qt::Gui pcv_m60_geometry_workpiece pcv_m50_coordinate_conversion)
@@ -121,7 +125,7 @@ list(APPEND PCV_APPLICATION_TEST_TARGETS
     artifact_transaction_tests
     downsample_tests
     statistical_filter_tests)
-list(APPEND PCV_APPLICATION_TEST_TARGETS plane_output_tests)
+list(APPEND PCV_APPLICATION_TEST_TARGETS plane_output_tests plane_mask_tests_v1)
 list(APPEND PCV_APPLICATION_TEST_TARGETS temp_workpiece_interface_tests)
 if(TARGET stitching_interface_tests)
     list(APPEND PCV_APPLICATION_TEST_TARGETS stitching_interface_tests)
@@ -260,6 +264,7 @@ if(PCV_BUILD_POINTCLOUDVIEW)
         unit/pointcloudview/workpiece_template_view_tests_v1.cpp
         ../apps/pointcloudview/mainwindow.cpp
         ../apps/pointcloudview/mainwindow.h
+        ../apps/pointcloudview/workbench_shell_v1.h
         ../apps/pointcloudview/cad_template_ui_v1.cpp
         ../apps/pointcloudview/features/cad_import_dialog_v1.cpp
         ../apps/pointcloudview/workpiece_template_ui_v1.cpp
@@ -292,7 +297,7 @@ if(PCV_BUILD_POINTCLOUDVIEW)
         ../apps/pointcloudview/features/workpiece_template_dialog_v1.h)
     target_include_directories(selected_plane_dialog_tests_v1 PRIVATE ../apps/pointcloudview)
     target_link_libraries(selected_plane_dialog_tests_v1 PRIVATE Qt::Core Qt::Gui Qt::Widgets Qt::Concurrent
-        Qt::OpenGL Qt::OpenGLWidgets pcv_m20_pointcloud_render pcv_m30_pointcloud_stitch pcv_m60_geometry_workpiece)
+        Qt::OpenGL Qt::OpenGLWidgets pcv_m20_pointcloud_render pcv_m30_pointcloud_stitch pcv_m60_geometry_workpiece pcv_selected_plane_tasks_v2)
     add_test(NAME selected_plane_dialog_tests_v1 COMMAND selected_plane_dialog_tests_v1)
     list(APPEND PCV_APPLICATION_TEST_TARGETS selected_plane_dialog_tests_v1)
     set_tests_properties(selected_plane_dialog_tests_v1 PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
@@ -324,6 +329,7 @@ if(TARGET pcv_stitching_ui)
             unit/pointcloudview/stitching_ui_tests_v1.cpp
             ../apps/pointcloudview/mainwindow.cpp
             ../apps/pointcloudview/mainwindow.h
+            ../apps/pointcloudview/workbench_shell_v1.h
             ../apps/pointcloudview/cad_template_ui_v1.cpp
         ../apps/pointcloudview/features/cad_import_dialog_v1.cpp
         ../apps/pointcloudview/workpiece_template_ui_v1.cpp
@@ -367,6 +373,29 @@ if(PCV_BUILD_POINTCLOUDVIEW)
     list(APPEND PCV_APPLICATION_TEST_TARGETS process_memory_usage_tests)
 endif()
 
+if(PCV_BUILD_SCAN_GEOMETRY_DEMO_V1)
+    find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
+    add_executable(scan_geometry_demo_model_tests_v1 unit/pointcloudview/scan_geometry_demo_model_tests_v1.cpp)
+    target_link_libraries(scan_geometry_demo_model_tests_v1 PRIVATE pcv_scan_geometry_demo_model_v1 Qt::Test)
+    add_test(NAME scan_geometry_demo_model_tests_v1 COMMAND scan_geometry_demo_model_tests_v1)
+    # The historical v1 view test describes the retired simulated window. Keep
+    # its source as history; the actual target now exercises the real v2 GUI.
+    add_executable(scan_geometry_session_tests_v2 unit/pointcloudview/scan_geometry_session_tests_v2.cpp)
+    target_link_libraries(scan_geometry_session_tests_v2 PRIVATE pcv_scan_geometry_session_v2 Qt::Test)
+    add_test(NAME scan_geometry_session_tests_v2 COMMAND scan_geometry_session_tests_v2)
+    add_executable(scan_geometry_view_tests_v2 unit/pointcloudview/scan_geometry_view_tests_v2.cpp)
+    target_link_libraries(scan_geometry_view_tests_v2 PRIVATE pcv_scan_geometry_demo_view_v1 Qt::Test)
+    add_test(NAME scan_geometry_view_tests_v2 COMMAND scan_geometry_view_tests_v2)
+    add_executable(reference_plane_match_tests_v2 unit/pointcloudview/reference_plane_match_tests_v2.cpp)
+    target_link_libraries(reference_plane_match_tests_v2 PRIVATE pcv_selected_plane_tasks_v2 Qt::Test)
+    add_test(NAME reference_plane_match_tests_v2 COMMAND reference_plane_match_tests_v2)
+    add_executable(high_side_plane_candidates_tests_v1 unit/pointcloudview/high_side_plane_candidates_tests_v1.cpp)
+    target_link_libraries(high_side_plane_candidates_tests_v1 PRIVATE pcv_m60_geometry_workpiece Qt::Test)
+    add_test(NAME high_side_plane_candidates_tests_v1 COMMAND high_side_plane_candidates_tests_v1)
+    set_tests_properties(scan_geometry_session_tests_v2 reference_plane_match_tests_v2 high_side_plane_candidates_tests_v1 PROPERTIES TIMEOUT 180)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS scan_geometry_demo_model_tests_v1 scan_geometry_session_tests_v2 scan_geometry_view_tests_v2 reference_plane_match_tests_v2 high_side_plane_candidates_tests_v1)
+endif()
+
 if(WIN32 AND TARGET Qt6::Core AND PCV_APPLICATION_TEST_TARGETS)
     set(PCV_TEST_RUNTIME_PATH "$<TARGET_FILE_DIR:Qt6::Core>")
     if(PCV_BUILD_EXPERIMENTAL_CAMERA)
@@ -382,6 +411,13 @@ if(WIN32 AND TARGET Qt6::Core AND PCV_APPLICATION_TEST_TARGETS)
     string(REPLACE ";" "\\;" PCV_TEST_PATH "PATH=${PCV_TEST_RUNTIME_PATH};$ENV{PATH}")
     set_tests_properties(${PCV_APPLICATION_TEST_TARGETS}
         PROPERTIES ENVIRONMENT "${PCV_TEST_PATH}")
+endif()
+if(TARGET scan_geometry_view_tests_v2)
+    set_tests_properties(scan_geometry_view_tests_v2 PROPERTIES TIMEOUT 90)
+    set_property(TEST scan_geometry_view_tests_v2 APPEND PROPERTY ENVIRONMENT
+        "QT_QPA_PLATFORM=windows"
+        "QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins"
+        "QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins/platforms")
 endif()
 foreach(stitchTest cad_import_view_tests_v1 stitching_ui_tests_v1 stitching_view_tests_v1 workpiece_template_view_tests_v1 camera_capture_panel_tests_v1 camera_depth_preview_tests_v1)
     if(TARGET ${stitchTest})

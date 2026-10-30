@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 #include "renderdialog.h"
+#include "workbench_shell_v1.h"
 #include "process_memory_usage_v1.h"
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
 #include "cameradialog.h"
@@ -431,6 +432,7 @@ MainWindow::~MainWindow() {
     // to run during teardown can access vectors/widgets whose lifetime has
     // already ended.
     m_closing = true;
+    shutdownWorkbenchPages();
     cancelAndWaitCadImport();
     cancelAndWaitWorkpieceTemplate();
     if (m_memoryTimer) m_memoryTimer->stop();
@@ -770,8 +772,7 @@ void MainWindow::buildUi() {
     addToolAction(tr("边缘与输出"), &MainWindow::showEdgeDialog);
     addToolAction(tr("扫描规划"), &MainWindow::showScanDialog);
     addToolAction(tr("所选平面拼接"), [this] {
-        if (pointTaskRunning()) return;
-        showSelectedPlaneDialog(float(m_defaults.planeDistanceToleranceMm), this);
+        activateWorkbenchPage("selection");
     });
     toolsMenu->addSeparator();
     addToolAction(tr("渲染设置"), &MainWindow::openRenderSettings);
@@ -817,14 +818,22 @@ void MainWindow::buildUi() {
             this, &MainWindow::cancelSecondPlanePointSelection);
     auto *cancelThreeAction = new QAction(this);
     cancelThreeAction->setShortcut(QKeySequence(Qt::Key_Escape));
-    cancelThreeAction->setShortcutContext(Qt::ApplicationShortcut);
-    connect(cancelThreeAction, &QAction::triggered, this, &MainWindow::abandonPlanePointSelection);
-    addAction(cancelThreeAction);
+    cancelThreeAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    connect(cancelThreeAction, &QAction::triggered, this, [this] {
+        if (m_operationBar && m_operationBar->isVisible()) cancelPickingOperation();
+        else if (isFullScreen()) showNormal();
+        else if (m_workbench) m_workbench->hideDrawer();
+    });
+    m_canvas->addAction(cancelThreeAction);
+    m_operationBar->addAction(cancelThreeAction);
     auto *undoThreeAction = new QAction(this);
     undoThreeAction->setShortcut(QKeySequence(Qt::Key_Backspace));
-    undoThreeAction->setShortcutContext(Qt::ApplicationShortcut);
-    connect(undoThreeAction, &QAction::triggered, this, &MainWindow::undoPlanePointSelection);
-    addAction(undoThreeAction);
+    undoThreeAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    connect(undoThreeAction, &QAction::triggered, this, [this] {
+        if (m_operationBar && m_operationBar->isVisible()) undoPickingOperation();
+    });
+    m_canvas->addAction(undoThreeAction);
+    m_operationBar->addAction(undoThreeAction);
     connect(m_edgeApplyButton, &QPushButton::clicked, this, &MainWindow::applyPlaneEdgeSegmentation);
     connect(m_selectEdgeButton, &QPushButton::clicked, this, &MainWindow::startEdgePointSelection);
     connect(m_clearEdgeSelectionButton, &QPushButton::clicked, this, &MainWindow::clearEdgePointSelection);
@@ -854,6 +863,169 @@ void MainWindow::buildUi() {
     updatePlaneExtractionUi();
     updatePlaneEdgeUi();
     statusBar()->showMessage(tr("就绪"));
+    buildWorkbench();
+}
+
+void MainWindow::buildWorkbench()
+{
+    m_workbench = new WorkbenchShellV1(ui->wgt_central);
+    auto *legacyHeader = new QWidget(ui->wgt_central);
+    ui->rootLayout->removeItem(ui->headerLayout);
+    legacyHeader->setLayout(ui->headerLayout);
+    legacyHeader->hide();
+    ui->rootLayout->setContentsMargins(0, 0, 0, 0);
+    ui->vbl_canvas->setContentsMargins(0, 0, 0, 0);
+    ui->rootLayout->removeWidget(ui->splitter_main);
+    ui->splitter_main->hide();
+    m_workbench->setMainWidget(ui->wgt_canvas_panel);
+    ui->rootLayout->insertWidget(0, m_workbench, 1);
+    ui->btn_open_point_cloud->setParent(m_workbench->header);
+    ui->btn_open_scanning_info->setParent(m_workbench->header);
+    m_workbench->headerLayout->addWidget(ui->btn_open_point_cloud);
+    m_workbench->headerLayout->addWidget(ui->btn_open_scanning_info);
+    ui->btn_open_point_cloud->show(); ui->btn_open_scanning_info->show();
+    auto *process = new QPushButton(tr("导入工序 JSON"), m_workbench->header);
+    process->setObjectName("btn_import_process_json");
+    m_workbench->headerLayout->addWidget(process);
+    connect(process, &QPushButton::clicked, this, &MainWindow::openProcessJob);
+    auto *tools = new QPushButton(tr("工具"), m_workbench->header);
+    tools->setObjectName("btn_tools_drawer");
+    m_workbench->headerLayout->addWidget(tools);
+    connect(tools, &QPushButton::clicked, m_workbench, &WorkbenchShellV1::toggleDrawer);
+    const auto tool = [this](int group, const QString &name, auto slot) {
+        m_workbench->addTool(group, name, [this, slot] { (this->*slot)(); });
+    };
+    tool(0, tr("数据源 / 当前文件"), &MainWindow::showSourceDialog);
+    tool(0, tr("打开工件模板"), &MainWindow::openWorkpieceTemplate);
+    tool(0, tr("创建工件模板"), &MainWindow::createWorkpieceTemplate);
+    tool(1, tr("点云清理"), &MainWindow::showCleanDialog);
+    tool(1, tr("平面与 WObj1"), &MainWindow::showPlaneDialog);
+    tool(1, tr("边缘选择"), &MainWindow::showEdgeDialog);
+    tool(1, tr("扫描规划"), &MainWindow::showScanDialog);
+    tool(2, tr("平面图像 / 亮度纹理 / 临时工件四件套"), &MainWindow::showEdgeDialog);
+    tool(2, tr("扫描 JSON / InoRobot JSON"), &MainWindow::showScanDialog);
+    tool(2, tr("工序 JSON"), &MainWindow::openProcessJob);
+    tool(3, tr("渲染设置"), &MainWindow::openRenderSettings);
+    for (const auto &entry : {qMakePair(QStringLiteral("camera"), tr("相机采集")),
+                              qMakePair(QStringLiteral("stitch"), tr("多帧拼接")),
+                              qMakePair(QStringLiteral("selection"), tr("六分屏选面")),
+                              qMakePair(QStringLiteral("cad"), tr("STEP 模板"))}) {
+        m_workbench->addTool(3, entry.second, [this, id = entry.first] { activateWorkbenchPage(id); });
+    }
+    m_workbench->activatePage = [this](const QString &id) { activateWorkbenchPage(id); };
+#ifndef PCV_BUILD_EXPERIMENTAL_CAMERA
+    m_workbench->setPageEnabled("camera", false);
+#endif
+#ifndef PCV_BUILD_STEP_IMPORT
+    m_workbench->setPageEnabled("cad", false);
+#endif
+    const auto previewAction = [this](const QString &name, auto callback) {
+        auto *button = new QPushButton(name, m_workbench->toolbar);
+        m_workbench->toolbarLayout->addWidget(button);
+        connect(button, &QPushButton::clicked, this, callback);
+        return button;
+    };
+    previewAction(tr("适配"), [this] { m_canvas->fitView(); });
+    previewAction(tr("重置"), [this] { m_canvas->resetView(); });
+    auto *colors = previewAction(tr("色彩"), [] {});
+    auto *colorMenu = new QMenu(colors); colors->setMenu(colorMenu);
+    for (int i = 0; i < m_colorMode->count(); ++i) {
+        auto *action = colorMenu->addAction(m_colorMode->itemText(i));
+        connect(action, &QAction::triggered, this, [this, i] { m_colorMode->setCurrentIndex(i); });
+    }
+    auto *overlays = previewAction(tr("叠加"), [] {});
+    auto *overlayMenu = new QMenu(overlays); overlays->setMenu(overlayMenu);
+    const QStringList names{tr("坐标轴"), tr("地板网格"), tr("包围盒"), tr("统计信息"), tr("色条"), tr("方向控件")};
+    for (int i = 0; i < names.size(); ++i) {
+        auto *action = overlayMenu->addAction(names.at(i)); action->setCheckable(true);
+        action->setChecked(i == 0 || i >= 4);
+        connect(action, &QAction::toggled, this, [this, i](bool value) {
+            auto options = m_canvas->overlayOptions();
+            switch (i) {
+            case 0: options.showCoordinateAxes = value; break;
+            case 1: options.showFloorGrid = value; break;
+            case 2: options.showBoundingBox = value; break;
+            case 3: options.showStatistics = value; break;
+            case 4: options.showColorBar = value; break;
+            case 5: options.showOrientation = value; break;
+            }
+            m_canvas->setOverlayOptions(options);
+            if (m_renderDialog) m_renderDialog->setOverlayOptions(options);
+        });
+        connect(overlayMenu, &QMenu::aboutToShow, this, [this, action, i] {
+            const auto o = m_canvas->overlayOptions();
+            const bool values[]{o.showCoordinateAxes, o.showFloorGrid, o.showBoundingBox, o.showStatistics, o.showColorBar, o.showOrientation};
+            const QSignalBlocker blocker(action); action->setChecked(values[i]);
+        });
+    }
+    previewAction(tr("截图"), [this] {
+        const QString path = QFileDialog::getSaveFileName(this, tr("保存预览截图"), {}, tr("PNG (*.png)"));
+        if (!path.isEmpty() && !m_canvas->grab().save(path, "PNG")) statusBar()->showMessage(tr("截图保存失败"));
+    });
+    previewAction(tr("全屏"), [this] { if (isFullScreen()) showNormal(); else showFullScreen(); });
+    m_workbench->toolbarLayout->addStretch();
+    auto *viewMenu = menuBar()->addMenu(tr("视图"));
+    auto *fit = viewMenu->addAction(tr("适配点云")); connect(fit, &QAction::triggered, m_canvas, &PointCloudCanvas::fitView);
+    auto *drawer = viewMenu->addAction(tr("工具抽屉")); connect(drawer, &QAction::triggered, m_workbench, &WorkbenchShellV1::toggleDrawer);
+    menuBar()->addMenu(tr("帮助"))->addAction(tr("操作快捷键"), this, [this] {
+        QMessageBox::information(this, tr("操作快捷键"), tr("左键旋转，右键平移，滚轮缩放\nEsc 取消取点，Backspace 撤销"));
+    });
+    ui->btn_device_placeholder->hide();
+    m_fileInfo->setText(tr("尚未加载点云"));
+    m_canvasInfo->setText(tr("未加载文件 · 0 点"));
+    statusBar()->setFixedHeight(20); statusBar()->setSizeGripEnabled(false);
+    menuBar()->setFixedHeight(20);
+    statusBar()->setStyleSheet("QStatusBar { font-size:11px; padding:0; } QStatusBar::item { border:none; }");
+    m_canvas->setPointSize(m_pointSize->value()); updateRenderSettings();
+    resize(1280, 720);
+}
+
+void MainWindow::showWorkbenchTool(QDialog *dialog, const QString &title)
+{
+    if (!m_workbench || !dialog) return;
+    m_workbench->showPage("main"); m_workbench->showTool(dialog, title);
+}
+
+void MainWindow::activateWorkbenchPage(const QString &id)
+{
+    if (!m_workbench || m_closing) return;
+    if (id == "main") { m_workbench->showPage(id); return; }
+    if (id == "stitch") { openMultiFrameRegistration(); return; }
+#ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
+    if (id == "camera") { openCameraStream(); return; }
+#endif
+    if (id == "selection") {
+        if (!m_selectedPlanePage) {
+            m_selectedPlanePage = createSelectedPlanePage(float(m_defaults.planeDistanceToleranceMm), this);
+            m_selectedPlanePage->installEventFilter(this);
+            m_workbench->embedPage(id, m_selectedPlanePage);
+        }
+        m_workbench->showPage(id); return;
+    }
+    if (id == "cad") {
+        if (m_workbench->hasPage(id)) m_workbench->showPage(id); else openStepTemplate();
+        return;
+    }
+    if (id == "template") {
+        if (m_workbench->hasPage(id)) m_workbench->showPage(id); else createWorkpieceTemplate();
+    }
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (m_workbench && watched == m_selectedPlanePage && (event->type() == QEvent::Close
+        || (event->type() == QEvent::KeyPress && static_cast<QKeyEvent *>(event)->key() == Qt::Key_Escape))) {
+        m_workbench->showPage("main"); event->ignore(); return true;
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::shutdownWorkbenchPages()
+{
+    cancelSelectedPlanePage(m_selectedPlanePage);
+#ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
+    if (m_cameraDialog) m_cameraDialog->cancelAndWait();
+#endif
 }
 
 void MainWindow::updateMemoryUsage() {
@@ -878,7 +1050,6 @@ void MainWindow::applyConfiguredDefaults() {
 
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
 void MainWindow::openCameraStream() {
-    if (m_cadDialogActive || m_templateTaskActive || m_templateFormActive) return;
     if (!m_cameraDialog) {
         m_cameraDialog = new CameraDialog(this);
         m_cameraDialog->canStartCapture = [this] {
@@ -937,9 +1108,10 @@ void MainWindow::openCameraStream() {
                 statusBar()->showMessage(tr("已冻结相机帧，可执行去噪和平面处理"));
             };
     }
-    m_cameraDialog->show();
-    m_cameraDialog->raise();
-    m_cameraDialog->activateWindow();
+    if (m_workbench) {
+        m_workbench->embedPage("camera", m_cameraDialog);
+        m_workbench->showPage("camera");
+    } else m_cameraDialog->show();
 }
 #endif
 
@@ -1341,15 +1513,14 @@ void MainWindow::openRenderSettings()
         m_renderDialog->setDisplaySettings(m_pointSize->value(), m_colorMode->currentIndex(),
                                            m_overlay->value(), m_mapMin->value(),
                                            m_mapMax->value());
+        m_renderDialog->setOverlayOptions(m_canvas->overlayOptions());
         connect(m_renderDialog, &RenderDialog::settingsChanged,
                 this, &MainWindow::applyRenderDialogSettings);
         connect(m_renderDialog, &RenderDialog::resetViewRequested,
                 m_canvas, &PointCloudCanvas::resetView);
     }
     refreshRenderDialogContent();
-    m_renderDialog->show();
-    m_renderDialog->raise();
-    m_renderDialog->activateWindow();
+    showWorkbenchTool(m_renderDialog, tr("渲染设置"));
 }
 
 void MainWindow::applyRenderDialogSettings()
@@ -1512,7 +1683,9 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points,
     if (m_canvas) {
         m_canvas->setSelectionMode(false);
         // setCloud() clears every derived point-state layer. Do not call
-    m_canvas->setCloud(m_points);
+        m_canvas->setCloud(m_points);
+        m_canvas->resetView();
+        applyDepthRenderRange(m_points);
     } else {
         qCritical() << "Main display cache is ready but PointCloudCanvas is null";
     }
@@ -1521,9 +1694,9 @@ void MainWindow::publishCanvasCache(QVector<pointcloud::Point3D> points,
     updatePlaneExtractionUi();
     updatePlaneEdgeUi();
     if (m_canvasInfo) {
-        m_canvasInfo->setText(tr("当前显示 %1 个点  ·  原始 %2 个点  ·  全量直接标记")
-                                  .arg(QLocale().toString(m_points.size()))
-                                  .arg(QLocale().toString(m_rawPoints.size())));
+        m_canvasInfo->setText(tr("%1 · %2 点")
+            .arg(m_pendingPath.isEmpty() ? m_currentCloudSource.entry : QFileInfo(m_pendingPath).fileName())
+            .arg(QLocale().toString(m_points.size())));
     }
     refreshRenderDialogContent();
 }
@@ -1598,44 +1771,34 @@ void MainWindow::setWorkflowState(WorkflowState state, const QString &statusText
 void MainWindow::showSourceDialog()
 {
     if (!m_sourceDialog) return;
-    m_sourceDialog->show();
-    m_sourceDialog->raise();
-    m_sourceDialog->activateWindow();
+    showWorkbenchTool(m_sourceDialog, tr("数据源"));
 }
 
 void MainWindow::showCleanDialog()
 {
     if (!m_cleanDialog) return;
-    m_cleanDialog->show();
-    m_cleanDialog->raise();
-    m_cleanDialog->activateWindow();
+    showWorkbenchTool(m_cleanDialog, tr("点云清理"));
 }
 
 void MainWindow::showPlaneDialog()
 {
     if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     if (!m_planeDialog) return;
-    m_planeDialog->show();
-    m_planeDialog->raise();
-    m_planeDialog->activateWindow();
+    showWorkbenchTool(m_planeDialog, tr("平面与 WObj1"));
 }
 
 void MainWindow::showEdgeDialog()
 {
     if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     if (!m_edgeDialog) return;
-    m_edgeDialog->show();
-    m_edgeDialog->raise();
-    m_edgeDialog->activateWindow();
+    showWorkbenchTool(m_edgeDialog, tr("边缘与输出"));
 }
 
 void MainWindow::showScanDialog()
 {
     if (cadSourceActive()) { statusBar()->showMessage(tr("当前为 cad_model 点云，此功能需要机器人坐标流程")); return; }
     if (!m_scanDialog) return;
-    m_scanDialog->show();
-    m_scanDialog->raise();
-    m_scanDialog->activateWindow();
+    showWorkbenchTool(m_scanDialog, tr("扫描规划"));
 }
 
 void MainWindow::setPickingOperation(const QString &text, bool visible)
@@ -1643,6 +1806,7 @@ void MainWindow::setPickingOperation(const QString &text, bool visible)
     if (!m_operationBar) return;
     m_operationBar->setVisible(visible);
     if (!visible) return;
+    if (m_workbench) { m_workbench->showPage("main"); m_workbench->hideDrawer(); }
     m_operationLabel->setText(text);
     const int selectedCount = m_edgeSelectionActive ? m_selectedEdgeIndices.size()
         : (m_secondPlaneSelectionActive ? m_secondPlanePointIndices.size()
@@ -1998,10 +2162,6 @@ void MainWindow::invalidateTextureOverlay() {
 
 void MainWindow::openMultiFrameRegistration()
 {
-    if (pointTaskRunning() && (!m_stitchingWindow || !m_stitchingWindow->isBusy())) {
-        statusBar()->showMessage(tr("点云处理任务正在运行"));
-        return;
-    }
     if (!m_stitchingWindow) {
         m_stitchingWindow = new StitchingWindow(this);
         m_stitchingWindow->canStartTask = [this] {
@@ -2014,9 +2174,10 @@ void MainWindow::openMultiFrameRegistration()
         connect(m_stitchingWindow, &StitchingWindow::stitchingSucceeded,
                 this, &MainWindow::stitchingSucceeded);
     }
-    m_stitchingWindow->show();
-    m_stitchingWindow->raise();
-    m_stitchingWindow->activateWindow();
+    if (m_workbench) {
+        m_workbench->embedPage("stitch", m_stitchingWindow);
+        m_workbench->showPage("stitch");
+    } else m_stitchingWindow->show();
 }
 
 void MainWindow::openProcessJob()
@@ -2114,7 +2275,7 @@ void MainWindow::stitchingSucceeded(const StitchingPublication &publication)
                             .arg(publication.formalPly)
                             .arg(QLocale().toString(m_rawPoints.size())));
     if (publication.textureMappedPointCount > 0) {
-        m_colorMode->setCurrentIndex(3);
+        m_colorMode->setCurrentIndex(0);
         updateRenderSettings();
     }
     QString publicationMessage = publication.textureMappedPointCount > 0
@@ -2768,10 +2929,6 @@ void MainWindow::textureMappingFinished() {
     m_canvas->setTextureGrayOverlay(result.grayscale, result.valid);
     m_textureImagePath = m_pendingTextureImagePath;
     m_pendingTextureImagePath.clear();
-    {
-        const QSignalBlocker blocker(m_colorMode);
-        m_colorMode->setCurrentIndex(3);
-    }
     updateRenderSettings();
     m_edgeOutput->setPlainText(
         tr("同次扫描亮度图已按原始栅格索引贴到 3D 平面点\n映射方式：%1\n图像尺寸：%2 × %3 px\n"
@@ -3801,6 +3958,7 @@ void MainWindow::noiseFinished() {
 
 void MainWindow::closeEvent(QCloseEvent *event) {
     m_closing = true;
+    shutdownWorkbenchPages();
     cancelAndWaitCadImport();
     cancelAndWaitWorkpieceTemplate();
     if (m_memoryTimer) m_memoryTimer->stop();

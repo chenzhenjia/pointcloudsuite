@@ -1,6 +1,10 @@
 # PointCloudSuite 顶层目标与交付状态
 
+2026-10-30 Codex：`scan_geometry_demo_v1` 增加SDK深度会话帧预览和按需点云物化；轮次缓存C16/辅助亮度，显式处理或自动匹配时由官方SDK生成XYZ，模块50按原始栅格行插值位姿，审核确认后释放该帧活动XYZ/索引/显示缓存。旧PLY流程不变。构建、CTest、原生GUI、无SDK及真实相机验证结果见开发说明；单帧峰值内存尚未声称下降。[开发说明](docs/development/scan_geometry_demo_v1.md#2026-10-30-sdk深度缓存与按需物化)。
+
 文档版本 v0.5。更新日期：2026-10-15。责任人：陈振佳（后端/主线）、于海军（前端/外部项目）。基线：HEAD 75d3e3b 加当前未提交/未跟踪实现；不代表发布版本。
+
+2026-10-30 Codex：扫描几何选面结果增加完整分辨率拟合区域掩码叠加。模块 60 `buildPlaneMaskV1()` 生成贴合平面的占用网格和外/孔洞闭合环；模块 20 `PlanarMaskOverlay` 绘制蓝/红 25% 透明区域及边界，原始点色与正式拼接/输出不变。增加模块/Canvas/GUI 测试源码和 Qt Creator 人工验收步骤；按用户约定未构建或运行测试。详见 [实施说明](docs/development/scan_geometry_real_selected_plane_v2.md#2026-10-30-拟合平面掩码叠加显示) 与 [集中日志](docs/changelog/v0.5.md#scan-geometry-plane-mask-overlay)。
 
 ## 北极星目标
 
@@ -39,8 +43,14 @@ P0 核对构建组合与 target 条件；P1 验收现有整帧/选面/临时工�
 
 ## 简要更新登记
 
+| 2026-10-29 | 主线/Codex | `scan_geometry_demo_v1` 接入扫描 JSON、WObj1、人工干涉持久化、修剪派生输出和 `selected_plane_geometry_v1.json` sidecar；Debug 全目标构建，定向会话测试通过 | [开发说明](docs/development/scan_geometry_demo_v1.md) · [契约](docs/contracts/data_contracts_v0.5.md) |
+| 2026-10-29 | Codex | 扫描几何页恢复深色高度渐变画布、合并导入与保存入口、逐帧确认后直接拼接，并折叠低频操作；源码外 Debug/Release clean build 和两套全量 CTest 34/34 通过，原生 GUI 检查因用户停止 Computer Use 未完成 | [开发说明](docs/development/scan_geometry_demo_v1.md#2026-10-29-画布与操作区精简) · [日志](docs/changelog/v0.5.md#scan-geometry-ui-simplification) |
+| 2026-10-29 | Codex | 扫描几何右栏增加 HTML 五步入口与四个会话门控子阶段；源码外 Debug/Release 构建成功、全量 CTest 各 34/34，GUI 初始控件状态已检查 | [开发说明](docs/development/scan_geometry_demo_v1.md#2026-10-29-右侧步骤式操作区) · [日志](docs/changelog/v0.5.md#scan-geometry-step-workflow) |
+| 2026-10-30 | Codex | 新扫描几何 GUI 画布改浅灰、每帧展示上限升至 100 万并将会话预算调至 512 MiB；旧选面对话框保持 30 万，验证由用户执行 | [开发说明](docs/development/scan_geometry_real_selected_plane_v2.md#2026-10-30-画布浅灰与百万点显示) · [日志](docs/changelog/v0.5.md#scan-geometry-light-canvas-million-display) |
+
 | date | owner | change_summary | detailed_record |
 |---|---|---|---|
+| 2026-10-26 | 主线/Codex | 独立 `scan_geometry_demo_v1` Designer GUI、离线扫描/选面/候选/修剪/确认；模块 20 实例配色兼容增量。已生成 Debug/Release EXE，用户接手最终验证 | [实施、实际记录与待验收](docs/development/scan_geometry_demo_v1.md) · [日志](docs/changelog/v0.5.md#scan-geometry-demo-v1) |
 | 2026-10-23 | 主线/Codex | 连续采集亮度默认保存、纹理独立且默认关闭；事后图片损坏不阻断几何直拼，保留可选纹理与光源操作提示 | [实现与验证](docs/changelog/v0.5.md#camera-capture-intensity-v2) |
 | 2026-10-09 | 主线 | 整帧算法定向回滚后新增独立所选平面拼接 | [版本日志](docs/changelog/v0.5.md) |
 | 2026-10-15 | 主线 | 共享拼接 UI、进程内存监测、单击 v1→v2 与来源参数 | [版本日志](docs/changelog/v0.5.md) |
@@ -98,3 +108,21 @@ P0 核对构建组合与 target 条件；P1 验收现有整帧/选面/临时工�
 2026-10-23 功能基线保存：最终Debug/Release完整构建及各41/41 CTest通过，无SDK定向2/2、双配置双GUI原生自关闭、Release六画布/相机向导与官方SDK无损重载回归通过。最新552万虚拟帧完整高亮9865ms，2秒及新候选300ms未通过，多轮内存保留与现场验收待复核。按用户授权将当前全部已审阅功能源码/测试/文档保存为本地Git基线，保留亮度/CAD/STEP/工序JSON工作，不打包、不推送、不继续优化算法。详见[最终证据](docs/development/camera_depth_preview_cache_v1.md#2026-10-23-功能基线最终验证与保存)。
 
 2026-10-23 2.5D深度栅格选面优化方案v2：保持C16主缓存和官方SDK临时XYZ精度，拟用原始像素邻接替代当前三维投影连通瓶颈；默认只选鼠标所在连通区域，保留0.4/3mm容差、不补点/不跨面。本轮仅保存方案，未修改优化算法，见 [方案](docs/development/camera_depth_plane_selection_optimization_v2.md)。
+# 本轮 UI 更新（2026-10-23）
+
+- `pointcloudview` 主窗口改为预览优先工作台：顶部高频入口、工作页下拉和右侧覆盖工具抽屉；已有处理、输出、相机、多帧、STEP 和模板业务保持原 owner。
+- 模块 20 默认点大小改为 2，加入 3DMVS 风格黑底高度 `RAINBOW`、彩条、坐标轴和方向控件；不改变点云/JSON/模板契约。
+- 原生 Debug UI 回归已验证 1280×720 预览占比约 90.9%、抽屉覆盖不缩放画布、任务页复用和取点条恢复；真实样本与 Release/全量 CTest 待后续运行。
+- 六分屏选面页将参数/帧列表与运行日志改为默认收起的可展开面板，保留原数据和任务状态；Debug/Release 全量 CTest 各 41/41、最终全目标增量构建和显隐定向测试通过。六分屏原生截图与设计对照仍 blocked，启动自关闭未取得通过证据；详见 `design-qa.md` 和 changelog。
+
+## 2026-10-26 当前 GUI 接入真实所选平面拼接 v2
+
+同名 `scan_geometry_demo_v1` target 已改为离线 PLY 真实链路：应用层共用读取/转换/索引/选面任务，模块 60 新增固定参考面辅助匹配，GUI 接入异常暂停、人工修正/跳过、逐帧审核和批量确认，调用模块 30 正式所选平面拼接。原 pointcloudview 保留原调度并复用任务；新页支持六帧轮次、红色人工干涉标注和基于稳定结果下标的会话修剪/撤销。主界面及输入配置均有 Designer `.ui`，没有接入设备、整帧拼接、CAD 或模板业务。
+
+Owner：Codex（实现），用户（验证）。提供三组 v2 测试源码、构建配置与验收清单；按用户明确安排未执行配置/构建/CTest/GUI/截图/DPI/性能验证，未生成新版 EXE。有限种子匹配成功率、真实数据性能和原生拾取仍待验收。未提交/推送/上传，保留既有工作区及附件。详细文件/API、风险及用户命令见 [v2 开发说明](docs/development/scan_geometry_real_selected_plane_v2.md)、[操作说明](apps/scan_geometry_demo_v1/README_v2.md)和 [集中日志](docs/changelog/v0.5.md#scan-geometry-real-selected-plane-v2)。
+
+2026-10-30 渲染与高侧提醒增量：原始转换帧使用 pointcloudview 默认高度色/点大小/叠加参数与完整 Z 范围；工件面蓝、干涉面红，未选点保留高度色。模块 60 新增 `findHighSidePlaneCandidatesV1`，以默认 2 mm、100 点、最多 16 个确定性种子提出高侧软提醒；手工确认后才成为干涉标注，忽略不阻止拼接。新增 API/会话测试源码和 Designer 门限设置。按用户分工未运行构建、CTest 或 GUI 验收；见[开发说明](docs/development/scan_geometry_real_selected_plane_v2.md#2026-10-30-转换预览与高侧平面提醒)。
+
+2026-10-30 标注可见性与世界 Z 高侧提醒：模块 20 新增独立 marker overlay buffer；GUI 工件蓝、干涉红标注采用大点、深色外缘和浅色内缘，point size 按 DPR 缩放，不改变原高度色或纹理 overlay。模块 60 高侧高度改为候选平面中心 Z 减工件面中心 Z，水平/倾斜工件均按 robot_base 世界 Z 判定；Designer 明示世界 Z 门限。补充 marker 显示与世界 Z 测试源码及验收命令。依用户分工未运行构建、CTest、GUI/DPI 验收；见[开发说明](docs/development/scan_geometry_real_selected_plane_v2.md#2026-10-30-标注可见性与世界-z-高侧提醒)。
+
+2026-10-30 本地版本归档：按用户要求仅将当前工作区提交到本地 Git 并输出提交号，不推送远端。提交包含真实所选平面拼接 v2、扫描几何演示、高侧提醒/标注、渲染与主窗口更新及对应测试/文档。已执行 diff 检查；本轮未重跑构建/CTest/GUI，验证边界沿用对应开发说明。

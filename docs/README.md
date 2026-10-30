@@ -27,6 +27,7 @@
 | 60 几何/工件/扫描/纹理 | [60_geometry_workpiece](modules/60_geometry_workpiece.md) |
 | CLI | [pointcloudcli](modules/pointcloudcli.md) |
 | View / Stitch / 共享UI | [View](../apps/pointcloudview/README.md) / [Stitch](../apps/pointcloudstitch/README.md) / [stitching_ui](../apps/stitching_ui/README.md) |
+| 离线 PLY 单页 / 所选平面拼接 v2 | [操作说明](../apps/scan_geometry_demo_v1/README_v2.md) / [开发与用户验收](development/scan_geometry_real_selected_plane_v2.md) |
 
 70/80仅兼容转发，详细职责归60/10；90/100并入路线图，不再各建空占位页。[features](../apps/pointcloudview/features/README.md)与[adapters](../apps/pointcloudview/adapters/README.md)明确同事工作边界。
 

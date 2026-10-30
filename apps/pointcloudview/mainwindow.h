@@ -39,6 +39,9 @@ struct StitchingPublication;
 class CameraDialog;
 #endif
 class PointCloudCanvas;
+class WorkbenchShellV1;
+class QResizeEvent;
+class QEvent;
 namespace Ui { class MainWindow; }
 namespace pointcloud { struct LoadResult; }
 namespace pcv::interface {
@@ -110,6 +113,7 @@ private slots:
     void workpieceTemplateFinished();
 
 private:
+    friend struct WorkbenchViewTestAccess;
     friend struct StitchingViewTestAccess;
     friend struct WorkpieceTemplateViewTestAccess;
     friend struct CadTemplateViewTestAccess;
@@ -134,6 +138,11 @@ private:
     };
     void closeEvent(QCloseEvent *event) override;
     void buildUi();
+    void buildWorkbench();
+    void activateWorkbenchPage(const QString &id);
+    void showWorkbenchTool(QDialog *dialog, const QString &title);
+    bool eventFilter(QObject *watched, QEvent *event) override;
+    void shutdownWorkbenchPages();
     bool workflowBlocksNewSource() const;
     QString workflowStateName() const;
     void setWorkflowState(WorkflowState state, const QString &statusText = QString());
@@ -237,6 +246,9 @@ private:
     QPushButton *m_exportInoRobotButton = nullptr;
     QPlainTextEdit *m_scanOutput = nullptr;
     PointCloudCanvas *m_canvas = nullptr;
+    WorkbenchShellV1 *m_workbench = nullptr;
+    QDialog *m_selectedPlanePage = nullptr;
+    QDialog *m_templateForm = nullptr;
     RenderDialog *m_renderDialog = nullptr;
     StitchingWindow *m_stitchingWindow = nullptr;
     QDialog *m_sourceDialog = nullptr;

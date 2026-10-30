@@ -1,4 +1,6 @@
 #include <pcv/workpiece/temp_workpiece_geometry.h>
+#include <pcv/roi/automatic_workpiece_frame_v1.h>
+#include <pcv/registration/handeye_transform.h>
 
 #include <QtMath>
 
@@ -66,18 +68,10 @@ WorkpieceCoordinateSystem makeFrame(const QVector3D &origin, QVector3D x,
     result.orthogonalityError = std::max({std::abs(QVector3D::dotProduct(x, y)),
                                           std::abs(QVector3D::dotProduct(x, z)),
                                           std::abs(QVector3D::dotProduct(y, z))});
-    const double b = std::asin(std::clamp(-double(result.workpieceToRobotBase(2, 0)), -1.0, 1.0));
-    const double cb = std::cos(b);
-    double a = 0.0, c = 0.0;
-    if (std::abs(cb) > 1.0e-8) {
-        a = std::atan2(double(result.workpieceToRobotBase(2, 1)), double(result.workpieceToRobotBase(2, 2)));
-        c = std::atan2(double(result.workpieceToRobotBase(1, 0)), double(result.workpieceToRobotBase(0, 0)));
-    } else {
-        a = std::atan2(-double(result.workpieceToRobotBase(0, 1)), double(result.workpieceToRobotBase(1, 1)));
-    }
-    result.poseA = float(qRadiansToDegrees(a));
-    result.poseB = float(qRadiansToDegrees(b));
-    result.poseC = float(qRadiansToDegrees(c));
+    const auto pose = pointcloud::matrixToRobotPose(result.workpieceToRobotBase);
+    result.poseA = float(pose.rx);
+    result.poseB = float(pose.ry);
+    result.poseC = float(pose.rz);
     result.valid = true;
     return result;
 }
@@ -158,6 +152,37 @@ WorkpieceCoordinateSystem buildWorkpieceCoordinateSystemFromThreePoints(
     }
     return makeFrame(origin, position(points, xAxisPointIndex) - origin,
                      position(points, yAxisPointIndex) - origin);
+}
+
+AutomaticAxisPointSelection selectAutomaticWorkpieceAxisPoints(
+    const QVector<pointcloud::Point3D> &points,
+    const QVector<int> &planeIndices,
+    const QVector3D &origin,
+    const QVector3D &planeNormal,
+    float planeToleranceMm)
+{
+    return selectAutomaticAxisPoints(points, planeIndices, origin, planeNormal,
+                                     planeToleranceMm);
+}
+
+WorkpieceCoordinateSystem buildWorkpieceCoordinateSystemFromRobotAxes(
+    const QVector3D &origin, const QVector3D &planeNormal)
+{
+    if (!finite(origin) || !finite(planeNormal) || planeNormal.lengthSquared() <= 1.0e-10f) {
+        WorkpieceCoordinateSystem result;
+        result.error = QStringLiteral("WObj1 原点或平面法向量无效");
+        return result;
+    }
+    QVector3D z = planeNormal.normalized();
+    if (z.z() < 0.0f) z = -z;
+    const QVector3D x = QVector3D(1, 0, 0) - z * z.x();
+    if (x.lengthSquared() <= 1.0e-10f) {
+        WorkpieceCoordinateSystem result;
+        result.error = QStringLiteral("机器人基坐标 X 轴在平面上的投影退化");
+        return result;
+    }
+    QVector3D y = QVector3D::crossProduct(z, x).normalized();
+    return makeFrame(origin, y.y() < 0.0f ? -x : x, y.y() < 0.0f ? -y : y);
 }
 
 PlaneMaskResult rasterizePlaneMask(const QVector<pointcloud::Point3D> &points,

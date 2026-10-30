@@ -28,6 +28,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(PCV_BUILD_POINTCLOUDVIEW "Build the point cloud viewer" ON)
 option(PCV_BUILD_POINTCLOUDSTITCH
     "Build the point cloud stitching application" ON)
+option(PCV_BUILD_SCAN_GEOMETRY_DEMO_V1 "Build the offline PLY selected-plane GUI (legacy target name)" ON)
 option(PCV_BUILD_CLI "Build the PointCloudSuite CLI" OFF)
 option(PCV_BUILD_TOOLS "Build diagnostic command-line tools" OFF)
 option(PCV_BUILD_STEP_IMPORT "Enable OCCT STEP import" OFF)
@@ -51,10 +52,10 @@ endif()
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core)
 if(PCV_BUILD_CLI OR PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_POINTCLOUDSTITCH
-   OR PCV_BUILD_TESTS)
+   OR PCV_BUILD_TESTS OR PCV_BUILD_SCAN_GEOMETRY_DEMO_V1)
     find_package(Qt6 6.5 REQUIRED COMPONENTS Gui Concurrent)
 endif()
-if(PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_POINTCLOUDSTITCH
+if(PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_POINTCLOUDSTITCH OR PCV_BUILD_SCAN_GEOMETRY_DEMO_V1
    OR (PCV_BUILD_EXPERIMENTAL_CAMERA AND
        (PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_POINTCLOUDSTITCH)))
     find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets)
@@ -73,7 +74,7 @@ include(cmake/step_runtime_v1.cmake)
 
 add_subdirectory(src)
 add_subdirectory(modules)
-if(PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_POINTCLOUDSTITCH)
+if(PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_POINTCLOUDSTITCH OR PCV_BUILD_SCAN_GEOMETRY_DEMO_V1)
     add_subdirectory(apps/stitching_ui)
 endif()
 
@@ -84,6 +85,9 @@ if(PCV_BUILD_POINTCLOUDVIEW)
 endif()
 if(PCV_BUILD_POINTCLOUDSTITCH)
     add_subdirectory(apps/pointcloudstitch)
+endif()
+if(PCV_BUILD_SCAN_GEOMETRY_DEMO_V1)
+    add_subdirectory(apps/scan_geometry_demo_v1)
 endif()
 if(PCV_BUILD_EXPERIMENTAL_CAMERA AND
    (PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_POINTCLOUDSTITCH))

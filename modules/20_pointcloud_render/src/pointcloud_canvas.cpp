@@ -4,16 +4,36 @@
 
 #include <QHash>
 #include <QSet>
+#include <new>
+
+namespace {
+class CanvasOverlay final : public QWidget {
+public:
+    CanvasOverlay(QWidget *parent, std::function<void(QPaintDevice *)> draw)
+        : QWidget(parent), m_draw(std::move(draw)) {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground);
+    }
+protected:
+    void paintEvent(QPaintEvent *) override { m_draw(this); }
+private:
+    std::function<void(QPaintDevice *)> m_draw;
+};
+}
 
 PointCloudCanvas::PointCloudCanvas(QWidget *parent)
         : QOpenGLWidget(parent), m_vertexBuffer(QOpenGLBuffer::VertexBuffer),
           m_stateBuffer(QOpenGLBuffer::VertexBuffer),
           m_textureBuffer(QOpenGLBuffer::VertexBuffer),
+          m_markerBuffer(QOpenGLBuffer::VertexBuffer),
+          m_planarMaskVertexBuffer(QOpenGLBuffer::VertexBuffer),
           m_contourBuffer(QOpenGLBuffer::VertexBuffer) {
         setMinimumSize(620, 480);
         setMouseTracking(true);
         setFocusPolicy(Qt::StrongFocus);
         setToolTip(tr("左键旋转，右键平移，滚轮缩放"));
+        m_overlayWidget = new CanvasOverlay(this, [this](QPaintDevice *device) { drawOverlay(device); });
+        m_overlayWidget->show();
     }
 
 PointCloudCanvas::~PointCloudCanvas()  {
@@ -23,8 +43,12 @@ PointCloudCanvas::~PointCloudCanvas()  {
         m_pickingFbo.reset();
         if (m_contourBuffer.isCreated()) m_contourBuffer.destroy();
         if (m_contourVertexArray.isCreated()) m_contourVertexArray.destroy();
+        if (m_planarMaskVertexArray.isCreated()) m_planarMaskVertexArray.destroy();
         if (m_stateBuffer.isCreated()) m_stateBuffer.destroy();
         if (m_textureBuffer.isCreated()) m_textureBuffer.destroy();
+        if (m_markerBuffer.isCreated()) m_markerBuffer.destroy();
+        if (m_planarMaskIndexBuffer.isCreated()) m_planarMaskIndexBuffer.destroy();
+        if (m_planarMaskVertexBuffer.isCreated()) m_planarMaskVertexBuffer.destroy();
         if (m_vertexBuffer.isCreated()) m_vertexBuffer.destroy();
         if (m_vertexArray.isCreated()) m_vertexArray.destroy();
         doneCurrent();
@@ -48,8 +72,10 @@ void PointCloudCanvas::setCloud(QVector<pointcloud::Point3D> points) {
           m_fullToDisplayIndices.clear();
           m_fullPointCount = m_points.size();
           m_pointStates.fill(NormalPoint, m_points.size());
+          clearPointMarkerOverlay();
+          clearPlanarMaskOverlays();
           // Point-index overlays refer to the previous frame and are invalid
-          // after a streaming replacement. World-coordinate overlays remain.
+          // after replacement; source-bound planar masks are cleared as well.
           m_selectedIndices.clear();
           m_selectedEdgeIndices.clear();
           m_edgeIndices.clear();
@@ -109,6 +135,8 @@ void PointCloudCanvas::setDisplayCloud(QVector<pointcloud::Point3D> points,
         m_fullToDisplayIndices = std::move(fullToDisplay);
         m_fullPointCount = fullPointCount;
         m_pointStates.fill(NormalPoint, m_points.size());
+        clearPointMarkerOverlay();
+        clearPlanarMaskOverlays();
         m_selectedIndices.clear();
         m_selectedEdgeIndices.clear();
         m_edgeIndices.clear();
@@ -148,6 +176,8 @@ void PointCloudCanvas::setCloudStreaming(QVector<pointcloud::Point3D> points) {
         m_fullToDisplayIndices.clear();
         m_fullPointCount = m_points.size();
         m_pointStates.fill(NormalPoint, m_points.size());
+        clearPointMarkerOverlay();
+        clearPlanarMaskOverlays();
         ++m_renderRevision;
         validateRenderSnapshot();
         // Point-index overlays belong to the preceding frame. Keep only
@@ -259,6 +289,74 @@ void PointCloudCanvas::setExtractedPlane(const QVector<int> &planeIndices) {
         setPlaneResult(planeIndices, {}, {});
     }
 
+bool PointCloudCanvas::setPlanarMaskOverlays(const QVector<pcv::render::PlanarMaskOverlay> &overlays) {
+    if (QThread::currentThread() != thread()) return false;
+    QString error;
+    qsizetype vertexCount = 0, boundaryCount = 0, indexCount = 0;
+    for (const auto &overlay : overlays) {
+        if (!pcv::render::validatePlanarMaskOverlay(overlay, &error)) {
+            qWarning() << "PointCloudCanvas rejected planar mask overlay:" << error;
+            return false;
+        }
+        const qsizetype maxBufferVertices = std::numeric_limits<int>::max() / qsizetype(sizeof(QVector3D));
+        const qsizetype maxBufferIndices = std::numeric_limits<int>::max() / qsizetype(sizeof(quint32));
+        if (overlay.vertices.size() > qsizetype(std::numeric_limits<quint32>::max()) - vertexCount
+            || overlay.vertices.size() > maxBufferVertices - vertexCount
+            || overlay.boundaryVertices.size() > maxBufferVertices - vertexCount - overlay.vertices.size() - boundaryCount
+            || overlay.triangleIndices.size() > maxBufferIndices - indexCount) {
+            qWarning() << "PointCloudCanvas rejected oversized planar mask overlay";
+            return false;
+        }
+        vertexCount += overlay.vertices.size();
+        boundaryCount += overlay.boundaryVertices.size();
+        indexCount += overlay.triangleIndices.size();
+    }
+    QVector<QVector3D> vertices, boundaryVertices;
+    QVector<quint32> indices;
+    QVector<QPair<int,int>> ranges, boundaryRanges;
+    QVector<QVector4D> colors, boundaryColors;
+    QVector<float> opacities;
+    try {
+    for (const auto &overlay : overlays) {
+        const quint32 vertexOffset = quint32(vertices.size());
+        const int indexStart = indices.size();
+        vertices.append(overlay.vertices);
+        for (quint32 index : overlay.triangleIndices) indices.append(vertexOffset + index);
+        ranges.append({indexStart, overlay.triangleIndices.size()});
+        colors.append(overlay.color);
+        opacities.append(overlay.opacity);
+        const int boundaryOffset = boundaryVertices.size();
+        boundaryVertices.append(overlay.boundaryVertices);
+        for (const auto &range : overlay.boundaryRanges)
+            boundaryRanges.append({boundaryOffset + range.first, range.second});
+        for (int i = 0; i < overlay.boundaryRanges.size(); ++i) boundaryColors.append(overlay.color);
+    }
+    } catch (const std::bad_alloc &) {
+        qWarning() << "PointCloudCanvas could not allocate planar mask overlay buffers";
+        return false;
+    }
+    m_planarMaskVertices = std::move(vertices);
+    m_planarMaskIndices = std::move(indices);
+    m_planarMaskRanges = std::move(ranges);
+    m_planarMaskColors = std::move(colors);
+    m_planarMaskOpacities = std::move(opacities);
+    m_planarMaskBoundaryVertices = std::move(boundaryVertices);
+    m_planarMaskBoundaryRanges = std::move(boundaryRanges);
+    m_planarMaskBoundaryColors = std::move(boundaryColors);
+    m_planarMaskUploadPending = true;
+    update();
+    return true;
+}
+
+void PointCloudCanvas::clearPlanarMaskOverlays() {
+    if (QThread::currentThread() != thread()) return;
+    m_planarMaskVertices.clear(); m_planarMaskIndices.clear(); m_planarMaskRanges.clear();
+    m_planarMaskColors.clear(); m_planarMaskOpacities.clear(); m_planarMaskBoundaryVertices.clear();
+    m_planarMaskBoundaryRanges.clear(); m_planarMaskBoundaryColors.clear();
+    m_planarMaskUploadPending = true;
+    update();
+}
+
 void PointCloudCanvas::clearPlaneResult() {
         if (QThread::currentThread() != thread()) return;
         ++m_renderRevision;
@@ -309,6 +407,64 @@ void PointCloudCanvas::clearTextureGrayOverlay() {
         update();
     }
 
+void PointCloudCanvas::setAppearance(const QColor &background, const QColor &selection) {
+    if (QThread::currentThread() != thread() || !background.isValid() || !selection.isValid()) return;
+    m_backgroundColor = background;
+    m_selectionColor = selection;
+    update();
+}
+
+void PointCloudCanvas::setEmptyMessage(const QString &message) {
+    if (QThread::currentThread() != thread()) return;
+    m_emptyMessage = message;
+    update();
+}
+
+bool PointCloudCanvas::setPointColorOverlay(const pcv::render::PointColorOverlay &overlay) {
+    if (QThread::currentThread() != thread()) return false;
+    QString error;
+    if (!pcv::render::validatePointColorOverlay(overlay, m_fullPointCount, &error)) {
+        qWarning() << "PointCloudCanvas rejected point color overlay:" << error;
+        return false;
+    }
+    m_textureColors.resize(m_points.size());
+    m_textureValid.resize(m_points.size());
+    for (int i = 0; i < m_points.size(); ++i) {
+        const int full = fullIndexForDisplayIndex(i);
+        m_textureColors[i] = overlay.colors.at(full);
+        m_textureColors[i].setW(overlay.valid.at(full) ? overlay.colors.at(full).w() : 0.0f);
+        m_textureValid[i] = overlay.valid.at(full);
+    }
+    m_textureUploadPending = true;
+    update();
+    return true;
+}
+
+bool PointCloudCanvas::setPointMarkerOverlay(const pcv::render::PointColorOverlay &overlay) {
+    if (QThread::currentThread() != thread()) return false;
+    QString error;
+    if (!pcv::render::validatePointColorOverlay(overlay, m_fullPointCount, &error)) {
+        qWarning() << "PointCloudCanvas rejected point marker overlay:" << error;
+        return false;
+    }
+    m_markerColors.resize(m_points.size());
+    for (int i = 0; i < m_points.size(); ++i) {
+        const int full = fullIndexForDisplayIndex(i);
+        m_markerColors[i] = overlay.colors.at(full);
+        m_markerColors[i].setW(overlay.valid.at(full) ? 1.0f : 0.0f);
+    }
+    m_markerUploadPending = true;
+    update();
+    return true;
+}
+
+void PointCloudCanvas::clearPointMarkerOverlay() {
+    if (QThread::currentThread() != thread()) return;
+    m_markerColors.fill(QVector4D(0, 0, 0, 0), m_points.size());
+    m_markerUploadPending = true;
+    update();
+}
+
 void PointCloudCanvas::setWorkpieceCoordinateSystem(const pcv::render::CoordinateFrame &frame) {
         if (QThread::currentThread() != thread()) return;
         QString renderError;
@@ -351,12 +507,44 @@ void PointCloudCanvas::setOverlayOptions(const pcv::render::RenderOverlayOptions
 
 void PointCloudCanvas::resetView() {
         if (QThread::currentThread() != thread()) return;
-        m_yaw = 38.0f;
-        m_pitch = -28.0f;
+        m_yaw = 0.0f;
+        m_pitch = -72.0f;
         m_zoom = 1.0f;
         m_pan = QPointF();
-        update();
+        fitView();
     }
+
+void PointCloudCanvas::fitView() {
+    if (QThread::currentThread() != thread()) return;
+    m_zoom = 1.0f;
+    m_pan = QPointF();
+    if (!m_points.isEmpty()) {
+        float x = 0.0f, y = 0.0f;
+        const float aspect = float(qMax(1, width())) / float(qMax(1, height()));
+        for (int i = 0; i < 8; ++i) {
+            const QVector3D corner(i & 1 ? m_maxX : m_minX,
+                                   i & 2 ? m_maxY : m_minY,
+                                   i & 4 ? m_maxZ : m_minZ);
+            const QVector3D p = rotationTransform().mapVector((corner - m_center) * (2.0f / m_span));
+            x = qMax(x, std::abs(p.x())); y = qMax(y, std::abs(p.y()));
+        }
+        const float xLimit = aspect >= 1.0f ? aspect : 1.0f;
+        const float yLimit = aspect >= 1.0f ? 1.0f : 1.0f / aspect;
+        m_zoom = qBound(0.08f, 0.82f / qMax(qMax(x / xLimit, y / yLimit), 0.0001f), 30.0f);
+    }
+    update();
+}
+
+void PointCloudCanvas::setStandardView(int view) {
+    if (QThread::currentThread() != thread()) return;
+    if (view == 0) { m_yaw = 0.0f; m_pitch = -72.0f; }
+    else if (view == 2) { m_yaw = 0.0f; m_pitch = 0.0f; }
+    else if (view == 3) { m_yaw = 0.0f; m_pitch = 180.0f; }
+    else if (view == 4) { m_yaw = 90.0f; m_pitch = -90.0f; }
+    else if (view == 5) { m_yaw = -90.0f; m_pitch = -90.0f; }
+    else { m_yaw = 38.0f; m_pitch = -28.0f; }
+    fitView();
+}
 
 void PointCloudCanvas::initializeGL()  {
         initializeOpenGLFunctions();
@@ -388,7 +576,7 @@ void PointCloudCanvas::initializeGL()  {
             || rendererLower.contains(QStringLiteral("gdi generic"))) {
             qWarning().noquote() << "OpenGL software renderer detected:" << renderer;
         }
-        glClearColor(0.018f, 0.025f, 0.035f, 1.0f);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glEnable(GL_DEPTH_TEST);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -405,6 +593,7 @@ void PointCloudCanvas::initializeGL()  {
             uniform float cloudSpan;
             uniform vec2 viewPan;
             uniform float pointSize;
+            uniform float devicePixelRatio;
             uniform float minHeight;
             uniform float maxHeight;
             uniform int colorMode;
@@ -412,15 +601,20 @@ void PointCloudCanvas::initializeGL()  {
             uniform int renderPass;
             layout(location = 2) in uint pointState;
             layout(location = 3) in vec4 textureColor;
+            layout(location = 4) in vec4 markerColor;
             out float heightValue;
             out vec3 normalValue;
             out vec4 textureValue;
+            out vec4 markerValue;
             flat out int stateValue;
             void main() {
                 vec3 normalized = (vertexPosition - cloudCenter) * (2.0 / cloudSpan);
                 gl_Position = transform * vec4(normalized, 1.0);
                 gl_Position.xy += viewPan * gl_Position.w;
-                gl_PointSize = renderPass == 0 ? pointSize : max(pointSize + 6.0, 8.0);
+                markerValue = markerColor;
+                gl_PointSize = renderPass == 0
+                    ? (markerColor.a > 0.5 ? max(pointSize * devicePixelRatio * 3.0, devicePixelRatio * 7.0) : pointSize)
+                    : max(pointSize + 6.0, 8.0);
                 normalValue = vertexNormal;
                 textureValue = textureColor;
                 stateValue = int(pointState);
@@ -436,18 +630,23 @@ void PointCloudCanvas::initializeGL()  {
             uniform int textureFallbackColorMode;
             uniform float overlay;
             uniform int renderPass;
+            uniform vec3 selectionColor;
             out vec4 fragmentColor;
             flat in int stateValue;
             in vec4 textureValue;
+            in vec4 markerValue;
             void main() {
                 if (renderPass == 1 && distance(gl_PointCoord, vec2(0.5)) > 0.48)
                     discard;
-                vec3 lowColor = vec3(0.05, 0.55, 0.95);
-                vec3 middleColor = vec3(0.12, 0.88, 0.70);
-                vec3 highColor = vec3(1.00, 0.68, 0.20);
-                vec3 color = heightValue < 0.5
-                    ? mix(lowColor, middleColor, heightValue * 2.0)
-                    : mix(middleColor, highColor, (heightValue - 0.5) * 2.0);
+                vec3 color;
+                if (heightValue < 0.25)
+                    color = mix(vec3(0.05, 0.05, 0.95), vec3(0.00, 0.85, 0.95), heightValue * 4.0);
+                else if (heightValue < 0.50)
+                    color = mix(vec3(0.00, 0.85, 0.95), vec3(0.10, 0.95, 0.15), (heightValue - 0.25) * 4.0);
+                else if (heightValue < 0.75)
+                    color = mix(vec3(0.10, 0.95, 0.15), vec3(1.00, 0.90, 0.00), (heightValue - 0.50) * 4.0);
+                else
+                    color = mix(vec3(1.00, 0.90, 0.00), vec3(1.00, 0.05, 0.00), (heightValue - 0.75) * 4.0);
                 int activeColorMode = colorMode == 3 ? textureFallbackColorMode : colorMode;
                 if (activeColorMode == 1) {
                     float gray = dot(color, vec3(0.299, 0.587, 0.114));
@@ -463,7 +662,13 @@ void PointCloudCanvas::initializeGL()  {
                 float light = hasTextureColor
                     ? 1.0
                     : 0.72 + 0.28 * max(dot(normal, normalize(vec3(0.35, 0.45, 0.82))), 0.0);
-                if (renderPass == 1) color = vec3(1.0);
+                if (renderPass == 1) color = selectionColor;
+                else if (markerValue.a > 0.5) {
+                    float radius = distance(gl_PointCoord, vec2(0.5));
+                    if (radius > 0.47) color = vec3(0.025, 0.035, 0.05);
+                    else if (radius > 0.34) color = vec3(0.96, 0.98, 1.0);
+                    else color = markerValue.rgb;
+                }
                 else if (!hasTextureColor) {
                     if (stateValue == 1) color = vec3(0.58);
                     else if (stateValue == 2) color = vec3(1.0, 0.86, 0.18);
@@ -519,6 +724,25 @@ void PointCloudCanvas::initializeGL()  {
             out vec4 fragmentColor;
             void main() { fragmentColor = vec4(1.0, 0.86, 0.18, 1.0); }
         )";
+        static const char *planarMaskVertexShader = R"(
+            #version 330 core
+            layout(location = 0) in vec3 vertexPosition;
+            uniform mat4 transform;
+            uniform vec3 cloudCenter;
+            uniform float cloudSpan;
+            uniform vec2 viewPan;
+            void main() {
+                vec3 normalized = (vertexPosition - cloudCenter) * (2.0 / cloudSpan);
+                gl_Position = transform * vec4(normalized, 1.0);
+                gl_Position.xy += viewPan * gl_Position.w;
+            }
+        )";
+        static const char *planarMaskFragmentShader = R"(
+            #version 330 core
+            uniform vec4 maskColor;
+            out vec4 fragmentColor;
+            void main() { fragmentColor = maskColor; }
+        )";
 
         if (!m_program.addShaderFromSourceCode(QOpenGLShader::Vertex, vertexShader)
             || !m_program.addShaderFromSourceCode(QOpenGLShader::Fragment, fragmentShader)
@@ -528,17 +752,22 @@ void PointCloudCanvas::initializeGL()  {
             || !m_pickingProgram.link()
             || !m_contourProgram.addShaderFromSourceCode(QOpenGLShader::Vertex, contourVertexShader)
             || !m_contourProgram.addShaderFromSourceCode(QOpenGLShader::Fragment, contourFragmentShader)
-            || !m_contourProgram.link()) {
-            m_initializationError = tr("OpenGL 着色器初始化失败\n主渲染：%1\n拾取：%2\n轮廓：%3")
+            || !m_contourProgram.link()
+            || !m_planarMaskProgram.addShaderFromSourceCode(QOpenGLShader::Vertex, planarMaskVertexShader)
+            || !m_planarMaskProgram.addShaderFromSourceCode(QOpenGLShader::Fragment, planarMaskFragmentShader)
+            || !m_planarMaskProgram.link()) {
+            m_initializationError = tr("OpenGL 着色器初始化失败\n主渲染：%1\n拾取：%2\n轮廓：%3\n平面掩码：%4")
                                         .arg(m_program.log(), m_pickingProgram.log(),
-                                             m_contourProgram.log());
+                                             m_contourProgram.log(), m_planarMaskProgram.log());
             qWarning().noquote() << m_initializationError;
             return;
         }
 
         if (!m_vertexArray.create() || !m_vertexBuffer.create() || !m_stateBuffer.create()
-            || !m_textureBuffer.create()
-            || !m_contourVertexArray.create() || !m_contourBuffer.create()) {
+            || !m_textureBuffer.create() || !m_markerBuffer.create()
+            || !m_contourVertexArray.create() || !m_contourBuffer.create()
+            || !m_planarMaskVertexArray.create() || !m_planarMaskVertexBuffer.create()
+            || !m_planarMaskIndexBuffer.create()) {
             m_initializationError = tr("无法创建 OpenGL 顶点缓冲区");
             return;
         }
@@ -546,6 +775,11 @@ void PointCloudCanvas::initializeGL()  {
     }
 
 void PointCloudCanvas::paintGL()  {
+        glClearColor(float(m_backgroundColor.redF()), float(m_backgroundColor.greenF()),
+                     float(m_backgroundColor.blueF()), 1.0f);
+        glEnable(GL_DEPTH_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         if (m_initializationError.isEmpty() && context() && context()->isValid()
@@ -554,6 +788,8 @@ void PointCloudCanvas::paintGL()  {
             if (m_uploadError.isEmpty()) {
                 uploadStatesIfNeeded();
                 uploadTextureIfNeeded();
+                uploadMarkersIfNeeded();
+                uploadPlanarMasksIfNeeded();
                 uploadContoursIfNeeded();
                 const QMatrix4x4 transform = viewTransform();
                 m_program.bind();
@@ -562,6 +798,7 @@ void PointCloudCanvas::paintGL()  {
                 m_program.setUniformValue("cloudSpan", m_span);
                 m_program.setUniformValue("viewPan", QVector2D(m_pan));
                 m_program.setUniformValue("pointSize", float(m_pointSize));
+                m_program.setUniformValue("devicePixelRatio", float(devicePixelRatioF()));
                 const float lower = m_mapMin;
                 const float upper = m_mapMax;
                 m_program.setUniformValue("minHeight", lower);
@@ -570,6 +807,8 @@ void PointCloudCanvas::paintGL()  {
                 m_program.setUniformValue("textureFallbackColorMode", m_textureFallbackColorMode);
                 m_program.setUniformValue("overlay", m_overlay);
                 m_program.setUniformValue("renderPass", 0);
+                m_program.setUniformValue("selectionColor", QVector3D(float(m_selectionColor.redF()),
+                    float(m_selectionColor.greenF()), float(m_selectionColor.blueF())));
                 m_vertexArray.bind();
                 glDrawArrays(GL_POINTS, 0, int(m_points.size()));
                 m_lastPaintedRevision = m_renderRevision;
@@ -609,10 +848,42 @@ void PointCloudCanvas::paintGL()  {
                     m_contourVertexArray.release();
                     m_contourProgram.release();
                 }
+                if (!m_planarMaskRanges.isEmpty() || !m_planarMaskBoundaryRanges.isEmpty()) {
+                    m_planarMaskProgram.bind();
+                    m_planarMaskProgram.setUniformValue("transform", transform);
+                    m_planarMaskProgram.setUniformValue("cloudCenter", m_center);
+                    m_planarMaskProgram.setUniformValue("cloudSpan", m_span);
+                    m_planarMaskProgram.setUniformValue("viewPan", QVector2D(m_pan));
+                    m_planarMaskVertexArray.bind();
+                    glDepthFunc(GL_LEQUAL);
+                    glDepthMask(GL_FALSE);
+                    glEnable(GL_POLYGON_OFFSET_FILL);
+                    glPolygonOffset(-1.0f, -1.0f);
+                    for (int i = 0; i < m_planarMaskRanges.size(); ++i) {
+                        const auto range = m_planarMaskRanges.at(i);
+                        const auto color = m_planarMaskColors.at(i);
+                        m_planarMaskProgram.setUniformValue("maskColor", QVector4D(color.x(), color.y(), color.z(), m_planarMaskOpacities.at(i)));
+                        glDrawElements(GL_TRIANGLES, range.second, GL_UNSIGNED_INT,
+                            reinterpret_cast<const void *>(quintptr(range.first) * sizeof(quint32)));
+                    }
+                    glDisable(GL_POLYGON_OFFSET_FILL);
+                    glLineWidth(float(qMax(1.0, devicePixelRatioF() * 1.5)));
+                    for (int i = 0; i < m_planarMaskBoundaryRanges.size(); ++i) {
+                        const auto range = m_planarMaskBoundaryRanges.at(i);
+                        const auto color = m_planarMaskBoundaryColors.at(i);
+                        m_planarMaskProgram.setUniformValue("maskColor", QVector4D(color.x(), color.y(), color.z(), 1.0f));
+                        glDrawArrays(GL_LINE_STRIP, m_planarMaskVertices.size() + range.first, range.second);
+                    }
+                    glLineWidth(1.0f);
+                    glDepthMask(GL_TRUE);
+                    glDepthFunc(GL_LESS);
+                    m_planarMaskVertexArray.release();
+                    m_planarMaskProgram.release();
+                }
             }
         }
 
-        drawOverlay();
+        if (m_overlayWidget) m_overlayWidget->update();
     }
 
 void PointCloudCanvas::mousePressEvent(QMouseEvent *event)  {
@@ -640,6 +911,16 @@ void PointCloudCanvas::mouseMoveEvent(QMouseEvent *event)  {
     }
 
 void PointCloudCanvas::mouseReleaseEvent(QMouseEvent *event)  {
+        if (!m_selectionMode && !m_edgeSelectionMode && !m_mouseMoved
+            && event->button() == Qt::LeftButton && m_overlayOptions.showOrientation
+            && QRect(width() - 80, 10, 68, 68).contains(event->position().toPoint())) {
+            const QPointF delta = event->position() - QPointF(width() - 46, 44);
+            if (std::hypot(delta.x(), delta.y()) < 14) setStandardView(0);
+            else if (std::abs(delta.x()) > std::abs(delta.y())) setStandardView(delta.x() < 0 ? 4 : 5);
+            else setStandardView(delta.y() < 0 ? 2 : 3);
+            m_pressedButton = Qt::NoButton;
+            return;
+        }
         if (m_edgeSelectionMode && event->button() == Qt::LeftButton && m_mouseMoved
             && edgeRectanglePicked) {
             edgeRectanglePicked(QRectF(m_selectionOrigin, event->position()).normalized());
@@ -659,6 +940,7 @@ void PointCloudCanvas::resizeGL(int width, int height)  {
         Q_UNUSED(width)
         Q_UNUSED(height)
         m_pickingFbo.reset();
+        if (m_overlayWidget) { m_overlayWidget->setGeometry(rect()); m_overlayWidget->raise(); }
     }
 
 void PointCloudCanvas::wheelEvent(QWheelEvent *event)  {
@@ -724,6 +1006,8 @@ void PointCloudCanvas::updateBounds() {
         m_spanY = m_maxY - m_minY;
         m_spanZ = m_maxZ - m_minZ;
         m_span = std::max({m_spanX, m_spanY, m_spanZ, 0.000001f});
+        m_mapMin = m_minZ;
+        m_mapMax = m_maxZ > m_minZ ? m_maxZ : m_minZ + 1.0f;
     }
 
 void PointCloudCanvas::uploadCloudIfNeeded() {
@@ -797,12 +1081,26 @@ void PointCloudCanvas::uploadCloudIfNeeded() {
             m_program.bind();
             m_program.enableAttributeArray(3);
             m_program.setAttributeBuffer(3, GL_FLOAT, 0, 4, sizeof(QVector4D));
+            m_markerBuffer.bind();
+            m_markerBuffer.setUsagePattern(QOpenGLBuffer::DynamicDraw);
+            const qsizetype markerBytes = m_markerColors.size() * qsizetype(sizeof(QVector4D));
+            if (markerBytes > m_markerBufferCapacityBytes) {
+                const qsizetype grown = qMax(markerBytes,
+                    qMax<qsizetype>(1024, m_markerBufferCapacityBytes * 2));
+                m_markerBuffer.allocate(static_cast<int>(grown));
+                m_markerBufferCapacityBytes = grown;
+            }
+            if (markerBytes > 0) m_markerBuffer.write(0, m_markerColors.constData(), int(markerBytes));
+            m_program.enableAttributeArray(4);
+            m_program.setAttributeBuffer(4, GL_FLOAT, 0, 4, sizeof(QVector4D));
+            m_markerBuffer.release();
             m_program.release();
             m_textureBuffer.release();
             m_program.release();
             m_uploadPending = false;
             m_stateUploadPending = false;
             m_textureUploadPending = false;
+            m_markerUploadPending = false;
             qInfo() << "OpenGL cloud upload finished, points=" << m_points.size()
                     << "bytes=" << uploadBytes;
         }
@@ -918,7 +1216,8 @@ int PointCloudCanvas::pickPoint(const QPointF &position) {
         glReadPixels(x, y, readWidth, readHeight, GL_DEPTH_COMPONENT, GL_FLOAT, depths);
         glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
         glViewport(0, 0, pixelSize.width(), pixelSize.height());
-        glClearColor(0.018f, 0.025f, 0.035f, 1.0f);
+        glClearColor(float(m_backgroundColor.redF()), float(m_backgroundColor.greenF()),
+                     float(m_backgroundColor.blueF()), 1.0f);
         glEnable(GL_DITHER);
         glEnable(GL_BLEND);
         doneCurrent();
@@ -995,6 +1294,8 @@ QVector<int> PointCloudCanvas::pickRectangle(const QRectF &selection) {
         glReadPixels(x0, y0, readWidth, readHeight, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
         glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
         glViewport(0, 0, pixelSize.width(), pixelSize.height());
+        glClearColor(float(m_backgroundColor.redF()), float(m_backgroundColor.greenF()),
+                     float(m_backgroundColor.blueF()), 1.0f);
         glEnable(GL_DITHER); glEnable(GL_BLEND); doneCurrent();
         QSet<int> unique;
         for (int i = 0; i < readWidth * readHeight; ++i) {
@@ -1013,6 +1314,51 @@ int PointCloudCanvas::displayIndexForFullIndex(int fullIndex) const {
     if (!m_hasDisplayMapping)
         return fullIndex >= 0 && fullIndex < m_points.size() ? fullIndex : -1;
     return m_fullToDisplayIndices.value(fullIndex, -1);
+}
+
+void PointCloudCanvas::uploadPlanarMasksIfNeeded() {
+    if (!m_planarMaskUploadPending || !m_planarMaskVertexBuffer.isCreated()) return;
+    m_planarMaskVertexArray.bind();
+    m_planarMaskVertexBuffer.bind();
+    m_planarMaskVertexBuffer.setUsagePattern(QOpenGLBuffer::DynamicDraw);
+    const qsizetype vertexBytes = m_planarMaskVertices.size() * qsizetype(sizeof(QVector3D));
+    const qsizetype boundaryBytes = m_planarMaskBoundaryVertices.size() * qsizetype(sizeof(QVector3D));
+    m_planarMaskVertexBuffer.allocate(int(vertexBytes + boundaryBytes));
+    if (vertexBytes) m_planarMaskVertexBuffer.write(0, m_planarMaskVertices.constData(), int(vertexBytes));
+    if (boundaryBytes) m_planarMaskVertexBuffer.write(int(vertexBytes), m_planarMaskBoundaryVertices.constData(), int(boundaryBytes));
+    m_planarMaskProgram.bind();
+    m_planarMaskProgram.enableAttributeArray(0);
+    m_planarMaskProgram.setAttributeBuffer(0, GL_FLOAT, 0, 3, sizeof(QVector3D));
+    m_planarMaskIndexBuffer.bind();
+    m_planarMaskIndexBuffer.setUsagePattern(QOpenGLBuffer::DynamicDraw);
+    m_planarMaskIndexBuffer.allocate(m_planarMaskIndices.constData(), int(m_planarMaskIndices.size() * qsizetype(sizeof(quint32))));
+    m_planarMaskProgram.release();
+    m_planarMaskVertexBuffer.release();
+    // Keep the element buffer attached to this VAO for core-profile draws.
+    m_planarMaskVertexArray.release();
+    m_planarMaskUploadPending = false;
+}
+
+void PointCloudCanvas::uploadMarkersIfNeeded() {
+    if (!m_markerUploadPending || !m_markerBuffer.isCreated()) return;
+    m_vertexArray.bind();
+    m_markerBuffer.bind();
+    m_markerBuffer.setUsagePattern(QOpenGLBuffer::DynamicDraw);
+    const qsizetype markerBytes = m_markerColors.size() * qsizetype(sizeof(QVector4D));
+    if (markerBytes > m_markerBufferCapacityBytes) {
+        const qsizetype grown = qMax(markerBytes,
+            qMax<qsizetype>(1024, m_markerBufferCapacityBytes * 2));
+        m_markerBuffer.allocate(static_cast<int>(grown));
+        m_markerBufferCapacityBytes = grown;
+    }
+    if (markerBytes > 0) m_markerBuffer.write(0, m_markerColors.constData(), int(markerBytes));
+    m_program.bind();
+    m_program.enableAttributeArray(4);
+    m_program.setAttributeBuffer(4, GL_FLOAT, 0, 4, sizeof(QVector4D));
+    m_program.release();
+    m_markerBuffer.release();
+    m_vertexArray.release();
+    m_markerUploadPending = false;
 }
 
 int PointCloudCanvas::fullIndexForDisplayIndex(int displayIndex) const {
@@ -1040,8 +1386,9 @@ QMatrix4x4 PointCloudCanvas::viewTransform() const {
         return projection * rotationTransform();
     }
 
-void PointCloudCanvas::drawOverlay() {
-        QPainter painter(this);
+void PointCloudCanvas::drawOverlay(QPaintDevice *device) {
+        QPainter painter;
+        if (!painter.begin(device)) return;
         painter.setRenderHint(QPainter::Antialiasing);
         const auto project = [this](const QVector3D &world) {
             const QVector3D normalized = (world - m_center) * (2.0f / m_span);
@@ -1184,12 +1531,49 @@ void PointCloudCanvas::drawOverlay() {
             painter.setBrush(QColor(90, 210, 255, 35));
             painter.drawRect(QRectF(m_selectionOrigin, m_lastMousePosition).normalized());
         }
-        painter.setPen(QColor(231, 237, 246));
+        painter.setPen(m_backgroundColor.lightnessF() > 0.5
+                           ? QColor(102, 120, 141) : QColor(231, 237, 246));
         QFont titleFont = painter.font();
         titleFont.setPointSize(11);
         titleFont.setBold(true);
         painter.setFont(titleFont);
-        painter.drawText(18, 27, tr("3D 点云"));
+        painter.setFont(QFont());
+        painter.drawText(12, 22, tr("%1 点").arg(QLocale().toString(m_fullPointCount)));
+
+        if (m_overlayOptions.showColorBar && m_colorMode == 0 && !m_points.isEmpty()) {
+            const int barHeight = qBound(80, int(height() * 0.45), 360);
+            QLinearGradient gradient(0, 0, 0, barHeight);
+            gradient.setColorAt(0.0, QColor::fromRgbF(1.0, 0.05, 0.0));
+            gradient.setColorAt(0.25, QColor::fromRgbF(1.0, 0.90, 0.0));
+            gradient.setColorAt(0.5, QColor::fromRgbF(0.10, 0.95, 0.15));
+            gradient.setColorAt(0.75, QColor::fromRgbF(0.0, 0.85, 0.95));
+            gradient.setColorAt(1.0, QColor::fromRgbF(0.05, 0.05, 0.95));
+            painter.save(); painter.translate(width() - 26, (height() - barHeight) / 2);
+            painter.fillRect(QRect(0, 0, 14, barHeight), gradient); painter.restore();
+        }
+        if (m_overlayOptions.showCoordinateAxes) {
+            const QPointF origin(42, height() - 38);
+            const QVector3D vectors[]{QVector3D(1, 0, 0), QVector3D(0, 1, 0), QVector3D(0, 0, 1)};
+            const QColor colors[]{QColor(255, 65, 65), QColor(65, 235, 95), QColor(65, 145, 255)};
+            const QString names[]{"X", "Y", "Z"};
+            for (int i = 0; i < 3; ++i) {
+                const QVector3D axis = rotationTransform().mapVector(vectors[i]);
+                const QPointF end = origin + QPointF(axis.x() * 28, -axis.y() * 28);
+                painter.setPen(QPen(colors[i], 2)); painter.drawLine(origin, end);
+                if (m_overlayOptions.showAxisLabels) painter.drawText(end + QPointF(4, -3), names[i]);
+            }
+        }
+        if (m_overlayOptions.showOrientation) {
+            const QRectF compass(width() - 80, 10, 68, 68);
+            painter.setPen(QPen(QColor(157, 168, 188), 1)); painter.setBrush(QColor(233, 238, 248));
+            painter.drawEllipse(compass); painter.setPen(QColor(55, 69, 90));
+            painter.drawText(compass.adjusted(0, 2, 0, -44), Qt::AlignCenter, "T");
+            painter.drawText(compass.adjusted(0, 44, 0, -2), Qt::AlignCenter, "B");
+            painter.drawText(compass.adjusted(3, 0, -44, 0), Qt::AlignCenter, "L");
+            painter.drawText(compass.adjusted(44, 0, -3, 0), Qt::AlignCenter, "R");
+            painter.setBrush(Qt::NoBrush); painter.drawEllipse(compass.center(), 10, 10);
+            painter.setBrush(QColor(55, 69, 90)); painter.drawEllipse(compass.center(), 3, 3);
+        }
 
         if (m_overlayOptions.showStatistics) {
             painter.setFont(QFont());
@@ -1288,9 +1672,9 @@ void PointCloudCanvas::drawOverlay() {
                              tr("点云显示失败\n%1").arg(displayError));
             return;
         }
-        if (m_points.isEmpty()) {
+        if (m_points.isEmpty() && !m_emptyMessage.isEmpty()) {
             painter.setPen(QColor(170, 182, 199));
-            painter.drawText(rect(), Qt::AlignCenter, tr("打开 PLY 文件开始预览"));
+            painter.drawText(rect(), Qt::AlignCenter, m_emptyMessage);
         }
-
+        painter.end();
     }

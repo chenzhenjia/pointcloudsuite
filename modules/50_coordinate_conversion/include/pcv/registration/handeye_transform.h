@@ -95,6 +95,9 @@ struct CloudTransformOptions {
     quint32 rasterWidth = 0;
     quint32 rasterHeight = 0;
     QVector<qsizetype> rasterSourceIndices;
+    // FullXyz camera rasters can interpolate robot pose once per source row.
+    // This is separate from LineProfileXz's historical input-Y contract.
+    bool useFullXyzRasterRowProgress = false;
 };
 
 struct RobotCloudResult {

@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1811</width>
-    <height>1095</height>
+    <width>1280</width>
+    <height>720</height>
    </rect>
   </property>
   <property name="minimumSize">
@@ -36,7 +36,7 @@ QMenuBar, QToolBar, QMenu, QAbstractItemView {
     border-bottom: 1px solid #d9e0e8;
     padding: 2px 8px;
 }
-QMenuBar::item { padding: 5px 12px; }
+QMenuBar::item { padding: 1px 10px; }
 QMenuBar::item:selected, QMenu::item:selected, QToolButton:hover { background-color: #edf5ff; color: #1769aa; }
 QMenu { border: 1px solid #d9e0e8; padding: 4px; }
 QMenu::item { padding: 6px 24px 6px 12px; }
@@ -47,8 +47,8 @@ QPushButton {
     color: #344054;
     border: 1px solid #cbd5e1;
     border-radius: 4px;
-    padding: 6px 14px;
-    min-height: 28px;
+    padding: 3px 8px;
+    min-height: 22px;
 }
 QPushButton:hover { background-color: #edf5ff; border-color: #5b9bd5; color: #1769aa; }
 QPushButton:pressed { background-color: #dceeff; }
@@ -97,7 +97,19 @@ QPushButton#btn_open_point_cloud, QPushButton#btn_open_scanning_info { backgroun
 QPushButton#btn_open_point_cloud:hover, QPushButton#btn_open_scanning_info:hover { background-color: #1769aa; }
 QLabel#lbl_device_empty { color: #667085; padding: 18px 8px; }
 QWidget#wgt_canvas_panel { background-color: #f8fafc; border: 1px solid #d9e0e8; }
-QWidget#wgt_canvas_host { background-color: #ffffff; }
+QWidget#wgt_canvas_host { background-color: #000000; }
+QWidget#workbench_header, QWidget#workbench_header QLabel { background:#185bb8; color:white; }
+QWidget#workbench_header QPushButton { background:#185bb8; border:1px solid #6c99d8; color:white; min-height:20px; padding:2px 10px; }
+QWidget#workbench_header QPushButton:hover { background:#286bc8; }
+QWidget#workbench_header QComboBox { min-height:20px; padding:2px 8px; }
+QLabel#workbench_brand { font-size:14px; font-weight:600; }
+QWidget#preview_toolbar { background:#eef2f8; }
+QWidget#preview_toolbar QPushButton { background:transparent; border:none; min-height:20px; padding:1px 10px; }
+QWidget#workbench_drawer { background:white; border-left:1px solid #d5deeb; }
+QWidget#workbench_drawer QTabBar::tab { padding:5px 6px; min-width:52px; }
+QWidget#workbench_drawer QPushButton { padding:3px 6px; }
+QWidget#wgt_canvas_panel { border:none; background:black; }
+
 </string>
   </property>
   <widget class="QWidget" name="wgt_central">
@@ -925,10 +937,7 @@ QWidget#wgt_canvas_host { background-color: #ffffff; }
         <item>
          <widget class="QLabel" name="lbl_device_empty">
           <property name="text">
-           <string>暂无设备数据
-连接功能待接入
-
-尚未加载点云</string>
+           <string>尚未加载点云</string>
           </property>
           <property name="wordWrap">
            <bool>true</bool>
@@ -1002,7 +1011,7 @@ QWidget#wgt_canvas_host { background-color: #ffffff; }
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>1811</width>
+     <width>1280</width>
      <height>27</height>
     </rect>
    </property>

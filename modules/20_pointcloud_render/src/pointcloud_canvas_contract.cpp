@@ -64,12 +64,75 @@ bool validateCoordinateFrame(const CoordinateFrame &frame, QString *error)
 bool validateContours(const QVector<Contour> &contours, QString *error)
 {
     for (const Contour &contour : contours) {
+        for (int component = 0; component < 4; ++component) {
+            const float value = contour.color[component];
+            if (!std::isfinite(value) || value < 0.0f || value > 1.0f) {
+                if (error) *error = QStringLiteral("渲染轮廓颜色无效");
+                return false;
+            }
+        }
+        for (int component = 0; component < 4; ++component) {
+            const float value = contour.color[component];
+            if (!std::isfinite(value) || value < 0.0f || value > 1.0f) {
+                if (error) *error = QStringLiteral("渲染轮廓颜色无效");
+                return false;
+            }
+        }
         for (const QVector3D &point : contour.points) {
             if (!std::isfinite(point.x()) || !std::isfinite(point.y())
                 || !std::isfinite(point.z())) {
                 if (error) *error = QStringLiteral("渲染轮廓包含非有限数值");
                 return false;
             }
+        }
+    }
+    return true;
+}
+
+bool validatePlanarMaskOverlay(const PlanarMaskOverlay &overlay, QString *error)
+{
+    if (overlay.vertices.isEmpty() || overlay.triangleIndices.isEmpty()
+        || overlay.triangleIndices.size() % 3 != 0
+        || overlay.boundaryRanges.isEmpty()
+        || !std::isfinite(overlay.opacity) || overlay.opacity < 0.0f || overlay.opacity > 1.0f) {
+        if (error) *error = QStringLiteral("平面掩码网格或透明度无效");
+        return false;
+    }
+    for (int component = 0; component < 4; ++component) {
+        const float value = overlay.color[component];
+        if (!std::isfinite(value) || value < 0.0f || value > 1.0f) {
+            if (error) *error = QStringLiteral("平面掩码颜色无效");
+            return false;
+        }
+    }
+    for (const QVector3D &point : overlay.vertices) {
+        if (!std::isfinite(point.x()) || !std::isfinite(point.y()) || !std::isfinite(point.z())) {
+            if (error) *error = QStringLiteral("平面掩码顶点包含非有限数值");
+            return false;
+        }
+    }
+    for (quint32 index : overlay.triangleIndices) {
+        if (index >= quint32(overlay.vertices.size())) {
+            if (error) *error = QStringLiteral("平面掩码三角索引越界");
+            return false;
+        }
+    }
+    for (const QVector3D &point : overlay.boundaryVertices) {
+        if (!std::isfinite(point.x()) || !std::isfinite(point.y()) || !std::isfinite(point.z())) {
+            if (error) *error = QStringLiteral("平面掩码边界包含非有限数值");
+            return false;
+        }
+    }
+    for (const auto &range : overlay.boundaryRanges) {
+        if (range.first < 0 || range.second < 4
+            || range.first > overlay.boundaryVertices.size() - range.second) {
+            if (error) *error = QStringLiteral("平面掩码边界范围越界");
+            return false;
+        }
+        if (overlay.boundaryVertices.at(range.first)
+            != overlay.boundaryVertices.at(range.first + range.second - 1)) {
+            if (error) *error = QStringLiteral("平面掩码边界必须闭合");
+            return false;
         }
     }
     return true;

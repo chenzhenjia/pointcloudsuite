@@ -6,6 +6,7 @@
 // complete stitch -> result view. Every dynamic expectation runs on complete
 // point clouds; the display subset only affects what is painted.
 #include "selectedplanedialog.h"
+#include "features/workpiece_template_dialog_v1.h"
 #include <pcv/render/pointcloud_canvas.h>
 #include <QApplication>
 #include <QComboBox>
@@ -27,6 +28,7 @@
 #include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QTableWidget>
+#include <QToolButton>
 #include <QTemporaryDir>
 #include <QThread>
 #include <functional>
@@ -179,6 +181,15 @@ struct SelectedPlaneDialogTestAccess {
         QString xml;QStringList plies;
         if(!writeFixture(root.path(),2,&xml,&plies))return false;
         SelectedPlaneDialog dialog(0.4f);
+        auto *configToggle=dialog.findChild<QToolButton *>(QStringLiteral("selected_plane_config_toggle"));
+        auto *configPanel=dialog.findChild<QWidget *>(QStringLiteral("selected_plane_config_panel"));
+        auto *logToggle=dialog.findChild<QToolButton *>(QStringLiteral("selected_plane_log_toggle"));
+        auto *logPanel=dialog.findChild<QWidget *>(QStringLiteral("selected_plane_log_panel"));
+        if(!configToggle||!configPanel||!logToggle||!logPanel||!configPanel->isHidden()||!logPanel->isHidden())return false;
+        configToggle->click();logToggle->click();
+        if(configPanel->isHidden()||logPanel->isHidden())return false;
+        configToggle->click();logToggle->click();
+        if(!configPanel->isHidden()||!logPanel->isHidden())return false;
         dialog.m_calibration->setText(xml);
         dialog.m_output->setText(root.path());
         dialog.m_tolerance->setValue(0.4);
@@ -234,6 +245,21 @@ struct SelectedPlaneDialogTestAccess {
         if(!PointCloudCanvasTestAccess::fullDisplay(*dialog.m_resultCanvas,1250))return false;
         if(nativeGl&&!pump(dialog,[&dialog] {return PointCloudCanvasTestAccess::rendered(*dialog.m_resultCanvas);}))return false;
         if(!dialog.m_saveTemplate->isEnabled())return false;
+        dialog.saveTemplate();
+        auto *form=dialog.m_templateForm.data();
+        if(!form||form->isWindow()||form->isModal()||QApplication::activeModalWidget()
+            ||dialog.m_views->currentWidget()!=form||dialog.m_globalBusy)return false;
+        auto *name=form->findChild<QLineEdit *>(QStringLiteral("template_name"));
+        if(!name)return false;
+        name->setText(QStringLiteral("retained name"));
+        form->reject();
+        if(!dialog.m_resultValid||dialog.m_views->currentIndex()!=1)return false;
+        dialog.saveTemplate();
+        if(dialog.m_templateForm!=form||name->text()!=QStringLiteral("retained name"))return false;
+        // A changed revision must never submit the stale form's snapshot.
+        ++dialog.m_revision;
+        form->accept();
+        if(dialog.m_globalBusy||!dialog.m_resultValid||dialog.m_views->currentIndex()!=1)return false;
         if(dialog.m_result.reportFile.isEmpty()||dialog.m_result.outputPly.isEmpty())return false;
         const auto formal=pcv::detail::io::readPly(dialog.m_result.outputPly);
         if(!formal.ok||formal.points.size()!=1250||dialog.m_result.cloudIds.size()!=1250||dialog.m_result.sourceIndices.size()!=1250)return false;

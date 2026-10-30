@@ -22,6 +22,8 @@ struct AxisPointSelection {
     bool ok = false;
 };
 
+using AutomaticAxisPointSelection = AxisPointSelection;
+
 struct WorkpieceCoordinateSystem {
     QVector3D originInRobotBase;
     QVector3D axisXInRobotBase{1.0f, 0.0f, 0.0f};
@@ -57,6 +59,13 @@ WorkpieceCoordinateSystem buildWorkpieceCoordinateSystemFromThreePoints(
     const QVector3D &origin,
     int xAxisPointIndex,
     int yAxisPointIndex);
+
+AutomaticAxisPointSelection selectAutomaticWorkpieceAxisPoints(
+    const QVector<pointcloud::Point3D> &points,
+    const QVector<int> &planeIndices,
+    const QVector3D &origin,
+    const QVector3D &planeNormal,
+    float planeToleranceMm = 0.4f);
 
 PlaneMaskResult rasterizePlaneMask(
     const QVector<pointcloud::Point3D> &points,

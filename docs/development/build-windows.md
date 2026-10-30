@@ -57,3 +57,9 @@ pointcloudview 自关闭变量为 POINTCLOUDVIEW_SELFTEST_CLOSE=1；pointcloudst
 ## STEP 可选依赖（2026-10-23）
 
 新增 `-StepImport -OcctDir <OpenCASCADEConfig目录>` 对应 `PCV_BUILD_STEP_IMPORT=ON`，严格使用OCCT7.9.3/x64动态库。默认OFF不需要OCCT，CAD模板包读写仍可用；ON缺依赖配置报错。Debug/Release用各自运行库，生成目录/依赖均在源码外。具体命令、运行库与验证见[STEP说明](step_cad_template_v1.md)。
+
+## 2026-10-26 离线所选平面 GUI v2 构建入口
+
+`scan_geometry_demo_v1` 保留 legacy target/开关名，当前源码已为真实离线 PLY 所选平面流程。根共享 UI 条件包括 `PCV_BUILD_SCAN_GEOMETRY_DEMO_V1`，20 随 View 或该 GUI 创建，30 随 View/Stitch/Tools/该 GUI 创建；此前“20只随View、30只随Stitch/Tools”的描述为旧状态。新增共享应用任务库 `pcv_selected_plane_tasks_v2` 依赖10/30/50/60，新 GUI 单独启用时应获得必要依赖，仍需用户实际配置验证。
+
+按用户安排本轮未配置、构建、CTest或运行，不生成新版 EXE；已有 v1 EXE 不代表新源码行为。使用全新源码外 Debug/Release 目录、Qt6.8.3/MSVC/NMake，完整命令、独立GUI组合和用户验收清单见 [v2 开发说明](scan_geometry_real_selected_plane_v2.md)。不要用本节追加说明覆盖历史实际运行记录。

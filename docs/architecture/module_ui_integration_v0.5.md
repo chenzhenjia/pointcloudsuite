@@ -126,3 +126,39 @@ CameraDialog负责设备源/SDK通知/高级实时预览；CameraCaptureWizard�
 
 
 2026-10-23 深度主缓存v1：10拥有C16/辅助元数据、SDK按需转换、session-v3/frame-v2；20提供SDK无关深度画布；应用CameraDepthPreviewV1负责固定帧/悬停/确认、revision/token/join及camera/mm发布；30适配深度来源，50/60数学不改，保留同期CAD/STEP修改。[说明](../development/camera_depth_preview_cache_v1.md)。
+# 2026-10-23 UI shell v1
+
+`MainWindow` 继续拥有数据读取、任务生命周期、revision 门禁和模块编排。`WorkbenchShellV1` 仅负责主窗口工作页、顶部入口和右侧覆盖抽屉，不拥有算法或后台任务。相机、拼接、六分屏和模板页面由原控制器继续持有，切页只改变显示；工具抽屉隐藏不销毁页面。
+
+模块 20 的 `PointCloudCanvas` 增加绘制层叠加：黑色画布、自动 Z 高度伪彩、无数值彩条、左下 XYZ 轴和右上方向控件。画布仍负责 OpenGL、拾取和渲染 DTO，不依赖应用层。
+
+2026-10-23 六分屏页面紧凑化：`SelectedPlaneDialog` 将参数、帧列表/轮次操作和运行日志置于两个默认收起的可展开容器内，六格画布仍常驻；仅设置 QWidget 可见性，不改变 Frame/Panel/Job、revision、取消/join、日志缓冲及提交行为。自动单测覆盖默认收起和展开/收起。原生 GUI 视觉截图未能在本轮稳定生成，设计对照见根目录 `design-qa.md`，状态 blocked。
+
+## 独立扫描几何演示映射 v1（2026-10-26）
+
+主责应用层 `apps/scan_geometry_demo_v1`；独立 EXE `scan_geometry_demo_v1`。`.ui`/QSS/QRC 提供 Designer 可编辑主体和原型图标，`ScanGeometryWindowV1` 持有流程模型、按钮状态、QTimer/token 及关闭/重新扫描确认，`DemoCanvasV1` 组合模块 20 并转换显示下标到稳定点 ID，`ScanGeometryModelV1` 维护六段示例、候选审核、修剪历史和确认快照。所有演示事件在 GUI 线程执行；无后台算法 worker 或硬件任务。
+
+运行依赖仅为 core 点类型、Qt 和模块 20，不调用 10/30/50/60 的真实采集、配准或坐标数学。20 仅追加实例 `setAppearance`、既有 `PointColorOverlay` 的公开配色入口及浅底点数提示；默认调用方保留黑底/白选中。方向、相机操作、单点/矩形深度拾取继续复用 20，选面身份和擦除/撤销语义归应用。
+
+本次白名单增量为新应用、新模型/view 测试、根/模块/tests CMake 注册、模块 20 canvas 头/源及配套文档；不覆盖已有主窗口/渲染改动，不更改版本/schema，不提交/push/上传。详细文件、接口、实际验证、最后 CMake 未重配项及回滚边界见[开发说明](../development/scan_geometry_demo_v1.md)。用户接手最终 GUI、DPI、Qt Creator target 运行及旧工作台验收，演示 [design-qa](../../apps/scan_geometry_demo_v1/design-qa.md) 保持 blocked，不代表最终视觉已通过。
+
+## 2026-10-26 离线单页所选平面拼接 v2 协同映射
+
+| owner_and_entry | responsibility_and_boundary |
+|---|---|
+| apps/stitching_ui / pcv_selected_plane_tasks_v2 | 从旧 SelectedPlaneDialog 提取真实读取/50转换/展示抽样/完整索引/选面快照；不拥有 UI 或调度 |
+| apps/pointcloudview / SelectedPlaneDialog | 保留原 UI、队列、线程生命周期、模板操作；使用共用任务和兼容类型别名 |
+| apps/scan_geometry_demo_v1 / ScanGeometrySessionV2 | 新单页独立会话、输入/参考 revision/token/稳定帧 ID、六帧窗口、固定参考匹配、异常暂停、逐帧/批量审核、拼接和会话修剪 |
+| apps/scan_geometry_demo_v1 / 深度帧生命周期 | 模块10读取深度会话帧供预览，显式处理/自动匹配时单帧物化；逐帧或批量确认后释放活动XYZ、索引和展示缓存，保留源深度与确认快照。模块20只显示中立深度DTO；模块50按原像素行插值FullXyz位姿 |
+| modules/60 / matchReferencePlaneV2 | robot_base 参考平面辅助候选，复用不可变索引和 selectPlaneAtPoint；不属于 40 位置确认，不自动业务确认 |
+| modules/30 / stitchSelectedPlanes | 仍只收完整已确认 robot_base 选面 DTO，30→10/50 不变；不链接60、不重复手眼转换、不接干涉标注 |
+| modules/20 / PointCloudCanvas | 复用实例外观/逐点配色、display→full 映射与可见 GPU 拾取；无新渲染算法或默认外观变更 |
+| modules/60 / findHighSidePlaneCandidatesV1 | 复用完整选面索引和 selectPlaneAtPoint 提供高侧候选；由 scan_geometry_demo_v1 展示软提醒，模块 30 不接收该状态 |
+
+根 CMake/模块条件补齐新 GUI 单独启用时20/30和共享任务依赖。旧模拟模型/画布源码保留，不在正式窗口运行链路中；target 名称与 Designer 入口保持。主线维护公共任务、会话/生命周期和 CMake；模块 60 只增加匹配 API。细节及未运行验证见 [开发说明](../development/scan_geometry_real_selected_plane_v2.md)。
+
+2026-10-30 渲染与高侧提醒增量：原始转换帧使用 pointcloudview 默认高度色/点大小/叠加参数与完整 Z 范围；会话标注为蓝工件、红干涉，未选点保留高度色。模块 60 提供 `findHighSidePlaneCandidatesV1`，仅生成应用软提醒；用户手工确认才进入干涉标注，跳过提醒不会门控拼接。见 [开发说明](../development/scan_geometry_real_selected_plane_v2.md)。
+
+2026-10-30 可见性与世界 Z 增量：模块 20 `PointCloudCanvas` 增加独立 marker overlay buffer，扫描几何页对标注点绘制 DPR 缩放的大点及深/浅双边缘，不改变高度色、纹理 overlay 和旧调用方默认值。模块 60 `findHighSidePlaneCandidatesV1` 使用候选中心 Z 减工件面中心 Z，取消法向方向/倾角相关判定。见 [开发说明](../development/scan_geometry_real_selected_plane_v2.md#2026-10-30-标注可见性与世界-z-高侧提醒)。
+
+2026-10-30 拟合区域显示增量：模块 60 `buildPlaneMaskV1()` 从完整选面点索引生成占用网格三角面与外环/孔洞闭合边界，复用处理预算和取消回调；应用任务携带结果并按输入/frame 生命周期清理。模块 20 `PlanarMaskOverlay` 用动态 VAO/VBO/EBO 绘制 25% 透明蓝/红平面和闭合轮廓，点颜色、拼接 DTO、输出文件和旧轮廓接口不变。详见 [扫描几何 v2 说明](../development/scan_geometry_real_selected_plane_v2.md#2026-10-30-拟合平面掩码叠加显示)。

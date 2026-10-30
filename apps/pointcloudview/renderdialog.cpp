@@ -22,7 +22,8 @@ RenderDialog::RenderDialog(QWidget *parent)
     for (QCheckBox *checkBox : {ui->chk_show_axes, ui->chk_show_floor_grid,
                                 ui->chk_floor_z_up, ui->chk_show_axis_labels,
                                 ui->chk_show_normals, ui->chk_show_bbox,
-                                ui->chk_show_statistics}) {
+                                ui->chk_show_statistics, ui->chk_show_colorbar,
+                                ui->chk_show_orientation}) {
         connect(checkBox, &QCheckBox::toggled, this, notify);
     }
     connect(ui->btn_reset_view, &QPushButton::clicked, this, &RenderDialog::resetViewRequested);
@@ -49,6 +50,8 @@ pcv::render::RenderOverlayOptions RenderDialog::overlayOptions() const
     options.showNormals = ui->chk_show_normals->isChecked();
     options.showBoundingBox = ui->chk_show_bbox->isChecked();
     options.showStatistics = ui->chk_show_statistics->isChecked();
+    options.showColorBar = ui->chk_show_colorbar->isChecked();
+    options.showOrientation = ui->chk_show_orientation->isChecked();
     return options;
 }
 
@@ -76,6 +79,8 @@ void RenderDialog::setOverlayOptions(const pcv::render::RenderOverlayOptions &op
     const QSignalBlocker normalsBlocker(ui->chk_show_normals);
     const QSignalBlocker bboxBlocker(ui->chk_show_bbox);
     const QSignalBlocker statisticsBlocker(ui->chk_show_statistics);
+    const QSignalBlocker colorbarBlocker(ui->chk_show_colorbar);
+    const QSignalBlocker orientationBlocker(ui->chk_show_orientation);
     ui->chk_show_axes->setChecked(options.showCoordinateAxes);
     ui->chk_show_floor_grid->setChecked(options.showFloorGrid);
     ui->chk_floor_z_up->setChecked(options.floorZUp);
@@ -83,6 +88,8 @@ void RenderDialog::setOverlayOptions(const pcv::render::RenderOverlayOptions &op
     ui->chk_show_normals->setChecked(options.showNormals);
     ui->chk_show_bbox->setChecked(options.showBoundingBox);
     ui->chk_show_statistics->setChecked(options.showStatistics);
+    ui->chk_show_colorbar->setChecked(options.showColorBar);
+    ui->chk_show_orientation->setChecked(options.showOrientation);
 }
 
 void RenderDialog::setContentText(const QString &text)

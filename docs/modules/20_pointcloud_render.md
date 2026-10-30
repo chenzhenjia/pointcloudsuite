@@ -1,5 +1,7 @@
 # 20_pointcloud_render：画布与渲染
 
+2026-10-30 扫描几何深度预览：`ScanGeometryCanvasV2` 复用 `DepthImageCanvasV1` 显示原始深度帧；SDK转换后切回既有点云画布。模块20仅接收中立 `CameraFrame` 预览数据，不调用SDK、不持有物化生命周期。PLY显示及拾取保持原行为。[开发记录](../development/scan_geometry_demo_v1.md#2026-10-30-sdk深度缓存与按需物化)。
+
 版本 v0.5，核对日期 2026-10-15。target pcv_m20_pointcloud_render，依赖 pcv_core 与 Qt Core/Gui/Widgets/OpenGL/OpenGLWidgets，不依赖 apps。[架构](../architecture/software_architecture_v0.5.md) · [日志](../changelog/v0.5.md)。
 
 ## 当前职责与接口
@@ -18,6 +20,10 @@ PointColorOverlay 接收 60 的严格 source raster 映射，渲染层校验后�
 
 ## 兼容与验证
 
+## 默认预览 v1（2026-10-23）
+
+默认点大小为 2，使用蓝-青-绿-黄-红的高度 `RAINBOW` 伪彩并按当前 Z 范围自动映射。`PointCloudCanvas` 通过透明子画布绘制无数值色条、左下 XYZ 轴和右上方向控件；默认隐藏地板网格、包围盒和统计文字。纹理灰度仍由应用切换到 color mode 3，不改变默认高度伪彩。
+
 旧 pcv_m20_pointcloudrender/旧头仅转发。pointcloud_canvas_contract_tests 覆盖非法值、索引及 DTO；真实 Windows/OpenGL、大点云、缩放、视觉方向和窗口关闭另验。历史显示细节见[归档](../archive/history_pre_v0.5.md)，本轮仅静态核对。
 
 六分屏整合（2026-10-16）：六个独立画布复用既有完整下标映射，仅批量入口设置更小最小尺寸；放大切换同一布局保留视角。正式结果仍setCloud完整显示。平面叠加更新推进渲染revision，使frameSwapped计时等待真正的候选绘制；重复设置相同选面模式不再反复抢焦点。见[整合说明](../development/batch_plane_selection_template_integration_v1.md)，真实OpenGL未验收。
@@ -33,3 +39,37 @@ PointColorOverlay 接收 60 的严格 source raster 映射，渲染层校验后�
 
 
 2026-10-23 深度画布v1：SDK无关pcv::render::DepthImageDisplayV1/DepthImageCanvasV1，C16直接伪彩、掩码覆盖、亮度切换、原像素拾取、滚轮缩放/右键平移；20不依赖10/60。[说明](../development/camera_depth_preview_cache_v1.md)。
+
+## 独立扫描几何演示的实例外观（2026-10-26）
+
+`PointCloudCanvas::setAppearance(const QColor &background, const QColor &selection)` 设置实例背景与选中点颜色，仅 GUI 线程接受有效颜色。默认仍为黑底、白色选中点；`paintGL` 和单点/矩形 GPU 拾取后的背景恢复使用实例配置。点数提示根据背景亮度选择深浅文字，黑底保留原文字颜色。
+
+`bool setPointColorOverlay(const pcv::render::PointColorOverlay &overlay)` 复用既有逐点覆盖 DTO、验证和纹理颜色缓冲；调用方按完整点云下标提供颜色与 valid，显示子集内部经已有 display→full 映射提取。非法输入返回 false 且保留旧覆盖。与灰度覆盖共用同一缓冲，调用方通过既有 color mode 3 显示；没有新增配准、选面算法或序列化格式。
+
+`setPointMarkerOverlay()` / `clearPointMarkerOverlay()` 是独立的标注显示通道，按完整点索引映射到当前显示子集，颜色不受 color mode 影响。仅有效标注点在常规点云通道上绘制更大圆点、深色外缘、浅色内缘和指定颜色核心；点径随设备像素比缩放。GPU 拾取仍使用原独立 pass。默认无 marker 的旧调用方渲染不变。
+
+`apps/scan_geometry_demo_v1` 使用高度彩虹作底色，蓝色覆盖工件面，红色覆盖人工干涉面；应用独立维护稳定 ID、修剪和会话确认。高侧候选提醒保持在应用层，不改变模块 20 DTO 或 GPU 拾取。矩形框选直接复用深度 GPU 拾取，仅返回当前视角可见点，不新增穿透选择。模块 20 仍只依赖 core/Qt，不依赖演示应用或其他算法模块。
+
+新增原生 view 回归覆盖默认黑底白选中、浅底拾取恢复、覆盖映射/非法保留、遮挡拾取和修剪显示。首轮 Debug/Release 全量 CTest 各 47/47；代码修正后 Release 末轮 47/47，Debug 末轮第 47 项按用户接手验证要求停止。最后测试环境追加顺序调整未重配置，最终 GUI/DPI/旧工作台人工验收归用户，不能由这些测试代替。详见[实施记录](../development/scan_geometry_demo_v1.md)。
+
+## 2026-10-26 真实离线单页调用方 v2
+
+`apps/scan_geometry_demo_v1/scan_geometry_canvas_v2.*` 复用现有实例外观、PointColorOverlay、setDisplayCloud 和 GPU 可见点拾取；本轮不改模块 20 渲染算法或旧默认外观。原始帧 display→full 映射保留完整下标，结果修剪映射至不可变原始结果下标，并由应用层检查结果 revision。蓝色为工件，橙色为待审核工件，黄色为人工干涉标注；干涉标注不混入正式结果。视角/缩放/尺寸变化取消待擦除框，确认擦除才改会话遮罩。原生 GL/DPI/遮挡与默认黑底回归由用户执行，见 [v2 说明](../development/scan_geometry_real_selected_plane_v2.md)。
+
+## 2026-10-29 扫描几何画布配色
+
+扫描几何页使用 `PointCloudCanvas::setAppearance` 设置实例级深色背景，不改变其他调用方默认外观。基础点色恢复模块 20 的高度彩虹模式；`PointColorOverlay.valid=0` 的点继续使用高度渐变，工件/干涉/待审核索引以稀疏覆盖显示。GPU 拾取仍使用独立颜色/深度 framebuffer，不依赖显示色。
+
+右侧 HTML 风格五步条属于应用层导航，不进入模块 20。应用只开放“扫描与几何选择”，其余工件信息、位置姿态、探针和发布项禁用；选面/拼接/保存子阶段由会话状态门控。该 UI 调整不改变画布、着色、拾取或其他 pointcloudview 调用方。
+
+同页使用实例级 `setEmptyMessage(QString)` 关闭模块通用 PLY 空态，改由应用显示扫描数据空态，避免两条提示重叠。空字符串只关闭该实例占位文本，默认消息对既有调用方不变。
+
+## 扫描几何高度预览与标注（2026-10-30）
+
+扫描几何调用方按模块 20 默认 `colorMode=0`、point size 2、overlay 1.0 显示转换后原始帧，并使用完整 robot_base Z 范围设色阶。高度彩虹保持原样，蓝色工件面和红色干涉面走独立 marker 通道，以放大点径及明暗双层边缘强调；拾取继续使用独立 pass。纹理覆盖契约及其他调用方默认外观不变。
+
+## 拟合平面掩码叠加（2026-10-30）
+
+`PlanarMaskOverlay` 接收世界坐标顶点、三角索引、闭合边界线环、颜色及透明度；`PointCloudCanvas::setPlanarMaskOverlays()` 在 GUI 线程验证后更新动态 VBO/EBO。三角面片按半透明填充绘制，边界按设备像素比设线宽，绘制不更改点颜色、纹理 overlay、拾取索引或正式点云。设置新点云/显示子集时清除旧掩码，调用方需在该次发布后提交与新来源匹配的 overlay。
+
+扫描几何使用蓝色工件面、红色待确认/已确认干涉面，默认填充透明度 25%。掩码由模块 60 在完整拟合点索引上生成，闭合边界按 U/V 占用单元追踪外环和孔洞环；渲染使用 `GL_LINE_STRIP` 与 VAO 绑定的元素缓冲。掩码生成峰值工作区通过共享 `ProcessingBudget` 申请，失败只丢弃叠加并保留选面结果，应用通过交互提示 tooltip 报告失败。旧黄色 `Contour`/轮廓渲染和未调用新 API 的调用方默认行为不变。

@@ -1,13 +1,16 @@
 #include "mainwindow.h"
+#include "workbench_shell_v1.h"
 #include "features/workpiece_template_dialog_v1.h"
 #include <stitchingwindow.h>
 #include <pcv/interface/temp_workpiece_interface.h>
 #include <QApplication>
+#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
 #include <pcv/render/pointcloud_canvas.h>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFutureWatcher>
@@ -20,12 +23,15 @@
 #include <QStatusBar>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QSurfaceFormat>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
 #include <iostream>
 
-#define CHECK(condition) do { if (!(condition)) { std::cerr << "CHECK failed at " << __LINE__ \
-    << ": " << #condition << '\n'; return false; } } while (false)
+#define CHECK(condition) do { if (!(condition)) { const QString failure = QString("CHECK failed at %1: %2").arg(__LINE__).arg(#condition); \
+    std::cerr << failure.toStdString() << '\n'; \
+    QFile report(qEnvironmentVariable("PCV_WORKBENCH_REPORT")); if (report.open(QIODevice::WriteOnly | QIODevice::Append)) report.write(failure.toUtf8() + '\n'); \
+    return false; } } while (false)
 
 struct PointCloudCanvasTestAccess {
     static bool hasTexture(const PointCloudCanvas &canvas) {
@@ -174,7 +180,9 @@ struct WorkpieceTemplateViewTestAccess {
         publication.textureMappedPointCount = snapshot.size();
         const auto beforePublication = view.m_canvasRevision;
         view.stitchingSucceeded(publication);
-        CHECK(view.m_canvasRevision > beforePublication && view.m_colorMode->currentIndex() == 3);
+        CHECK(view.m_canvasRevision > beforePublication && view.m_colorMode->currentIndex() == 0);
+        CHECK(PointCloudCanvasTestAccess::hasTexture(*view.m_canvas));
+        view.m_colorMode->setCurrentIndex(3);
         CHECK(PointCloudCanvasTestAccess::hasTexture(*view.m_canvas));
         publication.textureGrayscale.clear(); publication.textureValid.clear();
         publication.textureMappedPointCount = 0;
@@ -268,10 +276,99 @@ struct CadTemplateViewTestAccess {
     }
 };
 
+struct WorkbenchViewTestAccess {
+    static bool run(bool native) {
+        std::cerr << "workbench-test-start native=" << native << '\n';
+        MainWindow view;
+        view.resize(1280, 720);
+        view.show(); QApplication::processEvents();
+        CHECK(view.m_workbench && view.m_pointSize->value() == 2);
+        const int cameraPage=view.m_workbench->pagePicker->findData("camera");
+        view.m_workbench->setPageEnabled("camera",false);
+        CHECK(!(view.m_workbench->pagePicker->model()->flags(view.m_workbench->pagePicker->model()->index(cameraPage,0)) & Qt::ItemIsEnabled));
+        view.m_workbench->setPageEnabled("camera",true);
+        CHECK(view.m_workbench->pagePicker->model()->flags(view.m_workbench->pagePicker->model()->index(cameraPage,0)) & Qt::ItemIsEnabled);
+        for(auto *action:view.m_canvas->actions())
+            CHECK(action->shortcutContext()==Qt::WidgetWithChildrenShortcut);
+        for(auto *action:view.actions())
+            CHECK(action->shortcut()!=QKeySequence(Qt::Key_Backspace));
+        CHECK(!view.findChild<QWidget *>("wgt_source_panel")->isVisible());
+        const QSize canvasSize = view.m_canvas->size();
+        const QSize clientSize = view.centralWidget()->size();
+        const double ratio = double(canvasSize.width()) * canvasSize.height()
+            / qMax(1, clientSize.width() * clientSize.height());
+        std::cerr << "workbench-test-ratio=" << ratio << " canvas=" << canvasSize.width() << "x" << canvasSize.height() << " client=" << clientSize.width() << "x" << clientSize.height() << '\n';
+        std::cout << "preview_ratio=" << ratio << " canvas=" << canvasSize.width() << "x" << canvasSize.height() << '\n';
+        CHECK(ratio >= .85);
+        view.showCleanDialog(); QApplication::processEvents();
+        CHECK(view.m_workbench->drawerVisible());
+        CHECK(view.m_canvas->size() == canvasSize);
+        const double voxel = view.m_voxelSize->value();
+        view.m_voxelSize->setValue(voxel + .1);
+        view.m_workbench->hideDrawer(); view.showCleanDialog();
+        CHECK(view.m_voxelSize->value() == voxel + .1);
+        const auto revision = view.m_canvasRevision;
+        view.activateWorkbenchPage("selection");
+        auto *selection = view.m_selectedPlanePage; CHECK(selection && !selection->isWindow());
+        view.activateWorkbenchPage("main"); view.activateWorkbenchPage("selection");
+        CHECK(view.m_selectedPlanePage == selection);
+        view.openMultiFrameRegistration();
+        CHECK(view.m_stitchingWindow && !view.m_stitchingWindow->isWindow());
+        view.activateWorkbenchPage("main");
+        CHECK(view.m_canvasRevision == revision);
+        QVector<pointcloud::Point3D> cloud;
+        for (int y = -80; y <= 80; ++y) for (int x = -110; x <= 110; ++x)
+            cloud.append({float(x), float(y), float(x + 110) / 8.0f, 0, 0, 1});
+        view.m_rawPoints = cloud;
+        view.publishCanvasCache(cloud);
+        const auto options = view.m_canvas->overlayOptions();
+        CHECK(options.showColorBar && options.showOrientation && options.showCoordinateAxes);
+        CHECK(!options.showFloorGrid && !options.showBoundingBox);
+        CHECK(view.m_mapMax->value() > view.m_mapMin->value());
+        const QString output = qEnvironmentVariable("PCV_WORKBENCH_SCREENSHOT_DIR");
+        if (native) {
+            if (!output.isEmpty()) { QDir().mkpath(output); view.grab().save(QDir(output).filePath("before_v3.png")); }
+            std::cerr << "canvas-visible=" << view.m_canvas->isVisible() << " window=" << view.m_canvas->window()->objectName().toStdString() << '\n';
+            QElapsedTimer timer; timer.start();
+            while (!view.m_canvas->hasRenderedCurrentCloud() && timer.elapsed() < 5000) {
+                QApplication::processEvents(); QThread::msleep(5);
+            }
+            CHECK(view.m_canvas->isValid() && view.m_canvas->hasRenderedCurrentCloud());
+            if (!output.isEmpty()) {
+                QDir().mkpath(output);
+                CHECK(view.grab().save(QDir(output).filePath("main_v3.png")));
+                view.showCleanDialog(); QApplication::processEvents();
+                CHECK(view.grab().save(QDir(output).filePath("drawer_v3.png")));
+                view.activateWorkbenchPage("selection"); QApplication::processEvents();
+                CHECK(view.grab().save(QDir(output).filePath("selection_v3.png")));
+                view.openMultiFrameRegistration(); QApplication::processEvents();
+                CHECK(view.grab().save(QDir(output).filePath("stitch_v3.png")));
+            }
+        }
+        view.activateWorkbenchPage("main"); view.showPlaneDialog();
+        view.startPlanePointSelection(); QApplication::processEvents();
+        CHECK(!view.m_workbench->drawerVisible());
+        CHECK(view.m_operationBar->isVisible());
+        view.cancelPickingOperation(); QApplication::processEvents();
+        CHECK(!view.m_operationBar->isVisible());
+        CHECK(view.m_workbench->drawerVisible());
+        view.close(); QApplication::processEvents();
+        return true;
+    }
+};
+
 int main(int argc, char **argv)
 {
+    const bool native = argc > 1 && QByteArray(argv[1]) == "--native-ui";
+    if (native) {
+        qputenv("QT_OPENGL", "desktop"); QApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
+        QSurfaceFormat format; format.setVersion(3, 3); format.setProfile(QSurfaceFormat::CoreProfile);
+        format.setDepthBufferSize(24); QSurfaceFormat::setDefaultFormat(format);
+    }
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
+    if (!WorkbenchViewTestAccess::run(native)) return 3;
+    if (native) return 0;
     if (!WorkpieceTemplateViewTestAccess::run()) return 1;
     if (!CadTemplateViewTestAccess::run()) return 2;
     std::cout << "Workpiece template GUI lifecycle regression passed\n";

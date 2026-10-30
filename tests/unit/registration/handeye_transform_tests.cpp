@@ -272,6 +272,46 @@ int main(int argc, char **argv) {
                      "FullXyz must not require a LineProfileXz scan travel")) return 1;
     }
 
+    // FullXyz camera rasters interpolate robot pose by original image row,
+    // while preserving complete XYZ and sparse row-major source indices.
+    {
+        pointcloud::CloudTransformOptions rasterOptions = options;
+        rasterOptions.layout = pointcloud::DepthPointLayout::FullXyz;
+        rasterOptions.useFullXyzRasterRowProgress = true;
+        rasterOptions.rasterWidth = 2;
+        rasterOptions.rasterHeight = 3;
+        rasterOptions.rasterSourceIndices = {0, 1, 2, 5};
+        const QVector<pointcloud::Point3D> raster = {
+            {1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f},
+            {7.0f, 8.0f, 9.0f}, {10.0f, 11.0f, 12.0f}
+        };
+        const pointcloud::RobotPose xEnd{10.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+        const auto result = pointcloud::transformLineScanToRobotBase(
+            raster, identityCalibration, origin, xEnd, rasterOptions);
+        if (!require(result.ok, result.error.toLocal8Bit().constData())) return 1;
+        if (!require(result.sourceIndices == rasterOptions.rasterSourceIndices,
+                     "FullXyz raster conversion must preserve original pixel indices")) return 1;
+        if (!require(result.scanRatios == QVector<float>{0.0f, 0.0f, 0.5f, 1.0f},
+                     "points in one raster row must share the same robot pose ratio")) return 1;
+        if (!require(nearPoint(result.points.at(0), 1.0f, 2.0f, 3.0f)
+                     && nearPoint(result.points.at(1), 4.0f, 5.0f, 6.0f)
+                     && nearPoint(result.points.at(2), 12.0f, 8.0f, 9.0f)
+                     && nearPoint(result.points.at(3), 20.0f, 11.0f, 12.0f),
+                     "FullXyz raster conversion must preserve XYZ and interpolate translation by row")) return 1;
+
+        const auto reverse = pointcloud::transformLineScanToRobotBase(
+            raster, identityCalibration, xEnd, origin, rasterOptions);
+        if (!require(reverse.ok && near(reverse.scanRatios.at(2), 0.5f)
+                     && nearPoint(reverse.points.at(2), 12.0f, 8.0f, 9.0f),
+                     "reverse pose direction must use the same source-row ratio")) return 1;
+
+        rasterOptions.rasterSourceIndices = {0, 2, 4, 6};
+        const auto invalid = pointcloud::transformLineScanToRobotBase(
+            raster, identityCalibration, origin, xEnd, rasterOptions);
+        if (!require(!invalid.ok,
+                     "FullXyz raster indices outside width x height must be rejected")) return 1;
+    }
+
     // ------------------------------------------------------------------
     // 8. Normals share the rigid rotation and are never translated.
     // ------------------------------------------------------------------

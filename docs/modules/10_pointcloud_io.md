@@ -1,5 +1,7 @@
 # 10_pointcloud_io：IO、预处理与事务输出
 
+2026-10-30 扫描几何深度按需处理：`scan_geometry_demo_v1` 轮次浏览使用 `readCapturedFrame(...PreviewOnly)` 读取/校验原始C16及必要亮度，不在预览阶段调用SDK转换；用户开始当前帧处理时复用 `materializeCameraFrame()`。SDK输出仍需传给模块50按源像素行转换，模块10没有改变会话格式或SDK映射契约。源帧由应用会话保留，活动点云由应用在审核确认后释放。[开发记录](../development/scan_geometry_demo_v1.md#2026-10-30-sdk深度缓存与按需物化)。
+
 2026-10-23 亮度保存/纹理解耦 v2：`readCapturedFrame()` 新增 `CaptureFrameReadMode`，默认 `WithIntensity` 兼容旧调用，显式 `GeometryOnly` 严格读取几何/来源映射且不访问亮度载荷。亮度采集、缺图停采、逐帧 PNG/Mono8 事务保存不变；事后图片损坏不影响几何专用读取。[当前说明](../development/camera_capture_intensity_decoupling_v2.md)。
 
 2026-10-16 启动顺序修复v1：SDK整图在StartMeasure成功后清缓存，再开放内部图像门禁；清缓存失败停止测量并关闭释放，异常回调在启动期间仍可上报。预览/固定行数启动行为及公共接口不变；增加阶段/原始错误码诊断和真实驱动SDK替身回归。[验证与现场步骤](../development/camera_startup_order_fix_v1.md)。

@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "workbench_shell_v1.h"
 #include "features/workpiece_template_dialog_v1.h"
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
 #include "cameradialog.h"
@@ -15,6 +16,8 @@
 #include <QLocale>
 #include <QMessageBox>
 #include <QProgressDialog>
+#include <QPushButton>
+#include <QVBoxLayout>
 #include <QSignalBlocker>
 #include <QStatusBar>
 #include <QTimer>
@@ -89,18 +92,27 @@ void MainWindow::createWorkpieceTemplate()
         }
     }
     const quint64 revision = m_canvasRevision;
-    WorkpieceTemplateDialogV1 dialog(summary, pcv::workpiece::defaultWorkpieceTemplateRoot(), this);
+    if (m_templateForm) m_templateForm->deleteLater();
+    auto *dialog = new WorkpieceTemplateDialogV1(summary, pcv::workpiece::defaultWorkpieceTemplateRoot(), this);
+    m_templateForm = dialog;
     m_templateFormActive = true;
-    const int accepted = dialog.exec();
-    m_templateFormActive = false;
-    if (accepted != QDialog::Accepted || !workpieceTemplateReady() || revision != m_canvasRevision) return;
-    pcv::workpiece::SaveWorkpieceTemplateRequest request;
-    request.name = dialog.templateName();
-    request.outputRoot = dialog.outputRoot();
-    request.coordinateFrame = summary.coordinateFrame;
-    request.points = m_points;
-    request.source = m_currentCloudSource.templateSource();
-    startWorkpieceTemplateSave(std::move(request));
+    connect(dialog, &QDialog::accepted, this, [this, dialog, revision, summary] {
+        m_templateFormActive = false;
+        if (!workpieceTemplateReady() || revision != m_canvasRevision) {
+            statusBar()->showMessage(tr("点云已变化，请重新创建模板")); return;
+        }
+        pcv::workpiece::SaveWorkpieceTemplateRequest request;
+        request.name = dialog->templateName(); request.outputRoot = dialog->outputRoot();
+        request.coordinateFrame = summary.coordinateFrame;
+        request.points = m_points; request.source = m_currentCloudSource.templateSource();
+        startWorkpieceTemplateSave(std::move(request));
+    });
+    connect(dialog, &QDialog::rejected, this, [this] {
+        m_templateFormActive = false;
+        if (m_workbench && !m_closing) m_workbench->showPage("main");
+    });
+    if (m_workbench) { m_workbench->embedPage("template", dialog); m_workbench->showPage("template"); }
+    else dialog->show();
 }
 
 void MainWindow::openWorkpieceTemplate()
@@ -129,7 +141,7 @@ void MainWindow::prepareWorkpieceTemplateTask(bool loading)
                                                  tr("取消"), 0, 0, this);
     m_templateProgressDialog->setObjectName(QStringLiteral("workpiece_template_progress_v1"));
     m_templateProgressDialog->setWindowTitle(loading ? tr("打开工件模板") : tr("创建工件模板"));
-    m_templateProgressDialog->setWindowModality(Qt::WindowModal);
+    m_templateProgressDialog->setWindowModality(Qt::NonModal);
     m_templateProgressDialog->setMinimumDuration(0);
     m_templateProgressDialog->setAutoClose(false);
     m_templateProgressDialog->setAutoReset(false);
@@ -144,6 +156,7 @@ void MainWindow::prepareWorkpieceTemplateTask(bool loading)
             const qsizetype completed = m_templateProgress->completed.load();
             const qsizetype total = m_templateProgress->total.load();
             m_templateProgressDialog->setLabelText(stageText(stage));
+            statusBar()->showMessage(stageText(stage));
             if (total > 0) {
                 m_templateProgressDialog->setRange(0, 100);
                 m_templateProgressDialog->setValue(int(std::min(100.0, 100.0 * double(completed) / double(total))));
@@ -151,7 +164,10 @@ void MainWindow::prepareWorkpieceTemplateTask(bool loading)
         });
     }
     m_templateProgressTimer->start();
-    m_templateProgressDialog->show();
+    if (m_workbench) {
+        m_workbench->embedPage("template", m_templateProgressDialog);
+        m_workbench->showPage("template");
+    } else m_templateProgressDialog->show();
 }
 
 void MainWindow::startWorkpieceTemplateSave(pcv::workpiece::SaveWorkpieceTemplateRequest request)
@@ -235,6 +251,17 @@ void MainWindow::workpieceTemplateFinished()
     m_templateProgressDialog->deleteLater();
     m_templateProgressDialog = nullptr;
     m_templateTaskActive = false;
+    if (m_workbench) {
+        auto *summary = new QWidget(this);
+        auto *layout = new QVBoxLayout(summary);
+        auto *label = new QLabel(result.cancelled ? tr("模板任务已取消") :
+            (result.success ? tr("%1\n%2").arg(result.info.name, result.outputDirectory) : result.message), summary);
+        label->setWordWrap(true); label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        layout->addWidget(label);
+        auto *retry = new QPushButton(tr("创建工件模板"), summary); layout->addWidget(retry); layout->addStretch();
+        connect(retry, &QPushButton::clicked, this, &MainWindow::createWorkpieceTemplate);
+        m_workbench->embedPage("template", summary);
+    }
     if (result.cancelled) {
         if (m_processJob)
             finishProcessJob(m_processJob->parameters.jobId, QStringLiteral("PCV_CANCELLED"),

@@ -1,0 +1,938 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ui version="4.0">
+  <class>ScanGeometryWindowV1</class>
+  <widget class="QMainWindow" name="ScanGeometryWindowV1">
+    <property name="geometry">
+      <rect>
+        <x>0</x>
+        <y>0</y>
+        <width>1280</width>
+        <height>800</height>
+      </rect>
+    </property>
+    <property name="minimumSize">
+      <size>
+        <width>1024</width>
+        <height>640</height>
+      </size>
+    </property>
+    <property name="windowTitle">
+                  <string>扫描几何</string>
+    </property>
+    <widget class="QWidget" name="centralwidget">
+      <layout class="QVBoxLayout" name="rootLayout">
+        <property name="spacing">
+          <number>12</number>
+        </property>
+        <property name="leftMargin">
+          <number>16</number>
+        </property>
+        <property name="topMargin">
+          <number>16</number>
+        </property>
+        <property name="rightMargin">
+          <number>16</number>
+        </property>
+        <property name="bottomMargin">
+          <number>12</number>
+        </property>
+        <item>
+          <layout class="QHBoxLayout" name="pageHeading">
+            <item>
+              <widget class="QLabel" name="pageTitle">
+                <property name="text">
+                  <string>扫描几何</string>
+                </property>
+              </widget>
+            </item>
+            <item>
+              <spacer name="headingSpacer">
+                <property name="orientation">
+                  <enum>Qt::Horizontal</enum>
+                </property>
+                <property name="sizeHint" stdset="0">
+                  <size>
+                    <width>40</width>
+                    <height>20</height>
+                  </size>
+                </property>
+              </spacer>
+            </item>
+            <item>
+              <widget class="QLabel" name="demoBadge">
+                <property name="text">
+                  <string>离线模式</string>
+                </property>
+              </widget>
+            </item>
+          </layout>
+        </item>
+        <item>
+          <layout class="QHBoxLayout" name="bodyLayout" stretch="1,0">
+            <property name="spacing">
+              <number>16</number>
+            </property>
+            <item>
+              <widget class="QFrame" name="mainCard">
+                <layout class="QVBoxLayout" name="mainLayout" stretch="0,0,0,1,0,0">
+                  <property name="spacing">
+                    <number>12</number>
+                  </property>
+                  <property name="leftMargin">
+                    <number>14</number>
+                  </property>
+                  <property name="topMargin">
+                    <number>14</number>
+                  </property>
+                  <property name="rightMargin">
+                    <number>14</number>
+                  </property>
+                  <property name="bottomMargin">
+                    <number>12</number>
+                  </property>
+                  <item>
+                    <layout class="QHBoxLayout" name="scanHeading">
+                      <item>
+                        <widget class="QLabel" name="subtitle">
+                          <property name="text">
+                            <string>选择、审核、拼接</string>
+                          </property>
+                          <property name="wordWrap">
+                            <bool>true</bool>
+                          </property>
+                        </widget>
+                      </item>
+                      <item>
+                        <widget class="QLabel" name="scanStatus">
+                          <property name="sizePolicy">
+                            <sizepolicy hsizetype="Maximum" vsizetype="Preferred">
+                              <horstretch>0</horstretch>
+                              <verstretch>0</verstretch>
+                            </sizepolicy>
+                          </property>
+                          <property name="text">
+                            <string>等待配置</string>
+                          </property>
+                        </widget>
+                      </item>
+                    </layout>
+                  </item>
+                  <item>
+                    <layout class="QHBoxLayout" name="roundLayout">
+                      <item>
+                        <widget class="QPushButton" name="previousRound">
+                          <property name="text">
+                            <string>上一轮</string>
+                          </property>
+                        </widget>
+                      </item>
+                      <item>
+                        <widget class="QLabel" name="roundStatus">
+                          <property name="text">
+                            <string>第 0/0 轮</string>
+                          </property>
+                        </widget>
+                      </item>
+                      <item>
+                        <widget class="QPushButton" name="nextRound">
+                          <property name="text">
+                            <string>下一轮</string>
+                          </property>
+                        </widget>
+                      </item>
+                    </layout>
+                  </item>
+                  <item>
+                    <layout class="QHBoxLayout" name="segmentLayout">
+                      <property name="spacing">
+                        <number>6</number>
+                      </property>
+                      <item>
+                        <widget class="QPushButton" name="segment0">
+                          <property name="text">
+                            <string>点云 1 未加载</string>
+                          </property>
+                          <property name="checkable">
+                            <bool>true</bool>
+                          </property>
+                        </widget>
+                      </item>
+                      <item>
+                        <widget class="QPushButton" name="segment1">
+                          <property name="text">
+                            <string>点云 2 未加载</string>
+                          </property>
+                          <property name="checkable">
+                            <bool>true</bool>
+                          </property>
+                        </widget>
+                      </item>
+                      <item>
+                        <widget class="QPushButton" name="segment2">
+                          <property name="text">
+                            <string>点云 3 未加载</string>
+                          </property>
+                          <property name="checkable">
+                            <bool>true</bool>
+                          </property>
+                        </widget>
+                      </item>
+                      <item>
+                        <widget class="QPushButton" name="segment3">
+                          <property name="text">
+                            <string>点云 4 未加载</string>
+                          </property>
+                          <property name="checkable">
+                            <bool>true</bool>
+                          </property>
+                        </widget>
+                      </item>
+                      <item>
+                        <widget class="QPushButton" name="segment4">
+                          <property name="text">
+                            <string>点云 5 未加载</string>
+                          </property>
+                          <property name="checkable">
+                            <bool>true</bool>
+                          </property>
+                        </widget>
+                      </item>
+                      <item>
+                        <widget class="QPushButton" name="segment5">
+                          <property name="text">
+                            <string>点云 6 未加载</string>
+                          </property>
+                          <property name="checkable">
+                            <bool>true</bool>
+                          </property>
+                        </widget>
+                      </item>
+                      <item>
+                        <widget class="QPushButton" name="mergedSegment">
+                          <property name="text">
+                            <string>拼接结果
+未生成</string>
+                          </property>
+                          <property name="checkable">
+                            <bool>true</bool>
+                          </property>
+                        </widget>
+                      </item>
+                    </layout>
+                  </item>
+                  <item>
+                    <widget class="QFrame" name="canvasFrame">
+                      <layout class="QHBoxLayout" name="canvasFrameLayout" stretch="0,1">
+                        <property name="spacing">
+                          <number>4</number>
+                        </property>
+                        <property name="leftMargin">
+                          <number>8</number>
+                        </property>
+                        <property name="topMargin">
+                          <number>8</number>
+                        </property>
+                        <property name="rightMargin">
+                          <number>0</number>
+                        </property>
+                        <property name="bottomMargin">
+                          <number>0</number>
+                        </property>
+                        <item alignment="Qt::AlignTop">
+                          <widget class="QFrame" name="toolStrip">
+                            <property name="minimumWidth">
+                              <number>42</number>
+                            </property>
+                            <property name="maximumWidth">
+                              <number>42</number>
+                            </property>
+                            <layout class="QVBoxLayout" name="toolLayout">
+                              <property name="spacing">
+                                <number>5</number>
+                              </property>
+                              <property name="leftMargin">
+                                <number>4</number>
+                              </property>
+                              <property name="topMargin">
+                                <number>4</number>
+                              </property>
+                              <property name="rightMargin">
+                                <number>4</number>
+                              </property>
+                              <property name="bottomMargin">
+                                <number>4</number>
+                              </property>
+                              <item>
+                                <widget class="QToolButton" name="selectWorkpiece">
+                                  <property name="toolTip">
+                                    <string>选择工件平面</string>
+                                  </property>
+                                  <property name="accessibleName">
+                                    <string>选择工件平面</string>
+                                  </property>
+                                  <property name="checkable">
+                                    <bool>true</bool>
+                                  </property>
+                                </widget>
+                              </item>
+                              <item>
+                                <widget class="QToolButton" name="selectInterference">
+                                  <property name="toolTip">
+                                    <string>选择干涉平面</string>
+                                  </property>
+                                  <property name="accessibleName">
+                                    <string>选择干涉平面</string>
+                                  </property>
+                                  <property name="checkable">
+                                    <bool>true</bool>
+                                  </property>
+                                </widget>
+                              </item>
+                              <item>
+                                <widget class="QToolButton" name="resetPlanes">
+                                  <property name="toolTip">
+                                    <string>重置平面选择</string>
+                                  </property>
+                                  <property name="accessibleName">
+                                    <string>重置平面选择</string>
+                                  </property>
+                                </widget>
+                              </item>
+                              <item>
+                                <widget class="QToolButton" name="rectangleTool">
+                                  <property name="toolTip">
+                                    <string>矩形框选擦除（仅可见点）</string>
+                                  </property>
+                                  <property name="accessibleName">
+                                    <string>矩形框选擦除</string>
+                                  </property>
+                                  <property name="checkable">
+                                    <bool>true</bool>
+                                  </property>
+                                </widget>
+                              </item>
+                              <item>
+                                <widget class="QToolButton" name="undoTrim">
+                                  <property name="toolTip">
+                                    <string>撤销修剪（Ctrl+Z）</string>
+                                  </property>
+                                  <property name="accessibleName">
+                                    <string>撤销修剪</string>
+                                  </property>
+                                </widget>
+                              </item>
+                              <item>
+                                <widget class="QToolButton" name="restoreTrim">
+                                  <property name="toolTip">
+                                    <string>恢复全部点云</string>
+                                  </property>
+                                  <property name="accessibleName">
+                                    <string>恢复全部点云</string>
+                                  </property>
+                                </widget>
+                              </item>
+                            </layout>
+                          </widget>
+                        </item>
+                        <item>
+                          <widget class="QWidget" name="canvasHost" native="true">
+                            <layout class="QVBoxLayout" name="canvasLayout">
+                              <property name="spacing">
+                                <number>0</number>
+                              </property>
+                              <property name="leftMargin">
+                                <number>0</number>
+                              </property>
+                              <property name="topMargin">
+                                <number>0</number>
+                              </property>
+                              <property name="rightMargin">
+                                <number>0</number>
+                              </property>
+                              <property name="bottomMargin">
+                                <number>0</number>
+                              </property>
+                            </layout>
+                          </widget>
+                        </item>
+                      </layout>
+                    </widget>
+                  </item>
+                  <item>
+                    <widget class="QFrame" name="renderAndHeightNotice">
+                      <property name="frameShape">
+                        <enum>QFrame::NoFrame</enum>
+                      </property>
+                      <layout class="QVBoxLayout" name="renderAndHeightNoticeLayout">
+                        <property name="spacing">
+                          <number>4</number>
+                        </property>
+                        <property name="leftMargin">
+                          <number>2</number>
+                        </property>
+                        <property name="topMargin">
+                          <number>2</number>
+                        </property>
+                        <property name="rightMargin">
+                          <number>2</number>
+                        </property>
+                        <property name="bottomMargin">
+                          <number>2</number>
+                        </property>
+                        <item>
+                          <widget class="QLabel" name="colorLegend">
+                            <property name="text">
+                              <string>&lt;span style="color:#20c5d8"&gt;●&lt;/span&gt; 彩色高度　&lt;span style="color:#1675e8"&gt;●&lt;/span&gt; 工件面标注　&lt;span style="color:#f04452"&gt;●&lt;/span&gt; 干涉面标注　&lt;span style="color:#d39a20"&gt;●&lt;/span&gt; 世界 Z 高侧提醒</string>
+                            </property>
+                          </widget>
+                        </item>
+                        <item>
+                          <layout class="QHBoxLayout" name="highSideNoticeLayout">
+                            <item>
+                              <widget class="QLabel" name="highSideNotice">
+                                <property name="text">
+                                  <string>尚未检测高侧平面</string>
+                                </property>
+                                <property name="wordWrap">
+                                  <bool>true</bool>
+                                </property>
+                              </widget>
+                            </item>
+                            <item>
+                              <widget class="QComboBox" name="highSideCandidates">
+                                <property name="minimumSize">
+                                  <size>
+                                    <width>170</width>
+                                    <height>0</height>
+                                  </size>
+                                </property>
+                              </widget>
+                            </item>
+                            <item>
+                              <widget class="QPushButton" name="markHighSideCandidate">
+                                <property name="text">
+                                  <string>标注为干涉面</string>
+                                </property>
+                              </widget>
+                            </item>
+                            <item>
+                              <widget class="QPushButton" name="ignoreHighSideCandidate">
+                                <property name="text">
+                                  <string>忽略提醒</string>
+                                </property>
+                              </widget>
+                            </item>
+                          </layout>
+                        </item>
+                      </layout>
+                    </widget>
+                  </item>
+                  <item>
+                    <layout class="QHBoxLayout" name="viewActions">
+                      <item>
+                        <widget class="QLabel" name="pointCount">
+                          <property name="text">
+                            <string>尚无点云</string>
+                          </property>
+                        </widget>
+                      </item>
+                      <item>
+                        <spacer name="viewSpacer">
+                          <property name="orientation">
+                            <enum>Qt::Horizontal</enum>
+                          </property>
+                          <property name="sizeHint" stdset="0">
+                            <size>
+                              <width>20</width>
+                              <height>20</height>
+                            </size>
+                          </property>
+                        </spacer>
+                      </item>
+                      <item>
+                        <widget class="QPushButton" name="fitView">
+                          <property name="text">
+                            <string>适配视图</string>
+                          </property>
+                        </widget>
+                      </item>
+                      <item>
+                        <widget class="QPushButton" name="topView">
+                          <property name="text">
+                            <string>顶视图</string>
+                          </property>
+                        </widget>
+                      </item>
+                    </layout>
+                  </item>
+                  <item>
+                    <widget class="QLabel" name="interactionHint">
+                      <property name="text">
+                        <string>请先配置输入，再加载点云。</string>
+                      </property>
+                      <property name="wordWrap">
+                        <bool>true</bool>
+                      </property>
+                    </widget>
+                  </item>
+                </layout>
+              </widget>
+            </item>
+            <item>
+              <widget class="QScrollArea" name="sideScroll">
+                <property name="minimumSize">
+                  <size>
+                    <width>304</width>
+                    <height>0</height>
+                  </size>
+                </property>
+                <property name="maximumSize">
+                  <size>
+                    <width>320</width>
+                    <height>16777215</height>
+                  </size>
+                </property>
+                <property name="frameShape">
+                  <enum>QFrame::NoFrame</enum>
+                </property>
+                <property name="widgetResizable">
+                  <bool>true</bool>
+                </property>
+                <property name="horizontalScrollBarPolicy">
+                  <enum>Qt::ScrollBarAlwaysOff</enum>
+                </property>
+                <widget class="QWidget" name="sideContents">
+                  <layout class="QVBoxLayout" name="sideLayout">
+                    <property name="spacing">
+                      <number>12</number>
+                    </property>
+                    <property name="leftMargin">
+                      <number>0</number>
+                    </property>
+                    <property name="topMargin">
+                      <number>0</number>
+                    </property>
+                    <property name="rightMargin">
+                      <number>0</number>
+                    </property>
+                    <property name="bottomMargin">
+                      <number>0</number>
+                    </property>
+                    <item>
+                      <widget class="QWidget" name="stepNavigationHost" native="true">
+                        <layout class="QGridLayout" name="modelStepsLayout">
+                          <property name="leftMargin"><number>0</number></property>
+                          <property name="topMargin"><number>0</number></property>
+                          <property name="rightMargin"><number>0</number></property>
+                          <property name="bottomMargin"><number>0</number></property>
+                          <property name="horizontalSpacing"><number>4</number></property>
+                          <property name="verticalSpacing"><number>4</number></property>
+                        </layout>
+                      </widget>
+                    </item>
+                    <item>
+                      <widget class="QLabel" name="workflowStageTitle">
+                        <property name="text"><string>阶段 1 / 4 · 导入数据</string></property>
+                        <property name="class" stdset="0"><string>cardTitle</string></property>
+                      </widget>
+                    </item>
+                    <item>
+                      <widget class="QFrame" name="scanCard">
+                        <layout class="QVBoxLayout" name="scanControlsLayout">
+                          <property name="spacing">
+                            <number>10</number>
+                          </property>
+                          <item>
+                            <widget class="QLabel" name="scanCardTitle">
+                              <property name="text">
+                                <string>数据准备</string>
+                              </property>
+                              <property name="class" stdset="0">
+                                <string>cardTitle</string>
+                              </property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QPushButton" name="configureInputs">
+                              <property name="text">
+                          <string>导入数据…</string>
+                              </property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QPushButton" name="openScanJson"><property name="text"><string>打开扫描 JSON</string></property></widget></item><item>
+<widget class="QPushButton" name="loadInputs">
+                              <property name="text">
+                          <string>加载当前轮</string>
+                              </property>
+                              <property name="class" stdset="0">
+                                <string>primary</string>
+                              </property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QPushButton" name="processDepthFrame">
+                              <property name="text"><string>开始当前帧处理</string></property>
+                              <property name="toolTip"><string>调用SDK转换当前深度帧并建立选面索引</string></property>
+                              <property name="class" stdset="0"><string>primary</string></property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QProgressBar" name="scanProgress">
+                              <property name="value">
+                                <number>0</number>
+                              </property>
+                              <property name="textVisible">
+                                <bool>false</bool>
+                              </property>
+                              <property name="maximumHeight">
+                                <number>7</number>
+                              </property>
+                            </widget>
+                          </item>
+                          <item>
+                            <layout class="QHBoxLayout" name="pauseStopLayout">
+                              <item>
+                                <widget class="QPushButton" name="retryLoad">
+                                  <property name="text">
+                                <string>重试当前帧</string>
+                                  </property>
+                                </widget>
+                              </item>
+                              <item>
+                                <widget class="QPushButton" name="cancelTask">
+                                  <property name="text">
+                                    <string>取消任务</string>
+                                  </property>
+                                </widget>
+                              </item>
+                            </layout>
+                          </item>
+                          <item>
+                            <layout class="QHBoxLayout" name="emergencyLayout">
+                              <item>
+                                <widget class="QPushButton" name="resetInputs">
+                                  <property name="text">
+                                <string>重置</string>
+                                  </property>
+                                  <property name="class" stdset="0">
+                                    <string>danger</string>
+                                  </property>
+                                </widget>
+                              </item>
+                            </layout>
+                          </item>
+                          <item>
+                            <widget class="QLabel" name="deviceNotice">
+                              <property name="text">
+                                <string>真实读取与 robot_base 转换；不连接相机或机器人。</string>
+                              </property>
+                              <property name="wordWrap">
+                                <bool>true</bool>
+                              </property>
+                              <property name="class" stdset="0">
+                                <string>muted</string>
+                              </property>
+                            </widget>
+                          </item>
+                        </layout>
+                      </widget>
+                    </item>
+                    <item>
+                      <widget class="QFrame" name="processingCard">
+                        <layout class="QVBoxLayout" name="processingLayout">
+                          <property name="spacing">
+                            <number>10</number>
+                          </property>
+                          <item>
+                            <widget class="QLabel" name="processingTitle">
+                              <property name="text">
+                                <string>审核与拼接</string>
+                              </property>
+                              <property name="class" stdset="0">
+                                <string>cardTitle</string>
+                              </property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QLabel" name="processingStatus">
+                              <property name="text">
+                                <string>请加载首个未跳过帧，选择并确认参考面</string>
+                              </property>
+                              <property name="wordWrap">
+                                <bool>true</bool>
+                              </property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QProgressBar" name="processingProgress">
+                              <property name="value">
+                                <number>0</number>
+                              </property>
+                              <property name="format">
+                                <string>%p%</string>
+                              </property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QCheckBox" name="threePointSelection">
+                              <property name="text">
+                                <string>三点选面备用</string>
+                              </property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QPushButton" name="confirmCandidate">
+                              <property name="text">
+                                <string>确认此帧</string>
+                              </property>
+                            </widget>
+                          </item>
+                          <item>
+                            <layout class="QHBoxLayout" name="processingActions">
+                              <item>
+                                <widget class="QPushButton" name="matchFrames">
+                                  <property name="text">
+                                  <string>匹配其他帧</string>
+                                  </property>
+                                  <property name="class" stdset="0">
+                                    <string>primary</string>
+                                  </property>
+                                </widget>
+                              </item>
+                              <item>
+                                <widget class="QPushButton" name="continueMatching">
+                                  <property name="text">
+                                    <string>继续匹配</string>
+                                  </property>
+                                </widget>
+                              </item>
+                            </layout>
+                          </item>
+                          <item>
+                            <widget class="QPushButton" name="skipFrame">
+                              <property name="text">
+                                  <string>跳过此帧</string>
+                              </property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QToolButton" name="moreActions">
+                              <property name="text"><string>更多</string></property>
+                              <property name="popupMode"><enum>QToolButton::InstantPopup</enum></property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QPushButton" name="stitchFrames">
+                              <property name="text">
+                                <string>开始拼接</string>
+                              </property>
+                            </widget>
+                          </item>
+                        </layout>
+                      </widget>
+                    </item>
+                    <item>
+                      <widget class="QFrame" name="geometryCard">
+                        <layout class="QVBoxLayout" name="geometryLayout">
+                          <property name="spacing">
+                            <number>10</number>
+                          </property>
+                          <item>
+                            <widget class="QLabel" name="geometryTitle">
+                              <property name="text">
+                                <string>拼接结果</string>
+                              </property>
+                              <property name="class" stdset="0">
+                                <string>cardTitle</string>
+                              </property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QLabel" name="workpieceSummary">
+                              <property name="text">
+                                <string>工件面：未选择</string>
+                              </property>
+                              <property name="wordWrap">
+                                <bool>true</bool>
+                              </property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QLabel" name="interferenceSummary">
+                              <property name="text">
+                                <string>干涉面：未选择（可选）</string>
+                              </property>
+                              <property name="wordWrap">
+                                <bool>true</bool>
+                              </property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QPushButton" name="confirmInterference">
+                              <property name="text">
+                                <string>确认干涉标注</string>
+                              </property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QPushButton" name="clearInterference">
+                              <property name="text">
+                                <string>清除干涉标注</string>
+                              </property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QLabel" name="wobjLabel">
+                              <property name="text">
+                                <string>WObj1 · 待生成</string>
+                              </property>
+                              <property name="class" stdset="0">
+                                <string>muted</string>
+                              </property>
+                            </widget>
+                          </item>
+                          <item>
+                            <layout class="QGridLayout" name="wobjGrid">
+                              <item row="0" column="0">
+                                <widget class="QLabel" name="wobjX">
+                                  <property name="text">
+                                    <string>X  待获取</string>
+                                  </property>
+                                </widget>
+                              </item>
+                              <item row="0" column="1">
+                                <widget class="QLabel" name="wobjY">
+                                  <property name="text">
+                                    <string>Y  待获取</string>
+                                  </property>
+                                </widget>
+                              </item>
+                              <item row="0" column="2">
+                                <widget class="QLabel" name="wobjZ">
+                                  <property name="text">
+                                    <string>Z  待获取</string>
+                                  </property>
+                                </widget>
+                              </item>
+                              <item row="1" column="0">
+                                <widget class="QLabel" name="wobjA">
+                                  <property name="text">
+                                    <string>A  待获取</string>
+                                  </property>
+                                </widget>
+                              </item>
+                              <item row="1" column="1">
+                                <widget class="QLabel" name="wobjB">
+                                  <property name="text">
+                                    <string>B  待获取</string>
+                                  </property>
+                                </widget>
+                              </item>
+                              <item row="1" column="2">
+                                <widget class="QLabel" name="wobjC">
+                                  <property name="text">
+                                    <string>C  待获取</string>
+                                  </property>
+                                </widget>
+                              </item>
+                            </layout>
+                          </item>
+                          <item>
+                            <widget class="QPushButton" name="generateWobj1">
+                              <property name="text"><string>生成 WObj1</string></property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QPushButton" name="saveGeometry">
+                              <property name="text"><string>保存几何结果</string></property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QPushButton" name="exportTrimmed">
+                              <property name="text"><string>导出修剪结果</string></property>
+                            </widget>
+                          </item>
+                          <item>
+
+<widget class="QPushButton" name="confirmGeometry">
+                              <property name="text">
+                                <string>确认并保存几何</string>
+                              </property>
+                              <property name="class" stdset="0">
+                                <string>primary</string>
+                              </property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QLabel" name="confirmationStatus">
+                              <property name="text">
+                                <string>尚未确认 · 结果仅保留在当前会话</string>
+                              </property>
+                              <property name="wordWrap">
+                                <bool>true</bool>
+                              </property>
+                              <property name="class" stdset="0">
+                                <string>muted</string>
+                              </property>
+                            </widget>
+                          </item>
+                        </layout>
+                      </widget>
+                    </item>
+                    <item>
+                      <layout class="QHBoxLayout" name="workflowNavigationLayout">
+                        <item>
+                          <widget class="QPushButton" name="previousStage">
+                            <property name="text"><string>上一步</string></property>
+                          </widget>
+                        </item>
+                        <item>
+                          <spacer name="workflowNavigationSpacer">
+                            <property name="orientation"><enum>Qt::Horizontal</enum></property>
+                            <property name="sizeHint" stdset="0"><size><width>16</width><height>20</height></size></property>
+                          </spacer>
+                        </item>
+                        <item>
+                          <widget class="QPushButton" name="nextStage">
+                            <property name="text"><string>下一步</string></property>
+                            <property name="class" stdset="0"><string>primary</string></property>
+                          </widget>
+                        </item>
+                      </layout>
+                    </item>
+                    <item>
+                      <spacer name="sideSpacer">
+                        <property name="orientation">
+                          <enum>Qt::Vertical</enum>
+                        </property>
+                        <property name="sizeHint" stdset="0">
+                          <size>
+                            <width>20</width>
+                            <height>0</height>
+                          </size>
+                        </property>
+                      </spacer>
+                    </item>
+                  </layout>
+                </widget>
+              </widget>
+            </item>
+          </layout>
+        </item>
+        <item>
+          <widget class="QLabel" name="footerNotice">
+            <property name="text">
+              <string>干涉面仅人工标注，不参与拼接；formal_output 仅表示事务提交成功，不等于严格质量通过。</string>
+            </property>
+            <property name="class" stdset="0">
+              <string>muted</string>
+            </property>
+          </widget>
+        </item>
+      </layout>
+    </widget>
+  </widget>
+  <resources />
+  <connections />
+</ui>

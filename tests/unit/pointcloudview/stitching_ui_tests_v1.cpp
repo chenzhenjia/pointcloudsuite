@@ -284,12 +284,13 @@ struct StitchingViewTestAccess {
         CHECK(view.m_stitchingWindow == nullptr);
         view.openMultiFrameRegistration();
         auto *window = view.m_stitchingWindow;
-        CHECK(window && window->isWindow() && window->windowModality() == Qt::NonModal);
+        CHECK(window && !window->isWindow() && window->windowModality() == Qt::NonModal);
         window->close();
         CHECK(window->isHidden());
         view.openMultiFrameRegistration();
         CHECK(view.m_stitchingWindow == window);
-        CHECK(view.findChild<QPushButton *>("btn_multiframe_registration")->isVisibleTo(&view));
+        CHECK(!view.findChild<QPushButton *>("btn_multiframe_registration")->isVisibleTo(&view));
+        CHECK(view.findChild<QComboBox *>("workbench_page_picker"));
         view.m_rawPoints = {{1, 2, 3}};
         view.publishCanvasCache(view.m_rawPoints);
         view.m_tempWorkpieceSource = MainWindow::TempWorkpieceSource::Ply;

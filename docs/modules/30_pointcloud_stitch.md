@@ -49,3 +49,7 @@ worker const 读取 Qt 隐式共享容器并返回私有片段；全部 join 后
 
 
 2026-10-23 深度会话v1：采集来源支持depth.c16，实际拼接经10兼容接口按需转换；保留原栅格、50数学和完整输出，不新增60依赖。[说明](../development/camera_depth_preview_cache_v1.md)。
+
+## 2026-10-26 新单页应用接入所选平面
+
+当前 `scan_geometry_demo_v1` 已通过应用层共享任务及正式会话控制器调用 `stitchSelectedPlanes`。输入为人工批量审核后的完整 robot_base 选面快照；参考搜索归模块 60，30 不新增 60 依赖。模块 30 算法、受限修正、仅位姿选项、重叠双份/原序合并和正式 PLY/PCVMAP/manifest 契约不变。新 GUI 的人工干涉标注与会话修剪不进入输出，界面明确 formal_output 仅为事务成功与 warn_only。见 [v2 说明](../development/scan_geometry_real_selected_plane_v2.md)；本轮未执行构建、测试或质量验收。

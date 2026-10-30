@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pcv/planefitting/plane_fitting.h>
+#include <QVector3D>
 #include <memory>
 #include <pcv/core/processing_budget.h>
 
@@ -45,6 +46,7 @@ struct SingleClickResult {
     QString error;
     float samplingSpacingUMm = 0.0f;
     float samplingSpacingVMm = 0.0f;
+    QVector3D samplingAxisU;
     float connectivityRadiusUMm = 0.0f;
     float connectivityRadiusVMm = 0.0f;
     float maximumGapMm = 0.0f;

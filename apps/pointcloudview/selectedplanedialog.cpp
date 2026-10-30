@@ -30,6 +30,7 @@
 #include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QTableWidget>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QtConcurrent>
 #include <algorithm>
@@ -115,56 +116,7 @@ SelectedPlaneTask fitFullPlane(const pointcloud::RobotBaseFrame &source, const Q
     const pcv::planefitting::PlaneSelectionIndexPtr &spatialIndex,
     const std::shared_ptr<std::atomic_bool> &token, int workers,
     const std::shared_ptr<pcv::ProcessingBudget> &budget) {
-    SelectedPlaneTask task;task.kind=SelectedPlaneTask::Fit;QElapsedTimer timer;timer.start();
-    try {
-        pcv::planefitting::PlaneModel model;float rms=0;
-        auto &parameters=task.selected.selectionParameters;
-        parameters.insert("surface_tolerance_mm",tolerance);
-        parameters.insert("selection_timing_scope","worker_fit_classification_and_snapshot_excludes_pick_queue_and_display");
-        if(singleClick) {
-            pcv::planefitting::SingleClickOptions options;options.surfaceToleranceMm=tolerance;
-            options.maximumGapMm=maximumGap;
-            options.processingBudget=budget;
-            options.parallelEnabled=source.fullPoints.size()>=100000&&workers>1;options.maxParallelTasks=workers;options.isCancelled=[token]{return token->load();};
-            const auto fit=pcv::planefitting::selectPlaneAtPoint(source.fullPoints,spatialIndex,seeds.at(0),options);
-            if(!fit.ok()||token->load()){task.outOfMemory=fit.outOfMemory;task.error=fit.error;task.cancelled=fit.status==pcv::planefitting::SingleClickStatus::Cancelled||token->load();return task;}
-            model=fit.model;rms=fit.rmsMm;task.planeIndices=fit.planeIndices;
-            task.projectionMs=fit.projectionMs;task.normalConnectivityMs=fit.normalConnectivityMs;task.gapMs=fit.gapMergeMs;
-            task.selected.selectionMethod=pcv::stitching::PlaneSelectionMethod::SingleClick;
-            parameters.insert("grid_size_mm",fit.gridSizeMm);parameters.insert("local_spacing_mm",fit.localSpacingMm);
-            parameters.insert("algorithm_version","single_click_plane_selection_v2");
-            parameters.insert("maximum_gap_mm",fit.maximumGapMm);
-            parameters.insert("sampling_spacing_u_mm",fit.samplingSpacingUMm);parameters.insert("sampling_spacing_v_mm",fit.samplingSpacingVMm);
-            parameters.insert("connectivity_radius_u_mm",fit.connectivityRadiusUMm);parameters.insert("connectivity_radius_v_mm",fit.connectivityRadiusVMm);
-            parameters.insert("merged_region_count",fit.mergedRegionCount);parameters.insert("refinement_iterations",fit.refinementIterations);
-            parameters.insert("refinement_converged",fit.refinementConverged);parameters.insert("gap_merge_ms",fit.gapMergeMs);
-            parameters.insert("connectivity_radius_mm",fit.connectivityRadiusMm);parameters.insert("local_support_ratio",fit.localSupportRatio);
-            parameters.insert("algorithm_ms",fit.timings.totalMs);
-            parameters.insert("local_fit_ms",fit.timings.ransacMs);parameters.insert("grid_growth_ms",fit.timings.candidateMs);
-            parameters.insert("classification_ms",fit.timings.classificationMs);parameters.insert("connectivity_ms",fit.timings.connectivityMs);
-            parameters.insert("pca_ms",fit.timings.pcaMs);
-        } else {
-            pcv::planefitting::Options options;options.initialTolerance=1;options.surfaceTolerance=tolerance;options.useZAxisResidual=false;
-            options.parallelEnabled=source.fullPoints.size()>=100000&&workers>1;options.maxParallelTasks=workers;options.isCancelled=[token] {return token->load();};
-            const auto fit=pcv::planefitting::fit(source.fullPoints,seeds,options);
-            if(!fit.ok||fit.cancelled||token->load()) {task.error=fit.error;task.cancelled=fit.cancelled||token->load();return task;}
-            model=fit.model;rms=fit.rmsError;task.planeIndices=fit.planeIndices;
-            parameters.insert("initial_tolerance_mm",1.0);parameters.insert("algorithm_ms",fit.timings.totalMs);
-        }
-        QElapsedTimer snapshotTimer;snapshotTimer.start();
-        auto &selected=task.selected;selected.cloud=source;
-        selected.cloud.fullPoints.clear();selected.cloud.samplePoints.clear();selected.cloud.sourceIndices.clear();selected.cloud.scanRatios.clear();
-        std::sort(task.planeIndices.begin(),task.planeIndices.end());
-        for(int i:task.planeIndices) {if(token->load()){task.cancelled=true;return task;}selected.cloud.fullPoints.push_back(source.fullPoints.at(i));selected.cloud.sourceIndices.push_back(source.sourceIndices.at(i));selected.cloud.scanRatios.push_back(source.scanRatios.at(i));}
-        selected.normal=QVector3D(model.a,model.b,model.c).normalized();
-        const auto center=pcv::planefitting::calculateBoundsCenter(source.fullPoints,task.planeIndices);
-        if(!center.ok){task.error=center.error;return task;}
-        selected.center=center.center-selected.normal*(QVector3D::dotProduct(selected.normal,center.center)+model.d);
-        selected.rmsMm=rms;selected.originalValidPointCount=source.fullPoints.size();selected.selectionMs=timer.elapsed();
-        for(int i:seeds)selected.seedSourceIndices.push_back(source.sourceIndices.at(i));
-        task.snapshotMs=snapshotTimer.nsecsElapsed()/1e6;
-        task.ok=true;return task;
-        } catch(const std::bad_alloc &) {task.outOfMemory=true;task.error=QStringLiteral("内存不足，保留原选择");return task;}
+    return pcv::ui::fitFullPlaneV2(source,seeds,tolerance,maximumGap,singleClick,spatialIndex,token,workers,budget);
 }
 
 } // namespace
@@ -174,13 +126,46 @@ void showSelectedPlaneDialog(float surfaceToleranceMm, QWidget *parent) {
     dialog.exec();
 }
 
+QDialog *createSelectedPlanePage(float surfaceToleranceMm, QWidget *parent) {
+    return new SelectedPlaneDialog(surfaceToleranceMm, parent);
+}
+
+void cancelSelectedPlanePage(QDialog *page) {
+    if (page) static_cast<SelectedPlaneDialog *>(page)->cancelAndWait();
+}
+
 SelectedPlaneDialog::SelectedPlaneDialog(float tolerance, QWidget *parent) : QDialog(parent) {
     setWindowTitle(tr("多段所选平面拼接：六分屏选面（当前会话）"));
     resize(1480,940);
     m_budget=std::make_shared<pcv::ProcessingBudget>(kProcessingBudgetBytes);
 
     auto *root=new QVBoxLayout(this);
+    root->setContentsMargins(8,8,8,8);
+    root->setSpacing(6);
+    // Keep the six canvases dominant at the compact 1280x720 target size.
+    // Parameters and diagnostics remain available without occupying the page.
+    auto *configToggle=new QToolButton(this);
+    configToggle->setText(tr("帧配置 / 文件列表"));
+    configToggle->setCheckable(true);
+    configToggle->setChecked(false);
+    configToggle->setArrowType(Qt::RightArrow);
+    configToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    configToggle->setObjectName(QStringLiteral("selected_plane_config_toggle"));
+    root->addWidget(configToggle);
+    auto *configPanel=new QWidget(this);
+    configPanel->setObjectName(QStringLiteral("selected_plane_config_panel"));
+    configPanel->hide();
+    auto *configLayout=new QVBoxLayout(configPanel);
+    configLayout->setContentsMargins(0,0,0,0);
+    configLayout->setSpacing(4);
+    root->addWidget(configPanel);
+    connect(configToggle,&QToolButton::toggled,this,[configToggle,configPanel](bool expanded) {
+        configPanel->setVisible(expanded);
+        configToggle->setArrowType(expanded?Qt::DownArrow:Qt::RightArrow);
+    });
+
     auto *form=new QFormLayout;
+    form->setSpacing(4);
     m_calibration=new QLineEdit(this);
     m_calibration->setObjectName(QStringLiteral("selected_plane_calibration"));
     m_output=new QLineEdit(this);
@@ -200,7 +185,7 @@ SelectedPlaneDialog::SelectedPlaneDialog(float tolerance, QWidget *parent) : QDi
     m_maximumGap->setRange(0,50);m_maximumGap->setDecimals(3);m_maximumGap->setValue(3);m_maximumGap->setSuffix(" mm");
     m_maximumGap->setToolTip(tr("按平面内两侧有效点的最短距离跨越缺失带。0关闭额外跨带；不会生成缺失点。邻近共面物体也可能被并入，请检查预览。"));
     form->addRow(tr("最大跨缺失距离（0关闭）"),m_maximumGap);
-    root->addLayout(form);
+    configLayout->addLayout(form);
 
     auto *actions=new QHBoxLayout;
     const auto actionButton=[this,actions](const QString &name,auto slot) {
@@ -219,7 +204,7 @@ SelectedPlaneDialog::SelectedPlaneDialog(float tolerance, QWidget *parent) : QDi
     actionButton(tr("上移"),[this] {moveFrame(-1);});
     actionButton(tr("下移"),[this] {moveFrame(1);});
     actionButton(tr("移除"),[this] {removeFrame();});
-    root->addLayout(actions);
+    configLayout->addLayout(actions);
 
     m_table=new QTableWidget(0,5,this);
     m_table->setObjectName(QStringLiteral("selected_plane_file_list"));
@@ -229,7 +214,7 @@ SelectedPlaneDialog::SelectedPlaneDialog(float tolerance, QWidget *parent) : QDi
     m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     m_table->horizontalHeader()->setSectionResizeMode(1,QHeaderView::Stretch);
     m_table->setMaximumHeight(150);
-    root->addWidget(m_table);
+    configLayout->addWidget(m_table);
 
     auto *roundBar=new QHBoxLayout;
     m_roundLabel=new QLabel(tr("尚未添加任何帧"),this);
@@ -242,11 +227,9 @@ SelectedPlaneDialog::SelectedPlaneDialog(float tolerance, QWidget *parent) : QDi
     m_confirm=new QPushButton(tr("确认本轮 / 下一轮"),this);
     m_confirm->setObjectName(QStringLiteral("selected_plane_confirm_round"));
     roundBar->addWidget(m_confirm);
-    root->addLayout(roundBar);
+    configLayout->addLayout(roundBar);
 
-    auto *hint=new QLabel(tr("每轮最多六帧（三列两行）。每格独立旋转/平移/缩放，可临时放大单格并保留视角。每格取得完整候选或明确跳过后才能确认本轮；跳过可撤销，不删除原文件。"),this);
-    hint->setWordWrap(true);
-    root->addWidget(hint);
+    m_confirm->setToolTip(tr("每格确认候选或跳过后提交本轮；跳过可撤销，原文件保留。"));
 
     m_views=new QStackedWidget(this);
     auto *gridPage=new QWidget(m_views);
@@ -330,11 +313,30 @@ SelectedPlaneDialog::SelectedPlaneDialog(float tolerance, QWidget *parent) : QDi
     run->addWidget(m_saveTemplate);
     root->addLayout(run);
 
-    m_log=new QPlainTextEdit(this);
+    auto *logToggle=new QToolButton(this);
+    logToggle->setText(tr("运行日志"));
+    logToggle->setCheckable(true);
+    logToggle->setChecked(false);
+    logToggle->setArrowType(Qt::RightArrow);
+    logToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    logToggle->setObjectName(QStringLiteral("selected_plane_log_toggle"));
+    root->addWidget(logToggle);
+    auto *logPanel=new QWidget(this);
+    logPanel->setObjectName(QStringLiteral("selected_plane_log_panel"));
+    logPanel->hide();
+    auto *logLayout=new QVBoxLayout(logPanel);
+    logLayout->setContentsMargins(0,0,0,0);
+    root->addWidget(logPanel);
+    connect(logToggle,&QToolButton::toggled,this,[logToggle,logPanel](bool expanded) {
+        logPanel->setVisible(expanded);
+        logToggle->setArrowType(expanded?Qt::DownArrow:Qt::RightArrow);
+    });
+
+    m_log=new QPlainTextEdit(logPanel);
     m_log->setObjectName(QStringLiteral("selected_plane_log"));
     m_log->setReadOnly(true);
-    m_log->setMaximumHeight(150);
-    root->addWidget(m_log);
+    m_log->setMaximumHeight(120);
+    logLayout->addWidget(m_log);
 
     m_globalWatcher=new QFutureWatcher<SelectedPlaneTask>(this);
     connect(m_globalWatcher,&QFutureWatcher<SelectedPlaneTask>::finished,this,[this] {finishGlobal();});
@@ -1124,62 +1126,7 @@ void SelectedPlaneDialog::startJob(Job &job, const FramePtr &frame, SelectedPlan
         const auto budget=m_budget;
         const int workerCount=job.workers;
         const auto work=[path,calibration,start,end,token,budget,workerCount] {
-            SelectedPlaneTask task;task.kind=SelectedPlaneTask::LoadDisplay;
-            try {
-                const auto cancelled=[token] {return token->load();};
-                pointcloud::HandEyeCalibration handEye;
-                if(!pointcloud::loadHandEyeCalibration(calibration,&handEye,&task.error))return task;
-                pcv::detail::io::PlyReadOptions readOptions;readOptions.isCancelled=cancelled;
-                readOptions.asciiWorkerCount=workerCount;readOptions.binaryWorkerCount=workerCount;
-                // The batch entry never needs the canonical PLY or a read-back
-                // comparison; the source fingerprint and header checks stay on.
-                QElapsedTimer phase;phase.start();
-                const auto raw=pcv::detail::io::readPlyCached(path,{},readOptions,pcv::detail::io::CloudCachePolicy{false});
-                task.plyReadMs=phase.elapsed();
-                task.fingerprintMs=raw.fingerprintMs;
-                task.cacheReadMs=raw.cacheReadMs;
-                task.cacheWriteMs=raw.cacheWriteMs;
-                task.plyParseMs=raw.parseElapsedMs;
-                task.usedCache=raw.usedCache;
-                if(!raw.ok) {task.error=raw.error;task.cancelled=raw.cancelled;return task;}
-                pointcloud::CloudTransformOptions transformOptions;
-                transformOptions.isCancelled=cancelled;
-                transformOptions.collectSamplePoints=false;
-                transformOptions.parallelEnabled=raw.points.size()>=100000&&workerCount>1;
-                transformOptions.maxParallelTasks=workerCount;
-                transformOptions.processingBudget=budget;
-                phase.restart();
-                auto cloud=pointcloud::transformLineScanToRobotBase(raw.points,handEye,start,end,transformOptions);
-                task.transformMs=phase.elapsed();
-                task.transformMergeMs=cloud.mergeMs;task.transformWorkers=cloud.actualWorkerCount;
-                if(!cloud.ok) {task.error=cloud.error;task.cancelled=cloud.cancelled;return task;}
-                task.loaded.sourceFile=path;
-                task.loaded.fullPoints=std::move(cloud.points);
-                task.loaded.sourceIndices=std::move(cloud.sourceIndices);
-                task.loaded.scanRatios=std::move(cloud.scanRatios);
-                task.loaded.declaredCount=raw.declaredPointCount;
-                task.loaded.startBaseFromFlange=pointcloud::robotPoseToMatrix(start);
-                task.loaded.endBaseFromFlange=pointcloud::robotPoseToMatrix(end);
-                task.loaded.flangeFromDepth=handEye.flangeFromDepth;
-                task.loaded.rejectedInvalid=cloud.rejectedInvalid;
-                task.loaded.rejectedRange=cloud.rejectedRange;
-                task.loaded.signedTravel=cloud.signedTravel;
-                task.loaded.dominantTravelAxis=cloud.dominantTravelAxis;
-                task.loaded.inputYMinimum=cloud.inputYMinimum;
-                task.loaded.inputYMaximum=cloud.inputYMaximum;
-                phase.restart();
-                // Reserve both display points and forward/reverse mapping
-                // storage before allocating the optional display subset.
-                task.displayLease=budget->acquire(size_t(qMin<qsizetype>(task.loaded.fullPoints.size(),kDenseDisplayLimit))*64);
-                if(!task.displayLease) {task.outOfMemory=true;task.error=QStringLiteral("展示加速预算不足，请重试或跳过");return task;}
-                if(!prepareDisplayCloud(&task,cancelled)) {
-                    if(!task.cancelled)task.error=task.error.isEmpty()?QStringLiteral("展示子集生成失败"):task.error;
-                    return task;
-                }
-                task.displaySamplingMs=phase.elapsed();
-                task.ok=true;
-                return task;
-            } catch(const std::bad_alloc &) {task.outOfMemory=true;task.error=QStringLiteral("内存不足，帧未加载");return task;}
+            return pcv::ui::loadSelectedPlaneFrameV2(path,calibration,start,end,token,workerCount,budget);
         };
         watcher->setFuture(QtConcurrent::run([work] {return measureWorker(work);}));
         return;
@@ -1189,28 +1136,8 @@ void SelectedPlaneDialog::startJob(Job &job, const FramePtr &frame, SelectedPlan
         const QVector<pointcloud::Point3D> points=frame->loaded.fullPoints;
         const auto budget=m_budget;
         const int workerCount=job.workers;
-        const bool parallel=points.size()>=100000&&workerCount>1;
-        const auto work=[points,token,budget,workerCount,parallel] {
-            SelectedPlaneTask task;task.kind=SelectedPlaneTask::PrepareIndex;
-            try {
-                pcv::planefitting::IndexPreparationOptions options;
-                options.parallelEnabled=parallel;
-                options.maxParallelTasks=workerCount;
-                options.cachePointBuckets=true;
-                options.processingBudget=budget;
-                QElapsedTimer phase;phase.start();
-                const auto prepared=pcv::planefitting::preparePlaneSelectionIndex(points,[token]{return token->load();},options);
-                task.preparationMs=phase.elapsed();
-                if(prepared.cancelled||token->load()) {task.cancelled=true;return task;}
-                task.outOfMemory=prepared.outOfMemory;
-                task.gridMs=prepared.gridMs;
-                task.normalsMs=prepared.normalsMs;
-                task.optimizationBytes=prepared.optimizationBytes;
-                task.index=prepared.index;
-                task.error=prepared.error;
-                task.ok=prepared.index!=nullptr;
-                return task;
-            } catch(const std::bad_alloc &) {task.outOfMemory=true;task.error=QStringLiteral("内存不足，完整选面索引未建立");return task;}
+        const auto work=[points,token,budget,workerCount] {
+            return pcv::ui::prepareSelectedPlaneIndexV2(points,token,workerCount,budget);
         };
         watcher->setFuture(QtConcurrent::run([work] {return measureWorker(work);}));
         return;
@@ -1491,6 +1418,13 @@ QJsonObject SelectedPlaneDialog::buildResultSource() const {
 void SelectedPlaneDialog::saveTemplate() {
     if(m_closing||m_globalBusy||!m_resultValid||m_result.points.isEmpty())return;
     if(activeJobCount()>0) {log(tr("仍有帧任务处理中；请等待结束后再保存模板"));return;}
+    if(m_templateForm&&m_templateFormRevision==m_revision) {
+        m_views->setCurrentWidget(m_templateForm);m_templateForm->show();return;
+    }
+    if(m_templateForm) {
+        m_views->removeWidget(m_templateForm);
+        m_templateForm->deleteLater();
+    }
     pcv::workpiece::WorkpieceTemplateInfo summary;
     summary.name=QStringLiteral("selected_plane_%1").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")));
     summary.pointCount=m_result.points.size();
@@ -1499,16 +1433,27 @@ void SelectedPlaneDialog::saveTemplate() {
     summary.source=m_resultSource;
     summary.minimum=m_templateSummary.minimum;summary.maximum=m_templateSummary.maximum;
     const quint64 revision=m_revision;
-    WorkpieceTemplateDialogV1 dialog(summary,pcv::workpiece::defaultWorkpieceTemplateRoot(),this);
-    if(dialog.exec()!=QDialog::Accepted) {log(tr("模板保存已取消；已提交的拼接文件与完整结果保留，可重试"));return;}
-    if(dialog.templateName().trimmed().isEmpty()||dialog.outputRoot().isEmpty()) {log(tr("模板名称与保存根目录都不能为空"));return;}
-    if(m_closing||!m_resultValid||m_result.points.isEmpty()||revision!=m_revision) {
+    auto *form=new WorkpieceTemplateDialogV1(summary,pcv::workpiece::defaultWorkpieceTemplateRoot(),m_views);
+    form->setWindowFlags(Qt::Widget);form->setModal(false);
+    m_templateForm=form;m_templateFormRevision=revision;
+    m_views->addWidget(form);m_views->setCurrentWidget(form);form->show();
+    connect(form,&QDialog::rejected,this,[this] {
+        m_views->setCurrentIndex(m_resultValid?1:0);
+        log(tr("模板保存已取消；完整结果保留，可重试"));
+    });
+    connect(form,&QDialog::accepted,this,[this,form,revision] {submitTemplateSave(form,revision);});
+}
+
+void SelectedPlaneDialog::submitTemplateSave(WorkpieceTemplateDialogV1 *form, quint64 revision) {
+    m_views->setCurrentIndex(m_resultValid?1:0);
+    if(m_closing||m_globalBusy||activeJobCount()>0||!m_resultValid||m_result.points.isEmpty()||revision!=m_revision) {
         log(tr("结果已过期或会话已关闭，未提交模板保存"));
         return;
     }
+    if(form->templateName().trimmed().isEmpty()||form->outputRoot().isEmpty()) {log(tr("模板名称与保存根目录都不能为空"));return;}
     pcv::workpiece::SaveWorkpieceTemplateRequest request;
-    request.name=dialog.templateName().trimmed();
-    request.outputRoot=dialog.outputRoot();
+    request.name=form->templateName().trimmed();
+    request.outputRoot=form->outputRoot();
     request.coordinateFrame=QStringLiteral("robot_base");
     request.points=m_result.points;
     request.source=m_resultSource;
@@ -1582,42 +1527,5 @@ void SelectedPlaneDialog::finishGlobal() {
 }
 
 bool SelectedPlaneDialog::prepareDisplayCloud(SelectedPlaneTask *task, const std::function<bool()> &cancelled) {
-    if(!task)return false;
-    task->displayPoints.clear();
-    task->displayToFullIndices.clear();
-    task->cancelled=false;
-    const QVector<pointcloud::Point3D> &full=task->loaded.fullPoints;
-    const qsizetype count=full.size();
-    if(count<=0) {
-        task->error=QStringLiteral("点云为空，未生成展示子集");
-        return false;
-    }
-    if(count>qsizetype(std::numeric_limits<int>::max())) {
-        task->error=QStringLiteral("完整点数超过现有选面/拾取索引能力（%1 > INT_MAX）").arg(count);
-        return false;
-    }
-    const qsizetype displayCount=qMin<qsizetype>(count,kDenseDisplayLimit);
-    QVector<pointcloud::Point3D> points;
-    QVector<int> mapping;
-    points.reserve(displayCount);
-    mapping.reserve(displayCount);
-    for(qsizetype index=0;index<displayCount;++index) {
-        if(cancelled&&index%kCancellationCheckStride==0&&cancelled()) {
-            task->cancelled=true;
-            return false;
-        }
-        // Deterministic uniform sampling over the original order; the first and
-        // last point are always covered and the mapping is strictly increasing.
-        const qint64 fullIndex=(displayCount==1)?0
-            :qint64((qint64(index)*qint64(count-1))/qint64(displayCount-1));
-        mapping.push_back(int(fullIndex));
-        points.push_back(full.at(qsizetype(fullIndex)));
-    }
-    if(cancelled&&cancelled()) {
-        task->cancelled=true;
-        return false;
-    }
-    task->displayPoints=std::move(points);
-    task->displayToFullIndices=std::move(mapping);
-    return true;
+    return pcv::ui::prepareDisplayCloudV2(task,cancelled);
 }

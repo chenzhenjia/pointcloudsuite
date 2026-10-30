@@ -1,4 +1,6 @@
 #include <pcv/planefitting/single_click_plane_selection_v1.h>
+#include <pcv/planefitting/reference_plane_match_v2.h>
+#include <pcv/planefitting/high_side_plane_candidates_v1.h>
 #include "plane_eigen_v1.h"
 #include "plane_connectivity_v2.h"
 
@@ -371,6 +373,7 @@ SingleClickResult selectPlaneAtPoint(const QVector<pointcloud::Point3D> &points,
         if(cancelled())return fail(SingleClickStatus::Cancelled,QStringLiteral("cancelled"));
         if(axes.spacingU<=0 || axes.spacingV<=0)return fail(SingleClickStatus::InsufficientSupport,QStringLiteral("无法估计平面两个方向的采样间距"));
         result.samplingSpacingUMm=axes.spacingU;result.samplingSpacingVMm=axes.spacingV;
+        result.samplingAxisU=axes.u;
         result.localSpacingMm=std::sqrt(axes.spacingU*axes.spacingV);
         result.connectivityRadiusUMm=qMax(1e-5f,axes.spacingU*1.65f);
         result.connectivityRadiusVMm=qMax(1e-5f,axes.spacingV*1.65f);
@@ -547,5 +550,231 @@ SingleClickResult selectPlaneAtPoint(const QVector<pointcloud::Point3D> &points,
         result.status=SingleClickStatus::Success;result.timings.assemblyMs=stage.nsecsElapsed()/1e6;result.timings.totalMs=total.nsecsElapsed()/1e6;
         return result;
     } catch(const std::bad_alloc &) {result.outOfMemory=true;return fail(SingleClickStatus::InsufficientSupport,QStringLiteral("内存不足，保留原选择"));}
+}
+ReferencePlaneMatchResultV2 matchReferencePlaneV2(
+    const QVector<pointcloud::Point3D> &points, const PlaneSelectionIndexPtr &index,
+    const PlaneModel &reference, const ReferencePlaneMatchOptionsV2 &options) {
+    ReferencePlaneMatchResultV2 result;
+    const auto cancelled = [&] { return options.selection.isCancelled && options.selection.isCancelled(); };
+    const auto cancel = [&] {
+        result.status=ReferencePlaneMatchStatusV2::Cancelled; result.candidates.clear();
+        result.error=QStringLiteral("cancelled"); return result;
+    };
+    if (cancelled()) return cancel();
+    QVector3D normal(reference.a,reference.b,reference.c);
+    const float length=normal.length();
+    if (!index || points.isEmpty() || index->points.constData()!=points.constData() || index->points.size()!=points.size()
+        || !std::isfinite(length) || length<1e-6f || !std::isfinite(reference.d)
+        || !std::isfinite(options.maximumDistanceMm) || options.maximumDistanceMm<=0
+        || !std::isfinite(options.maximumNormalAngleDegrees) || options.maximumNormalAngleDegrees<=0
+        || options.maximumNormalAngleDegrees>90 || options.maximumSeeds<1 || options.maximumSeeds>64
+        || !std::isfinite(options.selection.surfaceToleranceMm)||options.selection.surfaceToleranceMm<=0
+        || !std::isfinite(options.selection.maximumGapMm)||options.selection.maximumGapMm<0||options.selection.maximumGapMm>50
+        || options.selection.maxParallelTasks<1||options.selection.maxParallelTasks>4) {
+        result.status=ReferencePlaneMatchStatusV2::InvalidInput;
+        result.error=QStringLiteral("参考面、完整点云索引或匹配参数无效"); return result;
+    }
+    normal/=length; const float offset=reference.d/length;
+    const float cosine=std::cos(qDegreesToRadians(options.maximumNormalAngleDegrees));
+    const auto eligible = [&](const Bucket &bucket) {
+        if (!bucket.hasLocalModel || bucket.localModel.thinness>0.05f || bucket.indices.isEmpty()) return false;
+        if (std::abs(QVector3D::dotProduct(normal,bucket.localModel.n))<cosine) return false;
+        const auto p=position(points.at(bucket.indices.at(bucket.indices.size()/2)));
+        return std::abs(QVector3D::dotProduct(normal,p)+offset)<=options.maximumDistanceMm;
+    };
+    try {
+        for (size_t i=0;i<index->buckets.size();++i) {
+            if ((i&4095)==0 && cancelled()) return cancel();
+            if (eligible(index->buckets.at(i))) ++result.eligibleBuckets;
+        }
+        const int count=qMin(options.maximumSeeds,result.eligibleBuckets);
+        int ordinal=0, next=0;
+        for (size_t i=0;i<index->buckets.size() && next<count;++i) {
+            if (cancelled()) return cancel();
+            const auto &bucket=index->buckets.at(i);
+            if (!eligible(bucket)) continue;
+            const qint64 target=count==1?result.eligibleBuckets/2
+                :qint64(next)*(result.eligibleBuckets-1)/(count-1);
+            if (ordinal++!=target) continue;
+            ++next;
+            const int seed=bucket.indices.at(bucket.indices.size()/2);
+            bool covered=false;
+            for (const auto &candidate:std::as_const(result.candidates))
+                if (std::binary_search(candidate.selection.planeIndices.cbegin(),candidate.selection.planeIndices.cend(),seed)) covered=true;
+            if (covered) continue;
+            ++result.attemptedSeeds;
+            result.attemptedSeedIndices.append(seed);
+            auto selected=selectPlaneAtPoint(points,index,seed,options.selection);
+            if (cancelled() || selected.status==SingleClickStatus::Cancelled) return cancel();
+            if (selected.outOfMemory) {
+                result.status=ReferencePlaneMatchStatusV2::Error; result.outOfMemory=true;
+                result.error=selected.error; result.candidates.clear(); return result;
+            }
+            if (!selected.ok()) continue;
+            const QVector3D candidateNormal(selected.model.a,selected.model.b,selected.model.c);
+            const float dot=qBound(0.0f,std::abs(QVector3D::dotProduct(normal,candidateNormal.normalized())),1.0f);
+            const float angle=qRadiansToDegrees(std::acos(dot));
+            const auto bounds=calculateBoundsCenter(points,selected.planeIndices);
+            if (!bounds.ok) continue;
+            const float distance=std::abs(QVector3D::dotProduct(normal,bounds.center)+offset);
+            if (angle>options.maximumNormalAngleDegrees || distance>options.maximumDistanceMm) continue;
+            std::sort(selected.planeIndices.begin(),selected.planeIndices.end());
+            bool duplicate=false;
+            for (auto &candidate:result.candidates) {
+                const auto &a=candidate.selection.planeIndices; const auto &b=selected.planeIndices;
+                qsizetype x=0,y=0,overlap=0;
+                while (x<a.size() && y<b.size()) {
+                    if (((x+y)&4095)==0 && cancelled()) return cancel();
+                    if (a.at(x)==b.at(y)) {++overlap;++x;++y;}
+                    else if (a.at(x)<b.at(y)) ++x; else ++y;
+                }
+                if (overlap*5>=qMin(a.size(),b.size())*4) {
+                    duplicate=true;
+                    if (b.size()>a.size()) candidate={seed,std::move(selected),angle,distance};
+                    break;
+                }
+            }
+            if (!duplicate) result.candidates.append({seed,std::move(selected),angle,distance});
+            if (result.candidates.size()>1) {
+                result.status=ReferencePlaneMatchStatusV2::Ambiguous;
+                result.error=QStringLiteral("发现至少两个不同候选，请手动选择工件面或明确跳过"); return result;
+            }
+        }
+        result.status=result.candidates.size()==1?ReferencePlaneMatchStatusV2::Unique:ReferencePlaneMatchStatusV2::NotFound;
+        if (result.candidates.isEmpty()) result.error=QStringLiteral("搜索范围内未找到稳定工件面，请手动选择或明确跳过");
+        return result;
+    } catch (const std::bad_alloc &) {
+        result.status=ReferencePlaneMatchStatusV2::Error; result.candidates.clear(); result.outOfMemory=true;
+        result.error=QStringLiteral("参考面匹配内存不足，未发布候选"); return result;
+    }
+}
+
+HighSidePlaneSearchResultV1 findHighSidePlaneCandidatesV1(
+    const QVector<pointcloud::Point3D> &points, const PlaneSelectionIndexPtr &index,
+    const QVector3D &selectedCenter, const QVector<int> &excludedIndices,
+    const HighSidePlaneSearchOptionsV1 &options) {
+    HighSidePlaneSearchResultV1 result;
+    const auto cancelled = [&] { return options.selection.isCancelled && options.selection.isCancelled(); };
+    if (cancelled()) {
+        result.status=HighSidePlaneSearchStatusV1::Cancelled;
+        result.error=QStringLiteral("cancelled");
+        return result;
+    }
+    if (!index || points.isEmpty() || index->points.constData()!=points.constData()
+        || index->points.size()!=points.size() || !std::isfinite(selectedCenter.x())
+        || !std::isfinite(selectedCenter.y()) || !std::isfinite(selectedCenter.z())
+        || !std::isfinite(options.minimumHeightMm)
+        || options.minimumHeightMm<0 || options.minimumPointCount<1
+        || options.maximumSeeds<1 || options.maximumSeeds>64
+        || !std::isfinite(options.selection.surfaceToleranceMm) || options.selection.surfaceToleranceMm<=0
+        || !std::isfinite(options.selection.maximumGapMm) || options.selection.maximumGapMm<0
+        || options.selection.maximumGapMm>50 || options.selection.maxParallelTasks<1
+        || options.selection.maxParallelTasks>4) {
+        result.status=HighSidePlaneSearchStatusV1::InvalidInput;
+        result.error=QStringLiteral("高侧平面搜索输入或参数无效");
+        return result;
+    }
+    try {
+        QSet<int> excluded;
+        excluded.reserve(excludedIndices.size());
+        for (int i:excludedIndices) if (i>=0&&i<points.size()) excluded.insert(i);
+        const auto bucketHeight=[&](const Bucket &bucket) {
+            const auto p=position(points.at(bucket.indices.at(bucket.indices.size()/2)));
+            return p.z()-selectedCenter.z();
+        };
+        const auto eligible=[&](const Bucket &bucket) {
+            return bucket.hasLocalModel && bucket.localModel.thinness<=0.05f
+                && !bucket.indices.isEmpty() && bucketHeight(bucket)>=options.minimumHeightMm;
+        };
+        for (size_t i=0;i<index->buckets.size();++i) {
+            if ((i&4095)==0&&cancelled()) {
+                result.status=HighSidePlaneSearchStatusV1::Cancelled;
+                result.error=QStringLiteral("cancelled");
+                result.candidates.clear();
+                return result;
+            }
+            if (eligible(index->buckets.at(i))) ++result.eligibleBuckets;
+        }
+        if (result.eligibleBuckets==0) {
+            result.status=HighSidePlaneSearchStatusV1::Success;
+            return result;
+        }
+        const int seedCount=qMin(options.maximumSeeds,result.eligibleBuckets);
+        int eligibleOrdinal=0, selectedOrdinal=0;
+        QVector<QVector<int>> candidateIndices;
+        for (size_t i=0;i<index->buckets.size()&&selectedOrdinal<seedCount;++i) {
+            if (cancelled()) {
+                result.status=HighSidePlaneSearchStatusV1::Cancelled;
+                result.error=QStringLiteral("cancelled");
+                result.candidates.clear();
+                return result;
+            }
+            const auto &bucket=index->buckets.at(i);
+            if (!eligible(bucket)) continue;
+            const qint64 target=seedCount==1?result.eligibleBuckets/2
+                :qint64(selectedOrdinal)*(result.eligibleBuckets-1)/(seedCount-1);
+            if (eligibleOrdinal++!=target) continue;
+            ++selectedOrdinal;
+            const int seed=bucket.indices.at(bucket.indices.size()/2);
+            if (excluded.contains(seed)) continue;
+            ++result.attemptedSeeds;
+            auto selection=selectPlaneAtPoint(points,index,seed,options.selection);
+            if (cancelled()||selection.status==SingleClickStatus::Cancelled) {
+                result.status=HighSidePlaneSearchStatusV1::Cancelled;
+                result.error=QStringLiteral("cancelled");
+                result.candidates.clear();
+                return result;
+            }
+            if (selection.outOfMemory) {
+                result.status=HighSidePlaneSearchStatusV1::Error;
+                result.error=selection.error;
+                result.candidates.clear();
+                return result;
+            }
+            if (!selection.ok()||selection.planeIndices.size()<options.minimumPointCount) continue;
+            std::sort(selection.planeIndices.begin(),selection.planeIndices.end());
+            int excludedOverlap=0;
+            for (int pointIndex:selection.planeIndices) if (excluded.contains(pointIndex)) ++excludedOverlap;
+            if (qint64(excludedOverlap)*5>=qint64(selection.planeIndices.size())*4) continue;
+            const auto bounds=calculateBoundsCenter(points,selection.planeIndices);
+            if (!bounds.ok) continue;
+            const float height=bounds.center.z()-selectedCenter.z();
+            if (height<options.minimumHeightMm) continue;
+            bool duplicate=false;
+            for (int c=0;c<candidateIndices.size();++c) {
+                const auto &prior=candidateIndices.at(c);
+                qsizetype a=0,b=0,overlap=0;
+                while (a<prior.size()&&b<selection.planeIndices.size()) {
+                    if (((a+b)&4095)==0&&cancelled()) {
+                        result.status=HighSidePlaneSearchStatusV1::Cancelled;
+                        result.error=QStringLiteral("cancelled");
+                        result.candidates.clear();
+                        return result;
+                    }
+                    if (prior.at(a)==selection.planeIndices.at(b)) {++overlap;++a;++b;}
+                    else if (prior.at(a)<selection.planeIndices.at(b)) ++a;
+                    else ++b;
+                }
+                if (overlap*5>=qMin(prior.size(),selection.planeIndices.size())*4) {
+                    duplicate=true;
+                    if (selection.planeIndices.size()>prior.size()) {
+                        candidateIndices[c]=selection.planeIndices;
+                        result.candidates[c]={seed,int(selection.planeIndices.size()),height};
+                    }
+                    break;
+                }
+            }
+            if (duplicate) continue;
+            candidateIndices.append(selection.planeIndices);
+            result.candidates.append({seed,int(selection.planeIndices.size()),height});
+        }
+        result.status=HighSidePlaneSearchStatusV1::Success;
+        return result;
+    } catch (const std::bad_alloc &) {
+        result.status=HighSidePlaneSearchStatusV1::Error;
+        result.candidates.clear();
+        result.error=QStringLiteral("高侧平面搜索内存不足");
+        return result;
+    }
 }
 } // namespace pcv::planefitting

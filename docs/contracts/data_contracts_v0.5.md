@@ -6,6 +6,18 @@
 
 连续采集v2经用户授权新增独立pcv-camera-session-v2：boundary_mode=sdk_image、boundary_verification=operator_confirmed_device_configuration，逐帧独立height，不将session的统一rows作为门槛；旧v1固定行数读写保留。逐帧frame-v1/PLY/索引格式复用，追加边界来源及原始类型/计时诊断，既有正式拼接manifest不升级。CaptureConfiguration显式选择边界模式，默认仍FixedRows；CameraFrame新增来源字段默认Unspecified，不能由completeScan默认值冒充SDK确认。[定义与验收](../development/camera_capture_sdk_frame_v2.md)。
 
+## 扫描几何派生结果 `selected_plane_geometry_v1`
+
+`scan_geometry_demo_v1` 另支持模块10 `pcv-camera-frame-v2` 深度帧目录作为输入，并继续沿用其配对扫描JSON与共用手眼XML。深度预览只读取原始C16及其辅助亮度；SDK XYZ仅在当前帧处理时物化。模块50 FullXyz选项用原始像素行号插值Start/End，`sourceIndices` 保持row-major原像素下标。确认后应用释放当前活动XYZ/索引/显示缓存，但源深度及已确认选面快照保留；没有把普通PLY反投影成深度的契约。现有PLY、拼接输出和sidecar schema不变。
+
+`scan_geometry_demo_v1` 接受离线 PLY 表单或现有扫描 JSON；两者均转换为 `InputFrameV2`，坐标计算仍由模块 50 完成。模块 30 的完整所选平面产物保持原有 PLY/PCVMAP/manifest/report 格式。应用随后可在新的唯一版本目录中写入 `selected_plane_geometry_v1.json` 及修剪派生文件，目录至少包含：
+
+`selected_plane_robot_base.ply`、`selected_plane_robot_base.pcvmap`、`selected_plane_trimmed.ply`、`selected_plane_trimmed.pcvmap`、`selected_plane_manifest.json`、`selected_plane_report.json`、`selected_plane_geometry_v1.json`。
+
+sidecar 顶层字段为 `schema_version`（值 `selected_plane_geometry_v1`）、`kind`、`coordinate_frame`（`robot_base`）、`units`（`mm`）、`wobj1`、`source`、`trim` 和 `interference`。`wobj1` 包含 `origin`、`axis_x`、`axis_y`、`axis_z`、`pose_xyzabc`、`reference_frame_id` 和 `orthogonality_error`；`source` 保存原始拼接目录、manifest/report 路径、结果 revision 及帧来源；`trim` 保存保留点数、被删除的结果点下标和是否发生修剪；`interference` 保存帧 ID、来源文件、scan JSON、完整点索引和标注点数。完整结果永远保留，修剪文件不覆盖原始结果。
+
+几何目录与模块 30 原始拼接目录是两个相继的 `ArtifactTransaction`，不宣称为单一跨目录事务。取消或失败不发布几何 sidecar；已完成提交在关闭/取消时保留并报告路径。WObj1 是参考面包围盒中心投影及 robot_base 轴投影的几何坐标系，不代表机器人可达性、安全或控制器下发。
+
 长度 mm、角度 deg。控制器位姿为 `[X,Y,Z,A,B,C]`，`A=Rx/B=Ry/C=Rz`，旋转 `Rz(C)*Ry(B)*Rx(A)`。手眼 XML 的 `RTmatDepth2robot=T_flange_depth`；`T_base_depth=T_base_flange*T_flange_depth`。不得默认求逆或增加固定 Z 翻转/镜像/180° 补丁。
 
 LineProfileXz 相机点为 `[X,0,Z]`，输入 Y 仅表示 `ratio=y/signedTravel`；负行程合法，方向由 Start/End 决定。FullXyz 保留 XYZ；点和法向共用旋转，法向不平移。所选平面公共请求已在 robot_base，绝不再次手眼；原始纹理实验保持输入 XYZ，不声明 robot_base。
@@ -99,3 +111,11 @@ CLI 退出码 0/2/10/20/30/40/130 对应成功、契约、输入、转换、平�
 
 
 2026-10-23 新增相机session-v3/frame-v2：C16 Little Endian载荷及SHA-256、owned逐行元数据、原始转换辅助亮度、SDK版本/配置指纹；用户PNG/Mono8可选，PLY按需生成；旧session-v1/v2/frame-v1含义不变。PreviewOnly/GeometryPreview不物化XYZ，独立camera-plane-selection-v1保存0/255掩码、完整模型/参数及源指纹；正式点云camera/mm、原栅格映射保留。[定义](../development/camera_depth_preview_cache_v1.md)。
+
+## 2026-10-26 离线单页所选平面 v2 补充（不升级 schema）
+
+新增模块 60 ReferencePlaneMatchOptionsV2/ReferencePlaneMatchResultV2 是进程内辅助匹配 DTO，输入完整 robot_base/mm 目标点及同缓冲索引和已确认参考模型。默认距离10 mm、无符号法向角5°、最多16种子；状态 Unique/Ambiguous/NotFound/Cancelled/InvalidInput/Error 不代表自动确认或严格质量通过。候选完整点序/来源保留，80%重复候选交集合并不会去重最终拼接输入。
+
+既有 SelectedPlaneFrame.selectionParameters 开放对象中补充 `frame_id`，自动候选另记录 `seed_origin=reference_plane_match_v2`、`reference_frame_id`、`reference_source_file`、`automatic_seed_full_index`、`attempted_seed_full_indices`、`search_distance_mm`、`search_angle_deg`、`maximum_seeds`、`attempted_seeds`。frame_id 为会话稳定字符串标识；full_index 为该转换后完整帧下标，不能冒充 PLY source_index；正式 seedSourceIndices 仍为原始来源下标。其余 manifest/PCVMAP 结构与默认值不变，无独立 schema 字段升级。
+
+GUI 新增六帧窗口/重载 SHA256 只用于会话一致性，原始帧按 frame_id+完整点下标标识；修剪按 result revision+原结果下标，会话内支持撤销/恢复，持久化时写入 `selected_plane_geometry_v1.json` 及独立修剪 PLY/PCVMAP，不覆盖正式产物。人工干涉不作为拼接 frame，随几何 sidecar 保存。输入仍遵循手眼 XML、Start/End、mm/deg、LineProfileXz；不按文件名推断坐标系，30 不再次转换。WObj1 由完整参考候选生成并随几何结果保存。详见 [v2 说明](../development/scan_geometry_real_selected_plane_v2.md) 和 [几何结果说明](../development/scan_geometry_demo_v1.md)。

@@ -34,10 +34,22 @@ int main(int argc, char **argv)
     if (pcv::render::validatePointColorOverlay(colors, 1, &error) || error.isEmpty()) return 1;
     colors.colors[0].setX(std::numeric_limits<float>::quiet_NaN());
     if (pcv::render::validatePointColorOverlay(colors, 2, &error) || error.isEmpty()) return 1;
+    pcv::render::PlanarMaskOverlay mask;
+    mask.vertices = {QVector3D(0,0,0), QVector3D(1,0,0), QVector3D(1,1,0), QVector3D(0,1,0)};
+    mask.triangleIndices = {0,1,2,0,2,3};
+    mask.boundaryVertices = {QVector3D(0,0,0), QVector3D(1,0,0), QVector3D(1,1,0),
+                             QVector3D(0,1,0), QVector3D(0,0,0)};
+    mask.boundaryRanges = {{0,5}};
+    if (!pcv::render::validatePlanarMaskOverlay(mask, &error)) return 1;
+    mask.boundaryRanges.clear();
+    if (pcv::render::validatePlanarMaskOverlay(mask, &error) || error.isEmpty()) return 1;
+    mask.boundaryRanges = {{0,5}};
+    mask.boundaryVertices.last().setX(0.1f);
+    if (pcv::render::validatePlanarMaskOverlay(mask, &error) || error.isEmpty()) return 1;
     const pcv::render::RenderOverlayOptions defaults;
-    if (!defaults.showCoordinateAxes || !defaults.showFloorGrid || !defaults.floorZUp
-        || !defaults.showAxisLabels || defaults.showNormals || !defaults.showBoundingBox
-        || !defaults.showStatistics) return 1;
+    if (!defaults.showCoordinateAxes || defaults.showFloorGrid || !defaults.floorZUp
+        || !defaults.showAxisLabels || defaults.showNormals || defaults.showBoundingBox
+        || defaults.showStatistics || !defaults.showColorBar || !defaults.showOrientation) return 1;
     pcv::render::RenderOverlayOptions hidden;
     hidden.showCoordinateAxes = false;
     hidden.showFloorGrid = false;

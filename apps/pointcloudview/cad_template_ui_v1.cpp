@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "workbench_shell_v1.h"
 #include "features/cad_import_dialog_v1.h"
 #include <pcv/render/pointcloud_canvas.h>
 #include <QFileDialog>
@@ -22,11 +23,18 @@ void MainWindow::openStepTemplate()
     const QString path=QFileDialog::getOpenFileName(this,tr("打开 STEP 工件"),{},tr("STEP (*.step *.stp *.STEP *.STP)"));
     if(path.isEmpty() || m_closing || workflowBlocksNewSource() || !confirmReplaceTempWorkpieceSession()) return;
     const quint64 revision=m_canvasRevision;
-    CadImportDialogV1 dialog(path,this);
-    m_cadImportDialog=&dialog; m_cadDialogActive=true;
-    const auto accepted=dialog.exec();
-    m_cadImportDialog=nullptr; m_cadDialogActive=false;
-    if(accepted==QDialog::Accepted) publishCadCloud(dialog.result(),revision);
+    if (m_cadImportDialog) { m_cadImportDialog->cancelAndWait(); m_cadImportDialog->deleteLater(); }
+    auto *dialog = new CadImportDialogV1(path, this);
+    m_cadImportDialog = dialog; m_cadDialogActive = true;
+    connect(dialog, &QDialog::accepted, this, [this, dialog, revision] {
+        m_cadDialogActive = false;
+        if (publishCadCloud(dialog->result(), revision) && m_workbench) m_workbench->showPage("main");
+    });
+    connect(dialog, &QDialog::rejected, this, [this] {
+        m_cadDialogActive = false;
+        if (m_workbench && !m_closing) m_workbench->showPage("main");
+    });
+    m_workbench->embedPage("cad", dialog); m_workbench->showPage("cad");
 #endif
 }
 bool MainWindow::publishCadCloud(const pcv::workpiece::CadCloudResult &result,quint64 inputRevision)

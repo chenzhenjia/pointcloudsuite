@@ -1,3 +1,10 @@
+add_library(pcv_selected_plane_tasks_v2 STATIC
+    selected_plane_tasks_v2.cpp selected_plane_tasks_v2.h)
+target_include_directories(pcv_selected_plane_tasks_v2 PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(pcv_selected_plane_tasks_v2 PUBLIC
+    Qt::Core Qt::Gui Qt::Concurrent pcv_m10_pointcloud_io
+    pcv_m30_pointcloud_stitch pcv_m50_coordinate_conversion pcv_m60_geometry_workpiece)
+
 add_library(pcv_stitching_ui STATIC
     stitchingwindow.cpp
     stitchingwindow.h
@@ -21,4 +28,5 @@ target_link_libraries(pcv_stitching_ui
         pcv_m10_pointcloud_io
         pcv_m30_pointcloud_stitch
         pcv_m50_coordinate_conversion
+        pcv_selected_plane_tasks_v2
 )

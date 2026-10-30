@@ -1,5 +1,7 @@
 # 50_coordinate_conversion：唯一坐标数学
 
+2026-10-30 FullXyz深度栅格行进度：`CloudTransformOptions::useFullXyzRasterRowProgress` 对 `FullXyz` 按 `rasterSourceIndices[i] / rasterWidth / (rasterHeight-1)` 计算每点扫描比例，保留XYZ和稀疏源像素映射；校验尺寸、映射长度、严格递增与范围。正向/反向Start-End共用同一栅格行比例；旧 `LineProfileXz` 和默认FullXyz行为不变。用于 `scan_geometry_demo_v1` SDK点云按行位姿变换。[实现与验证状态](../development/scan_geometry_demo_v1.md#2026-10-30-sdk深度缓存与按需物化)。
+
 2026-10-16 SDK整图采集v2继续复用既有行序进度；不同扫描可有不同height，每帧独立row/(height-1)，无效点过滤后仍用原始行号，不使用相机Y。本轮50数学/API不改，匀速/首末曝光对应为现场前提。[当前说明](../development/camera_capture_sdk_frame_v2.md)。
 
 2026-10-16 连续扫描行序进度：CloudTransformOptions尾部追加useRasterRowProgress、rasterWidth/Height、rasterSourceIndices，显式开启按row/(height-1)插值，刚体输入仍[X,0,Z]，输出保留原栅格来源。旧默认Y/signedTravel不变，需现场核对均匀行程及首末对应。[实现与验收](../development/camera_capture_pose_stitch_v1.md)。

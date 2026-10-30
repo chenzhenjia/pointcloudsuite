@@ -1,9 +1,11 @@
 #pragma once
+#include <selected_plane_tasks_v2.h>
 #include <pcv/stitching/selected_plane_stitch.h>
 #include <pcv/planefitting/single_click_plane_selection_v1.h>
 #include <pcv/workpiece/workpiece_template_v1.h>
 #include <QDialog>
 #include <QElapsedTimer>
+#include <QPointer>
 #include <array>
 #include <atomic>
 #include <functional>
@@ -20,32 +22,10 @@ class QLabel;
 class QGridLayout;
 class QStackedWidget;
 class PointCloudCanvas;
+class WorkpieceTemplateDialogV1;
 template<class T> class QFutureWatcher;
 
-struct SelectedPlaneTask {
-    enum Kind { LoadDisplay, PrepareIndex, Fit, Stitch, SaveTemplate } kind = LoadDisplay;
-    pointcloud::RobotBaseFrame loaded;
-    QVector<pointcloud::Point3D> displayPoints;
-    QVector<int> displayToFullIndices;
-    pcv::stitching::SelectedPlaneFrame selected;
-    pcv::stitching::SelectedPlaneStitchResult stitched;
-    pcv::workpiece::WorkpieceTemplateResult savedTemplate;
-    pcv::workpiece::WorkpieceTemplateInfo templateSummary;
-    QVector<int> planeIndices;
-    pcv::planefitting::PlaneSelectionIndexPtr index;
-    double preparationMs = 0, gridMs = 0, normalsMs = 0;
-    qint64 plyReadMs = 0, fingerprintMs = 0, cacheReadMs = 0, cacheWriteMs = 0;
-    qint64 transformMs = 0, displaySamplingMs = 0;
-    qint64 plyParseMs = 0;
-    double transformMergeMs = 0, snapshotMs = 0, projectionMs = 0, normalConnectivityMs = 0, gapMs = 0;
-    int transformWorkers = 1;
-    qint64 workerMs = 0;
-    QElapsedTimer startedAt, completedAt;
-    size_t optimizationBytes = 0;
-    QString error;
-    std::shared_ptr<pcv::ProcessingBudget::Lease> displayLease;
-    bool ok = false, cancelled = false, outOfMemory = false, usedCache = false;
-};
+using SelectedPlaneTask = pcv::ui::SelectedPlaneTaskV2;
 
 // All frame identity/revision and QWidget state belongs to the GUI thread.
 // Workers capture immutable snapshots and only return private task results.
@@ -53,6 +33,7 @@ class SelectedPlaneDialog final : public QDialog {
 public:
     explicit SelectedPlaneDialog(float surfaceToleranceMm, QWidget *parent=nullptr);
     ~SelectedPlaneDialog() override;
+    void cancelAndWait();
 protected:
     void closeEvent(QCloseEvent *event) override;
     bool eventFilter(QObject *object, QEvent *event) override;
@@ -123,11 +104,11 @@ private:
     void startJob(Job &job, const FramePtr &frame, SelectedPlaneTask::Kind kind, int workers);
     void finishJob(int slot);
     void finishGlobal();
-    void cancelAndWait();
     void updateActions();
     void refreshPanel(int panel);
     void stitch();
     void saveTemplate();
+    void submitTemplateSave(WorkpieceTemplateDialogV1 *form, quint64 revision);
     void log(const QString &text);
     static bool prepareDisplayCloud(SelectedPlaneTask *task, const std::function<bool()> &cancelled);
     QLineEdit *m_calibration=nullptr, *m_output=nullptr;
@@ -141,6 +122,8 @@ private:
     QPushButton *m_loadRound=nullptr;
     QVector<QPushButton *> m_editControls;
     QStackedWidget *m_views=nullptr;
+    QPointer<WorkpieceTemplateDialogV1> m_templateForm;
+    quint64 m_templateFormRevision=0;
     QGridLayout *m_grid=nullptr;
     PointCloudCanvas *m_resultCanvas=nullptr;
     std::array<Panel,6> m_panels;

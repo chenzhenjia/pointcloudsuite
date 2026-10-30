@@ -31,6 +31,17 @@ struct CoordinateFrame {
 struct Contour {
     QVector<QVector3D> points;
     bool hole = false;
+    QVector4D color = QVector4D(1.0f, 0.86f, 0.18f, 1.0f);
+};
+
+struct PlanarMaskOverlay {
+    // World-space mesh from the complete source fit; ranges describe closed loops.
+    QVector<QVector3D> vertices;
+    QVector<quint32> triangleIndices;
+    QVector<QVector3D> boundaryVertices;
+    QVector<QPair<int, int>> boundaryRanges;
+    QVector4D color = QVector4D(0.09f, 0.46f, 0.91f, 1.0f);
+    float opacity = 0.25f;
 };
 
 struct RenderSnapshot {
@@ -46,12 +57,14 @@ struct PointColorOverlay {
 
 struct RenderOverlayOptions {
     bool showCoordinateAxes = true;
-    bool showFloorGrid = true;
+    bool showFloorGrid = false;
     bool floorZUp = true;
     bool showAxisLabels = true;
     bool showNormals = false;
-    bool showBoundingBox = true;
-    bool showStatistics = true;
+    bool showBoundingBox = false;
+    bool showStatistics = false;
+    bool showColorBar = true;
+    bool showOrientation = true;
 };
 
 bool validateSnapshot(const RenderSnapshot &snapshot, QString *error = nullptr);
@@ -59,5 +72,6 @@ bool validatePointColorOverlay(const PointColorOverlay &overlay, qsizetype point
                                QString *error = nullptr);
 bool validateCoordinateFrame(const CoordinateFrame &frame, QString *error = nullptr);
 bool validateContours(const QVector<Contour> &contours, QString *error = nullptr);
+bool validatePlanarMaskOverlay(const PlanarMaskOverlay &overlay, QString *error = nullptr);
 
 } // namespace pcv::render

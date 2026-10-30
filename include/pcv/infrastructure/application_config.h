@@ -6,7 +6,7 @@
 namespace pcv::config {
 
 struct PointCloudViewDefaults {
-    int pointSize = 1;
+    int pointSize = 2;
     int colorMode = 0;
     double overlay = 1.0;
     bool voxelEnabled = true;

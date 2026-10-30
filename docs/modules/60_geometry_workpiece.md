@@ -2,12 +2,20 @@
 
 版本 v0.5，核对日期 2026-10-15。target pcv_m60_geometry_workpiece，依赖 core/infrastructure、10/50、Qt Core/Gui、Threads；不依赖 apps/QWidget。[架构](../architecture/software_architecture_v0.5.md) · [契约](../contracts/data_contracts_v0.5.md) · [日志](../changelog/v0.5.md)。
 
+## 扫描几何 WObj1 API（2026-10-29）
+
+新增公共头 `pcv/roi/automatic_workpiece_frame_v1.h`，提供 `buildWorkpieceCoordinateSystemFromRobotAxes(const QVector3D &origin, const QVector3D &planeNormal)`。实现只负责有限值、法向归一化、robot_base X/Y 投影、右手系和 `[X,Y,Z,A,B,C]` 姿态校验；参考面完整点集的包围盒中心、投影和确认生命周期由 `scan_geometry_demo_v1` 负责。显示抽样点不进入该计算，模块 60 不依赖应用或 QWidget。
+
+扫描几何应用将 WObj1、参考帧、来源 revision、修剪索引和人工干涉索引写入 `selected_plane_geometry_v1.json`。该文件属于应用派生输出，不改变模块 60 既有模板、ROI、纹理或扫描输出格式，也不代表机器人可执行性、碰撞安全或控制器下发。
+
 ## 实际 API
 
 | header | current_namespace_and_entry |
 |---|---|
 | pcv/planefitting/plane_fitting.h | pcv::planefitting::fit |
 | pcv/planefitting/single_click_plane_selection_v1.h | pcv::planefitting::preparePlaneSelectionIndex/selectPlaneAtPoint |
+| pcv/planefitting/reference_plane_match_v2.h | pcv::planefitting::matchReferencePlaneV2；固定参考面辅助候选，必须人工审核 |
+| pcv/planefitting/high_side_plane_candidates_v1.h | pcv::planefitting::findHighSidePlaneCandidatesV1；按已选平面高侧提出未标注平面提醒 |
 | pcv/workpiece/temp_workpiece_geometry.h | pcv::roi |
 | pcv/workpiece/roi_matching.h | pcv::matching::matchRoiToRobotBase |
 | pcv/workpiece/temp_workpiece_interface.h | pcv::interface::prepareTempWorkpiece/finalizeTempWorkpiece |
@@ -22,6 +30,18 @@
 三点 fit 拒绝重复/越界/非有限/共线，保留 RANSAC/PCA、RMS、阈值、planarity、连通域与取消诊断。等价提速保留 300 轮、固定种子和模型采样上限，parallelEnabled=false/maxParallelTasks=4，StageTimings；PCA/RMS 保持串行浮点累加顺序。
 
 单击 API 保留 v1 头名，行为已为 v2。不可变索引绑定同一份 const 点缓冲，替换/编辑后重建；surfaceToleranceMm 默认 0.4，maximumGapMm 默认 3（0～50），parallelEnabled=false/maxParallelTasks=4。多尺度 RANSAC/PCA 初始模型，全帧按垂直距离重分类；估计两个方向采样间距，正常连接后以真实边界点距离跨小缺失带，稳健精化最多六轮，集合稳定停止。
+
+## 高侧平面提醒 v1（2026-10-30）
+
+`findHighSidePlaneCandidatesV1` 接收完整 robot_base 点云、同缓冲不可变索引、已选平面及其中心、应排除的完整点下标和门限。它从索引局部模型确定性抽取最多 16 个种子，复用 `selectPlaneAtPoint()` 获取完整候选；以候选点集包围盒中心 Z 减工件面中心 Z 筛选，至少默认高 2 mm、100 点。搜索不计算或比较法向量，因此水平或倾斜工件均按 robot_base 世界 Z 解释；倾斜面高度仅是中心高度近似。重合候选按点索引交集/较小候选达到 80% 合并；与已选/标注点集重合达到 80% 的候选排除。
+
+API 仅建议人工检查，不确认为干涉面、不改变拼接 DTO。搜索支持取消，区分 Success/InvalidInput/Cancelled/Error；有限种子可能漏检，候选提醒不是碰撞或完整性判定。`scan_geometry_demo_v1` 只保存候选 seed/高度/点数元数据，用户选择标注后才用既有完整选面任务获取待确认干涉点集，避免长期保留多份大索引。
+
+## 完整拟合区域掩码 v1（2026-10-30）
+
+新增 `pcv/planefitting/plane_mask_v1.h` / `buildPlaneMaskV1()`。输入完整 `robot_base` 点集、拟合模型、完整平面点索引和 U/V 采样间距；单击选面同时传入选面器的 U 采样轴，掩码按同一平面基向量解释各向异性间距。三点选面无采样轴时使用确定性平面基；未提供正间距时按投影范围与完整点数估算。算法将点投影至模型平面，以占用单元生成贴合平面的三角面片，并沿单元边界追踪闭合环，内部空缺保留为孔洞，凹形边界不作凸包填充。输出顶点不回写原始点云，也不进入选面快照或拼接/磁盘产物。
+
+支持取消、完整索引校验和共享 `ProcessingBudget` 峰值工作区限制；取消、无效输入、超预算或内存分配失败时不返回半成品网格。输出掩码是显示几何，允许应用缓存；调用方应随输入/frame revision 丢弃旧网格。有限采样间距会将落入同一单元的邻近点合并成占用区域，因此区域边缘是采样网格近似，不等同于原始点的精确 alpha shape。
 
 混合/共线局部不能整格丢弃目标点；最终点始终满足发布模型容差，不补点/加厚/压平、不因时间阈值截断。0 只关闭额外跨带；近邻共面独立物体可能合并，需预览确认。参数变化使候选失效但保留已确认快照。应用负责三点备用、确认/自动下一帧、revision 与关闭 join。
 
@@ -68,3 +88,9 @@ plane_fitting_tests、plane_fitting_equivalence_tests_v2、single_click_plane_se
 
 
 2026-10-23 相机深度悬停v1：应用临时展开一帧后复用既有完整索引/单击选面，默认0.4mm/3mm、正式实测点不变；不新增深度选面算法、不接入六分屏拼接。[说明](../development/camera_depth_preview_cache_v1.md)。
+
+## 2026-10-26 固定参考面辅助匹配 v2
+
+新增 `pcv/planefitting/reference_plane_match_v2.h` / `pcv::planefitting::matchReferencePlaneV2`，由新单页离线 GUI 调用，不属于模块 40 位置确认。目标完整点云及不可变索引必须匹配同一缓冲，参考平面已在 robot_base/mm。默认搜索垂距 10 mm、法向角 5°（绝对点积消除法向正负差）、最多 16 个确定性分散种子；参数可调，正式选面垂距仍使用原容差。
+
+实现复用索引局部模型及 `selectPlaneAtPoint`，不增加第二套 RANSAC/PCA，不翻转/补点/压平。交集按较小候选点数计算，≥80% 合并重复候选；两个不同候选立即返回 Ambiguous。返回 Unique/Ambiguous/NotFound/Cancelled/InvalidInput/Error、完整候选模型/索引、种子/实际尝试序列、距离角度及诊断。有限种子下的唯一候选仍须人工审核，不等于全局唯一或严格配准质量通过。接口、测试源码与待用户验收项见 [v2 说明](../development/scan_geometry_real_selected_plane_v2.md)，本轮未构建/测试。

@@ -3,6 +3,7 @@ qt_add_executable(pointcloudview
     main.cpp
     mainwindow.cpp
     mainwindow.h
+    workbench_shell_v1.h
     cloud_source_context_v1.h
     cad_template_ui_v1.cpp
     features/cad_import_dialog_v1.cpp
@@ -61,6 +62,7 @@ target_link_libraries(pointcloudview
         pcv_m60_geometry_workpiece
         pcv_m30_pointcloud_stitch
         pcv_stitching_ui
+        pcv_selected_plane_tasks_v2
 )
 if (WIN32)
     target_link_libraries(pointcloudview PRIVATE Psapi)

@@ -2,6 +2,7 @@ find_package(Threads REQUIRED)
 add_library(pcv_m60_geometry_workpiece STATIC
     src/plane_fitting.cpp
     src/single_click_plane_selection_v1.cpp
+    src/plane_mask_v1.cpp
     src/plane_eigen_v1.h
     src/plane_connectivity_v2.h
     src/roi_matching.cpp
@@ -14,8 +15,12 @@ add_library(pcv_m60_geometry_workpiece STATIC
     include/pcv/workpiece/cad_template_v1.h
     include/pcv/planefitting/plane_fitting.h
     include/pcv/planefitting/single_click_plane_selection_v1.h
+    include/pcv/planefitting/reference_plane_match_v2.h
+    include/pcv/planefitting/high_side_plane_candidates_v1.h
+    include/pcv/planefitting/plane_mask_v1.h
     include/pcv/workpiece/roi_matching.h
     include/pcv/workpiece/temp_workpiece_geometry.h
+    include/pcv/roi/automatic_workpiece_frame_v1.h
     include/pcv/workpiece/temp_workpiece_interface.h
     include/pcv/scan/scan_planner.h
     include/pcv/texture/texture_mapping.h
