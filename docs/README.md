@@ -26,13 +26,26 @@
 | 50 唯一坐标数学 | [50_coordinate_conversion](modules/50_coordinate_conversion.md) |
 | 60 几何/工件/扫描/纹理 | [60_geometry_workpiece](modules/60_geometry_workpiece.md) |
 | CLI | [pointcloudcli](modules/pointcloudcli.md) |
-| View / Stitch / 共享UI | [View](../apps/pointcloudview/README.md) / [Stitch](../apps/pointcloudstitch/README.md) / [stitching_ui](../apps/stitching_ui/README.md) |
+| 原工作台 / 共享UI | [View](../apps/pointcloudview/README.md) / [stitching_ui](../apps/stitching_ui/README.md) |
 | 离线 PLY 单页 / 所选平面拼接 v2 | [操作说明](../apps/scan_geometry_demo_v1/README_v2.md) / [开发与用户验收](development/scan_geometry_real_selected_plane_v2.md) |
 
-70/80仅兼容转发，详细职责归60/10；90/100并入路线图，不再各建空占位页。[features](../apps/pointcloudview/features/README.md)与[adapters](../apps/pointcloudview/adapters/README.md)明确同事工作边界。
+70/80只保留兼容公共头，无构建target，详细职责归60/10；90/100并入路线图，不再各建空占位页。应用/无引用target清单和用户构建矩阵见[清理说明](development/application_target_cleanup_v1.md)。[features](../apps/pointcloudview/features/README.md)与[adapters](../apps/pointcloudview/adapters/README.md)明确同事工作边界。
 
 ## 历史、研究与示例
 
 v0.1～v0.4需求和v0.4协同旧路径保留短指引；详细历史只维护在归档/版本日志，当前模块页不复制测试记录。研究保留：[相机SDK](research/camera_sdk_direct_canvas_plan.md)、[RZ90跨向拼接](research/rz90_cross_direction_stitching_research.md)，不视为当前稳定功能。示例见[examples](../examples/README.md)。
 
 基线57份Markdown加1份txt，合并后删除18份Markdown和1份txt，新增10份Markdown，最终49份；无空文档可删。链接/内容迁移与静态结果见版本日志。软件CMake版本和真实schema不改，历史26/26与合成耗时不能当作本轮或现场验收。
+
+- [新GUI加载计时与日志v1](development/scan_geometry_load_performance_v1.md)：分段观测、先显后索引、操作任务日志与用户性能验收（未运行构建测试）。
+
+- [真实日志耗时优化v2](development/scan_geometry_load_performance_v2.md)：匹配结果复用、法向批次/预算回退、映射快路径、切帧计时与日志汇总；用户执行运行验证。
+
+- [点云加载与选面性能v3](development/scan_geometry_load_performance_v3.md)：先预览后校验、法向邻居表、连通缓冲复用、完整面片稠密路径及用户验收。
+
+- [最终工件模板蓝红显示v1](development/scan_geometry_result_regions_v1.md)：结果区域生成、修剪同步、取消重试与用户验收。
+
+
+## STEP 模板与自动匹配 v1
+
+2026-11-05 新增STEP模板与自动匹配v1开发/命令/验收说明；源码交付，尚未构建或验证定位成功率。 [开发与验收](development/step_template_matching_v1.md)。本轮未执行构建、CTest、GUI/DPI或真实样本验证，由用户执行。

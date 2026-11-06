@@ -2,6 +2,7 @@
 
 #include <pcv/camera/frame_data.h>
 #include <pcv/core/point_types.h>
+#include <QJsonObject>
 
 #include <QString>
 #include <QVector>
@@ -12,6 +13,7 @@ struct CameraConversionEnvironment {
     QString sdkVersion;
     QString fingerprint;
     QString error;
+    QJsonObject configuration;
 };
 
 CameraConversionEnvironment cameraConversionEnvironment();

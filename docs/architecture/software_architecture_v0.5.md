@@ -6,7 +6,7 @@
 
 | architecture_layer | components | responsibilities |
 |---|---|---|
-| 应用入口 | pointcloudview、pointcloudstitch、pointcloudcli、registration_diagnostic、intensity_viewer | 启动、命令、用户入口 |
+| 应用入口 | scan_geometry_demo_v1、pointcloudview；可选pointcloudcli、registration_diagnostic及转换工具 | 两个桌面入口、命令、用户入口 |
 | 应用编排与共享 UI | MainWindow、pcv_stitching_ui、SelectedPlaneDialog、features/adapters、内存监测 | 参数、会话、任务、取消/join、revision、用户提示与发布 |
 | 领域模块 | 10/20/30/50/60；40 兼容占位 | IO、渲染、拼接、坐标转换、几何与工件 |
 | 基础设施 | pcv_core、pcv_infrastructure、配置/运行路径 | 点类型、公共配置与可写目录 |
@@ -20,7 +20,13 @@
 flowchart TB
   View[pointcloudview] --> Shell[MainWindow / SelectedPlaneDialog]
   View --> Shared[pcv_stitching_ui]
-  Stitch[pointcloudstitch] --> Shared
+  Scan[scan_geometry_demo_v1] --> Tasks[pcv_selected_plane_tasks_v2]
+  Shell --> Tasks
+  Tasks --> M30
+  Tasks --> M10
+  Tasks --> M50
+  Tasks --> M60
+  Scan --> M20
   Shared --> M30[30 pointcloud_stitch]
   Shared --> M10[10 pointcloud_io]
   Shared --> M50[50 coordinate_conversion]
@@ -32,10 +38,8 @@ flowchart TB
   M30 --> M50
   M60 --> M10
   M60 --> M50
-  M40[40 INTERFACE] -.兼容聚合.-> M30
+  M40[40 STATIC 模板定位] -.兼容聚合.-> M30
   M40 -.兼容聚合.-> M60
-  M70[70 INTERFACE] -.-> M60
-  M80[80 INTERFACE] -.-> M10
   M10 --> Core[pcv_core]
   M10 --> Infra[pcv_infrastructure]
   M60 --> Core
@@ -48,14 +52,14 @@ flowchart TB
   Tool[registration_diagnostic] --> M30
 ```
 
-图突出主要业务边；完整链接事实以各 CMake 为准。诊断工具目前还链接旧 10 target、40 聚合与 50；infrastructure 使用 Qt Core，core 是 INTERFACE，10/20/30/50/60 与共享 UI 为静态库。30 不依赖 60，选面结果由应用 DTO 转换后传入 30。共享模块不得依赖 `apps/`。
+图突出主要业务边；完整链接事实以各 CMake 为准。诊断工具目前还链接旧 10 target、40 聚合与 50；infrastructure 使用 Qt Core，core 是 INTERFACE，10/20/30/40/50/60 与共享 UI 为静态库。40新增模板定位并依赖50刚体数学，PUBLIC保留30/60聚合。30 不依赖 60，选面结果由应用 DTO 转换后传入 30。共享模块不得依赖 `apps/`。
 
 | module | target | actual_api_namespace | responsibility |
 |---|---|---|---|
 | 10 | pcv_m10_pointcloud_io | pcv::detail::io/filtering、pcv::output、pcv::io、pcv::camera | 读取、canonical 缓存、预处理、writer、事务、实验相机 |
 | 20 | pcv_m20_pointcloud_render | 全局 PointCloudCanvas、pointcloud DTO | GUI/OpenGL 画布、拾取、渲染 DTO/灰度覆盖 |
 | 30 | pcv_m30_pointcloud_stitch | pcv::interface、pointcloud、pcv::stitching | 整帧编排、ICP/seam、所选平面拼接、诊断与产物 |
-| 40 | pcv_m40_pointcloud_matching | 兼容转发 | 工件位置确认规划，占位业务未实现 |
+| 40 | pcv_m40_pointcloud_matching | 模板定位/兼容聚合 | 平面边界6DoF模板匹配v1；机器人移动判定仍未实现，待用户验证 |
 | 50 | pcv_m50_coordinate_conversion | pointcloud | 唯一手眼、插值与坐标数学 |
 | 60 | pcv_m60_geometry_workpiece | pcv::planefitting/roi/matching/interface/scan/texture | 平面、单击选面、边缘/ROI、WObj1、临时工件、扫描与纹理 |
 
@@ -116,4 +120,4 @@ flowchart TD
 
 根 CMake 默认两个 GUI ON，选项实际控制 add_subdirectory；“固定接入”注释不能理解为强制开启。20 仅在 View 开启时加入；30 当前仅在 Stitch 或 Tools 开启时加入，但 View/共享 UI 及部分测试会依赖它。View-only、CLI-only/Tests 等组合存在静态依赖疑点，见[开发方案 P0](../development/development_plan_v0.5.md)。本轮未配置或构建，不将疑点写成已复现故障或已修复。
 
-旧 05/10read/20render/30stitch/40registration/50conversion/60plane/70/80 及 src 下的 IO/filtering/interface/registration/output target/header 保留转发。删除代码兼容层需引用归零、弃用期、独立评审及动态/现场验收；此次只删除重复文档。
+公共兼容头继续保留；16个仓库内无引用的兼容target及仅含定义的CMake文件已按用户授权删除。诊断工具仍使用的10 read及40聚合保留，外部项目若依赖已删除target须改链接规范模块。70/80目录仅保留公共头与说明，不再注册target。本轮不删除或迁移公共头，构建与动态验收由用户执行。[清单](../development/application_target_cleanup_v1.md)。

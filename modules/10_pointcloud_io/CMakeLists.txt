@@ -68,10 +68,3 @@ endif()
 
 add_library(pcv_m10_pointcloud_read INTERFACE)
 target_link_libraries(pcv_m10_pointcloud_read INTERFACE pcv_m10_pointcloud_io)
-
-# Migration aliases. New code must link pcv_m10_pointcloud_read; these names
-# remain available for downstream callers during the compatibility period.
-add_library(pcv_m10_pointcloudread INTERFACE)
-target_link_libraries(pcv_m10_pointcloudread INTERFACE pcv_m10_pointcloud_io)
-add_library(pcv_m05_camerainput INTERFACE)
-target_link_libraries(pcv_m05_camerainput INTERFACE pcv_m10_pointcloud_io)

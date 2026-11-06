@@ -27,27 +27,38 @@ struct ProjectedSelection {
     int mergedRegions = 0;
     double gapMs = 0;
     double normalMs = 0;
+    double buildMs = 0, traversalMs = 0;
+    qsizetype cellCount = 0;
 };
 
 // First label normal sampling components with an anisotropic metric. Then
 // connect components by real boundary-point distances, without filling holes.
+struct ConnectivityWorkspaceV3 {
+    struct Bucket {
+        int pending = -1, original = -1;
+        std::array<int,9> neighbors{-1,-1,-1,-1,-1,-1,-1,-1,-1};
+        bool boundary = false;
+    };
+    std::unordered_map<ProjectionCell,int,ProjectionHash> grid;
+    std::vector<Bucket> buckets;
+    QVector<int> cells,originalNext,next,previous,labels,queue;
+    size_t reservedCells=0;
+};
+
 inline ProjectedSelection selectProjectedComponents(
     const QVector<QVector2D> &projected, int seed, float radiusU, float radiusV,
-    float maximumGap, const std::function<bool()> &cancelled, QVector<int> *reusableQueue = nullptr)
+    float maximumGap, const std::function<bool()> &cancelled, QVector<int> *reusableQueue = nullptr, ConnectivityWorkspaceV3 *workspace = nullptr)
 {
     ProjectedSelection result;
     QElapsedTimer normalTimer; normalTimer.start();
-    struct Bucket {
-        int pending = -1;
-        int original = -1;
-        std::array<int, 9> neighbors{-1,-1,-1,-1,-1,-1,-1,-1,-1};
-        bool boundary = false;
-    };
-    std::unordered_map<ProjectionCell, int, ProjectionHash> grid;
+    ConnectivityWorkspaceV3 localWorkspace;
+    auto &storage=workspace?*workspace:localWorkspace;
+    auto &grid=storage.grid;grid.clear();
     const size_t expectedCells=qMax(size_t(1),size_t(projected.size())/4);
-    grid.reserve(expectedCells);
-    std::vector<Bucket> buckets; buckets.reserve(expectedCells);
-    QVector<int> cells(projected.size()), originalNext(projected.size()), next(projected.size()), previous(projected.size(),-1);
+    if(expectedCells>storage.reservedCells){grid.reserve(expectedCells);storage.reservedCells=expectedCells;}
+    auto &buckets=storage.buckets;buckets.clear();buckets.reserve(expectedCells);
+    auto &cells=storage.cells;auto &originalNext=storage.originalNext;auto &next=storage.next;auto &previous=storage.previous;
+    cells.resize(projected.size());originalNext.resize(projected.size());next.resize(projected.size());previous.fill(-1,projected.size());
     for (int i = 0; i < projected.size(); ++i) {
         if ((i & 4095) == 0 && cancelled()) return {};
         const auto p = projected.at(i);
@@ -72,9 +83,11 @@ inline ProjectedSelection selectProjectedComponents(
             }
         }
     }
-    QVector<int> labels(projected.size(), -1), localQueue;
-    QVector<int> &queue=reusableQueue?*reusableQueue:localQueue;
+    auto &labels=storage.labels;labels.fill(-1,projected.size());
+    QVector<int> &queue=reusableQueue?*reusableQueue:storage.queue;
     if(reusableQueue)queue.reserve(projected.size());
+    result.cellCount=qsizetype(buckets.size());result.buildMs=normalTimer.nsecsElapsed()/1e6;
+    QElapsedTimer traversal;traversal.start();
     int components = 0;
     // Intrusive lists use contiguous arrays rather than allocating two small
     // Qt buffers per spatial cell. Removing a visited point remains O(1).
@@ -108,6 +121,7 @@ inline ProjectedSelection selectProjectedComponents(
         ++components;
     }
     QVector<quint8> included(components, 0); included[labels.at(seed)] = 1;
+    result.traversalMs=traversal.nsecsElapsed()/1e6;
     result.normalMs=normalTimer.nsecsElapsed()/1e6;
     if (maximumGap > 0 && components > 1) {
         QElapsedTimer timer; timer.start();

@@ -44,6 +44,7 @@ public:
     std::function<bool()> canStartStitching;
     std::function<void(const pcv::interface::StitchingResult &)> stitchingPublished;
     bool isCaptureBusy() const;
+    bool isDeviceActive() const { return m_connected || m_streaming || isCaptureBusy(); }
     void cancelAndWait();
 
 protected:

@@ -3,6 +3,7 @@
 #include <pcv/planefitting/plane_fitting.h>
 #include <pcv/core/processing_budget.h>
 #include <QPair>
+#include <QJsonObject>
 #include <QVector>
 #include <QVector3D>
 #include <functional>
@@ -19,10 +20,13 @@ struct PlaneMaskMeshV1 {
 
 struct PlaneMaskOptionsV1 {
     QVector3D samplingAxisU;
-    float spacingUMm = 0.0f;
-    float spacingVMm = 0.0f;
+    double spacingUMm = 0.0;
+    double spacingVMm = 0.0;
     std::function<bool()> isCancelled;
     std::shared_ptr<pcv::ProcessingBudget> processingBudget;
+    bool preferDenseGrid = true;
+    bool fixedGridOrigin = false;
+    double gridOriginU = 0, gridOriginV = 0;
 };
 
 struct PlaneMaskResultV1 {
@@ -31,6 +35,9 @@ struct PlaneMaskResultV1 {
     bool ok = false;
     bool cancelled = false;
     bool outOfMemory = false;
+    QJsonObject performance; // Session diagnostics, not an output contract.
+    double spacingUMm = 0, spacingVMm = 0; // Effective spacing, for stable display rebuilds.
+    double gridOriginU = 0, gridOriginV = 0;
 };
 
 // Builds a planar occupancy mask from complete, original inlier indices.

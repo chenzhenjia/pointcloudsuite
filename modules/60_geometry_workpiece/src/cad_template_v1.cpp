@@ -24,6 +24,7 @@
 #include <BRepBndLib.hxx>
 #include <Bnd_Box.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <gp_Pln.hxx>
 #include <Poly_Triangulation.hxx>
 #include <Standard_Version.hxx>
 #include <Standard_Failure.hxx>
@@ -180,6 +181,14 @@ StepModelResult readStepModel(const ReadStepModelRequest &request)
             data.face=TopoDS::Face(faces(i));
             GProp_GProps props; BRepGProp::SurfaceProperties(data.face,props);
             data.info={i,surfaceName(BRepAdaptor_Surface(data.face).GetType()),props.Mass()};
+            BRepAdaptor_Surface analytic(data.face);
+            if(analytic.GetType()==GeomAbs_Plane) {
+                const auto plane=analytic.Plane(); const auto p=plane.Location(); auto n=plane.Axis().Direction();
+                if(data.face.Orientation()==TopAbs_REVERSED)n.Reverse();
+                data.info.planar=true;
+                data.info.planeOrigin=QVector3D(float(p.X()),float(p.Y()),float(p.Z()));
+                data.info.planeNormal=QVector3D(float(n.X()),float(n.Y()),float(n.Z()));
+            }
             if(!std::isfinite(data.info.areaMm2) || data.info.areaMm2<=0)
                 return fail<StepModelResult>(QStringLiteral("面 %1 面积无效").arg(i));
             TopLoc_Location loc;
@@ -266,6 +275,7 @@ CadCloudResult generateCadTemplateCloud(const GenerateCadTemplateRequest &reques
             const auto tri=data.triangulation;
             BRepAdaptor_Surface surface(data.face);
             const qint64 count=counts.at(faceIndex);
+            out.faceRanges.append({id,out.points.size(),qsizetype(count)});
             selected.append(QJsonObject{{"id",id},{"surface_type",data.info.surfaceType},{"area_mm2",data.info.areaMm2}});
             qint64 accepted=0;
             // A fixed low-discrepancy sequence, no global RNG or thread-dependent order.

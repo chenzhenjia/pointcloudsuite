@@ -61,7 +61,7 @@ flowchart TB
   M40 -.仅INTERFACE兼容聚合.-> M60
 ```
 
-图中的 `MainWindow`、`SelectedPlaneDialog` 和共享拼接 UI 是应用层代码，不是领域模块。模块间的依赖方向比窗口调用更稳定：`30→10/50`，`60→10/50`，`20→core`。模块不依赖 `apps/`；所选平面由应用把 60 的选区结果整理成 DTO，再交给 30，因此 30 不依赖 60。70/80 是旧 target 转发，不代表额外算法。
+图中的 `MainWindow`、`SelectedPlaneDialog` 和共享拼接 UI 是应用层代码，不是领域模块。模块间的依赖方向比窗口调用更稳定：`30→10/50`，`60→10/50`，`20→core`。模块不依赖 `apps/`；所选平面由应用把 60 的选区结果整理成 DTO，再交给 30，因此 30 不依赖 60。70/80仅保留公共兼容头，其旧target已清理，不代表额外算法。
 
 ## 分层与边界
 
@@ -73,7 +73,7 @@ flowchart TB
 | 基础层 | `pcv_core`、`pcv_infrastructure` | 通用点类型、取消令牌、预算、配置和运行目录 |
 | 外部数据边界 | PLY、JSON、PNG、PCVMAP、相机 SDK | 有格式/坐标/单位约定的输入输出；不是内部模块层 |
 
-当前 target 名称为 `pcv_m10_pointcloud_io`、`pcv_m20_pointcloud_render`、`pcv_m30_pointcloud_stitch`、`pcv_m50_coordinate_conversion`、`pcv_m60_geometry_workpiece`。40 是 `INTERFACE` 聚合层；70/80 也是兼容入口。实际 namespace 与目录名不完全相同，例如坐标数学仍在 `pointcloud::`，不可由头文件路径推断 namespace。
+当前target名称为`pcv_m10_pointcloud_io`、`pcv_m20_pointcloud_render`、`pcv_m30_pointcloud_stitch`、`pcv_m50_coordinate_conversion`、`pcv_m60_geometry_workpiece`。40是`INTERFACE`聚合层；70/80仅保留兼容头。实际namespace与目录名不完全相同，例如坐标数学仍在`pointcloud::`，不可由头文件路径推断namespace。
 
 ## pointcloudview 的窗口与关键函数
 

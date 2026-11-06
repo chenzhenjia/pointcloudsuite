@@ -35,8 +35,8 @@ public:
         brand->setObjectName("workbench_brand"); headerLayout->addWidget(brand);
         pagePicker = new QComboBox(header); pagePicker->setObjectName("workbench_page_picker");
         pagePicker->setAccessibleName(tr("工作页"));
-        const QStringList ids{"main", "camera", "stitch", "selection", "cad", "template"};
-        const QStringList titles{tr("点云工作台"), tr("相机采集"), tr("多帧拼接"),
+        const QStringList ids{"main", "camera", "depth_raw", "stitch", "selection", "cad", "template"};
+        const QStringList titles{tr("点云工作台"), tr("相机采集"), tr("深度图取流"), tr("多帧拼接"),
                                  tr("六分屏选面"), tr("STEP 模板"), tr("工件模板")};
         for (int i = 0; i < ids.size(); ++i) pagePicker->addItem(titles.at(i), ids.at(i));
         headerLayout->addWidget(pagePicker); headerLayout->addStretch();

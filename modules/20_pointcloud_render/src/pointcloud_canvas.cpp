@@ -3,8 +3,11 @@
 #include "overlay_geometry.h"
 
 #include <QHash>
+#include <QElapsedTimer>
 #include <QSet>
 #include <new>
+#include <utility>
+#include <algorithm>
 
 namespace {
 class CanvasOverlay final : public QWidget {
@@ -66,8 +69,10 @@ void PointCloudCanvas::setCloud(QVector<pointcloud::Point3D> points) {
                 Qt::QueuedConnection);
             return;
         }
+          ++m_displayCloudRevision;
           m_points = std::move(points);
           m_hasDisplayMapping = false;
+          m_displayMappingSorted = false;
           m_displayToFullIndices.clear();
           m_fullToDisplayIndices.clear();
           m_fullPointCount = m_points.size();
@@ -77,6 +82,7 @@ void PointCloudCanvas::setCloud(QVector<pointcloud::Point3D> points) {
           // Point-index overlays refer to the previous frame and are invalid
           // after replacement; source-bound planar masks are cleared as well.
           m_selectedIndices.clear();
+          m_controlPointIndices.clear();
           m_selectedEdgeIndices.clear();
           m_edgeIndices.clear();
         ++m_renderRevision;
@@ -113,15 +119,26 @@ void PointCloudCanvas::setDisplayCloud(QVector<pointcloud::Point3D> points,
                        << displayToFullIndices.size() << fullPointCount;
             return;
         }
+        QElapsedTimer total,phase;
+        if(displayTiming){total.start();phase.start();}
+        QJsonObject timing{{"event","canvas_publish_cpu"}};
+        const auto lap=[&](const char *key){if(displayTiming){timing.insert(key,phase.nsecsElapsed()/1e6);phase.restart();}};
         QHash<int,int> fullToDisplay;
-        fullToDisplay.reserve(displayToFullIndices.size());
-        for (int index : displayToFullIndices) {
-            if (index < 0 || qsizetype(index) >= fullPointCount || fullToDisplay.contains(index)) {
-                qWarning() << "PointCloudCanvas rejected display cloud mapping index" << index;
-                return;
-            }
-            fullToDisplay.insert(index,int(fullToDisplay.size()));
+        bool sorted=true;int previous=-1;
+        for(int index:std::as_const(displayToFullIndices)) {
+            if(index<0||qsizetype(index)>=fullPointCount){qWarning()<<"PointCloudCanvas rejected display cloud mapping index"<<index;return;}
+            if(index<=previous)sorted=false;
+            previous=index;
         }
+        if(!sorted) {
+            fullToDisplay.reserve(displayToFullIndices.size());
+            for(int index:std::as_const(displayToFullIndices)) {
+                if(fullToDisplay.contains(index)){qWarning()<<"PointCloudCanvas rejected duplicate mapping index"<<index;return;}
+                fullToDisplay.insert(index,int(fullToDisplay.size()));
+            }
+        }
+        timing.insert("mapping_strategy",sorted?"sorted_binary":"hash");
+        lap("mapping_ms");
         for (const auto &point : points) {
             if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)
                 || !std::isfinite(point.nx) || !std::isfinite(point.ny) || !std::isfinite(point.nz)) {
@@ -129,13 +146,19 @@ void PointCloudCanvas::setDisplayCloud(QVector<pointcloud::Point3D> points,
                 return;
             }
         }
+        lap("validation_ms");
+        ++m_displayCloudRevision;
         m_points = std::move(points);
         m_hasDisplayMapping = true;
+        m_displayMappingSorted = sorted;
         m_displayToFullIndices = std::move(displayToFullIndices);
         m_fullToDisplayIndices = std::move(fullToDisplay);
         m_fullPointCount = fullPointCount;
+        m_controlPointIndices.clear();
         m_pointStates.fill(NormalPoint, m_points.size());
+        lap("state_buffer_ms");
         clearPointMarkerOverlay();
+        lap("marker_buffer_ms");
         clearPlanarMaskOverlays();
         m_selectedIndices.clear();
         m_selectedEdgeIndices.clear();
@@ -145,17 +168,21 @@ void PointCloudCanvas::setDisplayCloud(QVector<pointcloud::Point3D> points,
         m_coordinatePointIndex = -1;
         m_workpieceCoordinate = {};
         clearTextureGrayOverlay();
+        lap("texture_buffer_ms");
         m_contourVertices.clear();
         m_contourRanges.clear();
         m_contourUploadPending = true;
         ++m_renderRevision;
+        lap("overlay_reset_ms");
         updateBounds();
+        lap("bounds_ms");
         m_uploadError.clear();
         m_uploadPending = true;
         m_stateUploadPending = true;
         qInfo() << "PointCloudCanvas display cloud published, points=" << m_points.size()
                 << "full points=" << m_fullPointCount;
         update();
+        if(displayTiming){timing.insert("total_ms",total.nsecsElapsed()/1e6);displayTiming(m_displayCloudRevision,timing);}
     }
 
 void PointCloudCanvas::setCloudStreaming(QVector<pointcloud::Point3D> points) {
@@ -170,8 +197,11 @@ void PointCloudCanvas::setCloudStreaming(QVector<pointcloud::Point3D> points) {
                 Qt::QueuedConnection);
             return;
         }
+        m_controlPointIndices.clear();
+        ++m_displayCloudRevision;
         m_points = std::move(points);
         m_hasDisplayMapping = false;
+          m_displayMappingSorted = false;
         m_displayToFullIndices.clear();
         m_fullToDisplayIndices.clear();
         m_fullPointCount = m_points.size();
@@ -240,6 +270,29 @@ void PointCloudCanvas::setSelectedIndices(const QVector<int> &indices) {
             const int display = displayIndexForFullIndex(index);
             if (display >= 0) m_selectedIndices.push_back(display);
         }
+        update();
+    }
+
+void PointCloudCanvas::setControlPointIndices(const QVector<int> &indices) {
+        if (QThread::currentThread() != thread()) return;
+        m_controlPointIndices.clear();
+        for (int index : indices) {
+            const int display = displayIndexForFullIndex(index);
+            if (display >= 0 && !m_controlPointIndices.contains(display))
+                m_controlPointIndices.append(display);
+        }
+        if (m_overlayWidget) m_overlayWidget->update();
+    }
+
+void PointCloudCanvas::setUniformPointColor(const QColor &color) {
+        if (QThread::currentThread() != thread() || !color.isValid()) return;
+        m_uniformPointColor = color;
+        update();
+    }
+
+void PointCloudCanvas::clearUniformPointColor() {
+        if (QThread::currentThread() != thread()) return;
+        m_uniformPointColor = QColor();
         update();
     }
 
@@ -599,6 +652,7 @@ void PointCloudCanvas::initializeGL()  {
             uniform int colorMode;
             uniform float overlay;
             uniform int renderPass;
+            uniform bool uniformPointColorEnabled;
             layout(location = 2) in uint pointState;
             layout(location = 3) in vec4 textureColor;
             layout(location = 4) in vec4 markerColor;
@@ -613,7 +667,7 @@ void PointCloudCanvas::initializeGL()  {
                 gl_Position.xy += viewPan * gl_Position.w;
                 markerValue = markerColor;
                 gl_PointSize = renderPass == 0
-                    ? (markerColor.a > 0.5 ? max(pointSize * devicePixelRatio * 3.0, devicePixelRatio * 7.0) : pointSize)
+                    ? (!uniformPointColorEnabled && markerColor.a > 0.5 ? max(pointSize * devicePixelRatio * 3.0, devicePixelRatio * 7.0) : pointSize)
                     : max(pointSize + 6.0, 8.0);
                 normalValue = vertexNormal;
                 textureValue = textureColor;
@@ -631,11 +685,17 @@ void PointCloudCanvas::initializeGL()  {
             uniform float overlay;
             uniform int renderPass;
             uniform vec3 selectionColor;
+            uniform bool uniformPointColorEnabled;
+            uniform vec3 uniformPointColor;
             out vec4 fragmentColor;
             flat in int stateValue;
             in vec4 textureValue;
             in vec4 markerValue;
             void main() {
+                if (renderPass == 0 && uniformPointColorEnabled) {
+                    fragmentColor = vec4(uniformPointColor, max(0.02, overlay));
+                    return;
+                }
                 if (renderPass == 1 && distance(gl_PointCoord, vec2(0.5)) > 0.48)
                     discard;
                 vec3 color;
@@ -807,6 +867,9 @@ void PointCloudCanvas::paintGL()  {
                 m_program.setUniformValue("textureFallbackColorMode", m_textureFallbackColorMode);
                 m_program.setUniformValue("overlay", m_overlay);
                 m_program.setUniformValue("renderPass", 0);
+                m_program.setUniformValue("uniformPointColorEnabled", m_uniformPointColor.isValid());
+                m_program.setUniformValue("uniformPointColor", QVector3D(float(m_uniformPointColor.redF()),
+                    float(m_uniformPointColor.greenF()), float(m_uniformPointColor.blueF())));
                 m_program.setUniformValue("selectionColor", QVector3D(float(m_selectionColor.redF()),
                     float(m_selectionColor.greenF()), float(m_selectionColor.blueF())));
                 m_vertexArray.bind();
@@ -1012,12 +1075,17 @@ void PointCloudCanvas::updateBounds() {
 
 void PointCloudCanvas::uploadCloudIfNeeded() {
         if (!m_uploadPending) return;
+        QElapsedTimer total,phase;
+        if(displayTiming){total.start();phase.start();}
+        QJsonObject timing{{"event","gl_upload_cpu"},{"scope","CPU OpenGL calls; excludes GPU completion"}};
+        const auto lap=[&](const char *key){if(displayTiming){timing.insert(key,phase.nsecsElapsed()/1e6);phase.restart();}};
         if (m_points.size() > std::numeric_limits<int>::max() / qsizetype(sizeof(pointcloud::Point3D))) {
             m_uploadError = tr("点云过大，超过单个 OpenGL 缓冲区限制");
             qCritical() << "OpenGL upload rejected, points=" << m_points.size()
                         << "bytes="
                         << (m_points.size() * qsizetype(sizeof(pointcloud::Point3D)));
             m_uploadPending = false;
+            if(displayTiming){timing.insert("status","failed");timing.insert("error",m_uploadError);displayTiming(m_displayCloudRevision,timing);}
             return;
         }
 
@@ -1037,6 +1105,7 @@ void PointCloudCanvas::uploadCloudIfNeeded() {
         }
         if (requiredBytes > 0)
             m_vertexBuffer.write(0, m_points.constData(), int(requiredBytes));
+        lap("point_buffer_ms");
         const GLenum uploadError = glGetError();
         if (uploadError != GL_NO_ERROR) {
             m_uploadError = uploadError == GL_OUT_OF_MEMORY
@@ -1066,6 +1135,7 @@ void PointCloudCanvas::uploadCloudIfNeeded() {
             glEnableVertexAttribArray(2);
             glVertexAttribIPointer(2, 1, GL_UNSIGNED_BYTE, sizeof(quint8), nullptr);
             m_stateBuffer.release();
+            lap("state_buffer_ms");
             m_textureBuffer.bind();
             m_textureBuffer.setUsagePattern(QOpenGLBuffer::DynamicDraw);
             const qsizetype textureBytes = m_textureColors.size()
@@ -1081,6 +1151,7 @@ void PointCloudCanvas::uploadCloudIfNeeded() {
             m_program.bind();
             m_program.enableAttributeArray(3);
             m_program.setAttributeBuffer(3, GL_FLOAT, 0, 4, sizeof(QVector4D));
+            lap("texture_buffer_ms");
             m_markerBuffer.bind();
             m_markerBuffer.setUsagePattern(QOpenGLBuffer::DynamicDraw);
             const qsizetype markerBytes = m_markerColors.size() * qsizetype(sizeof(QVector4D));
@@ -1094,6 +1165,7 @@ void PointCloudCanvas::uploadCloudIfNeeded() {
             m_program.enableAttributeArray(4);
             m_program.setAttributeBuffer(4, GL_FLOAT, 0, 4, sizeof(QVector4D));
             m_markerBuffer.release();
+            lap("marker_buffer_ms");
             m_program.release();
             m_textureBuffer.release();
             m_program.release();
@@ -1106,6 +1178,9 @@ void PointCloudCanvas::uploadCloudIfNeeded() {
         }
         m_vertexBuffer.release();
         m_vertexArray.release();
+        if(displayTiming){timing.insert("total_ms",total.nsecsElapsed()/1e6);
+            timing.insert("status",m_uploadError.isEmpty()?"success":"failed");
+            timing.insert("error",m_uploadError);displayTiming(m_displayCloudRevision,timing);}
     }
 
 void PointCloudCanvas::uploadStatesIfNeeded() {
@@ -1313,6 +1388,11 @@ QVector<int> PointCloudCanvas::pickRectangle(const QRectF &selection) {
 int PointCloudCanvas::displayIndexForFullIndex(int fullIndex) const {
     if (!m_hasDisplayMapping)
         return fullIndex >= 0 && fullIndex < m_points.size() ? fullIndex : -1;
+    if(m_displayMappingSorted) {
+        const auto begin=m_displayToFullIndices.cbegin(),end=m_displayToFullIndices.cend();
+        const auto found=std::lower_bound(begin,end,fullIndex);
+        return found!=end&&*found==fullIndex?int(found-begin):-1;
+    }
     return m_fullToDisplayIndices.value(fullIndex, -1);
 }
 
@@ -1399,6 +1479,18 @@ void PointCloudCanvas::drawOverlay(QPaintDevice *device) {
             return QPointF((clip.x() * 0.5f + 0.5f) * width(),
                            (0.5f - clip.y() * 0.5f) * height());
         };
+        // A few UI crosses, never a point-color or point-size override.
+        for (int index : m_controlPointIndices) {
+            if (index < 0 || index >= m_points.size()) continue;
+            const auto &point = m_points.at(index);
+            const QPointF anchor = project({point.x, point.y, point.z});
+            if (!rect().contains(anchor.toPoint())) continue;
+            for (const auto &pen : {QPen(Qt::white, 4.0), QPen(QColor("#253347"), 2.0)}) {
+                painter.setPen(pen);
+                painter.drawLine(anchor + QPointF(-6, 0), anchor + QPointF(6, 0));
+                painter.drawLine(anchor + QPointF(0, -6), anchor + QPointF(0, 6));
+            }
+        }
         QVector<QRectF> axisLabelRects;
         const auto drawAxisLabel = [&](const QPointF &anchor, const QString &text,
                                        const QPointF &offset, const QColor &color) {
@@ -1540,7 +1632,7 @@ void PointCloudCanvas::drawOverlay(QPaintDevice *device) {
         painter.setFont(QFont());
         painter.drawText(12, 22, tr("%1 点").arg(QLocale().toString(m_fullPointCount)));
 
-        if (m_overlayOptions.showColorBar && m_colorMode == 0 && !m_points.isEmpty()) {
+        if (m_overlayOptions.showColorBar && !m_uniformPointColor.isValid() && m_colorMode == 0 && !m_points.isEmpty()) {
             const int barHeight = qBound(80, int(height() * 0.45), 360);
             QLinearGradient gradient(0, 0, 0, barHeight);
             gradient.setColorAt(0.0, QColor::fromRgbF(1.0, 0.05, 0.0));

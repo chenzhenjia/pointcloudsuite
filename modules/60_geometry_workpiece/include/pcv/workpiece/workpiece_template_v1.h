@@ -44,6 +44,9 @@ struct SaveWorkpieceTemplateRequest {
     QJsonObject source;
     std::function<bool()> isCancelled;
     WorkpieceTemplateProgress progress;
+    // Optional v1 role companion, committed with the existing package. Old JSON schema is unchanged.
+    QJsonObject roleCompanion;
+    QVector<pointcloud::Point3D> interferencePoints;
 };
 
 struct LoadWorkpieceTemplateRequest {

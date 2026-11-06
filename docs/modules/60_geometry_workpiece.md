@@ -1,5 +1,9 @@
 # 60_geometry_workpiece：几何与工件流程
 
+2026-11-05 清理：移除无引用旧plane_fitting/planefitting及70转发target，统一链接`pcv_m60_geometry_workpiece`；70公共兼容头保留。拟合、掩码、高侧及模板算法不变。[说明](../development/application_target_cleanup_v1.md)。
+
+2026-11-05 应用契约复用：扫描几何GUI将最终保留点交给既有`buildPlaneMaskV1`，再光栅化成0/128/255契约PNG，并用既有WObj矩阵/轴/位姿作一致性校验；60公共头与算法不改。base X平行法向的既有WObj退化仍拒绝。见[契约适配说明](../development/scan_geometry_contract_adapter_v1.md)。
+
 版本 v0.5，核对日期 2026-10-15。target pcv_m60_geometry_workpiece，依赖 core/infrastructure、10/50、Qt Core/Gui、Threads；不依赖 apps/QWidget。[架构](../architecture/software_architecture_v0.5.md) · [契约](../contracts/data_contracts_v0.5.md) · [日志](../changelog/v0.5.md)。
 
 ## 扫描几何 WObj1 API（2026-10-29）
@@ -23,7 +27,7 @@
 | pcv/texture/texture_mapping.h | pcv::texture::mapPlaneBrightness |
 | pcv/workpiece/workpiece_template_v1.h | pcv::workpiece::saveWorkpieceTemplate/loadWorkpieceTemplate |
 
-头路径 workpiece 不表示 pcv::workpiece namespace 已落地。原 60/70/roi/matching/interface 兼容 target/header 保留，不新增第二套几何。
+头路径workpiece不表示pcv::workpiece namespace已落地。60/70/roi/matching/interface公共兼容头保留，无引用转发target已清理，不新增第二套几何。
 
 ## 平面与单击选面 v2
 
@@ -94,3 +98,22 @@ plane_fitting_tests、plane_fitting_equivalence_tests_v2、single_click_plane_se
 新增 `pcv/planefitting/reference_plane_match_v2.h` / `pcv::planefitting::matchReferencePlaneV2`，由新单页离线 GUI 调用，不属于模块 40 位置确认。目标完整点云及不可变索引必须匹配同一缓冲，参考平面已在 robot_base/mm。默认搜索垂距 10 mm、法向角 5°（绝对点积消除法向正负差）、最多 16 个确定性分散种子；参数可调，正式选面垂距仍使用原容差。
 
 实现复用索引局部模型及 `selectPlaneAtPoint`，不增加第二套 RANSAC/PCA，不翻转/补点/压平。交集按较小候选点数计算，≥80% 合并重复候选；两个不同候选立即返回 Ambiguous。返回 Unique/Ambiguous/NotFound/Cancelled/InvalidInput/Error、完整候选模型/索引、种子/实际尝试序列、距离角度及诊断。有限种子下的唯一候选仍须人工审核，不等于全局唯一或严格配准质量通过。接口、测试源码与待用户验收项见 [v2 说明](../development/scan_geometry_real_selected_plane_v2.md)，本轮未构建/测试。
+
+2026-11-05 加载计时：PlaneSelectionIndexResult新增budgetAcquireMs，统计既有点桶与法向缓冲预算申请，包含于总准备/grid/normals内。不改索引或选面算法。公共DTO需全量重编，[说明](../development/scan_geometry_load_performance_v1.md)，本轮仅静态检查。
+
+## 2026-11-05 真实日志耗时优化 v2
+
+IndexPreparationOptions追加normalBatchSize（默认4096，新GUI显式65536）；仅改变法向调度块大小，邻居累计/PCA/确定性提交顺序不变。私有并行模型申请ProcessingBudget，退回4096再串行，启动失败join后处理剩余。结果补网格/批次/实际最大并行块/回退/计算/等待/提交耗时；compute sum、join与normals相互包含，不可累加。ReferencePlaneMatchResultV2追加seedSelectionMs供应用直接复用原SingleClickResult后处理，不新增拟合或改变候选规则。公共DTO须完整重编。补4096/65536、1/2/4worker、预算/取消等价测试源码，本轮未运行。[说明](../development/scan_geometry_load_performance_v2.md)。
+
+## 2026-11-05 性能优化 v3
+
+IndexPreparationOptions追加cacheNormalNeighbors默认false，新GUI显式开启：临时27邻居int表，13方向查找双填，按旧slot序累计，预算/分配失败直查，法向结束释放。SingleClickOptions.reuseConnectivityWorkspace默认true，任务私有数组/容量复用（新增留存按projected×256预算，失败原路径），拟合/连通/跨带/六轮数学不变。PlaneMaskOptionsV1.preferDenseGrid默认true，紧凑且预算允许用连续占用/顶点表，稀疏或失败回原路径；完整边界/孔洞/区域不变，内部编号可变。三个结果DTO追加诊断计时，不进正式schema；公共头需完整重编。补等价/预算/取消源码未运行。[v3开发说明](../development/scan_geometry_load_performance_v3.md)。
+
+## 2026-11-05 结果区域固定网格元数据
+
+PlaneMaskResultV1返回有效double间距及投影原点；PlaneMaskOptionsV1间距double、追加默认关闭fixedGridOrigin/gridOriginU/V，仅应用结果修剪启用固定网格。占用/三角面/边界算法不变，旧调用方自动原点保持。完整点生成，公共DTO全量重编；[说明](../development/scan_geometry_result_regions_v1.md)。
+
+
+## STEP 模板与自动匹配 v1
+
+2026-11-05：CAD面信息增加解析平面原点/法向，采样结果追加完整逐面范围；新增 `template_features_v1` 和 `template_package_v1`，复用完整选面/区域、裁剪CAD网格与孔洞边界，事务保存多角色伴随文件。旧模板schema保持。 [开发与验收](../development/step_template_matching_v1.md)。本轮未执行构建、CTest、GUI/DPI或真实样本验证，由用户执行。

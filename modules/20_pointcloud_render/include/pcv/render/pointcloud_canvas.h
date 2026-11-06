@@ -7,6 +7,7 @@
 #include <QColor>
 #include <QFont>
 #include <QHash>
+#include <QJsonObject>
 #include <QKeyEvent>
 #include <QMatrix4x4>
 #include <QMouseEvent>
@@ -39,6 +40,9 @@ public:
         PlanePoint = 1,
         EdgePoint = 2
     };
+    // Optional CPU timing hook. Revisions identify cloud replacement, not overlays.
+    std::function<void(quint64,const QJsonObject &)> displayTiming;
+    quint64 displayCloudRevision() const { return m_displayCloudRevision; }
     std::function<void(int)> pointPicked;
     // Optional GUI-thread timing hook, immediately before the picking pass.
     std::function<void()> pointPickingStarted;
@@ -75,6 +79,8 @@ public:
     QVector<int> pickRectangleForSelection(const QRectF &selection);
 
     void setSelectedIndices(const QVector<int> &indices);
+    // Independent screen-space crosses; indices use the full source mapping.
+    void setControlPointIndices(const QVector<int> &indices);
 
     void setPlaneResult(const QVector<int> &planeIndices, const QVector<int> &edgeIndices,
                         const QVector<pcv::render::Contour> &contours);
@@ -94,6 +100,9 @@ public:
 
     // Instance-local presentation. Existing callers retain their defaults.
     void setAppearance(const QColor &background, const QColor &selection);
+    // Overrides base point shading only. Disabled by default; no point mutation.
+    void setUniformPointColor(const QColor &color);
+    void clearUniformPointColor();
     void setEmptyMessage(const QString &message);
     // Colors/valid are indexed by the full source cloud, like gray overlays.
     bool setPointColorOverlay(const pcv::render::PointColorOverlay &overlay);
@@ -161,8 +170,10 @@ private:
     void drawOverlay(QPaintDevice *device);
     QWidget *m_overlayWidget = nullptr;
 
+    quint64 m_displayCloudRevision = 0;
     QVector<pointcloud::Point3D> m_points;
     bool m_hasDisplayMapping = false;
+    bool m_displayMappingSorted = false;
     QVector<int> m_displayToFullIndices;
     QHash<int, int> m_fullToDisplayIndices;
     qsizetype m_fullPointCount = 0;
@@ -170,6 +181,7 @@ private:
     pcv::render::CoordinateFrame m_workpieceCoordinate;
     QVector<quint8> m_pointStates;
     QVector<int> m_selectedIndices;
+    QVector<int> m_controlPointIndices;
     QVector<int> m_edgeIndices;
     QVector<int> m_selectedEdgeIndices;
     QVector<int> m_planeResultIndices;
@@ -246,6 +258,7 @@ private:
     int m_textureFallbackColorMode = 0;
     QColor m_backgroundColor = Qt::black;
     QColor m_selectionColor = Qt::white;
+    QColor m_uniformPointColor;
     QString m_emptyMessage = QStringLiteral("打开 PLY 文件开始预览");
 
     int displayIndexForFullIndex(int fullIndex) const;

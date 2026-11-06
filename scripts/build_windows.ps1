@@ -5,6 +5,7 @@ param(
     [ValidateSet("Debug", "Release")]
     [string]$Config = "Release",
     [switch]$BuildTests,
+    [switch]$BuildTools,
     [switch]$StepImport,
     [string]$OcctDir = "",
     [switch]$CliOnly,
@@ -360,6 +361,7 @@ if ($CliOnly -and $QtDir -match '(?i)(^|[\\/])mingw') {
 $CMakePath = Get-CMakePath $CMakePath
 
 $testOption = if ($BuildTests) { 'ON' } else { 'OFF' }
+$toolsOption = if ($BuildTools) { 'ON' } else { 'OFF' }
 $cameraOption = if ($ExperimentalCamera) { 'ON' } else { 'OFF' }
 Write-Host "CMake: $CMakePath"
 Write-Host "Qt: $QtDir"
@@ -368,6 +370,7 @@ Write-Host "Build: $BuildDir"
 Write-Host "CliOnly: $CliOnly"
 Write-Host "Deploy: $Deploy"
 Write-Host "BuildTests: $BuildTests"
+Write-Host "BuildTools: $BuildTools"
 Write-Host "ExperimentalCamera: $ExperimentalCamera"
 
 $configureArguments = @(
@@ -375,13 +378,14 @@ $configureArguments = @(
     ("-DCMAKE_PREFIX_PATH={0}" -f $(if ($OcctDir) { "$QtDir;$(Split-Path (Split-Path $OcctDir -Parent) -Parent)" } else { $QtDir })),
     ("-DCMAKE_BUILD_TYPE={0}" -f $Config),
     ("-DPCV_BUILD_TESTS={0}" -f $testOption),
+    ("-DPCV_BUILD_TOOLS={0}" -f $toolsOption),
     ("-DPCV_BUILD_STEP_IMPORT={0}" -f $(if ($StepImport) { "ON" } else { "OFF" })),
     ("-DPCV_BUILD_EXPERIMENTAL_CAMERA={0}" -f $cameraOption)
 )
 if ($OcctDir) { $configureArguments += ("-DOpenCASCADE_DIR={0}" -f $OcctDir) }
 if ($CliOnly) {
     $configureArguments += @('-DPCV_BUILD_POINTCLOUDVIEW=OFF',
-        '-DPCV_BUILD_POINTCLOUDSTITCH=OFF', '-DPCV_BUILD_CLI=ON')
+        '-DPCV_BUILD_SCAN_GEOMETRY_DEMO_V1=OFF', '-DPCV_BUILD_CLI=ON')
 }
 if ($Generator -eq 'Ninja') {
     $configureArguments += ("-DCMAKE_MAKE_PROGRAM={0}" -f $NinjaPath)

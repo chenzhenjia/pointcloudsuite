@@ -102,7 +102,11 @@ PlaneSelectionIndexResult preparePlaneSelectionIndex(const QVector<pointcloud::P
         auto index=std::make_shared<PlaneSelectionIndex>(); index->points=points;
         if(options.cachePointBuckets) {
             const size_t bytes=size_t(points.size())*sizeof(int);
-            if(options.processingBudget)index->bucketLease=options.processingBudget->acquire(bytes);
+            if(options.processingBudget) {
+                QElapsedTimer budgetTimer;budgetTimer.start();
+                index->bucketLease=options.processingBudget->acquire(bytes);
+                result.budgetAcquireMs+=budgetTimer.nsecsElapsed()/1e6;
+            }
             if(!options.processingBudget||index->bucketLease)index->pointBuckets.fill(-1,points.size());
         }
         QVector3D low(std::numeric_limits<float>::max(),std::numeric_limits<float>::max(),std::numeric_limits<float>::max());
@@ -127,6 +131,40 @@ PlaneSelectionIndexResult preparePlaneSelectionIndex(const QVector<pointcloud::P
             auto &bucket=index->buckets[size_t(it->second)];bucket.indices.push_back(i);bucket.moments.add(p-index->origin);
         }
         result.gridMs=timer.nsecsElapsed()/1e6;
+        // Optional transient adjacency: populate each undirected pair once.
+        // Slots use exactly the legacy dz/dy/dx order, so moment accumulation is unchanged.
+        QElapsedTimer neighborTimer;neighborTimer.start();
+        using NeighborRow=std::array<int,27>;
+        std::vector<NeighborRow> neighbors;
+        std::shared_ptr<pcv::ProcessingBudget::Lease> neighborLease;
+        if(options.cacheNormalNeighbors) {
+            const size_t bytes=index->buckets.size()*sizeof(NeighborRow);
+            if(options.processingBudget) {
+                QElapsedTimer acquire;acquire.start();neighborLease=options.processingBudget->acquire(bytes);
+                result.budgetAcquireMs+=acquire.nsecsElapsed()/1e6;
+            }
+            if(!options.processingBudget||neighborLease) {
+                try { neighbors.resize(index->buckets.size()); }
+                catch(const std::bad_alloc &){neighborLease.reset();result.neighborFallback=QStringLiteral("allocation");}
+                if(!neighbors.empty()) {
+                    for(size_t i=0;i<neighbors.size();++i) {
+                        if((i&4095)==0&&stopped())return result;
+                        neighbors.at(i).fill(-1);
+                    }
+                    for(size_t i=0;i<index->buckets.size();++i) {
+                        if((i&1023)==0&&stopped())return result;
+                        neighbors.at(i).at(13)=int(i);const auto key=index->buckets.at(i).key;
+                        for(int n=14;n<27;++n) {
+                            const int dx=n%3-1,dy=(n/3)%3-1,dz=n/9-1;
+                            const int other=index->find({key.x+dx,key.y+dy,key.z+dz});
+                            if(other>=0){neighbors.at(i).at(size_t(n))=other;neighbors.at(size_t(other)).at(size_t(26-n))=int(i);}
+                        }
+                    }
+                    result.neighborCacheUsed=true;result.neighborCacheBytes=bytes;
+                }
+            } else result.neighborFallback=QStringLiteral("budget");
+        }
+        result.neighborPreparationMs=neighborTimer.nsecsElapsed()/1e6;
         QElapsedTimer normalTimer;normalTimer.start();
         // Read the finished grid through a const view. Each worker owns its
         // models; the original dz/dy/dx reduction order is unchanged.
@@ -134,27 +172,31 @@ PlaneSelectionIndexResult preparePlaneSelectionIndex(const QVector<pointcloud::P
         struct Normal { Model model;bool valid=false; };
         // A worker that observes cancellation reports it, so its remaining
         // buckets are never published with default models.
-        struct NormalChunk { std::vector<Normal> output;bool cancelled=false; };
-        const auto normals=[view,&cancelled](size_t begin,size_t end) {
-            NormalChunk chunk;
+        struct NormalChunk { std::vector<Normal> output;bool cancelled=false;double computeMs=0; };
+        const auto normals=[view,&cancelled,&neighbors](size_t begin,size_t end) {
+            NormalChunk chunk;QElapsedTimer compute;compute.start();
             chunk.output.resize(end-begin);
             for(size_t i=begin;i<end;++i) {
                 if(cancelled&&cancelled()) {chunk.cancelled=true;break;}
                 const auto &bucket=view->buckets.at(i);Moments moments;
-                for(int dz=-1;dz<=1;++dz)for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx) {
+                if(!neighbors.empty()) {
+                    for(int neighbor:neighbors.at(i))if(neighbor>=0)moments.append(view->buckets.at(size_t(neighbor)).moments);
+                } else for(int dz=-1;dz<=1;++dz)for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx) {
                     const int neighbor=view->find({bucket.key.x+dx,bucket.key.y+dy,bucket.key.z+dz});
                     if(neighbor>=0)moments.append(view->buckets.at(size_t(neighbor)).moments);
                 }
                 auto &normal=chunk.output.at(i-begin);normal.valid=pca(moments,view->origin,&normal.model);
             }
-            return chunk;
+            chunk.computeMs=compute.nsecsElapsed()/1e6;return chunk;
         };
         const auto normalsSerial=[&](size_t begin,size_t end) {
             for(size_t i=begin;i<end;++i) {
                 if(stopped())return false;
                 auto &bucket=index->buckets.at(i);
                 Moments moments;
-                for(int dz=-1;dz<=1;++dz)for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx) {
+                if(!neighbors.empty()) {
+                    for(int neighbor:neighbors.at(i))if(neighbor>=0)moments.append(view->buckets.at(size_t(neighbor)).moments);
+                } else for(int dz=-1;dz<=1;++dz)for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx) {
                     const int neighbor=view->find({bucket.key.x+dx,bucket.key.y+dy,bucket.key.z+dz});
                     if(neighbor>=0)moments.append(view->buckets.at(size_t(neighbor)).moments);
                 }
@@ -164,47 +206,67 @@ PlaneSelectionIndexResult preparePlaneSelectionIndex(const QVector<pointcloud::P
         };
         int workers=options.parallelEnabled?qBound(1,options.maxParallelTasks,4):1;
         const size_t bucketCount=index->buckets.size();
-        constexpr size_t windowSize=4096;
+        size_t windowSize=size_t(qBound(4096,options.normalBatchSize,65536));
+        result.bucketCount=qsizetype(bucketCount);
         std::shared_ptr<pcv::ProcessingBudget::Lease> normalLease;
-        if(options.processingBudget) {
-            normalLease=options.processingBudget->acquire(windowSize*size_t(workers)*sizeof(Normal));
-            if(!normalLease)workers=1;
+        if(workers>1&&options.processingBudget) {
+            const auto acquire=[&] {
+                QElapsedTimer budgetTimer;budgetTimer.start();
+                auto lease=options.processingBudget->acquire(windowSize*size_t(workers)*sizeof(Normal));
+                result.budgetAcquireMs+=budgetTimer.nsecsElapsed()/1e6;return lease;
+            };
+            normalLease=acquire();
+            if(!normalLease&&windowSize>4096) {
+                windowSize=4096;result.normalFallback=QStringLiteral("budget_small_batch");normalLease=acquire();
+            }
+            if(!normalLease){workers=1;result.normalFallback=QStringLiteral("budget_serial");}
         }
+        result.normalBatchSize=int(windowSize);result.normalWorkerCount=1;
         if(workers==1) {
             for(size_t begin=0;begin<bucketCount;) {
                 const size_t end=qMin(bucketCount,begin+windowSize);
+                QElapsedTimer compute;compute.start();++result.normalBatchCount;
                 if(!normalsSerial(begin,end))return result;
+                result.normalComputeSumMs+=compute.nsecsElapsed()/1e6;
                 begin=end;
             }
         } else {
             for(size_t begin=0;begin<bucketCount;) {
                 std::vector<std::pair<size_t,std::future<NormalChunk>>> futures;
+                futures.reserve(size_t(workers));
                 size_t serialBegin=bucketCount,serialEnd=bucketCount;
                 for(int worker=0;worker<workers&&begin<bucketCount;++worker) {
                     const size_t end=qMin(bucketCount,begin+windowSize);
                     try {
                         futures.emplace_back(begin,std::async(std::launch::async,[&normals,begin,end]{return normals(begin,end);}));
+                        ++result.normalBatchCount;
                     } catch(const std::system_error &) {
                         serialBegin=begin;serialEnd=end;workers=1;
+                        result.normalFallback=QStringLiteral("launch_serial");
                     }
                     begin=end;
                     if(serialBegin<bucketCount)break;
                 }
+                result.normalWorkerCount=qMax(result.normalWorkerCount,int(futures.size()));
                 std::vector<std::pair<size_t,NormalChunk>> chunks;chunks.reserve(futures.size());
-                bool chunkCancelled=false;
+                bool chunkCancelled=false;QElapsedTimer join;join.start();
                 for(auto &entry:futures) {
-                    auto chunk=entry.second.get();chunkCancelled=chunkCancelled||chunk.cancelled;
+                    auto chunk=entry.second.get();chunkCancelled=chunkCancelled||chunk.cancelled;result.normalComputeSumMs+=chunk.computeMs;
                     chunks.emplace_back(entry.first,std::move(chunk));
                 }
+                result.normalJoinMs+=join.nsecsElapsed()/1e6;
                 if(chunkCancelled) {result.cancelled=true;result.error=QStringLiteral("cancelled");return result;}
                 if(stopped())return result;
+                QElapsedTimer commit;commit.start();
                 for(const auto &entry:chunks)for(size_t i=0;i<entry.second.output.size();++i) {
                     auto &bucket=index->buckets.at(entry.first+i);
                     bucket.localModel=entry.second.output.at(i).model;bucket.hasLocalModel=entry.second.output.at(i).valid;
                 }
+                result.normalCommitMs+=commit.nsecsElapsed()/1e6;
                 if(serialBegin<bucketCount) {
+                    QElapsedTimer compute;compute.start();++result.normalBatchCount;
                     if(!normalsSerial(serialBegin,serialEnd)||!normalsSerial(begin,bucketCount))return result;
-                    break;
+                    result.normalComputeSumMs+=compute.nsecsElapsed()/1e6;break;
                 }
             }
         }
@@ -442,6 +504,9 @@ SingleClickResult selectPlaneAtPoint(const QVector<pointcloud::Point3D> &points,
         QVector<QVector2D> projected;
         QVector<float> distances;
         QVector<int> connectivityQueue;
+        detail::ConnectivityWorkspaceV3 connectivityWorkspace;
+        std::shared_ptr<pcv::ProcessingBudget::Lease> connectivityLease;
+        qsizetype connectivityCapacity=0;
         QVector<int> previousClassified;
         QVector3D previousNormal;
         for(int iteration=0;iteration<6;++iteration) {
@@ -506,9 +571,19 @@ SingleClickResult selectPlaneAtPoint(const QVector<pointcloud::Point3D> &points,
             result.projectionMs+=projectionTimer.nsecsElapsed()/1e6;
             if(cancelled())return fail(SingleClickStatus::Cancelled,QStringLiteral("cancelled"));
             if(seedLocal<0)return fail(SingleClickStatus::Ambiguous,QStringLiteral("点击点不在目标平面内，请重选"));
+            bool reuseConnectivity=options.reuseConnectivityWorkspace;
+            if(reuseConnectivity&&projected.size()>connectivityCapacity) {
+                auto lease=options.processingBudget?options.processingBudget->acquire(size_t(projected.size())*256):nullptr;
+                if(!options.processingBudget||lease) {
+                    connectivityLease=std::move(lease);connectivityCapacity=projected.size();
+                } else reuseConnectivity=false;
+            }
             const auto component=detail::selectProjectedComponents(projected,seedLocal,result.connectivityRadiusUMm,
-                result.connectivityRadiusVMm,options.maximumGapMm,cancelled,reuseBuffers?&connectivityQueue:nullptr);
+                result.connectivityRadiusVMm,options.maximumGapMm,cancelled,reuseBuffers?&connectivityQueue:nullptr,reuseConnectivity?&connectivityWorkspace:nullptr);
             result.normalConnectivityMs+=component.normalMs;
+            result.connectivityBuildMs+=component.buildMs;result.connectivityTraversalMs+=component.traversalMs;
+            result.connectivityCellCount=qMax(result.connectivityCellCount,component.cellCount);
+            result.connectivityWorkspaceUsed|=reuseConnectivity;
             result.timings.connectivityMs+=stage.nsecsElapsed()/1e6;result.gapMergeMs+=component.gapMs;stage.restart();
             if(cancelled())return fail(SingleClickStatus::Cancelled,QStringLiteral("cancelled"));
             if(!reuseBuffers)projected={};
@@ -605,6 +680,7 @@ ReferencePlaneMatchResultV2 matchReferencePlaneV2(
             ++result.attemptedSeeds;
             result.attemptedSeedIndices.append(seed);
             auto selected=selectPlaneAtPoint(points,index,seed,options.selection);
+            result.seedSelectionMs.append(selected.timings.totalMs);
             if (cancelled() || selected.status==SingleClickStatus::Cancelled) return cancel();
             if (selected.outOfMemory) {
                 result.status=ReferencePlaneMatchStatusV2::Error; result.outOfMemory=true;

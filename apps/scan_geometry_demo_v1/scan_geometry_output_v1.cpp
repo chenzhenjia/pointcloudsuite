@@ -37,6 +37,7 @@ QByteArray mappingBytes(const pcv::stitching::SelectedPlaneStitchResult &r, cons
 
 GeometryOutputResultV1 saveSelectedPlaneGeometryV1(const GeometryOutputRequestV1 &request) {
     GeometryOutputResultV1 out;
+    if(!validateScanGeometryContractV1(request.contract,&out.error))return out;
     const auto cancelled = [&] { return request.isCancelled && request.isCancelled(); };
     if (!request.result.success || request.result.points.size() != request.result.cloudIds.size()
         || request.result.points.size() != request.result.sourceIndices.size()
@@ -45,7 +46,7 @@ GeometryOutputResultV1 saveSelectedPlaneGeometryV1(const GeometryOutputRequestV1
     }
     if (!request.wobj1.valid) { out.error = request.wobj1.error.isEmpty() ? QStringLiteral("WObj1 无效") : request.wobj1.error; return out; }
     if (cancelled()) { out.cancelled = true; out.error = QStringLiteral("已取消"); return out; }
-    const QString directory = QDir(request.outputRoot).filePath(QStringLiteral("geometry_%1_%2")
+    const QString directory = request.contract.enabled() ? pointCloudContractDirectoryV1(request.contract) : QDir(request.outputRoot).filePath(QStringLiteral("geometry_%1_%2")
         .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz")),
              QUuid::createUuid().toString(QUuid::Id128)));
     for(int index:request.removed)if(index<0||index>=request.result.points.size()) {
@@ -94,11 +95,18 @@ GeometryOutputResultV1 saveSelectedPlaneGeometryV1(const GeometryOutputRequestV1
         || !transaction.stageJson(QStringLiteral("selected_plane_report.json"),QJsonDocument(request.result.report).toJson())
         || !transaction.stageBinaryPly(ply, trimmed, true, {QStringLiteral("derived trimmed selected plane points")})
         || !transaction.stageBytes(pcvmap, map)
-        || !transaction.stageJson(json, QJsonDocument(sidecar).toJson(QJsonDocument::Indented))
-        || !transaction.commit()) {
+        || !transaction.stageJson(json, QJsonDocument(sidecar).toJson(QJsonDocument::Indented))) {
+        out.cancelled = cancelled(); out.error = out.cancelled ? QStringLiteral("已取消") : transaction.error(); return out;
+    }
+    if (request.contract.enabled() && !stagePointCloudContractV1(transaction, request, nullptr, &out.error)) {
+        out.cancelled = cancelled(); return out;
+    }
+    if (!transaction.commit()) {
         out.cancelled = cancelled(); out.error = out.cancelled ? QStringLiteral("已取消") : transaction.error(); transaction.abort(); return out;
     }
     out.success = true; out.outputDirectory = directory; out.trimmedPly = QDir(directory).filePath(ply);
-    out.trimmedMapping = QDir(directory).filePath(pcvmap); out.sidecar = QDir(directory).filePath(json); return out;
+    out.trimmedMapping = QDir(directory).filePath(pcvmap); out.sidecar = QDir(directory).filePath(json);
+    if (request.contract.enabled()) out.contractFile = QDir(directory).filePath("point_cloud_result.json");
+    return out;
 }
 } // namespace pcv::demo

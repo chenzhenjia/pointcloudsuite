@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SR-2026 initial modeling candidate result (scan_geometry_demo v1 subset)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "schema_version", "job_id", "run_id", "step_id", "business_code", "workpiece_id", "template_ref", "template_version", "algorithm_version", "status", "inputs", "outputs", "validation", "generated_at"],
+  "properties": {
+    "schema": {"const": "sr2026.point-cloud-result"},
+    "schema_version": {"const": 1},
+    "job_id": {"$ref": "#/$defs/id"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "step_id": {"$ref": "#/$defs/id"},
+    "business_code": {"const": "global_scan"},
+    "workpiece_id": {"$ref": "#/$defs/id"},
+    "template_ref": {"type": "null"},
+    "template_version": {"type": "null"},
+    "algorithm_version": {"type": "string", "minLength": 1},
+    "status": {"enum": ["completed", "partial", "failed"]},
+    "inputs": {
+      "type": "object", "additionalProperties": false,
+      "required": ["calibration_ref", "raw_clouds"],
+      "properties": {
+        "scan_path_output_ref": {"$ref": "#/$defs/ref"},
+        "calibration_ref": {"$ref": "#/$defs/ref"},
+        "raw_clouds": {
+          "type": "array", "items": {
+            "type": "object", "additionalProperties": false, "required": ["path_index", "ref"],
+            "properties": {"path_index": {"type": "integer", "minimum": 1}, "ref": {"$ref": "#/$defs/ref"}}
+          }
+        }
+      }
+    },
+    "outputs": {"type": "object"},
+    "validation": {
+      "type": "object", "additionalProperties": false, "required": ["errors", "warnings"],
+      "properties": {
+        "errors": {"type": "array", "items": {"type": "string"}},
+        "warnings": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "generated_at": {"type": "string", "format": "date-time", "pattern": "(Z|[+-][0-9]{2}:[0-9]{2})$"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "failed"}}},
+      "then": {"properties": {"outputs": {"maxProperties": 0}}},
+      "else": {"properties": {"outputs": {"$ref": "#/$defs/candidateOutputs"}, "inputs": {"properties": {"raw_clouds": {"minItems": 2}}}}}
+    },
+    {
+      "if": {"properties": {"status": {"const": "completed"}}},
+      "then": {"properties": {"inputs": {"required": ["scan_path_output_ref"]}, "validation": {"properties": {"errors": {"maxItems": 0}}}}}
+    }
+  ],
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$"},
+    "ref": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:\\\\|:))(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!system/temp/)(?!.*//)(?!.*(?:\\.| )(?=/|$)).+[^/]$"},
+    "positivePair": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number", "exclusiveMinimum": 0}},
+    "mask": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ref", "pixel_size_px", "physical_size_mm", "mm_per_pixel", "gray_value_map"],
+      "properties": {
+        "ref": {"$ref": "#/$defs/ref"},
+        "pixel_size_px": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "integer", "minimum": 1, "maximum": 16384}},
+        "physical_size_mm": {"$ref": "#/$defs/positivePair"},
+        "mm_per_pixel": {"$ref": "#/$defs/positivePair"},
+        "gray_value_map": {"const": {"background": 0, "template": 128, "forbidden": 255}}
+      }
+    },
+    "candidateOutputs": {
+      "type": "object", "additionalProperties": false,
+      "required": ["base_cloud_ref", "template_geometry", "wobj_candidate"],
+      "properties": {
+        "base_cloud_ref": {"$ref": "#/$defs/ref"},
+        "template_geometry": {
+          "type": "object", "additionalProperties": false, "required": ["coordinate_frame", "point_cloud_ref", "plane_mask"],
+          "properties": {"coordinate_frame": {"const": "base"}, "point_cloud_ref": {"$ref": "#/$defs/ref"}, "plane_mask": {"$ref": "#/$defs/mask"}}
+        },
+        "wobj_candidate": {
+          "type": "object", "additionalProperties": false,
+          "required": ["coordinate_frame", "controller_id", "wobj_id", "wobj_pose", "method"],
+          "properties": {
+            "coordinate_frame": {"const": "base"}, "controller_id": {"$ref": "#/$defs/id"}, "wobj_id": {"const": 1},
+            "wobj_pose": {"type": "array", "minItems": 6, "maxItems": 6, "items": {"type": "number"}}, "method": {"const": "point_cloud_fit"}
+          }
+        }
+      }
+    }
+  }
+}

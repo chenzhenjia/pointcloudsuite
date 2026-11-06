@@ -1,6 +1,6 @@
-# 40_pointcloud_matching：工件位置确认规划占位
+# 40_pointcloud_matching：模板定位与位置确认边界
 
-版本 v0.5，核对日期 2026-10-15。pcv_m40_pointcloud_matching 为 INTERFACE，聚合 30/60；旧 pcv_m40_pointcloudregistration 转发它。[架构](../architecture/software_architecture_v0.5.md) · [路线图](../development/roadmap_v0.5.md)。
+版本v0.5。2026-11-05：`pcv_m40_pointcloud_matching` 改为 STATIC，新增 `pcv/matching/template_match_v1.h`，PUBLIC 保持30/60兼容聚合，刚体数学依赖50；仅在30可用时注册。[本轮实现及验收](../development/step_template_matching_v1.md)。旧兼容头和诊断工具保留。
 
 ## 正式目标
 
@@ -8,7 +8,9 @@
 
 ## 当前状态
 
-业务为“规划目标，未实现”。没有本模块的基准持久化/比较、移动阈值/6DoF 判定、机器人执行/修正下发或新的正式输出闭环。临时工件 baseline 文件和现有几何/拼接输出不能作为移动判定已实现的证据。
+新增模板定位 `matchTemplateV1`：确定性计算子集、平面/边界姿态假设、无10mm/1°限制的6DoF精化、完整模板点距离核验、边界约束秩/空间分布/局部扰动检查；红色干涉面排除评分。默认2mm/30%/100点，4096粗假设、16精化、5候选；1mm/1°位姿合并。候选必须人工确认，搜索受限不代表全局无解。本轮尚未构建或运行样例，不声明定位成功率。
+
+机器人挪动判定、基准冻结/移动阈值、机器人执行和修正下发仍未实现。临时工件 baseline 或本次人工确认的模板匹配不能作为机器人移动判定已实现的证据。
 
 旧 registration/matching 头只转发：多帧/ICP 归 30，ROI/临时工件归 60。历史在本模块记录的高倾角、2.5D/快速模式及配准测试已集中到[归档](../archive/history_pre_v0.5.md)与[日志](../changelog/v0.5.md)，不能误作本模块功能。
 

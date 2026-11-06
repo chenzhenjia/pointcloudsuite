@@ -4,6 +4,7 @@
 #include "process_memory_usage_v1.h"
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
 #include "cameradialog.h"
+#include "features/depth_raw_capture_page_v1.h"
 #endif
 #include <stitchingwindow.h>
 #include "selected_plane_launcher.h"
@@ -907,6 +908,7 @@ void MainWindow::buildWorkbench()
     tool(2, tr("工序 JSON"), &MainWindow::openProcessJob);
     tool(3, tr("渲染设置"), &MainWindow::openRenderSettings);
     for (const auto &entry : {qMakePair(QStringLiteral("camera"), tr("相机采集")),
+                              qMakePair(QStringLiteral("depth_raw"), tr("深度图取流")),
                               qMakePair(QStringLiteral("stitch"), tr("多帧拼接")),
                               qMakePair(QStringLiteral("selection"), tr("六分屏选面")),
                               qMakePair(QStringLiteral("cad"), tr("STEP 模板"))}) {
@@ -993,6 +995,17 @@ void MainWindow::activateWorkbenchPage(const QString &id)
     if (id == "stitch") { openMultiFrameRegistration(); return; }
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
     if (id == "camera") { openCameraStream(); return; }
+    if (id == "depth_raw") {
+        if (!m_depthRawPage) {
+            m_depthRawPage = new DepthRawCapturePageV1(this);
+            m_depthRawPage->canStartCapture = [this] {
+                return !m_closing && !pointTaskRunning(false) && !m_templateTaskActive
+                    && !m_templateFormActive && (!m_cameraDialog || !m_cameraDialog->isDeviceActive());
+            };
+            m_workbench->embedPage(id, m_depthRawPage);
+        }
+        m_workbench->showPage(id); return;
+    }
 #endif
     if (id == "selection") {
         if (!m_selectedPlanePage) {
@@ -1025,6 +1038,7 @@ void MainWindow::shutdownWorkbenchPages()
     cancelSelectedPlanePage(m_selectedPlanePage);
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
     if (m_cameraDialog) m_cameraDialog->cancelAndWait();
+    if (m_depthRawPage) m_depthRawPage->stopAndWait();
 #endif
 }
 
@@ -1053,7 +1067,8 @@ void MainWindow::openCameraStream() {
     if (!m_cameraDialog) {
         m_cameraDialog = new CameraDialog(this);
         m_cameraDialog->canStartCapture = [this] {
-            return !m_closing && !pointTaskRunning(false) && !m_templateTaskActive && !m_templateFormActive;
+            return !m_closing && !pointTaskRunning(false) && !m_templateTaskActive && !m_templateFormActive
+                && (!m_depthRawPage || !m_depthRawPage->isCapturing());
         };
         m_cameraDialog->canStartStitching = [this] {
             if (m_closing || pointTaskRunning(false) || m_cadDialogActive || m_templateTaskActive || m_templateFormActive) return false;

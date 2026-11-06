@@ -9,6 +9,7 @@
 #include "scan_geometry_output_v1.h"
 #include <QtTest>
 #include <limits>
+#include <QSemaphore>
 namespace pcv::demo {
 struct ScanGeometrySessionTestAccessV2 {
     static void result(ScanGeometrySessionV2 &s) {
@@ -16,10 +17,13 @@ struct ScanGeometrySessionTestAccessV2 {
         s.m_result.cloudIds={0,0,1,1};s.m_result.sourceIndices={10,20,30,40};s.m_result.scanRatios={0,.2f,.5f,1};
         s.m_frames.resize(2);s.m_config.frames.resize(2);s.m_reference=0;
         auto &f=s.m_frames[0];f.confirmed=true;f.candidate.cloud.fullPoints=s.m_result.points;f.candidate.normal={0,0,1};f.candidate.center={.5f,.5f,0};
+        s.m_result.corrections={QMatrix4x4{},QMatrix4x4{}};
+        s.m_resultRegions.basis.valid=true;s.m_resultRegions.basis.model.c=1;
+        s.m_resultRegions.basis.axisU={1,0,0};s.m_resultRegions.basis.spacingU=s.m_resultRegions.basis.spacingV=1;
     }
     static void reviewFixture(ScanGeometrySessionV2 &s) {
         s.m_frames.resize(3);s.m_reference=0;s.m_active=0;
-        for(auto &f:s.m_frames){f.hasCandidate=true;f.reviewed=true;f.confirmed=true;}
+        for(auto &f:s.m_frames){f.sourceVerification=SourceVerificationV3::Verified;f.hasCandidate=true;f.reviewed=true;f.confirmed=true;}
     }
     static SessionFrameV2 &frame(ScanGeometrySessionV2 &s,int i){return s.m_frames[i];}
     static void maskFrame(ScanGeometrySessionV2 &s) {
@@ -31,13 +35,88 @@ struct ScanGeometrySessionTestAccessV2 {
         f.workpieceMaskError=QStringLiteral("workpiece");
         f.interferenceMaskError=QStringLiteral("interference");
         f.pendingInterferenceMaskError=QStringLiteral("pending");
-        f.hasCandidate=true;
+        f.hasCandidate=true;f.sourceVerification=SourceVerificationV3::Verified;
     }
     static void staleResult(ScanGeometrySessionV2 &s) {
         pcv::ui::SelectedPlaneTaskV2 task;task.ok=true;task.stitched.success=true;task.stitched.points={{5,5,5}};
         s.finish(-1,pcv::ui::SelectedPlaneTaskV2::Stitch,s.m_revision-1,s.m_referenceRevision,s.m_token,task);
     }
     static void pause(ScanGeometrySessionV2 &s,int frame) {s.m_matching=true;s.pauseAt(frame,QStringLiteral("测试异常"));}
+    static bool foregroundPriority(ScanGeometrySessionV2 &s) {
+        s.m_frames.resize(2);s.m_active=0;
+        s.m_frames[0].cloud.fullPoints={{0,0,0},{1,0,0},{0,1,0}};
+        auto gate=std::make_shared<QSemaphore>();
+        auto entered=std::make_shared<QSemaphore>();
+        const auto work=[gate,entered]{entered->release();gate->acquire();pcv::ui::SelectedPlaneTaskV2 t;t.ok=true;return t;};
+        s.submit(1,pcv::ui::SelectedPlaneTaskV2::LoadDisplay,work);
+        s.submit(1,pcv::ui::SelectedPlaneTaskV2::PrepareIndex,work);
+        entered->acquire(2);
+        const bool backgroundDoesNotBlock=!s.activeFrameBusy()&&!s.interactionBlocked()&&s.runningCount()==2;
+        s.submit(0,pcv::ui::SelectedPlaneTaskV2::Fit,[]{return pcv::ui::SelectedPlaneTaskV2{};});
+        const bool foregroundBlocks=s.interactionBlocked()&&s.runningCount()==2&&s.m_pending.size()==1;
+        gate->release(2);s.shutdown();
+        return backgroundDoesNotBlock&&foregroundBlocks;
+    }
+    static void delayedStaleIndex(ScanGeometrySessionV2 &s,const std::shared_ptr<QSemaphore> &gate) {
+        s.m_frames.resize(1);s.m_active=0;auto &f=s.m_frames[0];f.id=42;f.loadAttempt=1;
+        s.submit(0,pcv::ui::SelectedPlaneTaskV2::PrepareIndex,[gate]{gate->acquire();pcv::ui::SelectedPlaneTaskV2 t;t.ok=true;return t;});
+        ++f.loadAttempt;f.indexPreparing=true;f.status="new attempt";
+    }
+    static bool verificationFailureRetryRetainsCloud(ScanGeometrySessionV2 &s) {
+        s.m_frames.resize(1);s.m_config.frames.resize(1);s.m_active=0;
+        auto &f=s.m_frames[0];f.id=99;f.loadAttempt=1;f.requestedAt.start();
+        for(int y=0;y<25;++y)for(int x=0;x<25;++x) {
+            f.cloud.fullPoints.append({float(x),float(y),0});f.cloud.sourceIndices.append(y*25+x);f.cloud.scanRatios.append(0);
+        }
+        f.display=f.cloud.fullPoints;f.sourceVerification=SourceVerificationV3::Checking;f.indexPreparing=true;
+        const auto data=f.cloud.fullPoints.constData();
+        pcv::ui::SelectedPlaneTaskV2 failure;failure.error="verification failure";
+        s.finish(0,pcv::ui::SelectedPlaneTaskV2::PrepareIndex,s.m_revision,s.m_referenceRevision,s.m_token,failure);
+        if(f.sourceVerification!=SourceVerificationV3::Failed||f.display.isEmpty()||s.canSelectActive())return false;
+        s.retry();
+        return f.cloud.fullPoints.constData()==data&&f.loadAttempt==1&&s.busy();
+    }
+    static bool indexFailureRetainsDisplay(ScanGeometrySessionV2 &s) {
+        s.m_frames.resize(1);s.m_active=0;auto &f=s.m_frames[0];
+        f.cloud.fullPoints={{0,0,0}};f.display=f.cloud.fullPoints;f.displayToFull={0};f.indexPreparing=true;
+        pcv::ui::SelectedPlaneTaskV2 t;t.error="test index failure";
+        s.finish(0,pcv::ui::SelectedPlaneTaskV2::PrepareIndex,s.m_revision,s.m_referenceRevision,s.m_token,t);
+        return !f.display.isEmpty()&&!f.indexPreparing&&f.problem&&!f.index;
+    }
+    static bool publishBeforeIndex(ScanGeometrySessionV2 &s) {
+        s.m_frames.resize(1);s.m_config.frames.resize(1);s.m_active=0;
+        auto &f=s.m_frames[0];f.id=9;f.loadAttempt=1;f.requestedAt.start();
+        // Hold speculative dispatch while publishing; no algorithm mock or timing threshold.
+        s.m_seeds={0};
+        pcv::ui::SelectedPlaneTaskV2 t;t.ok=true;
+        for(int y=0;y<25;++y)for(int x=0;x<25;++x){t.loaded.fullPoints.append({float(x),float(y),0});t.displayToFullIndices.append(y*25+x);}
+        t.displayPoints=t.loaded.fullPoints;
+        s.finish(0,pcv::ui::SelectedPlaneTaskV2::LoadDisplay,s.m_revision,s.m_referenceRevision,s.m_token,t);
+        const bool visible=!f.display.isEmpty()&&f.indexQueued&&!f.index&&!s.canSelectActive();
+        auto prepared=pcv::ui::prepareSelectedPlaneIndexV2(f.cloud.fullPoints,s.m_token,1,s.m_budget);
+        if(!prepared.ok)return false;
+        f.indexQueued=false;f.indexPreparing=true;f.sourceVerification=SourceVerificationV3::Verified;
+        s.finish(0,pcv::ui::SelectedPlaneTaskV2::PrepareIndex,s.m_revision,s.m_referenceRevision,s.m_token,prepared);
+        s.m_seeds.clear();
+        return visible&&s.canSelectActive()&&f.loadTiming.value("selectable_ms").isDouble();
+    }
+    static bool verificationLifecycle(ScanGeometrySessionV2 &s) {
+        s.m_frames.resize(1);s.m_config.frames.resize(1);s.m_active=0;s.m_reference=0;
+        auto &f=s.m_frames[0];f.id=90;f.loadAttempt=3;f.digest="same";f.hasCandidate=f.reviewed=f.confirmed=true;
+        f.planeIndices={0};f.interferenceIndices={1};f.workpieceMask.vertices={{1,2,3}};
+        f.sourceVerification=SourceVerificationV3::Checking;
+        if(s.canSelectActive()||s.confirmCandidate()||s.confirmInterference())return false;
+        s.acceptSourceVerification(0,s.m_revision,2,s.m_token,"wrong",1,2);
+        if(f.sourceVerification!=SourceVerificationV3::Checking||f.digest!="same")return false;
+        s.acceptSourceVerification(0,s.m_revision,3,s.m_token,"same",1,2);
+        if(f.sourceVerification!=SourceVerificationV3::Verified||!f.hasCandidate||f.interferenceIndices.isEmpty())return false;
+        ++f.loadAttempt;f.sourceVerification=SourceVerificationV3::Checking;
+        s.acceptSourceVerification(0,s.m_revision,4,s.m_token,"different",2,3);
+        if(f.hasCandidate||f.reviewed||f.confirmed||!f.interferenceIndices.isEmpty()||!f.workpieceMask.vertices.isEmpty()||s.m_reference!=-1)return false;
+        f.sourceVerification=SourceVerificationV3::Checking;f.indexPreparing=true;auto old=s.m_token;s.cancel();
+        s.acceptSourceVerification(0,s.m_revision-1,4,old,"late",1,2);
+        return f.digest=="different"&&f.sourceVerification!=SourceVerificationV3::Verified;
+    }
     static bool sixFrameDisplayBudget(ScanGeometrySessionV2 &s) {
         bool filled=false;
         {
@@ -53,6 +132,33 @@ struct ScanGeometrySessionTestAccessV2 {
         }
         return filled&&s.m_budget->used()==0;
     }
+    static bool staleRegions(ScanGeometrySessionV2 &s) {
+        ScanGeometrySessionV2::Task task;task.kind=pcv::ui::SelectedPlaneTaskV2::BuildResultRegions;
+        task.regions=std::make_shared<ResultRegionsResultV1>();task.regions->workpieceOk=task.regions->interferenceOk=true;
+        task.regions->workpiece.vertices={{999,999,999}};task.resultRevision=s.m_resultRevision;
+        task.trimRevision=s.m_trimRevision;task.annotationRevision=s.m_annotationRevision;
+        const auto old=s.m_resultRegions.workpiece.vertices;
+        ++task.trimRevision;s.acceptResultRegions(task);
+        if(s.m_resultRegions.workpiece.vertices!=old)return false;
+        --task.trimRevision;++task.resultRevision;s.acceptResultRegions(task);
+        if(s.m_resultRegions.workpiece.vertices!=old)return false;
+        --task.resultRevision;++task.annotationRevision;s.acceptResultRegions(task);
+        return s.m_resultRegions.workpiece.vertices==old;
+    }
+    static void denyRegionBudget(ScanGeometrySessionV2 &s){s.m_budget=std::make_shared<pcv::ProcessingBudget>(0);}
+    static bool committedStitchSurvivesRegionCancel(ScanGeometrySessionV2 &s) {
+        s.m_frames.resize(2);s.m_config.frames.resize(2);s.m_reference=0;
+        ScanGeometrySessionV2::Task task;task.kind=pcv::ui::SelectedPlaneTaskV2::Stitch;
+        task.stitched.success=true;task.stitched.outputPly="committed.ply";
+        task.stitched.points={{0,0,0},{1,0,0},{0,1,0}};
+        task.resultRevision=s.m_resultRevision+1;task.trimRevision=0;task.annotationRevision=s.m_annotationRevision;
+        task.regions=std::make_shared<ResultRegionsResultV1>();task.regions->cancelled=true;
+        const auto revision=s.m_revision,reference=s.m_referenceRevision;const auto token=s.m_token;
+        s.cancel();s.m_token=token;
+        s.finish(-1,pcv::ui::SelectedPlaneTaskV2::Stitch,revision,reference,token,std::move(task));
+        return s.hasResult()&&s.result().points.size()==3&&s.committedOutputs().contains("committed.ply")
+            &&s.resultRegions().state==ResultRegionStateV1::Cancelled;
+    }
 };
 }
 using namespace pcv::demo;
@@ -60,9 +166,97 @@ using AccessV2=ScanGeometrySessionTestAccessV2;
 class ScanGeometrySessionTestsV2 : public QObject {
     Q_OBJECT
 private slots:
+    void stitchCommitIsIndependentOfRegionCancellation() {
+        ScanGeometrySessionV2 s;QVERIFY(AccessV2::committedStitchSurvivesRegionCancel(s));
+    }
+    void resultRegionFailureRetryAndStaleState() {
+        ScanGeometrySessionV2 s;AccessV2::result(s);s.rebuildResultRegions();
+        QVERIFY(s.busy());QVERIFY(!s.canConfirmGeometry());QTRY_VERIFY(!s.busy());
+        QCOMPARE(s.resultRegions().state,ResultRegionStateV1::Ready);
+        QVERIFY(AccessV2::staleRegions(s));
+        const auto points=s.result().points.constData();
+        s.erase({0},s.resultRevision());QVERIFY(s.resultRegions().workpiece.vertices.isEmpty());
+        const auto removed=s.removed();s.erase({1},s.resultRevision());QCOMPARE(s.removed(),removed);
+        s.cancel();QTRY_VERIFY(!s.busy());
+        QCOMPARE(s.resultRegions().state,ResultRegionStateV1::Cancelled);QCOMPARE(s.removed(),removed);
+        s.rebuildResultRegions();QTRY_VERIFY(!s.busy());QCOMPARE(s.resultRegions().state,ResultRegionStateV1::Ready);
+        AccessV2::denyRegionBudget(s);s.rebuildResultRegions();QTRY_VERIFY(!s.busy());
+        QCOMPARE(s.resultRegions().state,ResultRegionStateV1::Failed);QVERIFY(s.hasResult());
+        QVERIFY(!s.resultRegions().error.isEmpty());QCOMPARE(s.result().points.constData(),points);
+    }
+    void verificationRetryDoesNotReload() {
+        ScanGeometrySessionV2 s;QVERIFY(AccessV2::verificationFailureRetryRetainsCloud(s));
+        QTRY_VERIFY(!s.busy());QVERIFY(s.canSelectActive());
+        QCOMPARE(s.activeFrame()->sourceVerification,SourceVerificationV3::Verified);
+    }
+    void sourceVerificationLifecycle() {ScanGeometrySessionV2 s;QVERIFY(AccessV2::verificationLifecycle(s));}
+    void staleAttemptDoesNotClearNewIndexState() {
+        ScanGeometrySessionV2 s;auto gate=std::make_shared<QSemaphore>();AccessV2::delayedStaleIndex(s,gate);
+        gate->release();QTRY_VERIFY(!s.busy());
+        QVERIFY(s.activeFrame()->indexPreparing);QCOMPARE(s.activeFrame()->status,QString("new attempt"));
+    }
+    void indexFailureKeepsCloudVisible() {
+        ScanGeometrySessionV2 s;QVERIFY(AccessV2::indexFailureRetainsDisplay(s));
+    }
+    void foregroundPriorityAndConcurrencyLimit() {
+        ScanGeometrySessionV2 s;QVERIFY(AccessV2::foregroundPriority(s));
+    }
+    void displayPublicationPrecedesIndex() {
+        ScanGeometrySessionV2 s;QVERIFY(AccessV2::publishBeforeIndex(s));
+    }
+    void heightRangeUsesFullCloudAndCancellation() {
+        pcv::ui::SelectedPlaneTaskV2 task;
+        task.loaded.fullPoints={{0,0,-20},{1,0,3},{0,1,90}};task.displayPoints={{1,0,3}};
+        auto token=std::make_shared<std::atomic_bool>(false);
+        QVERIFY(pcv::ui::prepareHeightRangeV1(&task,token));
+        QCOMPARE(task.heightRange,qMakePair(-20.0f,90.0f));
+        task.loaded.fullPoints={{0,0,8},{1,0,8}};
+        QVERIFY(pcv::ui::prepareHeightRangeV1(&task,token));QVERIFY(task.heightRange.second>8);
+        token->store(true);QVERIFY(!pcv::ui::prepareHeightRangeV1(&task,token));QVERIFY(task.cancelled);
+    }
+    void loggingAndFirstFrameAttemptGate() {
+        ScanGeometrySessionV2 s;AccessV2::reviewFixture(s);
+        auto &f=AccessV2::frame(s,0);f.id=71;f.loadAttempt=4;f.requestedAt.start();
+        s.observeFirstFrame(71,3);QVERIFY(!f.loadTiming.value("first_frame_ms").isDouble());
+        s.observeFirstFrame(71,4);QVERIFY(f.loadTiming.value("first_frame_ms").isDouble());
+        const auto first=f.loadTiming.value("first_frame_ms");s.observeFirstFrame(71,4);QCOMPARE(f.loadTiming.value("first_frame_ms"),first);
+        s.recordOperation("test_operation");QVERIFY(s.recentLog().contains("test_operation"));
+        QDir dir(s.timingLogDirectory());const auto files=dir.entryList({"*.jsonl"},QDir::Files);QVERIFY(!files.isEmpty());
+        for(const auto &name:files){QFile file(dir.filePath(name));QVERIFY(file.open(QIODevice::ReadOnly));
+            while(!file.atEnd()){QJsonParseError error;const auto doc=QJsonDocument::fromJson(file.readLine(),&error);
+                QCOMPARE(error.error,QJsonParseError::NoError);QVERIFY(doc.isObject());}}
+    }
     void sixFrameDisplayBudget() {
         ScanGeometrySessionV2 s;
         QVERIFY(AccessV2::sixFrameDisplayBudget(s));
+    }
+    void contractSessionPublishesAndInvalidates() {
+        QTemporaryDir root;InputConfigV2 config;QVERIFY(writeScanGeometryFixtureV2(root.path(),2,&config));
+        auto &c=config.contract;c.runtimeRoot=QDir(root.path()).filePath("runtime_v1");
+        c.jobId="JOB-SESSION";c.runId="RUN-001";c.stepId="STEP-001";c.workpieceId="WP-001";c.controllerId="ROBOT-001";
+        config.poseOnly=true;ScanGeometrySessionV2 s;QString error;QVERIFY2(s.configure(config,&error),qPrintable(error));
+        s.loadRound(0);QTRY_VERIFY_WITH_TIMEOUT(!s.busy(),60000);s.pick(312,false);QTRY_VERIFY_WITH_TIMEOUT(!s.busy(),60000);
+        QVERIFY(s.confirmCandidate());s.matchRemaining();QTRY_VERIFY_WITH_TIMEOUT(!s.busy()&&!s.matching(),60000);
+        s.activate(1);QVERIFY(s.confirmCandidate());QVERIFY(s.canStitch());s.stitch();QTRY_VERIFY_WITH_TIMEOUT(!s.busy(),60000);
+        QVERIFY(s.hasResult());
+        bool sawStitch=false;
+        for(const auto &line:s.recentLog().split('\n')) {
+            const auto event=QJsonDocument::fromJson(line.toUtf8()).object();
+            if(event.value("event")=="task_finished"&&event.value("kind").toInt()==int(pcv::ui::SelectedPlaneTaskV2::Stitch)) {
+                sawStitch=true;QCOMPARE(event.value("status").toString(),QString("success"));
+                QVERIFY(event.value("error").toString().isEmpty());QVERIFY(event.value("level").toString()!="error");
+                QVERIFY(!event.value("message").toString().isEmpty());
+            }
+        }
+        QVERIFY(sawStitch);s.confirmGeometry();QTRY_VERIFY_WITH_TIMEOUT(!s.busy(),60000);
+        QVERIFY2(s.geometryConfirmed(),qPrintable(s.status()));
+        const auto file=QDir(pointCloudContractDirectoryV1(c)).filePath("point_cloud_result.json");
+        QFile result(file);QVERIFY(result.open(QIODevice::ReadOnly));const auto bytes=result.readAll();result.close();
+        const auto document=QJsonDocument::fromJson(bytes).object();QVERIFY(validatePointCloudResultV1(document,&error));
+        QCOMPARE(document.value("status").toString(),QString("partial"));
+        s.erase({0},s.resultRevision());QVERIFY(!s.geometryConfirmed());QVERIFY(!s.wobj1().valid);QTRY_VERIFY(!s.busy());
+        s.confirmGeometry();QVERIFY(!s.busy());QVERIFY(!s.geometryConfirmed());QVERIFY(s.status().contains("run_id"));
+        QVERIFY(result.open(QIODevice::ReadOnly));QCOMPARE(result.readAll(),bytes);
     }
     void inputCounts_data() {QTest::addColumn<int>("count");for(int n:{2,6,7,13})QTest::newRow(qPrintable(QString::number(n)))<<n;}
     void inputCounts() {
@@ -82,7 +276,7 @@ private slots:
         QVERIFY(s.activeFrame()->hasCandidate);QVERIFY(s.confirmCandidate());QCOMPARE(s.reference(),0);
         QVERIFY(!s.activeFrame()->workpieceMask.triangleIndices.isEmpty());
         s.matchRemaining();QTRY_VERIFY_WITH_TIMEOUT(!s.busy()&&!s.matching(),60000);
-        QVERIFY(s.frames().at(1).hasCandidate);QVERIFY(!s.canStitch());QVERIFY(!s.canReviewAll());
+        QVERIFY(s.frames().at(1).hasCandidate);QVERIFY(s.recentLog().contains("\"reused_selection\":true"));QVERIFY(!s.canStitch());QVERIFY(!s.canReviewAll());
         s.activate(1);QVERIFY(s.confirmCandidate());QVERIFY(s.canReviewAll());QVERIFY(s.canStitch());
         s.stitch();QTRY_VERIFY_WITH_TIMEOUT(!s.busy(),60000);QVERIFY2(s.hasResult(),qPrintable(s.status()));
         QCOMPARE(s.result().points.size(),1250);QVERIFY(s.result().report.value("formal_output").toBool());
@@ -132,9 +326,14 @@ private slots:
     }
     void trimmingRestoreUndoAndGeometry() {
         ScanGeometrySessionV2 s;AccessV2::result(s);QVERIFY(s.canConfirmGeometry());QVERIFY(s.generateWobj1());QVERIFY(s.wobj1().valid);
-        s.erase({0,0,-1,100},s.resultRevision());QCOMPARE(s.removed().size(),1);QVERIFY(!s.geometryConfirmed());s.erase({1},s.resultRevision());QVERIFY(!s.canConfirmGeometry());
-        s.restore();QVERIFY(s.removed().isEmpty());s.undo();QCOMPARE(s.removed().size(),2);s.undo();QCOMPARE(s.removed().size(),1);
-        s.erase({0,1,2,3},s.resultRevision());QVERIFY(!s.canConfirmGeometry());s.undo();QVERIFY(s.canConfirmGeometry());
+        s.erase({0,0,-1,100},s.resultRevision());QCOMPARE(s.removed().size(),1);QVERIFY(!s.geometryConfirmed());QTRY_VERIFY(!s.busy());
+        s.erase({1},s.resultRevision());QVERIFY(!s.canConfirmGeometry());QTRY_VERIFY(!s.busy());
+        s.restore();QVERIFY(s.removed().isEmpty());QTRY_VERIFY(!s.busy());
+        s.undo();QCOMPARE(s.removed().size(),2);QTRY_VERIFY(!s.busy());
+        s.undo();QCOMPARE(s.removed().size(),1);QTRY_VERIFY(!s.busy());
+        s.erase({0,1,2,3},s.resultRevision());QVERIFY(!s.canConfirmGeometry());QTRY_VERIFY(!s.busy());
+        QVERIFY(s.resultRegions().workpiece.vertices.isEmpty());
+        s.undo();QTRY_VERIFY(!s.busy());QVERIFY(s.canConfirmGeometry());
         QCOMPARE(s.result().points.size(),4);
         const auto before=s.removed();s.erase({2},s.resultRevision()+1);QCOMPARE(s.removed(),before);
     }

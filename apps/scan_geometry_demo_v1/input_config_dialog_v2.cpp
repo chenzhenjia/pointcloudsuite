@@ -12,11 +12,34 @@
 #include <QCheckBox>
 #include <QSpinBox>
 #include <QLineEdit>
+#include <QGroupBox>
+#include <QFormLayout>
+#include <QScrollArea>
 #include <cmath>
 namespace pcv::demo {
 InputConfigDialogV2::InputConfigDialogV2(const InputConfigV2 &config,QWidget *parent)
     :QDialog(parent),ui(std::make_unique<Ui::InputConfigDialogV2>()),m_config(config) {
     ui->setupUi(this);
+    m_contractGroup=new QGroupBox(tr("输出候选几何契约（启用后请填写上游业务身份）"),this);
+    m_contractGroup->setObjectName("contractOutputGroup");m_contractGroup->setCheckable(true);m_contractGroup->setChecked(config.contract.enabled());
+    auto *groupLayout=new QVBoxLayout(m_contractGroup);
+    auto *scroll=new QScrollArea(m_contractGroup);scroll->setWidgetResizable(true);scroll->setMaximumHeight(170);
+    auto *body=new QWidget(scroll);auto *form=new QFormLayout(body);scroll->setWidget(body);groupLayout->addWidget(scroll);
+    scroll->setVisible(config.contract.enabled());
+    connect(m_contractGroup,&QGroupBox::toggled,scroll,&QWidget::setVisible);
+    const auto field=[&](const QString &label,const char *name,const QString &value) {
+        auto *edit=new QLineEdit(value,m_contractGroup);edit->setObjectName(QString::fromLatin1(name));form->addRow(label,edit);return edit;
+    };
+    const auto &c=config.contract;
+    m_runtimeRoot=field("runtime_data_root","contractRuntimeRoot",c.runtimeRoot);
+    m_jobId=field("job_id","contractJobId",c.jobId);m_runId=field("run_id","contractRunId",c.runId);
+    m_stepId=field("step_id","contractStepId",c.stepId);m_workpieceId=field("workpiece_id","contractWorkpieceId",c.workpieceId);
+    m_controllerId=field("controller_id (wobj_id=1)","contractControllerId",c.controllerId);
+    m_scanOutputRef=field(tr("scan_path_output_ref（无则输出 partial）"),"contractScanOutputRef",c.scanPathOutputRef);
+    m_maskPixel=new QDoubleSpinBox(m_contractGroup);m_maskPixel->setObjectName("contractMaskPixel");
+    m_maskPixel->setDecimals(4);m_maskPixel->setRange(0.0001,100);m_maskPixel->setValue(c.maskPixelSizeMm);
+    form->addRow(tr("掩码像素尺寸（mm）"),m_maskPixel);
+    ui->rootLayout->insertWidget(ui->rootLayout->count()-1,m_contractGroup);
     ui->frames->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     ui->frames->setSelectionBehavior(QAbstractItemView::SelectRows);ui->frames->setSelectionMode(QAbstractItemView::SingleSelection);
     for(const auto &frame:config.frames)append(frame,true);
@@ -86,6 +109,16 @@ void InputConfigDialogV2::moveRow(int delta) {
 }
 void InputConfigDialogV2::acceptInput() {
     InputConfigV2 result;result.calibration=ui->calibration->text().trimmed();result.outputRoot=ui->outputRoot->text().trimmed();
+    if(m_contractGroup->isChecked()) {
+        auto &c=result.contract;c.runtimeRoot=m_runtimeRoot->text().trimmed();c.jobId=m_jobId->text().trimmed();
+        c.runId=m_runId->text().trimmed();c.stepId=m_stepId->text().trimmed();c.workpieceId=m_workpieceId->text().trimmed();
+        c.controllerId=m_controllerId->text().trimmed();c.scanPathOutputRef=m_scanOutputRef->text().trimmed();c.maskPixelSizeMm=m_maskPixel->value();
+        QString error;
+        if(c.runtimeRoot.isEmpty()||!validateScanGeometryContractV1(c,&error)) {
+            QMessageBox::warning(this,tr("契约配置无效"),error.isEmpty()?tr("请填写 runtime_data_root"):error);return;
+        }
+        if(result.outputRoot.isEmpty())result.outputRoot=QDir(c.runtimeRoot).filePath("system/temp");
+    }
     if(ui->frames->rowCount()<2){QMessageBox::warning(this,tr("输入不足"),tr("至少添加两帧输入"));return;}
     for(int r=0;r<ui->frames->rowCount();++r) {
         InputFrameV2 frame;frame.path=ui->frames->item(r,0)?ui->frames->item(r,0)->text().trimmed():QString();

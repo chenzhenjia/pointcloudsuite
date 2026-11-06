@@ -37,6 +37,7 @@ class StitchingWindow;
 struct StitchingPublication;
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
 class CameraDialog;
+class DepthRawCapturePageV1;
 #endif
 class PointCloudCanvas;
 class WorkbenchShellV1;
@@ -264,6 +265,7 @@ private:
     QPushButton *m_operationConfirm = nullptr;
 #ifdef PCV_BUILD_EXPERIMENTAL_CAMERA
     CameraDialog *m_cameraDialog = nullptr;
+    DepthRawCapturePageV1 *m_depthRawPage = nullptr;
 #endif
     QVector<pointcloud::Point3D> m_rawPoints;
     QVector<pointcloud::Point3D> m_points;

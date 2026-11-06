@@ -1,5 +1,7 @@
 # 30_pointcloud_stitch：整帧与所选平面拼接
 
+2026-11-05 清理：独立拼接应用及其回归命令已删除，整帧窗口继续由pointcloudview使用；30算法、输出及测试保留。移除无引用旧target，正式target仍为`pcv_m30_pointcloud_stitch`，按GUI/Tools/Tests需求构建。[说明](../development/application_target_cleanup_v1.md)。
+
 2026-10-16 SDK整图采集v2复用现有captureFrameDirectory和位姿直拼：每帧从10读自己的width/height及原始栅格下标，经50转换一次；不增加ICP/seam或改变正式manifest。本轮30源码不变，新增不同高度串并行/映射回归。[当前说明](../development/camera_capture_sdk_frame_v2.md)。
 
 2026-10-16 连续采集直拼：StitchingFrameInput.captureFrameDirectory读取10保存的相机点云/栅格映射，经50行序插值复用仅转换和事务四件套。此输入拒绝ICP/seam，点序和来源保留，诊断明确pose_only/not_run；旧PLY与选面默认不变。[实现与验收](../development/camera_capture_pose_stitch_v1.md)。
@@ -30,7 +32,7 @@ quality_policy=warn_only，strict_validation_status=not_run；formal_output 仅�
 
 ## 应用、兼容与并行
 
-pcv_stitching_ui 在应用层为 View/Stitch 共用窗口，调用分组入口；view 选面对话框调独立选面入口。旧 RegistrationDialog 停止编译，原 stitch 窗口为 forwarding；regressionrunner/registration_diagnostic 保留旧命令，诊断工具仍用旧 Options 和兼容 target。
+pcv_stitching_ui在应用层为pointcloudview提供整帧窗口，调用分组入口；view选面对话框和新GUI调用独立选面入口。独立stitch窗口壳及regressionrunner已删除；registration_diagnostic保留，仍用旧Options及有引用的兼容target。
 
 worker const 读取 Qt 隐式共享容器并返回私有片段；全部 join 后按输入顺序合并。回归必须持有额外共享副本，覆盖串行及 1/2/4 任务等价、取消与 join 生命周期。
 

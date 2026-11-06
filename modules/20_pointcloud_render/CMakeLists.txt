@@ -14,6 +14,3 @@ target_include_directories(pcv_m20_pointcloud_render PUBLIC
     ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(pcv_m20_pointcloud_render PUBLIC
     pcv_core Qt::Core Qt::Gui Qt::Widgets Qt::OpenGL Qt::OpenGLWidgets)
-
-add_library(pcv_m20_pointcloudrender INTERFACE)
-target_link_libraries(pcv_m20_pointcloudrender INTERFACE pcv_m20_pointcloud_render)

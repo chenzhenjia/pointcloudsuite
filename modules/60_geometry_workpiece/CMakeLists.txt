@@ -1,5 +1,9 @@
 find_package(Threads REQUIRED)
 add_library(pcv_m60_geometry_workpiece STATIC
+    src/template_features_v1.cpp
+    src/template_package_v1.cpp
+    include/pcv/workpiece/template_package_v1.h
+    include/pcv/workpiece/template_features_v1.h
     src/plane_fitting.cpp
     src/single_click_plane_selection_v1.cpp
     src/plane_mask_v1.cpp
@@ -33,12 +37,6 @@ target_link_libraries(pcv_m60_geometry_workpiece PUBLIC pcv_core pcv_infrastruct
 target_link_libraries(pcv_m60_geometry_workpiece PRIVATE Threads::Threads)
 target_compile_definitions(pcv_m60_geometry_workpiece PRIVATE
     PCV_WORKPIECE_TEMPLATE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-
-add_library(pcv_m60_plane_fitting INTERFACE)
-target_link_libraries(pcv_m60_plane_fitting INTERFACE pcv_m60_geometry_workpiece)
-
-add_library(pcv_m60_planefitting INTERFACE)
-target_link_libraries(pcv_m60_planefitting INTERFACE pcv_m60_geometry_workpiece)
 
 if(PCV_BUILD_STEP_IMPORT)
     target_include_directories(pcv_m60_geometry_workpiece PRIVATE ${OpenCASCADE_INCLUDE_DIR})

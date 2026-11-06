@@ -38,6 +38,7 @@
         </property>
         <item>
           <layout class="QHBoxLayout" name="pageHeading">
+            <item><widget class="QPushButton" name="stepTemplate"><property name="text"><string>STEP 模板与自动匹配…</string></property><property name="toolTip"><string>独立制作多平面模板，或匹配当前完整修剪结果</string></property></widget></item>
             <item>
               <widget class="QLabel" name="pageTitle">
                 <property name="text">
@@ -382,7 +383,7 @@
                         <item>
                           <widget class="QLabel" name="colorLegend">
                             <property name="text">
-                              <string>&lt;span style="color:#20c5d8"&gt;●&lt;/span&gt; 彩色高度　&lt;span style="color:#1675e8"&gt;●&lt;/span&gt; 工件面标注　&lt;span style="color:#f04452"&gt;●&lt;/span&gt; 干涉面标注　&lt;span style="color:#d39a20"&gt;●&lt;/span&gt; 世界 Z 高侧提醒</string>
+                              <string>高度色点云　&lt;span style="color:#1675e8"&gt;■&lt;/span&gt; 蓝色工件拟合面　&lt;span style="color:#f04452"&gt;■&lt;/span&gt; 红色干涉拟合面</string>
                             </property>
                           </widget>
                         </item>
@@ -759,6 +760,18 @@
                             </widget>
                           </item>
                           <item>
+                            <widget class="QLabel" name="resultRegionStatus">
+                              <property name="text"><string>结果区域尚未生成</string></property>
+                              <property name="wordWrap"><bool>true</bool></property>
+                            </widget>
+                          </item>
+                          <item>
+                            <widget class="QPushButton" name="rebuildResultRegions">
+                              <property name="text"><string>重建区域</string></property>
+                              <property name="toolTip"><string>仅重新生成蓝红显示区域，不重新拼接或修改磁盘文件</string></property>
+                            </widget>
+                          </item>
+                          <item>
                             <widget class="QLabel" name="interferenceSummary">
                               <property name="text">
                                 <string>干涉面：未选择（可选）</string>
@@ -900,6 +913,32 @@
                           </widget>
                         </item>
                       </layout>
+                    </item>
+                    <item>
+                      <widget class="QToolButton" name="toggleLoadTiming">
+                        <property name="text"><string>加载耗时与日志</string></property>
+                        <property name="checkable"><bool>true</bool></property>
+                        <property name="checked"><bool>false</bool></property>
+                        <property name="toolButtonStyle"><enum>Qt::ToolButtonTextOnly</enum></property>
+                      </widget>
+                    </item>
+                    <item>
+                      <widget class="QWidget" name="loadTimingPanel">
+                        <layout class="QVBoxLayout" name="loadTimingLayout">
+                          <item><widget class="QLabel" name="loadTimingSummary">
+                            <property name="wordWrap"><bool>true</bool></property>
+                            <property name="text"><string>尚无耗时记录</string></property>
+                          </widget></item>
+                          <item><widget class="QPlainTextEdit" name="sessionLog">
+                            <property name="readOnly"><bool>true</bool></property>
+                            <property name="maximumHeight"><number>200</number></property>
+                            <property name="placeholderText"><string>操作、任务、耗时和错误日志</string></property>
+                          </widget></item>
+                          <item><widget class="QPushButton" name="openLoadLogDirectory">
+                            <property name="text"><string>打开日志目录</string></property>
+                          </widget></item>
+                        </layout>
+                      </widget>
                     </item>
                     <item>
                       <spacer name="sideSpacer">

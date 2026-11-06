@@ -20,6 +20,7 @@ struct ReferencePlaneMatchResultV2 {
     QVector<ReferencePlaneCandidateV2> candidates;
     int eligibleBuckets = 0, attemptedSeeds = 0;
     QVector<int> attemptedSeedIndices;
+    QVector<double> seedSelectionMs; // Same attempted-seed order; diagnostic only.
     QString error;
     bool outOfMemory = false;
 };

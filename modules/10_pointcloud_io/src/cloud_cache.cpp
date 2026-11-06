@@ -174,7 +174,9 @@ CachedCloudResult readPlyCached(const QString &sourceFile, const QString &cacheD
         result.error = result.cancelled?QStringLiteral("PLY reading cancelled"):QStringLiteral("无法读取 PLY 源文件指纹");
         return result;
     }
+    phase.restart();
     const PlyHeaderInfo sourceHeader = inspectPlyHeader(sourceFile);
+    result.headerElapsedMs=phase.elapsed();
     if (!sourceHeader.ok) {
         result.error = sourceHeader.error;
         return result;
@@ -242,7 +244,7 @@ CachedCloudResult readPlyCached(const QString &sourceFile, const QString &cacheD
     result.minimum = parsed.minimum;
     result.maximum = parsed.maximum;
     result.hasBounds = parsed.hasBounds;
-    result.headerElapsedMs = parsed.headerElapsedMs;
+    result.headerElapsedMs += parsed.headerElapsedMs;
     result.boundaryScanElapsedMs = parsed.boundaryScanElapsedMs;
     result.parseElapsedMs = parsed.parseElapsedMs;
     result.totalElapsedMs = parsed.totalElapsedMs;

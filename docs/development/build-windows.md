@@ -13,20 +13,20 @@ ctest --test-dir <DebugBuildDir> -C Debug --output-on-failure
 ctest --test-dir <ReleaseBuildDir> -C Release --output-on-failure
 ```
 
-已有 windows-msvc-debug/release、build-debug/release、test-debug preset；Debug preset 开 Tests/Tools，Release 默认不开 Tests。环境需自行提供 Qt/MSVC 与可靠生成器。Qt Creator 打开根 CMake，选 MSVC x64 Kit，使用新的源码外目录并重新配置；缓存中关闭的 target 不因普通编译自动重开。
+已有 windows-msvc-debug/release、build-debug/release、test-debug preset；Debug preset 开Tests、关闭Tools，Release默认不开Tests，两个preset的Tools默认均为OFF。环境需自行提供Qt/MSVC与可靠生成器。Qt Creator打开根CMake，选MSVC x64 Kit，使用新的源码外目录并重新配置；缓存中关闭的target不因普通编译自动重开。
 
 ## 实际开关与组合风险
 
-PCV_BUILD_POINTCLOUDVIEW/POINTCLOUDSTITCH 默认 ON，CLI/TOOLS/TESTS 默认 OFF，EXPERIMENTAL_CAMERA 根默认 ON。脚本默认关闭相机，-ExperimentalCamera 才开启。SDK 真机编译另取决于头/库可用性。
+`PCV_BUILD_POINTCLOUDVIEW`、`PCV_BUILD_SCAN_GEOMETRY_DEMO_V1`默认ON，CLI/TOOLS/TESTS默认OFF，EXPERIMENTAL_CAMERA根默认ON。脚本默认关闭相机，`-ExperimentalCamera`才开启。SDK真机编译另取决于头/库可用性。独立拼接/亮度应用及旧拼接构建开关已移除；[清理清单与配置矩阵](application_target_cleanup_v1.md)。
 
-根 CMake 的 GUI 开关仍控制目录；“固定入口”注释不表示忽略 OFF。共享 UI 在任一 GUI 开启时加入；20 只随 View，30 当前只随 Stitch OR Tools。View/共享 UI 和某些无条件测试还依赖30，CLI-only/测试/单GUI等组合需独立配置验证，不能把旧记录的成功当作当前组合保证。[P0任务](development_plan_v0.5.md)。
+根CMake按两个GUI开关控制入口；20随任一GUI构建；30随任一GUI、Tools或Tests构建，40聚合只在30可用时注册。两个GUI共用真实选面任务，整帧共享窗口只随pointcloudview构建。基础模块始终需要Qt Core/Gui，Tools也查找Concurrent；CLI-only不查找Widgets/OpenGL。组合已静态检查，仍需用户按矩阵实际配置与构建，不能沿用历史通过记录。
 
-pointcloudcli target 本身只链接 Core/Gui/Concurrent、10/50/60，不链接 Widgets/OpenGL。脚本 -CliOnly 会关闭两个 GUI、开启 CLI，与 -ExperimentalCamera 互斥；这是脚本意图，本轮未重新验证所有根/兼容 target 组合。
+pointcloudcli target本身只链接Core/Gui/Concurrent、10/50/60，不链接Widgets/OpenGL。脚本`-CliOnly`明确关闭pointcloudview与scan_geometry_demo_v1、开启CLI，与`-ExperimentalCamera`互斥；本轮未运行配置/构建。
 
 ```powershell
 .\scripts\build_windows.ps1 -CliOnly -BuildTests -Config Debug -BuildDir C:\pcv-build\cli-debug
 ctest --test-dir C:\pcv-build\cli-debug -C Debug -R "cli_" --output-on-failure
-cmake -S . -B <ToolsBuildDir> -DPCV_BUILD_TOOLS=ON
+cmake -S . -B <ToolsBuildDir> -DPCV_BUILD_POINTCLOUDVIEW=OFF -DPCV_BUILD_SCAN_GEOMETRY_DEMO_V1=OFF -DPCV_BUILD_TOOLS=ON
 cmake --build <ToolsBuildDir> --config Debug --target registration_diagnostic
 ```
 
@@ -40,7 +40,7 @@ cmake --build <ToolsBuildDir> --config Debug --target registration_diagnostic
 
 ## 启动与便携部署
 
-pointcloudview 自关闭变量为 POINTCLOUDVIEW_SELFTEST_CLOSE=1；pointcloudstitch 参数 --selftest-close。使用匹配 Qt bin/plugins/platforms，启动成功不能代替真实 OpenGL/数据验收，offscreen只能覆盖相应headless契约。
+pointcloudview自关闭变量为`POINTCLOUDVIEW_SELFTEST_CLOSE=1`；新GUI为`PCV_SCAN_GEOMETRY_SELFTEST_CLOSE=1`。使用匹配Qt bin/plugins/platforms，启动成功不能代替真实OpenGL/数据验收，offscreen只能覆盖相应headless契约。
 
 -Deploy 仅接受 -CliOnly 且 Release，调用 windeployqt/编译器运行库检查，生成exe、Qt/VC DLL、data、README.txt，并清空PATH执行CLI契约。目标目录必须源码外且非盘符根；脚本会清空已有部署目录，运行前须明确授权准确目录。本次不执行部署。
 
@@ -63,3 +63,8 @@ pointcloudview 自关闭变量为 POINTCLOUDVIEW_SELFTEST_CLOSE=1；pointcloudst
 `scan_geometry_demo_v1` 保留 legacy target/开关名，当前源码已为真实离线 PLY 所选平面流程。根共享 UI 条件包括 `PCV_BUILD_SCAN_GEOMETRY_DEMO_V1`，20 随 View 或该 GUI 创建，30 随 View/Stitch/Tools/该 GUI 创建；此前“20只随View、30只随Stitch/Tools”的描述为旧状态。新增共享应用任务库 `pcv_selected_plane_tasks_v2` 依赖10/30/50/60，新 GUI 单独启用时应获得必要依赖，仍需用户实际配置验证。
 
 按用户安排本轮未配置、构建、CTest或运行，不生成新版 EXE；已有 v1 EXE 不代表新源码行为。使用全新源码外 Debug/Release 目录、Qt6.8.3/MSVC/NMake，完整命令、独立GUI组合和用户验收清单见 [v2 开发说明](scan_geometry_real_selected_plane_v2.md)。不要用本节追加说明覆盖历史实际运行记录。
+
+
+## STEP 模板与自动匹配 v1
+
+2026-11-05 STEP模板匹配增加模块40 STATIC实现，新GUI也调用既有OCCT7.9.3部署函数；公共头变化请全新源码树外全量构建。STEP关闭仍可模板回读/匹配。 [开发与验收](step_template_matching_v1.md)。本轮未执行构建、CTest、GUI/DPI或真实样本验证，由用户执行。

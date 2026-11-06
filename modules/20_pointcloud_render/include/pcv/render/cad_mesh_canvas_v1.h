@@ -7,6 +7,8 @@
 #include <QOpenGLShaderProgram>
 #include <QMatrix4x4>
 #include <QSet>
+#include <QColor>
+#include <QHash>
 #include <functional>
 namespace pcv::render {
 class CadMeshCanvasV1 final : public QOpenGLWidget, protected QOpenGLFunctions_3_3_Core {
@@ -14,7 +16,10 @@ public:
     explicit CadMeshCanvasV1(QWidget *parent=nullptr);
     ~CadMeshCanvasV1() override;
     bool setMesh(pcv::CadMeshV1 mesh);
+    void clearMesh();
     void setSelectedFaces(QSet<int> faces);
+    void setFaceColors(QHash<int,QColor> colors);
+    void setAppearance(QColor background,QColor neutral);
     int pickFaceAt(const QPointF &position) const;
     std::function<void(int)> faceClicked;
 protected:
@@ -29,6 +34,8 @@ private:
     QVector3D normalized(const QVector3D &p) const;
     pcv::CadMeshV1 m_mesh;
     QSet<int> m_selected;
+    QHash<int,QColor> m_faceColors;
+    QColor m_background=QColor::fromRgbF(.08,.1,.13),m_neutral=QColor::fromRgbF(.65,.75,.85);
     QVector3D m_center;
     float m_span=1, m_zoom=1, m_yaw=30, m_pitch=-35;
     QPointF m_press, m_last, m_pan;

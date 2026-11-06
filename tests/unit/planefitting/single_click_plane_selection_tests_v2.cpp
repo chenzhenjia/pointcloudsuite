@@ -42,6 +42,8 @@ bool gaps() {
         const auto prepared=preparePlaneSelectionIndex(points);
         for(int seed:{400,1424}) {
             const auto result=selectPlaneAtPoint(points,prepared.index,seed);
+            SingleClickOptions noReuse;noReuse.reuseConnectivityWorkspace=false;
+            if(!check(same(result,selectPlaneAtPoint(points,prepared.index,seed,noReuse)),"gap workspace mismatch"))return false;
             const int expected=gap<=3?2048:1024;
             if(!check(valid(points,result,seed,0.4f)&&result.planeIndices.size()==expected,"gap threshold/completeness failed")) {
                 std::cerr<<gap<<" seed="<<seed<<" count="<<result.planeIndices.size()<<" "<<result.error.toStdString()<<'\n';return false;
@@ -78,12 +80,16 @@ bool surfaces() {
         holes.push_back({x*0.5f,y*0.5f,0});
     }
     const auto holesIndex=preparePlaneSelectionIndex(holes);const auto holeResult=selectPlaneAtPoint(holes,holesIndex.index,410);
+    SingleClickOptions noReuse;noReuse.reuseConnectivityWorkspace=false;
+    if(!check(same(holeResult,selectPlaneAtPoint(holes,holesIndex.index,410,noReuse)),"hole workspace mismatch"))return false;
     if(!check(valid(holes,holeResult,410,0.4f)&&holeResult.planeIndices.size()==holes.size(),"large hole lost border / narrow connection"))return false;
     QVector<pointcloud::Point3D> mixed;patch(mixed,40,40,0,0.2f,0.2f);patch(mixed,20,20,8.0f,0.8f,0.4f);
     const int targetCount=int(mixed.size());patch(mixed,40,40,0,0.2f,0.2f,5);patch(mixed,20,20,60);
     const auto mixedIndex=preparePlaneSelectionIndex(mixed);
     for(int seed:{820,1810}) {
         const auto r=selectPlaneAtPoint(mixed,mixedIndex.index,seed);
+        SingleClickOptions noReuse;noReuse.reuseConnectivityWorkspace=false;
+        if(!check(same(r,selectPlaneAtPoint(mixed,mixedIndex.index,seed,noReuse)),"mixed workspace mismatch"))return false;
         if(!check(valid(mixed,r,seed,0.4f)&&r.planeIndices.size()==targetCount&&r.planeIndices.last()<targetCount,"mixed density / parallel layer / separate object failed")) {
             std::cerr<<r.error.toStdString()<<" count="<<r.planeIndices.size()<<'\n';return false;
         }
@@ -106,6 +112,7 @@ bool surfaces() {
     for(int y=0;y<40;++y)for(int z=0;z<40;++z)folded.push_back({0,y*0.5f,z*0.5f});
     const auto foldIndex=preparePlaneSelectionIndex(folded);
     const auto foldResult=selectPlaneAtPoint(folded,foldIndex.index,820);
+    if(!check(same(foldResult,selectPlaneAtPoint(folded,foldIndex.index,820,noReuse)),"fold workspace mismatch"))return false;
     if(!check(valid(folded,foldResult,820,0.4f),"fold selection invalid"))return false;
     for(int i=0;i<planeCount;++i)if(!check(foldResult.planeIndices.contains(i),"fold neighborhood discarded true plane points"))return false;
     for(int i:foldResult.planeIndices)if(!check(folded.at(i).z<=0.4f,"fold crossed onto side"))return false;
@@ -157,6 +164,32 @@ bool optimizedIndexEquivalence() {
     }
     return true;
 }
+bool neighborAndWorkspaceEquivalence() {
+    QVector<pointcloud::Point3D> data;patch(data,40,40,0);patch(data,40,40,22);
+    const auto points=data;const auto retained=points;Q_UNUSED(retained);
+    const auto baselineIndex=preparePlaneSelectionIndex(points);
+    SingleClickOptions baselineOptions;baselineOptions.reuseConnectivityWorkspace=false;
+    const auto baseline=selectPlaneAtPoint(points,baselineIndex.index,820,baselineOptions);
+    if(!check(baseline.ok(),"v3 baseline failed"))return false;
+    for(int workers:{1,2})for(size_t bytes:{size_t(0),size_t(64)*1024*1024}) {
+        auto budget=std::make_shared<pcv::ProcessingBudget>(bytes);
+        {
+            IndexPreparationOptions options;options.cacheNormalNeighbors=true;options.parallelEnabled=true;
+            options.maxParallelTasks=workers;options.normalBatchSize=65536;options.processingBudget=budget;
+            const auto index=preparePlaneSelectionIndex(points,{},options);
+            if(!check(index.index&&index.neighborCacheUsed==(bytes>0),"neighbor cache budget path invalid"))return false;
+            if(!check(budget->used()==0,"transient neighbor lease retained by index"))return false;
+            for(bool reuse:{false,true}) {
+                SingleClickOptions selection;selection.reuseConnectivityWorkspace=reuse;selection.processingBudget=budget;
+                if(!check(same(baseline,selectPlaneAtPoint(points,index.index,820,selection)),"neighbor/workspace changed selection"))return false;
+            }
+            std::atomic_int calls{0};const auto cancelled=preparePlaneSelectionIndex(points,[&calls]{return ++calls>10;},options);
+            if(!check(cancelled.cancelled&&!cancelled.index,"neighbor cancellation published partial index"))return false;
+        }
+        if(!check(budget->used()==0,"v3 optional lease leaked"))return false;
+    }
+    return true;
+}
 bool parallelProjectionEquivalence() {
     // Exceeds the dispatch threshold and spans more than one bounded window.
     QVector<pointcloud::Point3D> points;patch(points,320,320,0);
@@ -172,6 +205,44 @@ bool parallelProjectionEquivalence() {
         if(!check(selected.projectionMs>=0&&selected.normalConnectivityMs>=0,"projection diagnostics invalid"))return false;
     }
     return check(points.constData()==shared.constData(),"projection detached shared input");
+}
+bool normalBatchEquivalence() {
+    // Spacing equals the capped index cell size: >65536 distinct buckets.
+    QVector<pointcloud::Point3D> data;patch(data,320,320,0,5.0f,5.0f);
+    const auto points=data;const auto retained=points;Q_UNUSED(retained);
+    const auto referenceIndex=preparePlaneSelectionIndex(points);
+    const auto reference=selectPlaneAtPoint(points,referenceIndex.index,51360);
+    if(!check(reference.ok(),"batch baseline failed"))return false;
+    for(int batch:{4096,65536})for(int workers:{1,2,4}) {
+        IndexPreparationOptions options;options.normalBatchSize=batch;options.parallelEnabled=true;options.maxParallelTasks=workers;
+        const auto prepared=preparePlaneSelectionIndex(points,{},options);
+        if(!check(prepared.index&&prepared.normalBatchSize==batch&&prepared.normalWorkerCount==qMin(workers,int((prepared.bucketCount+batch-1)/batch)),"batch diagnostics invalid"))return false;
+        if(!check(same(reference,selectPlaneAtPoint(points,prepared.index,51360)),"batch changed plane selection"))return false;
+    }
+    // Exercise cached neighbors with actual parallel chunks (>65536 buckets).
+    {
+        auto budget=std::make_shared<pcv::ProcessingBudget>(64u*1024u*1024u);
+        IndexPreparationOptions options;options.cacheNormalNeighbors=true;
+        options.parallelEnabled=true;options.maxParallelTasks=2;options.normalBatchSize=65536;options.processingBudget=budget;
+        const auto prepared=preparePlaneSelectionIndex(points,{},options);
+        if(!check(prepared.index&&prepared.neighborCacheUsed&&prepared.normalWorkerCount==2&&budget->used()==0,
+            "parallel neighbor cache path invalid"))return false;
+        if(!check(same(reference,selectPlaneAtPoint(points,prepared.index,51360)),"parallel neighbor cache changed selection"))return false;
+    }
+    for(size_t bytes:{size_t(0),size_t(512)*1024}) {
+        auto budget=std::make_shared<pcv::ProcessingBudget>(bytes);
+        {
+            IndexPreparationOptions options;options.normalBatchSize=65536;options.parallelEnabled=true;options.maxParallelTasks=2;options.processingBudget=budget;
+            const auto prepared=preparePlaneSelectionIndex(points,{},options);
+            if(!check(prepared.index&&prepared.normalFallback==(bytes?QStringLiteral("budget_small_batch"):QStringLiteral("budget_serial")),"batch budget fallback invalid"))return false;
+            if(!check(same(reference,selectPlaneAtPoint(points,prepared.index,51360)),"fallback changed result"))return false;
+            auto calls=std::make_shared<std::atomic_int>(0);
+            const auto cancelled=preparePlaneSelectionIndex(points,[calls]{return ++*calls>100;},options);
+            if(!check(cancelled.cancelled&&!cancelled.index,"large batch cancellation published result"))return false;
+        }
+        if(!check(budget->used()==0,"batch budget leaked"))return false;
+    }
+    return true;
 }
 int benchmark() {
     QVector<pointcloud::Point3D> points;points.reserve(6300000);patch(points,1000,6300,0,0.1f,0.1f);
@@ -190,5 +261,5 @@ int benchmark() {
 int main(int argc,char **argv) {
     QCoreApplication app(argc,argv);
     if(app.arguments().contains("--benchmark"))return benchmark();
-    return gaps()&&surfaces()&&cancellation()&&optimizedIndexEquivalence()&&parallelProjectionEquivalence()?0:1;
+    return gaps()&&surfaces()&&cancellation()&&optimizedIndexEquivalence()&&parallelProjectionEquivalence()&&normalBatchEquivalence()&&neighborAndWorkspaceEquivalence()?0:1;
 }

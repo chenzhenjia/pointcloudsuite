@@ -16,6 +16,7 @@
 #include <gp_Pln.hxx>
 #endif
 #include <pcv/workpiece/cad_template_v1.h>
+#include <pcv/workpiece/template_package_v1.h>
 #include <QCoreApplication>
 #include <QTemporaryDir>
 #include <QFile>
@@ -87,6 +88,12 @@ bool geometryTests()
     CHECK(writeStep(BRepPrimAPI_MakeBox(gp_Pnt(10,20,30),10,20,30).Shape(),input));
     const QString unicode=tmp.path()+QString::fromUtf8("/中文 工件.stp");CHECK(QFile::copy(input,unicode));
     const auto model=readStepModel({unicode});if(!model.success)std::cerr<<model.message.toStdString()<<'\n';CHECK(model.success);CHECK(model.faces.size()==6);
+    for(const auto &face:model.faces)CHECK(face.planar&&std::abs(face.planeNormal.length()-1)<1e-5);
+    const auto roles=generateStepTemplatePackageV1(model,{1,2},{3},.5);CHECK(roles.ok&&roles.planes.size()==3&&!roles.interferencePoints.isEmpty());
+    const auto roleSaved=saveTemplatePackageV1(roles,QString::fromUtf8("多平面 CAD"),tmp.path());CHECK(roleSaved.success);
+    const auto roleRead=loadTemplatePackageV1(roleSaved.outputDirectory);CHECK(roleRead.ok&&roleRead.planes.size()==3&&roleRead.coordinateFrame=="cad_model");
+    CHECK(!generateStepTemplatePackageV1(model,{1},{1},.5).ok);
+    CHECK(!generateStepTemplatePackageV1(model,{1},{2},1e-9).ok);
     CHECK(std::abs(model.minimum.x()-10)<.01);CHECK(std::abs(model.maximum.z()-60)<.01);
     GenerateCadTemplateRequest g;g.model=model.model;g.faceIds={6,1,3,2,5,4};
     const auto cloud=generateCadTemplateCloud(g);if(!cloud.success)std::cerr<<cloud.message.toStdString()<<'\n';CHECK(cloud.success);CHECK(cloud.points.size()==8800);

@@ -57,6 +57,7 @@ CameraConversionEnvironment conversionEnvironment()
     }
     QSettings config(ini, QSettings::IniFormat);
     QByteArray signature = result.sdkVersion.toUtf8();
+    QJsonObject snapshot;
     for (const QString &key : {QStringLiteral("CameraConfig/EmptyPointEnable"),
                               QStringLiteral("CameraConfig/PointCloudUnit"),
                               QStringLiteral("CameraConfig/AlgorithmInvalidHeight")}) {
@@ -68,12 +69,14 @@ CameraConversionEnvironment conversionEnvironment()
         if (key.startsWith("LogConfig/") || key.startsWith("Debug/")
             || key.startsWith("DepthToRgb/") || key.startsWith("DepthToMono/")) continue;
         signature += '\n' + key.toUtf8() + '=' + config.value(key).toString().toUtf8();
+        snapshot.insert(key, config.value(key).toString());
     }
     if (config.value("CameraConfig/EmptyPointEnable").toInt() != 1
         || config.value("CameraConfig/PointCloudUnit").toInt() != 1) {
         result.error = QStringLiteral("SDK 必须保留空点栅格且使用 mm 单位"); return result;
     }
     result.fingerprint = QString::fromLatin1(QCryptographicHash::hash(signature, QCryptographicHash::Sha256).toHex());
+    result.configuration = snapshot;
     return result;
 }
 

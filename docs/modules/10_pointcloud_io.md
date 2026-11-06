@@ -1,5 +1,7 @@
 # 10_pointcloud_io：IO、预处理与事务输出
 
+2026-10-30 深度 RAW 导出 v1：独立`depth_raw`工作页通过`CaptureFrameQueue`/`CaptureRecorder`逐完整SDK帧事务保存纯C16 `depth.raw`、`depth.json`、真实转换亮度、8字节SDK reserved和可用逐行元数据。帧 JSON 为每种载荷记录类型/字节序/数量/长度/SHA-256，保存RAW布局、尺度/偏移、无效码策略、设备信息、标定附件状态及SDK转换配置快照/指纹；纯RAW不另存显示PNG。`CameraConversionEnvironment::configuration`提供只读转换配置；离线工具仍复用`materializeCameraFrame()`并保留row-major来源下标。既有session-v3/frame-v2默认行为不变。[开发说明](../development/depth_raw_capture_v1.md)。
+
 2026-10-30 扫描几何深度按需处理：`scan_geometry_demo_v1` 轮次浏览使用 `readCapturedFrame(...PreviewOnly)` 读取/校验原始C16及必要亮度，不在预览阶段调用SDK转换；用户开始当前帧处理时复用 `materializeCameraFrame()`。SDK输出仍需传给模块50按源像素行转换，模块10没有改变会话格式或SDK映射契约。源帧由应用会话保留，活动点云由应用在审核确认后释放。[开发记录](../development/scan_geometry_demo_v1.md#2026-10-30-sdk深度缓存与按需物化)。
 
 2026-10-23 亮度保存/纹理解耦 v2：`readCapturedFrame()` 新增 `CaptureFrameReadMode`，默认 `WithIntensity` 兼容旧调用，显式 `GeometryOnly` 严格读取几何/来源映射且不访问亮度载荷。亮度采集、缺图停采、逐帧 PNG/Mono8 事务保存不变；事后图片损坏不影响几何专用读取。[当前说明](../development/camera_capture_intensity_decoupling_v2.md)。
@@ -32,7 +34,7 @@ ArtifactTransaction 提供 stageBinaryPly/stageGrayscalePng/stageJson/stageBytes
 
 ## 兼容与验收
 
-旧 05、10 read、pcv_io/filtering、80/output target/header 保留转发，禁止重复实现。当前 namespace 门面迁移未完成。
+公共兼容头继续转发，禁止重复实现。清理后只保留诊断工具使用的`pcv_m10_pointcloud_read`转发target；旧05、10无下划线及io/filtering/output/80转发target已移除，外部调用改链接`pcv_m10_pointcloud_io`。独立亮度查看应用删除不影响亮度读取、SDK或RAW采集能力。namespace门面迁移未完成。[清理说明](../development/application_target_cleanup_v1.md)。
 
 测试归属：ply_reader、cloud_cache、artifact_transaction、downsample、statistical_filter、plane_output；相机另有 frame_converter/frame_source/intensity_image 及应用 pipeline 测试，注册依构建选项。后续覆盖 LE/BE/ASCII、法向/强度、缓存失败、路径拒绝、覆盖/取消/回滚。历史 DP2240 试验见[历史归档](../archive/history_pre_v0.5.md)，不能替代当前现场验收。本轮未构建或运行测试。
 
@@ -45,3 +47,5 @@ ArtifactTransaction 提供 stageBinaryPly/stageGrayscalePng/stageJson/stageBytes
 
 
 2026-10-23 深度缓存v1：owned逐行元数据、SDK版本/配置指纹、materializeCameraFrame设备无关官方转换和进程转换锁；C16及必要辅助亮度保存session-v3/frame-v2，PreviewOnly/GeometryPreview不物化XYZ，旧接口兼容。[说明](../development/camera_depth_preview_cache_v1.md)。
+
+2026-11-05 加载计时：readPlyCached记录指纹后sourceHeader读取耗时；冷读headerElapsedMs包含解析器头读取。不改缓存校验/写入或输出。[说明](../development/scan_geometry_load_performance_v1.md)，用户执行验证。

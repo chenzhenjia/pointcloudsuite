@@ -1,6 +1,7 @@
 #include "scan_geometry_window_v1.h"
 #include "scan_geometry_canvas_v2.h"
 #include "input_config_dialog_v2.h"
+#include "step_template_dialog_v1.h"
 #include "ui_scan_geometry_window_v1.h"
 #include <pcv/render/pointcloud_canvas.h>
 #include <QCloseEvent>
@@ -20,6 +21,10 @@
 #include <QToolButton>
 #include <QComboBox>
 #include <algorithm>
+#include <QDesktopServices>
+#include <QUrl>
+#include <QPlainTextEdit>
+#include <QScrollBar>
 static void initializeDemoResourcesV1() { Q_INIT_RESOURCE(scan_geometry_v1); }
 namespace pcv::demo {
 namespace {
@@ -30,6 +35,10 @@ void available(QWidget *w,bool enabled,const QString &reason,const QString &help
 ScanGeometryWindowV1::ScanGeometryWindowV1(QWidget *parent)
     :QMainWindow(parent),ui(std::make_unique<Ui::ScanGeometryWindowV1>()) {
     initializeDemoResourcesV1();ui->setupUi(this);
+    connect(ui->stepTemplate,&QPushButton::clicked,this,[this]{
+        m_session.recordOperation(QStringLiteral("open_step_template_matching"));
+        StepTemplateDialogV1 dialog(&m_session,this);dialog.exec();
+    });
     const QStringList modelStepNames{tr("工件信息"),tr("工件位置及姿态"),tr("扫描与几何选择"),tr("探针测量"),tr("发布模板")};
     for(int i=0;i<modelStepNames.size();++i) {
         auto *button=new QToolButton(ui->stepNavigationHost);button->setObjectName(QStringLiteral("modelStep%1").arg(i));
@@ -43,6 +52,14 @@ ScanGeometryWindowV1::ScanGeometryWindowV1(QWidget *parent)
     QFile style(":/scan_geometry_v1/scan_geometry_v1.qss");
     if(style.open(QIODevice::ReadOnly))setStyleSheet(QString::fromUtf8(style.readAll()));
     m_view=new ScanGeometryCanvasV2(ui->canvasHost);ui->canvasLayout->addWidget(m_view);
+    m_view->loadCanvasTiming=[this](quint64 frame,quint64 attempt,const QJsonObject &timing){m_session.observeCanvasTiming(frame,attempt,timing);};
+    m_view->loadFirstFrame=[this](quint64 frame,quint64 attempt){m_session.observeFirstFrame(frame,attempt);};
+    ui->loadTimingPanel->hide();
+    connect(ui->toggleLoadTiming,&QToolButton::toggled,this,[this](bool shown){ui->loadTimingPanel->setVisible(shown);refresh(false);});
+    connect(ui->openLoadLogDirectory,&QPushButton::clicked,this,[this] {
+        if(!QDesktopServices::openUrl(QUrl::fromLocalFile(m_session.timingLogDirectory())))
+            QMessageBox::warning(this,tr("日志目录"),tr("无法打开目录：%1").arg(m_session.timingLogDirectory()));
+    });
     const QList<QPair<QToolButton *,QString>> icons{{ui->selectWorkpiece,"face"},{ui->selectInterference,"interference"},
         {ui->resetPlanes,"reset-planes"},{ui->rectangleTool,"rectangle"},{ui->undoTrim,"undo"},{ui->restoreTrim,"restore"}};
     for(const auto &entry:icons){entry.first->setIcon(QIcon(":/scan_geometry_v1/icons/"+entry.second+".svg"));entry.first->setIconSize(QSize(20,20));}
@@ -85,7 +102,9 @@ ScanGeometryWindowV1::ScanGeometryWindowV1(QWidget *parent)
     connect(ui->previousRound,&QPushButton::clicked,this,[this]{m_session.loadRound(m_session.round()-1);});
     connect(ui->nextRound,&QPushButton::clicked,this,[this]{m_session.loadRound(m_session.round()+1);});
     const QList<QPushButton *> tabs{ui->segment0,ui->segment1,ui->segment2,ui->segment3,ui->segment4,ui->segment5};
-    for(int i=0;i<6;++i)connect(tabs.at(i),&QPushButton::clicked,this,[this,i]{m_view->setTool(ScanGeometryCanvasV2::Tool::Browse);m_session.activate(m_session.round()*6+i);});
+    for(int i=0;i<6;++i)connect(tabs.at(i),&QPushButton::clicked,this,[this,i]{m_view->setTool(ScanGeometryCanvasV2::Tool::Browse);const int target=m_session.round()*6+i;
+        if(target<m_session.frames().size()){const auto &f=m_session.frames().at(target);m_view->beginViewObservation(f.id,f.loadAttempt);}
+        m_session.activate(target);});
     connect(ui->mergedSegment,&QPushButton::clicked,this,[this]{m_view->setTool(ScanGeometryCanvasV2::Tool::Browse);m_session.showResult();});
     auto selectTool=[this](ScanGeometryCanvasV2::Tool tool) {
         if(tool==ScanGeometryCanvasV2::Tool::Workpiece && m_session.active()==m_session.reference()
@@ -120,6 +139,7 @@ ScanGeometryWindowV1::ScanGeometryWindowV1(QWidget *parent)
         m_session.stitch();
     });
     connect(ui->confirmGeometry,&QPushButton::clicked,&m_session,&ScanGeometrySessionV2::confirmGeometry);
+    connect(ui->rebuildResultRegions,&QPushButton::clicked,&m_session,&ScanGeometrySessionV2::rebuildResultRegions);
     connect(ui->generateWobj1,&QPushButton::clicked,&m_session,&ScanGeometrySessionV2::generateWobj1);
     connect(ui->saveGeometry,&QPushButton::clicked,&m_session,&ScanGeometrySessionV2::saveGeometry);
     connect(ui->exportTrimmed,&QPushButton::clicked,&m_session,&ScanGeometrySessionV2::saveGeometry);
@@ -150,7 +170,7 @@ int ScanGeometryWindowV1::maximumWorkflowStage() const {
     return 0;
 }
 void ScanGeometryWindowV1::setWorkflowStage(int stage) {
-    if(m_session.busy())return;
+    if(m_session.interactionBlocked())return;
     m_workflowStage=qBound(0,stage,maximumWorkflowStage());
 }
 void ScanGeometryWindowV1::configureInputs(bool scanJson) {
@@ -162,21 +182,34 @@ void ScanGeometryWindowV1::configureInputs(bool scanJson) {
 }
 void ScanGeometryWindowV1::refresh(bool publish) {
     const auto &frames=m_session.frames();const auto *f=m_session.activeFrame();
-    const bool busy=m_session.busy(),navigate=!busy&&(!m_session.matching()||m_session.paused());
-    const bool loaded=f&&!f->cloud.fullPoints.isEmpty();const bool editable=!busy&&m_session.hasResult()&&m_session.active()==-1;
+    const bool busy=m_session.busy(),blocked=m_session.interactionBlocked();
+    const bool navigate=!m_session.activeFrameBusy()&&(!m_session.matching()||m_session.paused());
+    const bool canNavigate=!blocked&&(!m_session.matching()||m_session.paused());
+    ui->loadTimingSummary->setText(m_session.timingSummary());
+    if(ui->toggleLoadTiming->isChecked()) {
+        const QString log=m_session.recentLog();
+        if(ui->sessionLog->toPlainText()!=log){ui->sessionLog->setPlainText(log);ui->sessionLog->verticalScrollBar()->setValue(ui->sessionLog->verticalScrollBar()->maximum());}
+    }
+    const bool resultView=m_session.hasResult()&&m_session.active()==-1;
+    const bool loaded=f&&!f->cloud.fullPoints.isEmpty();const bool editable=!busy&&resultView;
     const bool depthPreview=f&&f->depthReady&&f->rawDepthFrame&&f->cloud.fullPoints.isEmpty();
+    const bool sourceVerified=f&&f->sourceVerification==SourceVerificationV3::Verified;
+    const auto displayMode=resultView||(sourceVerified&&f->hasCandidate)?ScanGeometryCanvasV2::DisplayMode::UniformGray:ScanGeometryCanvasV2::DisplayMode::Height;
+    ui->colorLegend->setText((displayMode==ScanGeometryCanvasV2::DisplayMode::UniformGray
+        ?tr("<span style=\"color:#59636f\">●</span> 灰色点云　")
+        :tr("高度色点云　"))+tr("<span style=\"color:#1675e8\">■</span> 蓝色工件拟合面　<span style=\"color:#f04452\">■</span> 红色干涉拟合面"));
     const bool depthInput=f&&m_session.active()>=0&&m_session.active()<m_session.config().frames.size()
         &&m_session.config().frames.at(m_session.active()).depthFrame;
     ui->processDepthFrame->setVisible(depthInput&&bool(f->rawDepthFrame));
-    available(ui->processDepthFrame,depthPreview&&!busy&&!m_session.matching(),tr("先加载当前帧深度源"));
+    available(ui->processDepthFrame,depthPreview&&navigate&&!m_session.matching(),tr("先加载当前帧深度源"));
     if(m_session.hasResult()&&m_session.resultRevision()!=m_lastWorkflowResultRevision) {
         m_workflowStage=3;m_lastWorkflowResultRevision=m_session.resultRevision();
     }
     if(m_workflowStage>maximumWorkflowStage()&&!busy)m_workflowStage=maximumWorkflowStage();
     const QStringList stageNames{tr("导入数据"),tr("选面与审核"),tr("拼接"),tr("确认并保存")};
     ui->workflowStageTitle->setText(tr("阶段 %1 / 4 · %2").arg(m_workflowStage+1).arg(stageNames.at(m_workflowStage)));
-    ui->previousStage->setVisible(m_workflowStage>0);ui->previousStage->setEnabled(!busy&&m_workflowStage>0);
-    const bool canAdvance=m_workflowStage<maximumWorkflowStage()&&!busy;
+    ui->previousStage->setVisible(m_workflowStage>0);ui->previousStage->setEnabled(!blocked&&m_workflowStage>0);
+    const bool canAdvance=m_workflowStage<maximumWorkflowStage()&&!blocked;
     ui->nextStage->setVisible(m_workflowStage<3);ui->nextStage->setEnabled(canAdvance);
     const QStringList nextLabels{tr("下一步：审核"),tr("下一步：拼接"),tr("查看结果"),QString()};
     if(m_workflowStage<nextLabels.size())ui->nextStage->setText(nextLabels.at(m_workflowStage));
@@ -184,9 +217,9 @@ void ScanGeometryWindowV1::refresh(bool publish) {
     ui->configureInputs->setVisible(m_workflowStage==0);
     ui->loadInputs->setVisible(m_workflowStage==0);
     ui->processingCard->setVisible(m_workflowStage==1||m_workflowStage==2);
-    ui->geometryCard->setVisible(m_workflowStage==3&&editable);
+    ui->geometryCard->setVisible(m_workflowStage==3&&resultView);
     const auto wait=tr("请先取消或等待当前任务结束");
-    if(busy)m_view->setTool(ScanGeometryCanvasV2::Tool::Browse);
+    if(blocked)m_view->setTool(ScanGeometryCanvasV2::Tool::Browse);
     available(ui->configureInputs,!busy&&!m_session.matching(),wait);
     available(ui->loadInputs,!busy&&!m_session.matching()&&!frames.isEmpty(),tr("先配置输入，或先结束匹配"));
     const bool canRetry=navigate&&f&&(f->problem||f->status.contains(tr("可重试")));
@@ -198,7 +231,9 @@ void ScanGeometryWindowV1::refresh(bool publish) {
     ui->scanProgress->setRange(0,busy?0:1);ui->scanProgress->setValue(0);
     int loadedCount=0,completedCount=0;
     for(const auto &frame:frames){if(!frame.cloud.fullPoints.isEmpty())++loadedCount;if(!frame.digest.isEmpty())++completedCount;}
-    ui->scanStatus->setText(frames.isEmpty()?tr("未导入"):tr("%1 帧 · %2 已加载").arg(frames.size()).arg(loadedCount));
+    ui->scanStatus->setText(frames.isEmpty()?tr("未导入"):loaded&&!sourceVerified
+        ?tr("%1 帧 · %2 已加载 · 来源校验中/待重试").arg(frames.size()).arg(loadedCount)
+        :tr("%1 帧 · %2 已加载").arg(frames.size()).arg(loadedCount));
     const int rounds=frames.isEmpty()?0:int((frames.size()+5)/6);
     ui->roundStatus->setText(tr("%1 / %2").arg(rounds?m_session.round()+1:0).arg(rounds));
     available(ui->previousRound,!busy&&!m_session.matching()&&m_session.round()>0,wait);
@@ -208,23 +243,23 @@ void ScanGeometryWindowV1::refresh(bool publish) {
         const int index=m_session.round()*6+i;const bool exists=index<frames.size();auto *button=tabs.at(i);
         button->setVisible(exists||frames.isEmpty());button->setChecked(exists&&m_session.active()==index);
         QString state;
-        if(exists){const auto &frame=frames.at(index);state=frame.skipped?tr("已跳过"):frame.loading?tr("载入中"):frame.problem?tr("需处理")
+        if(exists){const auto &frame=frames.at(index);state=frame.skipped?tr("已跳过"):frame.loading?tr("载入中"):frame.indexPreparing||frame.indexQueued?(frame.sourceVerification==SourceVerificationV3::Checking?tr("来源校验/索引"):tr("准备索引")):frame.problem?tr("需处理")
             :frame.confirmed?tr("已确认"):frame.reviewed?tr("已预览"):frame.hasCandidate?tr("待预览"):frame.cloud.fullPoints.isEmpty()?tr("待加载"):tr("待选面");}
         button->setText(exists?tr("点云 %1\n%2").arg(index+1).arg(state):tr("未配置"));
-        available(button,navigate&&exists,tr("等待当前任务结束"),exists?frames.at(index).status:QString());
+        available(button,canNavigate&&exists,tr("等待当前任务结束"),exists?frames.at(index).status:QString());
     }
     ui->mergedSegment->setChecked(m_session.active()==-1&&m_session.hasResult());
     ui->mergedSegment->setText(m_session.hasResult()?tr("拼接结果\n已落盘"):tr("拼接结果\n未生成"));
     available(ui->mergedSegment,navigate&&m_session.hasResult(),tr("请先完成拼接"));
-    available(ui->selectWorkpiece,navigate&&loaded,tr("先加载当前帧并结束任务"),tr("单击选面；高级设置可启用三点选面"));
-    available(ui->selectInterference,navigate&&loaded,tr("先加载当前帧并结束任务"),tr("人工标注，不参与拼接；随几何结果保存"));
+    available(ui->selectWorkpiece,m_session.canSelectActive(),tr("等待当前帧完整索引就绪；其他帧可继续后台加载"),tr("单击选面；高级设置可启用三点选面"));
+    available(ui->selectInterference,m_session.canSelectActive(),tr("等待当前帧完整索引就绪；其他帧可继续后台加载"),tr("人工标注，不参与拼接；随几何结果保存"));
     available(ui->resetPlanes,navigate&&f&&f->hasCandidate,tr("当前帧无工件候选"),tr("清除当前工件面及其结果；干涉标注可单独清除"));
-    const bool canConfirmFrame=navigate&&f&&f->hasCandidate&&!f->reviewed;
+    const bool canConfirmFrame=navigate&&sourceVerified&&f->hasCandidate&&!f->reviewed;
     available(ui->confirmCandidate,canConfirmFrame,tr("请先选择工件面候选"));
     ui->confirmCandidate->setVisible(canConfirmFrame);
-    available(ui->threePointSelection,navigate&&loaded,tr("请先加载原始帧，并结束当前任务"));
+    available(ui->threePointSelection,m_session.canSelectActive(),tr("请先加载原始帧，并结束当前任务"));
     if(auto *action=ui->moreActions->menu()->findChild<QAction *>(QStringLiteral("moreThreePoint"))) {
-        const QSignalBlocker blocker(action);action->setChecked(m_session.config().threePoint);action->setEnabled(navigate&&loaded);
+        const QSignalBlocker blocker(action);action->setChecked(m_session.config().threePoint);action->setEnabled(m_session.canSelectActive());
     }
     for(const auto &pair:{qMakePair(QStringLiteral("moreConfirmInterference"),ui->confirmInterference),
                           qMakePair(QStringLiteral("moreClearInterference"),ui->clearInterference),
@@ -233,8 +268,8 @@ void ScanGeometryWindowV1::refresh(bool publish) {
         if(auto *action=ui->moreActions->menu()->findChild<QAction *>(pair.first))action->setEnabled(pair.second->isEnabled());
     }
     {const QSignalBlocker blocker(ui->threePointSelection);ui->threePointSelection->setChecked(m_session.config().threePoint);}
-    available(ui->confirmInterference,navigate&&f&&!f->pendingInterference.isEmpty(),tr("先手工选择干涉面"));
-    available(ui->clearInterference,navigate&&f&&(!f->interferenceIndices.isEmpty()||!f->pendingInterference.isEmpty()),tr("当前帧无干涉标注"));
+    available(ui->confirmInterference,navigate&&sourceVerified&&!f->pendingInterference.isEmpty(),tr("先手工选择干涉面"));
+    available(ui->clearInterference,navigate&&sourceVerified&&(!f->interferenceIndices.isEmpty()||!f->pendingInterference.isEmpty()),tr("当前帧无干涉标注"));
     available(ui->skipFrame,navigate&&f&&!f->skipped,tr("请选择未跳过的原始帧"));
     ui->skipFrame->setVisible(navigate&&f&&!f->skipped);
     bool hasUnmatched=false;
@@ -265,31 +300,38 @@ void ScanGeometryWindowV1::refresh(bool publish) {
     ui->selectWorkpiece->setChecked(m_view->tool()==ScanGeometryCanvasV2::Tool::Workpiece);
     ui->selectInterference->setChecked(m_view->tool()==ScanGeometryCanvasV2::Tool::Interference);
     ui->rectangleTool->setChecked(m_view->tool()==ScanGeometryCanvasV2::Tool::Rectangle);
-    ui->geometryCard->setVisible(m_workflowStage==3&&editable);
+    ui->geometryCard->setVisible(m_workflowStage==3&&resultView);
+    const auto &regions=m_session.resultRegions();
+    const bool regionsBusy=regions.state==ResultRegionStateV1::Building;
+    ui->resultRegionStatus->setText(regionsBusy?tr("正在生成蓝色工件模板区域；可浏览，修剪和保存暂不可用")
+        :regions.state==ResultRegionStateV1::Ready?tr("灰色实测点云 / 蓝色工件模板 / 红色干涉面；颜色仅用于显示")
+        :tr("点云及磁盘结果保留，区域显示未完成：%1").arg(regions.error.isEmpty()?tr("请点击重建区域"):regions.error));
+    ui->rebuildResultRegions->setVisible(regions.state!=ResultRegionStateV1::Ready);
+    available(ui->rebuildResultRegions,editable&&!regionsBusy,tr("请先取消或等待当前任务结束"));
     ui->workpieceSummary->setText(f?tr("工件面 %1 点 · %2").arg(f->planeIndices.size()).arg(f->status):tr("所选平面拼接结果"));
     ui->interferenceSummary->setText(tr("干涉面：%1 点，预览 %2 点\n人工标注，不参与拼接；%3").arg(f?f->interferenceIndices.size():0).arg(f?f->pendingInterference.size():0)
         .arg(m_session.geometryConfirmed()?tr("已随几何结果保存"):tr("待保存几何结果")));
     QStringList maskErrors;
-    if(f&&!f->workpieceMaskError.isEmpty())maskErrors.append(tr("工件面：%1").arg(f->workpieceMaskError));
-    if(f&&!f->interferenceMaskError.isEmpty())maskErrors.append(tr("干涉面：%1").arg(f->interferenceMaskError));
-    if(f&&!f->pendingInterferenceMaskError.isEmpty())maskErrors.append(tr("干涉面预览：%1").arg(f->pendingInterferenceMaskError));
-    ui->interactionHint->setToolTip(maskErrors.isEmpty()?QString():tr("拟合结果可用，但平面区域叠加生成失败：%1").arg(maskErrors.join("\n")));
+    if(sourceVerified&&!f->workpieceMaskError.isEmpty())maskErrors.append(tr("工件面：%1").arg(f->workpieceMaskError));
+    if(sourceVerified&&!f->interferenceMaskError.isEmpty())maskErrors.append(tr("干涉面：%1").arg(f->interferenceMaskError));
+    if(sourceVerified&&!f->pendingInterferenceMaskError.isEmpty())maskErrors.append(tr("干涉面预览：%1").arg(f->pendingInterferenceMaskError));
+    ui->interactionHint->setToolTip(maskErrors.isEmpty()?QString():tr("平面拟合成功，区域显示失败：%1").arg(maskErrors.join("\n")));
     const QSignalBlocker highSideBlocker(ui->highSideCandidates);
     ui->highSideCandidates->clear();
-    if(f)for(const auto &candidate:f->highSideCandidates)
+    if(sourceVerified)for(const auto &candidate:f->highSideCandidates)
         ui->highSideCandidates->addItem(tr("+%1 mm · %2 点").arg(candidate.heightMm,0,'f',2).arg(candidate.pointCount),candidate.seedIndex);
-    const bool hasHighSide=f&&!f->highSideCandidates.isEmpty();
+    const bool hasHighSide=sourceVerified&&!f->highSideCandidates.isEmpty();
     ui->renderAndHeightNotice->setVisible(loaded||hasHighSide||(f&&f->highSideChecking));
     const bool highSidePending=f&&!f->pendingInterference.isEmpty()&&hasHighSide
         &&std::any_of(f->highSideCandidates.cbegin(),f->highSideCandidates.cend(),[f](const auto &candidate){return f->pendingInterference.contains(candidate.seedIndex);});
-    ui->highSideNotice->setText(!f?QString():f->highSideChecking?tr("正在检查未标注的高侧平面…")
+    ui->highSideNotice->setText(!f?QString():!sourceVerified?tr("来源尚未校验，旧标注暂不显示"):f->highSideChecking?tr("正在检查未标注的高侧平面…")
         :highSidePending?tr("高侧候选已载入干涉面预览；请在“更多”中确认标注。")
         :hasHighSide?tr("发现 %1 个世界 Z 高侧平面候选。提醒可忽略，不会自动进入拼接。").arg(f->highSideCandidates.size())
         :!f->highSideError.isEmpty()?tr("高侧平面检查失败：%1").arg(f->highSideError)
         :f->hasCandidate?tr("未发现符合门限的未标注高侧平面"):tr("请先选择工件面以检查高侧平面"));
-    available(ui->highSideCandidates,hasHighSide&&!busy,tr("当前帧没有待处理高侧候选"));
-    available(ui->markHighSideCandidate,hasHighSide&&!busy&&!highSidePending,tr("请选择待处理候选"),tr("按候选种子执行常规平面选择；确认后才记录为干涉面"));
-    available(ui->ignoreHighSideCandidate,hasHighSide&&!busy&&!highSidePending,tr("当前帧没有待处理高侧候选"));
+    available(ui->highSideCandidates,hasHighSide&&navigate,tr("当前帧没有待处理高侧候选"));
+    available(ui->markHighSideCandidate,hasHighSide&&navigate&&!highSidePending,tr("请选择待处理候选"),tr("按候选种子执行常规平面选择；确认后才记录为干涉面"));
+    available(ui->ignoreHighSideCandidate,hasHighSide&&navigate&&!highSidePending,tr("当前帧没有待处理高侧候选"));
     ui->highSideCandidates->setVisible(hasHighSide);ui->markHighSideCandidate->setVisible(hasHighSide);
     ui->ignoreHighSideCandidate->setVisible(hasHighSide);
     available(ui->confirmGeometry,editable&&m_session.canConfirmGeometry()&&!m_session.geometryConfirmed(),tr("需保留至少三个非共线点"));
@@ -318,29 +360,45 @@ void ScanGeometryWindowV1::refresh(bool publish) {
     if(m_view->tool()==ScanGeometryCanvasV2::Tool::Workpiece||m_view->tool()==ScanGeometryCanvasV2::Tool::Interference)
         hint=m_session.config().threePoint?tr("依次点击三个不同、非共线点；Esc 取消。完整点集上选面后预览确认。"):tr("点击面内点；完整点集上扩展平面，预览后确认。Esc 退出。");
     ui->interactionHint->setText(hint);
+    if(sourceVerified&&!maskErrors.isEmpty())ui->interactionHint->setText(hint+tr("\n平面拟合成功，区域显示失败；可继续确认，详情见提示。"));
     qsizetype count=0;
+    if(!m_session.hasResult()) {
+        m_resultDisplay.clear();m_resultMapping.clear();m_resultRemoved.clear();m_cachedResultRevision=0;
+    }
     if(publish) {
         QVector<pointcloud::Point3D> points;QVector<int> mapping,work,interference,pending;qsizetype fullCount=0;
         const QVector<pointcloud::Point3D> *fullPoints=nullptr;
         const pointcloud::Point3D *cloudKey=nullptr;
-        if(f&&loaded){points=f->display;mapping=f->displayToFull;fullCount=f->cloud.fullPoints.size();fullPoints=&f->cloud.fullPoints;cloudKey=f->cloud.fullPoints.constData();work=f->planeIndices;interference=f->interferenceIndices;pending=f->pendingInterference;}
-        else if(editable){const auto &full=m_session.result().points;fullPoints=&full;fullCount=full.size();cloudKey=full.constData();
-            points.reserve(full.size()-m_session.removed().size());mapping.reserve(points.capacity());
-            for(int i=0;i<full.size();++i)if(!m_session.removed().contains(i)){points.append(full.at(i));mapping.append(i);}}
+        if(f&&loaded){points=f->display;mapping=f->displayToFull;fullCount=f->cloud.fullPoints.size();fullPoints=&f->cloud.fullPoints;cloudKey=f->cloud.fullPoints.constData();if(sourceVerified){work=f->planeIndices;interference=f->interferenceIndices;pending=f->pendingInterference;}}
+        else if(resultView){const auto &full=m_session.result().points;fullPoints=&full;fullCount=full.size();cloudKey=full.constData();
+            if(m_cachedResultRevision!=m_session.resultRevision()||m_resultRemoved!=m_session.removed()) {
+                m_resultDisplay.clear();m_resultMapping.clear();
+                m_resultDisplay.reserve(full.size()-m_session.removed().size());m_resultMapping.reserve(m_resultDisplay.capacity());
+                for(int i=0;i<full.size();++i)if(!m_session.removed().contains(i)){m_resultDisplay.append(full.at(i));m_resultMapping.append(i);}
+                m_cachedResultRevision=m_session.resultRevision();m_resultRemoved=m_session.removed();
+            }
+            points=m_resultDisplay;mapping=m_resultMapping;}
         count=points.size();const bool fit=m_lastActive!=m_session.active()||m_lastCloud!=cloudKey;
         m_lastActive=m_session.active();m_lastCloud=cloudKey;
-        if(depthPreview) {m_view->showDepthFrame(f->rawDepthFrame);m_view->showEmptyMessage(QString());}
+        if(depthPreview) {m_view->bindLoadObservation(0,0);m_view->showDepthFrame(f->rawDepthFrame);m_view->showEmptyMessage(QString());}
         else {
+            m_view->bindLoadObservation(f?f->id:0,f?f->loadAttempt:0);
             m_view->showPointCloud();
-            m_view->publish(points,mapping,fullCount,work,interference,pending,f&&!f->reviewed,fit,m_session.resultRevision(),
-                fullPoints?*fullPoints:QVector<pointcloud::Point3D>{},loaded?&f->workpieceMask:nullptr,
-                loaded?&f->interferenceMask:nullptr,loaded?&f->pendingInterferenceMask:nullptr);
+            m_view->publish(points,mapping,fullCount,work,interference,pending,f&&!f->reviewed,fit,f?0:m_session.resultRevision(),
+                fullPoints?*fullPoints:QVector<pointcloud::Point3D>{},resultView?&regions.workpiece:loaded&&sourceVerified?&f->workpieceMask:nullptr,
+                resultView?&regions.interference:loaded&&sourceVerified?&f->interferenceMask:nullptr,loaded&&sourceVerified?&f->pendingInterferenceMask:nullptr,displayMode,
+                loaded?QByteArray("frame:")+QByteArray::number(f->id)+":"+QByteArray::number(f->loadAttempt)
+                    :resultView?QByteArray("result:")+QByteArray::number(m_session.resultRevision()):QByteArray{},
+                loaded&&f->hasHeightRange?std::optional<QPair<float,float>>(f->heightRange)
+                    :resultView?std::optional<QPair<float,float>>(m_session.resultHeightRange())
+                    :std::optional<QPair<float,float>>(QPair<float,float>{0,1}));
             m_view->showEmptyMessage(points.isEmpty()?tr("当前没有可显示点云\n请配置并加载，或撤销 / 恢复修剪"):QString());
         }
     }else count=f?f->display.size():m_session.hasResult()?m_session.result().points.size()-m_session.removed().size():0;
     ui->pointCount->setText(tr("显示 %1 点 · 会话擦除 %2 点").arg(count).arg(m_session.removed().size()));
-    if(!busy&&(m_view->tool()==ScanGeometryCanvasV2::Tool::Workpiece||m_view->tool()==ScanGeometryCanvasV2::Tool::Interference))
-        m_view->canvas()->setSelectedIndices(m_session.pendingSeeds());
+    m_view->canvas()->setControlPointIndices(navigate&&m_session.config().threePoint
+        &&(m_view->tool()==ScanGeometryCanvasV2::Tool::Workpiece||m_view->tool()==ScanGeometryCanvasV2::Tool::Interference)
+        ?m_session.pendingSeeds():QVector<int>{});
     if(w.valid&&m_session.active()==-1) {
         pcv::render::CoordinateFrame frame;
         frame.originInRobotBase=w.originInRobotBase;frame.axisXInRobotBase=w.axisXInRobotBase;

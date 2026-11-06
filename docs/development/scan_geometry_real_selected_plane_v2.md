@@ -1,5 +1,29 @@
 # 当前 GUI 接入真实所选平面拼接 v2
 
+2026-11-05 构建清理：旧模拟源码/专属测试及独立拼接/亮度应用已移除；本页真实任务、session、Designer表单和配色保持。当前构建与验收矩阵见[应用清理说明](application_target_cleanup_v1.md)，不沿用已删除入口的历史命令。
+
+## 2026-11-04 按工件拟合状态切换配色
+
+本节为当前配色规则，下方固定灰点记录保留为历史。Owner：Codex（源码），用户（构建及验收）。
+
+- `ScanGeometryCanvasV2::DisplayMode` 明确区分 `Height` / `UniformGray`，`publish()` 末尾接收模式与高度来源 key。窗口仅以当前帧 `hasCandidate` 决定灰色，不依赖确认、自动/人工来源或区域网格生成结果；未拟合、仅干涉拟合、工件清除/失效均为高度色。结果/修剪视图为高度色。有效候选同源重载仍灰色；输入变化清候选后恢复高度色。图例与色条同步，二维深度图不变。
+- 高度模式为 `colorMode=0`、overlay `1.0`；完整 `robot_base` 点云有限 Z 范围以 `frame:id:digest` 缓存，结果以 `result:revision` 缓存，缓存只保留标量，不持有卸载帧。来源变化产生新 key；确认、切帧、修剪/撤销/恢复不重复扫描同一来源。常量高度扩为非零范围，无有限 Z 时回退 0～1。无来源 key 的兼容调用以不可变共享数据身份缓存当前范围。
+- `setDisplayCloud()` 会将 map bounds 重设为展示子集，因此发布点云后重新设置完整来源范围；即使结果全被擦除也保留完整结果色阶。配色只调用模块20已有实例参数接口，不上传点、重建映射或改变区域 revision。蓝/红25%区域与闭合边界、孔洞、三点十字、修剪框/计数保持；无逐点蓝红标注和修剪高亮。
+- 新增/调整 `scan_geometry_view_tests_v2` 源码：默认高度、干涉预览不切灰、人工/自动候选及确认切灰、清除/参考依赖失效、切帧、同源重载、三点共线重选失败、来源改变、网格失败仍灰且可确认、完整有限 Z/常量范围、结果修剪色阶及模式变化不上传点/区域不丢失。
+- 本轮不执行配置、构建、CTest、GUI/DPI或性能验收，不生成EXE。仅静态审阅、`.ui` XML解析和 `git diff --check`。源树外 Debug/Release 构建命令沿用下文；已配置目录可执行 `cmake --build <build目录>`，然后 `ctest --test-dir <build目录> --output-on-failure -R "scan_geometry_view_tests_v2|scan_geometry_session_tests_v2|plane_mask_tests_v1|pointcloud_canvas_contract_tests"`，全量使用同命令去掉 `-R`。
+- Qt Creator人工检查：两帧先高度色，单独干涉拟合仍有色条；工件拟合后立即灰色并保留蓝/红区域，确认不变；未拟合帧切回高度色；清除工件恢复；网格失败仍灰并显示错误；同源重载保持、修改来源重载恢复；结果擦除极端Z点/全擦/撤销/恢复色阶不变。检查100%/150% DPI、百万点数据切换及旋转拾取。
+- 风险：每个新来源首次增加一次完整 Z 扫描（GUI发布阶段），缓存不限制完整业务/GPU内存；真实数据响应时间、原生透明面/色条、旧窗口回归待用户验收。默认浅灰背景、点径2、百万点/512 MiB、算法、输出schema和世界Z提醒不变。
+
+## 2026-11-05 灰色点云与独立拟合面显示
+
+- 当前三维画布使用固定点色 `#59636f`、点大小 2 和浅灰背景，关闭高度彩虹与色条。工件面蓝色、干涉面及待确认干涉面红色只用于完整分辨率区域网格与闭合边界，填充透明度 25%。二维深度预览、拟合/拼接数据及输出 schema 不变。
+- 模块 20 新增实例 `setUniformPointColor()` / `clearUniformPointColor()`，启用时常规点 pass 使用固定 RGB，绕过高度、法向照明、纹理和 marker 着色/放大；清除后恢复原模式。默认关闭，旧应用不变。独立 `setControlPointIndices()` 使用完整下标回译展示点，只绘制白缘深色十字，随视角更新；替换点云时清除。
+- 新 GUI 不再分配完整点数的蓝/红 marker 数组。三点控制点走十字；修剪仅显示边框与“擦除 N 点”，零命中禁用，不高亮点。拟合成功但区域生成失败时显示明确文字及错误 tooltip，仍可确认候选。
+- 保存不可变 Qt 隐式共享展示/映射和区域快照，以存储身份判断变更并推进独立 display/region revision；只更新拟合面时不重建显示映射或点 VBO。结果展示按 result revision 与修剪索引集合缓存；擦除/撤销/恢复、换帧及重载会更新。取消专为高度映射遍历完整 Z 的扫描，保留模块 20 必需空间 bounds 计算。百万点上限及 512 MiB 预算不变。
+- 已补 `scan_geometry_view_tests_v2` 源码：统一色设置/清除与 framebuffer 灰点、默认外观、无 marker/修剪高亮、控制点映射、空框/误拖、遮挡可见点拾取、25% 蓝红区域、清理、重载、仅区域更新不触发点上传、失败提示与可确认状态。沿用掩码孔洞/闭合边界及会话修剪/过期任务测试。
+- 本轮仅静态检查，**未运行配置、构建、CTest、GUI、截图、DPI 或性能验收**。在已配置的源码外 Debug/Release Kit 中执行 `cmake --build <build目录>`，再执行 `ctest --test-dir <build目录> --output-on-failure`；定向可加 `-R "scan_geometry_view_tests_v2|scan_geometry_session_tests_v2|plane_mask_tests_v1|pointcloud_canvas_contract_tests|selected_plane_dialog_tests_v1"`。公共头/Shader 已变更，需完整重编。
+- 人工验收：100%/150% DPI、百万点稀疏/密集数据；灰点不随选面改变、蓝红区域与孔洞可辨、十字跟随相机、修剪零命中禁用及视角改变清框；旧工作台高度色/纹理/marker 正常，二维深度预览不变。半透明面叠色属于预期，十字为屏幕提示会覆盖遮挡物。未测性能，不承诺帧率或内存峰值下降。
+
 日期：2026-10-26。Owner：Codex（实现），用户（构建与验收）。文档基线 v0.5，软件版本、JSON/PLY/PCVMAP schema 均未升级。入口仍为 `scan_geometry_demo_v1`，原 `pointcloudview` 保留。本记录描述本轮源码，不声明构建或验收通过。
 
 ## 交付与架构
@@ -15,7 +39,7 @@ scan_geometry_window_v1.ui / input_config_dialog_v2.ui
 
 `apps/stitching_ui/selected_plane_tasks_v2.*` 从旧对话框提取读取/坐标转换、可配置上限的展示抽样、完整索引与选面快照。共享默认及旧 `SelectedPlaneDialog` 上限为 300000；新 GUI 显式请求每帧最多 1000000。没有隐藏旧窗口或访问其私有控件；领域模块不反向依赖应用。
 
-`pcv_selected_plane_tasks_v2` 链接 10/30/50/60、Qt Core/Gui/Concurrent；`pcv_scan_geometry_session_v2` 组织新流程；原 `pcv_scan_geometry_demo_view_v1` target 加载真实 session/dialog/canvas。`demo_cloud_v1`、旧演示模型/画布与 v1 测试源码保留为历史，不在正式窗口运行链路中。旧演示模型测试仍可构建，旧模拟窗口测试不再注册，正式窗口由 `scan_geometry_view_tests_v2` 覆盖。
+`pcv_selected_plane_tasks_v2` 链接 10/30/50/60、Qt Core/Gui/Concurrent；`pcv_scan_geometry_session_v2` 组织新流程；原 `pcv_scan_geometry_demo_view_v1` target 加载真实 session/dialog/canvas。旧模拟数据、模型/画布与专属v1测试源码及target已按用户授权清理，正式窗口由`scan_geometry_view_tests_v2`覆盖；真实session和任务库保留。
 
 ## 输入、审核与调度
 
@@ -51,15 +75,15 @@ scan_geometry_window_v1.ui / input_config_dialog_v2.ui
 ```powershell
 $env:VSLANG = '1033'
 $qtPrefix = '<Qt 6.8.3 MSVC x64 prefix>'
-cmake -S D:/workpiece/pointcloudview/pointcloudview -B D:/pcv-build/scan-geometry-real-v2-debug -G 'NMake Makefiles' -DCMAKE_BUILD_TYPE=Debug "-DCMAKE_PREFIX_PATH=$qtPrefix" -DPCV_BUILD_SCAN_GEOMETRY_DEMO_V1=ON -DPCV_BUILD_POINTCLOUDVIEW=ON -DPCV_BUILD_POINTCLOUDSTITCH=ON -DPCV_BUILD_EXPERIMENTAL_CAMERA=OFF -DPCV_BUILD_TESTS=ON
+cmake -S D:/workpiece/pointcloudview/pointcloudview -B D:/pcv-build/scan-geometry-real-v2-debug -G 'NMake Makefiles' -DCMAKE_BUILD_TYPE=Debug "-DCMAKE_PREFIX_PATH=$qtPrefix" -DPCV_BUILD_SCAN_GEOMETRY_DEMO_V1=ON -DPCV_BUILD_POINTCLOUDVIEW=ON -DPCV_BUILD_EXPERIMENTAL_CAMERA=OFF -DPCV_BUILD_TESTS=ON
 cmake --build D:/pcv-build/scan-geometry-real-v2-debug
 ctest --test-dir D:/pcv-build/scan-geometry-real-v2-debug --output-on-failure
-cmake -S D:/workpiece/pointcloudview/pointcloudview -B D:/pcv-build/scan-geometry-real-v2-release -G 'NMake Makefiles' -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$qtPrefix" -DPCV_BUILD_SCAN_GEOMETRY_DEMO_V1=ON -DPCV_BUILD_POINTCLOUDVIEW=ON -DPCV_BUILD_POINTCLOUDSTITCH=ON -DPCV_BUILD_EXPERIMENTAL_CAMERA=OFF -DPCV_BUILD_TESTS=ON
+cmake -S D:/workpiece/pointcloudview/pointcloudview -B D:/pcv-build/scan-geometry-real-v2-release -G 'NMake Makefiles' -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$qtPrefix" -DPCV_BUILD_SCAN_GEOMETRY_DEMO_V1=ON -DPCV_BUILD_POINTCLOUDVIEW=ON -DPCV_BUILD_EXPERIMENTAL_CAMERA=OFF -DPCV_BUILD_TESTS=ON
 cmake --build D:/pcv-build/scan-geometry-real-v2-release
 ctest --test-dir D:/pcv-build/scan-geometry-real-v2-release --output-on-failure
 ```
 
-上述 NMake 命令不请求并行 make；勿切到 JOM。也可使用仓库 `scripts/build_windows.ps1` 设置现有 Kit。单 GUI 依赖另用新的外部目录配置 `PCV_BUILD_POINTCLOUDVIEW=OFF`、`PCV_BUILD_POINTCLOUDSTITCH=OFF`、`PCV_BUILD_SCAN_GEOMETRY_DEMO_V1=ON`、`PCV_BUILD_EXPERIMENTAL_CAMERA=OFF`。根 CMake、模块 20/30 条件和共享任务依赖已补齐，但组合尚未实际配置验证。
+上述 NMake 命令不请求并行 make；勿切到 JOM。也可使用仓库 `scripts/build_windows.ps1` 设置现有 Kit。单 GUI 依赖另用新的外部目录配置 `PCV_BUILD_POINTCLOUDVIEW=OFF`、`PCV_BUILD_SCAN_GEOMETRY_DEMO_V1=ON`、`PCV_BUILD_EXPERIMENTAL_CAMERA=OFF`。根 CMake、模块 20/30 条件和共享任务依赖已补齐，但组合尚未实际配置验证。
 
 新增自动测试源码：
 
@@ -124,3 +148,7 @@ ctest --test-dir D:/pcv-build/scan-geometry-real-v2-release --output-on-failure
 - 新 GUI 会话预算从 256 MiB 提高至 512 MiB；六帧百万点映射预算申请共 384 MB（约 366 MiB），余额供既有可选优化缓冲使用。该预算不限制完整业务数据、GPU 资源或进程 RSS。
 - 新增回归源码覆盖低于/等于/超过百万点上限、默认 300000 兼容、重复抽样映射、六帧展示预算容量及浅灰画布。按用户安排本轮不运行构建、CTest、Qt Creator 或 DPI/性能验收。用户侧验收需特别观察百万点上传/绘制耗时、两轮切换后预算释放，以及 100%/150% DPI 下浅底文字和点云可见性。
 - 定向源码外验证命令：`cmake --build <build目录> --target reference_plane_match_tests_v2 scan_geometry_session_tests_v2 scan_geometry_view_tests_v2`；`ctest --test-dir <build目录> --output-on-failure -R "reference_plane_match_tests_v2|scan_geometry_session_tests_v2|scan_geometry_view_tests_v2"`。
+
+## 2026-11-05 最终结果蓝红区域 v1
+
+覆盖此前“结果/修剪高度色”规则：结果起灰点、蓝色统一模板及红色确认干涉面，25%填充；修剪后台重建，固定间距/网格原点；红色随各有效帧累计修正。颜色仅GUI，无输出变更。[当前说明](scan_geometry_result_regions_v1.md)。用户执行构建/CTest/GUI。

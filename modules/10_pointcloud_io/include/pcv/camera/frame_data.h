@@ -52,6 +52,10 @@ struct CaptureConfiguration {
     bool externalLightOperatorConfirmed = false;
     // Explicit new storage contract; legacy callers retain v1/v2 PLY storage.
     bool storeRawDepth = false;
+    bool exportPureRaw = false;
+    QString calibrationAttachment;
+    QString deviceModel;
+    QString deviceSerial;
 };
 
 // Owned copy of one camera frame. The callback thread copies the raw bytes

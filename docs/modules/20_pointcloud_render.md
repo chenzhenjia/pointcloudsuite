@@ -1,5 +1,7 @@
 # 20_pointcloud_render：画布与渲染
 
+2026-11-05 清理：移除无引用`pcv_m20_pointcloudrender`，统一链接`pcv_m20_pointcloud_render`；公共头、渲染及拾取不变，保留两个GUI的调用。[说明](../development/application_target_cleanup_v1.md)。
+
 2026-10-30 扫描几何深度预览：`ScanGeometryCanvasV2` 复用 `DepthImageCanvasV1` 显示原始深度帧；SDK转换后切回既有点云画布。模块20仅接收中立 `CameraFrame` 预览数据，不调用SDK、不持有物化生命周期。PLY显示及拾取保持原行为。[开发记录](../development/scan_geometry_demo_v1.md#2026-10-30-sdk深度缓存与按需物化)。
 
 版本 v0.5，核对日期 2026-10-15。target pcv_m20_pointcloud_render，依赖 pcv_core 与 Qt Core/Gui/Widgets/OpenGL/OpenGLWidgets，不依赖 apps。[架构](../architecture/software_architecture_v0.5.md) · [日志](../changelog/v0.5.md)。
@@ -24,7 +26,7 @@ PointColorOverlay 接收 60 的严格 source raster 映射，渲染层校验后�
 
 默认点大小为 2，使用蓝-青-绿-黄-红的高度 `RAINBOW` 伪彩并按当前 Z 范围自动映射。`PointCloudCanvas` 通过透明子画布绘制无数值色条、左下 XYZ 轴和右上方向控件；默认隐藏地板网格、包围盒和统计文字。纹理灰度仍由应用切换到 color mode 3，不改变默认高度伪彩。
 
-旧 pcv_m20_pointcloudrender/旧头仅转发。pointcloud_canvas_contract_tests 覆盖非法值、索引及 DTO；真实 Windows/OpenGL、大点云、缩放、视觉方向和窗口关闭另验。历史显示细节见[归档](../archive/history_pre_v0.5.md)，本轮仅静态核对。
+旧公共头继续转发，无引用旧target已删除。pointcloud_canvas_contract_tests覆盖非法值、索引及DTO；真实Windows/OpenGL、大点云、缩放、视觉方向和窗口关闭另验。历史显示细节见[归档](../archive/history_pre_v0.5.md)，本轮仅静态核对。
 
 六分屏整合（2026-10-16）：六个独立画布复用既有完整下标映射，仅批量入口设置更小最小尺寸；放大切换同一布局保留视角。正式结果仍setCloud完整显示。平面叠加更新推进渲染revision，使frameSwapped计时等待真正的候选绘制；重复设置相同选面模式不再反复抢焦点。见[整合说明](../development/batch_plane_selection_template_integration_v1.md)，真实OpenGL未验收。
 
@@ -41,6 +43,12 @@ PointColorOverlay 接收 60 的严格 source raster 映射，渲染层校验后�
 2026-10-23 深度画布v1：SDK无关pcv::render::DepthImageDisplayV1/DepthImageCanvasV1，C16直接伪彩、掩码覆盖、亮度切换、原像素拾取、滚轮缩放/右键平移；20不依赖10/60。[说明](../development/camera_depth_preview_cache_v1.md)。
 
 ## 独立扫描几何演示的实例外观（2026-10-26）
+
+当前扫描几何三维调用方按工件拟合状态切换：无工件候选为高度色，有效工件候选为统一灰点，结果/修剪为统一灰点并显示蓝色模板/红色干涉区域；蓝/红仅显示拟合区域。本次仅应用层复用既有接口，不改20实现和旧调用方默认行为。完整高度范围缓存、动态图例及用户验收见[当前说明](../development/scan_geometry_real_selected_plane_v2.md#2026-11-04-按工件拟合状态切换配色)。
+
+2026-11-05 新增 `setUniformPointColor(const QColor&)` / `clearUniformPointColor()`：仅 GUI 线程设置有效 RGB；默认未启用，启用后常规点绘制绕过高度色、法向照明、纹理、marker 颜色及 marker 点径，清除恢复原模式；不修改点/映射。选择高亮 pass 仍供旧调用方使用，新 GUI 不提交选择点。统一色启用时高度色条隐藏。
+
+`setControlPointIndices(const QVector<int>&)` 按完整点索引映射展示点，忽略未显示/无效下标、去重；独立 QPainter 白缘深色十字随投影更新，逻辑像素由 Qt 按 DPI 绘制，不改变点色或拾取。此为屏幕提示而非深度几何，云替换/streaming 后清除。新 GUI 保留 25% 蓝/红 PlanarMaskOverlay 与闭合边界、深度测试及原偏移，停用 marker 和修剪点高亮。旧调用方默认外观/API 兼容；本轮未构建或原生验收，见[当前说明](../development/scan_geometry_real_selected_plane_v2.md#2026-11-05-灰色点云与独立拟合面显示)。
 
 `PointCloudCanvas::setAppearance(const QColor &background, const QColor &selection)` 设置实例背景与选中点颜色，仅 GUI 线程接受有效颜色。默认仍为黑底、白色选中点；`paintGL` 和单点/矩形 GPU 拾取后的背景恢复使用实例配置。点数提示根据背景亮度选择深浅文字，黑底保留原文字颜色。
 
@@ -73,3 +81,20 @@ PointColorOverlay 接收 60 的严格 source raster 映射，渲染层校验后�
 `PlanarMaskOverlay` 接收世界坐标顶点、三角索引、闭合边界线环、颜色及透明度；`PointCloudCanvas::setPlanarMaskOverlays()` 在 GUI 线程验证后更新动态 VBO/EBO。三角面片按半透明填充绘制，边界按设备像素比设线宽，绘制不更改点颜色、纹理 overlay、拾取索引或正式点云。设置新点云/显示子集时清除旧掩码，调用方需在该次发布后提交与新来源匹配的 overlay。
 
 扫描几何使用蓝色工件面、红色待确认/已确认干涉面，默认填充透明度 25%。掩码由模块 60 在完整拟合点索引上生成，闭合边界按 U/V 占用单元追踪外环和孔洞环；渲染使用 `GL_LINE_STRIP` 与 VAO 绑定的元素缓冲。掩码生成峰值工作区通过共享 `ProcessingBudget` 申请，失败只丢弃叠加并保留选面结果，应用通过交互提示 tooltip 报告失败。旧黄色 `Contour`/轮廓渲染和未调用新 API 的调用方默认行为不变。
+
+## 新 GUI 加载耗时 v1（2026-11-05）
+
+新增可选 `PointCloudCanvas::displayTiming(revision,QJsonObject)` 与 `displayCloudRevision()`；只统计CPU发布/缓冲准备/OpenGL调用，不做GPU同步。默认无回调，不改变旧外观或拾取。新GUI使用worker提供的完整高度范围，避免界面扫描；详见 [说明](../development/scan_geometry_load_performance_v1.md)。仅静态检查，用户构建验证。
+
+## 2026-11-05 加载耗时优化 v2
+
+setDisplayCloud对严格递增映射采用相邻校验和lower_bound反查，避免百万点反向QHash构建；乱序仍用QHash且拒绝重复/越界，替换完整/流式数据重置快路径。displayTiming记录mapping_strategy，配色/缓冲/深度拾取不变。补递增/乱序/缺失/重复/越界/修剪回归源码；本轮仅静态检查，原生拾取与实际性能待用户验证。[说明](../development/scan_geometry_load_performance_v2.md)。
+
+2026-11-05 应用提前预览v3：新GUI按source verification状态提交/隐藏旧平面叠加，本次高度范围身份改为frameId+attempt，已校验同数据恢复区域不重传点。模块20本轮无代码修改，拾取/渲染契约不变。[用户回归](../development/scan_geometry_load_performance_v3.md)。
+
+2026-11-05 最终结果区域：新GUI复用setPlanarMaskOverlays和统一色接口，结果及修剪起灰点、蓝红25%面片、无色条；网格由应用后台提供，20无新算法/默认行为变化。[说明](../development/scan_geometry_result_regions_v1.md)。
+
+
+## STEP 模板与自动匹配 v1
+
+2026-11-05 STEP模板：`CadMeshCanvasV1::setFaceColors/setAppearance/clearMesh` 提供实例级灰/蓝/红CAD显示，旧默认不变。匹配复用25%掩码与闭合边界，候选切换仅更新叠加。 [开发与验收](../development/step_template_matching_v1.md)。本轮未执行构建、CTest、GUI/DPI或真实样本验证，由用户执行。

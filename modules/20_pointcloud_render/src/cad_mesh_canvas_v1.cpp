@@ -38,6 +38,9 @@ bool CadMeshCanvasV1::setMesh(pcv::CadMeshV1 mesh)
     m_selected.clear(); m_zoom=1; m_pan={}; m_dirty=true; update(); return true;
 }
 void CadMeshCanvasV1::setSelectedFaces(QSet<int> faces) { m_selected=std::move(faces); m_dirty=true; update(); }
+void CadMeshCanvasV1::clearMesh() {m_mesh={};m_selected.clear();m_faceColors.clear();m_dirty=true;update();}
+void CadMeshCanvasV1::setFaceColors(QHash<int,QColor> colors) {m_faceColors=std::move(colors);m_dirty=true;update();}
+void CadMeshCanvasV1::setAppearance(QColor background,QColor neutral) {m_background=background;m_neutral=neutral;m_dirty=true;update();}
 QVector3D CadMeshCanvasV1::normalized(const QVector3D &p) const { return (p-m_center)/m_span; }
 QMatrix4x4 CadMeshCanvasV1::matrix() const
 {
@@ -59,7 +62,7 @@ void CadMeshCanvasV1::paintGL()
 {
     if(!m_ready) { QPainter p(this); p.drawText(rect(),Qt::AlignCenter,m_error); return; }
     glViewport(0,0,int(width()*devicePixelRatioF()),int(height()*devicePixelRatioF()));
-    glClearColor(.08f,.1f,.13f,1); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT); glEnable(GL_DEPTH_TEST);
+    glClearColor(float(m_background.redF()),float(m_background.greenF()),float(m_background.blueF()),1); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT); glEnable(GL_DEPTH_TEST);
     m_vao.bind(); m_buffer.bind(); m_program.bind();
     if(m_dirty) {
         QVector<float> vertices; vertices.reserve(m_mesh.triangles.size()*18);
@@ -67,7 +70,8 @@ void CadMeshCanvasV1::paintGL()
             const auto a=normalized(m_mesh.vertices.at(t.a)),b=normalized(m_mesh.vertices.at(t.b)),c=normalized(m_mesh.vertices.at(t.c));
             const auto n=QVector3D::crossProduct(b-a,c-a).normalized();
             const float shade=.45f+.55f*std::abs(QVector3D::dotProduct(n,QVector3D(.3f,.4f,.866f)));
-            const auto color=(m_selected.contains(t.faceId)?QVector3D(1,.65f,.12f):QVector3D(.65f,.75f,.85f))*shade;
+            const auto role=m_faceColors.value(t.faceId,m_selected.contains(t.faceId)?QColor::fromRgbF(1,.65,.12):m_neutral);
+            const auto color=QVector3D(float(role.redF()),float(role.greenF()),float(role.blueF()))*shade;
             for(const auto &v:{a,b,c}) vertices << v.x()<<v.y()<<v.z()<<color.x()<<color.y()<<color.z();
         }
         m_buffer.allocate(vertices.constData(),int(vertices.size()*sizeof(float))); m_dirty=false;

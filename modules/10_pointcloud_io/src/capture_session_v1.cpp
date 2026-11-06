@@ -202,20 +202,24 @@ QString createCaptureSession(const QString &parent, const CaptureConfiguration &
     if (!outsideSourceTree(parent)) {
         *error = QStringLiteral("请选择已存在且位于源码树外的采集保存目录"); return {};
     }
-    const QString stem = QStringLiteral("capture_v%1_%2").arg(configuration.storeRawDepth ? 3 : sdk ? 2 : 1)
-        .arg(QDateTime::currentDateTimeUtc().toString("yyyyMMdd_HHmmss_zzz"));
+    const QString stem = configuration.exportPureRaw
+        ? QStringLiteral("depth_capture_v1_%1").arg(QDateTime::currentDateTimeUtc().toString("yyyyMMdd_HHmmss_zzz"))
+        : QStringLiteral("capture_v%1_%2").arg(configuration.storeRawDepth ? 3 : sdk ? 2 : 1)
+            .arg(QDateTime::currentDateTimeUtc().toString("yyyyMMdd_HHmmss_zzz"));
     QDir dir(parent);
     if (!dir.mkpath(".")) { *error = QStringLiteral("无法创建采集目录"); return {}; }
     QString name = stem;
     for (int i = 1; dir.exists(name); ++i) name = stem + "_" + QString::number(i);
     if (!dir.mkdir(name)) { *error = QStringLiteral("无法创建采集会话"); return {}; }
     pcv::io::ArtifactTransaction tx(dir.filePath(name));
-    QJsonObject meta{{"schema", configuration.storeRawDepth ? "pcv-camera-session-v3" : sdk ? "pcv-camera-session-v2" : "pcv-camera-session-v1"},
+    QJsonObject meta{{"schema", configuration.exportPureRaw ? "pcv-depth-raw-session-v1" : configuration.storeRawDepth ? "pcv-camera-session-v3" : sdk ? "pcv-camera-session-v2" : "pcv-camera-session-v1"},
         {"device", device}, {"progress_source", "raster_row"},
         {"intensity_enabled", configuration.requireIntensity},
         {"external_light_enabled", configuration.externalLightEnabled},
         {"external_light_operator_confirmed", configuration.externalLightOperatorConfirmed},
-        {"created_at", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
+        {"created_at", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
+        {"raw_type", configuration.exportPureRaw ? "pure_c16" : ""},
+        {"calibration_attachment", configuration.calibrationAttachment.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(QFileInfo(configuration.calibrationAttachment).fileName())}};
     if (sdk) {
         meta.insert("boundary_mode", "sdk_image");
         meta.insert("boundary_verification", "operator_confirmed_device_configuration");
@@ -393,9 +397,11 @@ void CaptureRecorder::run() {
         quint64 id = 1;
         while (auto frame = m_queue->pop()) {
             CaptureFrameRecord record; QString error; QVector<pointcloud::Point3D> preview;
-            const bool depth = m_configuration.storeRawDepth;
+            const bool depth = m_configuration.storeRawDepth || m_configuration.exportPureRaw;
             const bool saved = depth
-                ? detail::saveDepthFrame(m_directory, id++, *frame, m_configuration.requireIntensity, &record, &error)
+                ? detail::saveDepthFrame(m_directory, id++, *frame, m_configuration.requireIntensity, &record, &error,
+                                         m_configuration.calibrationAttachment, m_configuration.exportPureRaw,
+                                         m_configuration.deviceModel, m_configuration.deviceSerial)
                 : saveFrame(m_directory, id++, *frame, m_configuration.requireIntensity, &record, &preview, &error);
             if (!saved) { m_queue->fail(error); break; }
             std::lock_guard<std::mutex> lock(m_mutex);

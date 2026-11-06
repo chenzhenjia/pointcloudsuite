@@ -36,6 +36,8 @@ if(PCV_BUILD_EXPERIMENTAL_CAMERA)
         features/camera_capture_wizard.h
         features/camera_depth_preview_v1.cpp
         features/camera_depth_preview_v1.h
+        features/depth_raw_capture_page_v1.cpp
+        features/depth_raw_capture_page_v1.h
         ui/cameradialog.ui
     )
 endif()

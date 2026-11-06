@@ -1,6 +1,9 @@
 #include <pcv/planefitting/plane_mask_v1.h>
 
 #include <cmath>
+#include <algorithm>
+#include <array>
+#include <vector>
 
 using namespace pcv::planefitting;
 
@@ -14,6 +17,36 @@ static bool closedLoops(const PlaneMaskMeshV1 &mesh)
     return true;
 }
 
+// Canonicalize geometry rather than implementation-specific vertex numbering.
+static bool sameRegion(const PlaneMaskMeshV1 &a,const PlaneMaskMeshV1 &b) {
+    using Point=std::array<float,3>;
+    const auto key=[](const QVector3D &v){return Point{v.x(),v.y(),v.z()};};
+    const auto triangles=[&](const PlaneMaskMeshV1 &m) {
+        std::vector<std::array<Point,3>> out;
+        for(qsizetype i=0;i<m.triangleIndices.size();i+=3) {
+            std::array<Point,3> t{key(m.vertices.at(m.triangleIndices.at(i))),key(m.vertices.at(m.triangleIndices.at(i+1))),key(m.vertices.at(m.triangleIndices.at(i+2)))};
+            std::sort(t.begin(),t.end());out.push_back(t);
+        }
+        std::sort(out.begin(),out.end());return out;
+    };
+    const auto edges=[&](const PlaneMaskMeshV1 &m) {
+        std::vector<std::array<Point,2>> out;
+        for(const auto &range:m.boundaryRanges)for(int i=1;i<range.second;++i) {
+            std::array<Point,2> e{key(m.boundaryVertices.at(range.first+i-1)),key(m.boundaryVertices.at(range.first+i))};
+            std::sort(e.begin(),e.end());out.push_back(e);
+        }
+        std::sort(out.begin(),out.end());return out;
+    };
+    return closedLoops(a)&&closedLoops(b)&&triangles(a)==triangles(b)&&edges(a)==edges(b);
+}
+static bool denseSparseEquivalent(const QVector<pointcloud::Point3D> &points,const QVector<int> &indices,
+    const PlaneModel &model,PlaneMaskOptionsV1 options) {
+    options.preferDenseGrid=true;options.processingBudget=std::make_shared<pcv::ProcessingBudget>(16u*1024u*1024u);
+    const auto dense=buildPlaneMaskV1(points,indices,model,options);
+    options.preferDenseGrid=false;const auto sparse=buildPlaneMaskV1(points,indices,model,options);
+    return dense.ok&&sparse.ok&&dense.performance.value("mask_grid_strategy")=="dense"
+        &&sparse.performance.value("mask_grid_strategy")=="sparse"&&sameRegion(dense.mesh,sparse.mesh)&&options.processingBudget->used()==0;
+}
 int main()
 {
     QVector<pointcloud::Point3D> points;
@@ -58,6 +91,7 @@ int main()
             tiltedPoints.append({point.x(),point.y(),point.z()});
         }
     }
+    if(!denseSparseEquivalent(points,indices,flat,options)||!denseSparseEquivalent(concavePoints,concaveIndices,flat,options))return 10;
     PlaneModel tilted;
     tilted.a = -2.0f;
     tilted.b = -3.0f;
@@ -70,6 +104,7 @@ int main()
         if (std::abs(tilted.a * vertex.x() + tilted.b * vertex.y()
                      + tilted.c * vertex.z() + tilted.d) > 1e-4f) return 3;
     }
+    if(!denseSparseEquivalent(tiltedPoints,tiltedIndices,tilted,options))return 11;
 
     QVector<pointcloud::Point3D> anisotropicPoints;
     QVector<int> anisotropicIndices;
@@ -89,6 +124,15 @@ int main()
     if (!mask.ok || mask.mesh.triangleIndices.size()!=anisotropicIndices.size()*6
         || mask.mesh.boundaryRanges.size()!=1 || !closedLoops(mask.mesh)) return 8;
 
+    if(!denseSparseEquivalent(anisotropicPoints,anisotropicIndices,tilted,options))return 11;
+    // Tight budget admits the legacy sparse reservation, but not the dense addition.
+    PlaneMaskOptionsV1 tight; tight.spacingUMm=tight.spacingVMm=1;
+    tight.processingBudget=std::make_shared<pcv::ProcessingBudget>(size_t(indices.size())*256);
+    const auto fallback=buildPlaneMaskV1(points,indices,flat,tight);
+    if(!fallback.ok||fallback.performance.value("mask_dense_fallback")!="budget"||tight.processingBudget->used()!=0)return 12;
+    QVector<pointcloud::Point3D> wide{{0,0,0},{1000000,0,0},{0,1000000,0}};
+    const auto sparseWide=buildPlaneMaskV1(wide,{0,1,2},flat,tight);
+    if(!sparseWide.ok||sparseWide.performance.value("mask_grid_strategy")!="sparse"||!closedLoops(sparseWide.mesh))return 13;
     int cancellationChecks = 0;
     options.isCancelled = [&cancellationChecks] { return ++cancellationChecks >= 8; };
     const auto cancelled = buildPlaneMaskV1(tiltedPoints, tiltedIndices, tilted, options);

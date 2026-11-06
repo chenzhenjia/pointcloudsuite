@@ -1,12 +1,20 @@
 # 模块、UI 与交接协同规范 v0.5
 
+2026-11-05 应用/target清理：桌面入口保留scan_geometry_demo_v1与pointcloudview，独立拼接/亮度应用及旧模拟源码移除；两个GUI共用真实选面任务，整帧窗口仅随pointcloudview构建。无引用兼容target删除，公共兼容头保留；本轮用户明确授权清理，无须迁移公共头。CLI/Tools保留默认OFF，验证由用户执行。[清单](../development/application_target_cleanup_v1.md)。
+
+2026-11-04 配色状态协同：新GUI窗口根据当前帧 `hasCandidate` 显式传 `ScanGeometryCanvasV2::DisplayMode`，原始帧默认高度色、工件拟合后灰点，拼接/修剪结果灰点＋蓝红区域；20只负责既有统一色/高度色参数与蓝红平面绘制。应用缓存完整来源Z范围并在点发布后恢复，不改60拟合或30拼接，不改变marker/拾取默认契约。模式变化不更新点VBO，测试及GUI由用户执行。[说明](../development/scan_geometry_real_selected_plane_v2.md#2026-11-04-按工件拟合状态切换配色)。
+
+2026-11-05 候选几何契约：`apps/scan_geometry_demo_v1/scan_geometry_contract_v1.*`为应用私有适配，不进入模块公共API；应用接收01业务身份、核验02扫描来源并调10事务、50转换及60掩码，30不依赖60。正式结果仅交接候选，不承担01发布或02执行；网页未修改。详见[说明](../development/scan_geometry_contract_adapter_v1.md)。
+
+2026-10-30 深度 RAW 采集：应用工作台增加`depth_raw`独立页；设备控制/预览/启停归应用，10拥有帧队列、事务写入及 RAW 数据契约。页面与既有`camera`向导启采互斥，切页不停止任务。[开发说明](../development/depth_raw_capture_v1.md)。
+
 2026-10-23 连续采集 v2：默认同步保存亮度、仅发布几何点云；第四步独立纹理开关默认关闭。10 提供兼容的严格/几何读取模式，30 显式只读几何；应用负责分列状态、严格纹理校验、参数恢复及工作台 revision 发布/清除旧覆盖，60 算法不变。`StitchingPublication::intensitySourceDirectory` 传递逐帧目录；不修改已有工序 JSON 业务。[当前说明](../development/camera_capture_intensity_decoupling_v2.md)。
 
 日期：2026-10-15。当前基线见[需求](../requirements/pointcloudview_v0.5.md)与[软件架构](software_architecture_v0.5.md)。本文件维护协作规则；详细代码变更集中到[版本日志](../changelog/v0.5.md)，并在 [target.md](../../target.md)登记摘要。
 
 ## 职责与依赖
 
-10 为读取、过滤、writer/事务和实验相机；20 为渲染；30 为整帧与所选平面拼接；50 为唯一坐标数学；60 为几何/工件/扫描/纹理。40 是 30/60 的 INTERFACE 兼容聚合，移动判定未实现；70/80 分别转发 60/10。90/100 进入[路线图](../development/roadmap_v0.5.md)。
+10为读取、过滤、writer/事务和实验相机；20为渲染；30为整帧与所选平面拼接；50为唯一坐标数学；60为几何/工件/扫描/纹理。40为STATIC模板定位实现，PUBLIC保留30/60兼容聚合并依赖50，机器人移动判定未实现；70/80仅保留转发60/10的公共兼容头，已无构建target。90/100进入[路线图](../development/roadmap_v0.5.md)。
 
 依赖为 `30→10/50`、`60→10/50`、`40→30/60`、`20→core`。共享 UI 位于 apps，允许依赖算法；模块不得依赖 apps。所选平面通过应用适配 60→30，30 不链接 60。
 
@@ -30,21 +38,12 @@
 
 ### target 转发明细
 
-以下为 CMake 中实际的 INTERFACE 链接；逗号表示并列依赖，不是 alias 已完全删除。
+当前保留的INTERFACE转发如下。16个无引用兼容target及旧模拟库已按用户授权删除，清单和外部迁移风险见[清理说明](../development/application_target_cleanup_v1.md)。公共兼容头仍保留，不代表所有兼容层均已删除。
 
 | legacy_target | forwards_to |
 |---|---|
-| pcv_m05_camerainput、pcv_m10_pointcloud_read、pcv_m10_pointcloudread、pcv_io、pcv_filtering、pcv_output | pcv_m10_pointcloud_io |
-| pcv_m20_pointcloudrender | pcv_m20_pointcloud_render |
-| pcv_m30_pointcloudstitch | pcv_m30_pointcloud_stitch |
-| pcv_m40_pointcloudregistration | pcv_m40_pointcloud_matching |
+| pcv_m10_pointcloud_read | pcv_m10_pointcloud_io |
 | pcv_m40_pointcloud_matching | pcv_m30_pointcloud_stitch、pcv_m60_geometry_workpiece |
-| pcv_m50_coordinateconversion | pcv_m50_coordinate_conversion |
-| pcv_m60_plane_fitting、pcv_m60_planefitting、pcv_m70_roi_template | pcv_m60_geometry_workpiece |
-| pcv_m80_plane_output | pcv_m10_pointcloud_io |
-| pcv_m80_planeoutput | pcv_m80_plane_output |
-| pcv_registration | pcv_m40_pointcloud_matching、pcv_m50_coordinate_conversion、pcv_m30_pointcloud_stitch |
-| pcv_interface | pcv_m30_pointcloud_stitch、pcv_m60_geometry_workpiece |
 
 ### header 与实现归属
 
@@ -58,7 +57,7 @@
 | include/pcv/registration/handeye_transform.h | modules/50_coordinate_conversion/include/pcv/registration/handeye_transform.h | pointcloud |
 | include/pcv/interface/stitching_interface.h | modules/30_pointcloud_stitch/include/pcv/interface/stitching_interface.h | pcv::interface |
 | include/pcv/interface/temp_workpiece_interface.h、modules/70_roi_template | modules/60_geometry_workpiece/include/pcv/workpiece/*；interface/roi/matching 路径保留 | pcv::interface、pcv::roi、pcv::matching |
-| apps/pointcloudstitch/stitchingwindow.h | apps/stitching_ui/stitchingwindow.h | 共享应用窗口，非领域 namespace |
+| 整帧拼接窗口（旧独立应用已删除） | apps/stitching_ui/stitchingwindow.h | pointcloudview应用窗口，非领域 namespace |
 
 这些表记录实现迁移关系，旧头仍按实际代码转发；不承诺每个旧符号已经具备编译器弃用属性。未来门面 namespace 与实际 namespace 分开登记。
 
@@ -144,6 +143,8 @@ CameraDialog负责设备源/SDK通知/高级实时预览；CameraCaptureWizard�
 
 ## 2026-10-26 离线单页所选平面拼接 v2 协同映射
 
+2026-11-05 画布增量：20 负责实例统一点色及独立控制点十字（`setUniformPointColor`/`clearUniformPointColor`/`setControlPointIndices`），默认兼容；新 GUI 负责灰点/蓝红拟合面、无点高亮修剪、display/region revision 缓存与结果修剪缓存。区域更新不重复发布点云，重载/换帧及修剪使缓存失效；60/30 算法、输出契约和二维深度预览不变。本轮验证由用户执行；见[当前说明](../development/scan_geometry_real_selected_plane_v2.md#2026-11-05-灰色点云与独立拟合面显示)。
+
 | owner_and_entry | responsibility_and_boundary |
 |---|---|
 | apps/stitching_ui / pcv_selected_plane_tasks_v2 | 从旧 SelectedPlaneDialog 提取真实读取/50转换/展示抽样/完整索引/选面快照；不拥有 UI 或调度 |
@@ -162,3 +163,26 @@ CameraDialog负责设备源/SDK通知/高级实时预览；CameraCaptureWizard�
 2026-10-30 可见性与世界 Z 增量：模块 20 `PointCloudCanvas` 增加独立 marker overlay buffer，扫描几何页对标注点绘制 DPR 缩放的大点及深/浅双边缘，不改变高度色、纹理 overlay 和旧调用方默认值。模块 60 `findHighSidePlaneCandidatesV1` 使用候选中心 Z 减工件面中心 Z，取消法向方向/倾角相关判定。见 [开发说明](../development/scan_geometry_real_selected_plane_v2.md#2026-10-30-标注可见性与世界-z-高侧提醒)。
 
 2026-10-30 拟合区域显示增量：模块 60 `buildPlaneMaskV1()` 从完整选面点索引生成占用网格三角面与外环/孔洞闭合边界，复用处理预算和取消回调；应用任务携带结果并按输入/frame 生命周期清理。模块 20 `PlanarMaskOverlay` 用动态 VAO/VBO/EBO 绘制 25% 透明蓝/红平面和闭合轮廓，点颜色、拼接 DTO、输出文件和旧轮廓接口不变。详见 [扫描几何 v2 说明](../development/scan_geometry_real_selected_plane_v2.md#2026-10-30-拟合平面掩码叠加显示)。
+
+## 2026-11-05 加载计时与日志 v1 协同
+
+apps/stitching_ui共享任务负责读取转换及计时/高度元数据；新GUI会话负责LoadDisplay/PrepareIndex拆分、每帧attempt门控、优先调度和源码外JSONL；20仅提供可选GUI CPU/GL上传调用计时，领域算法不变。两个帧任务各2workers，前台等待时不再派发预取。无全局Qt日志handler，无新schema。旧GUI30万默认及现有调度保持；测试由用户执行。[接口与验收](../development/scan_geometry_load_performance_v1.md)。
+
+计时边界补充：10补headerElapsedMs累计，60公共结果补budgetAcquireMs，应用透传；不迁移算法、不改缓存与输出契约。
+
+## 2026-11-05 加载耗时优化 v2 协同增量
+
+应用共享任务维护snapshotFromSingleClickV2完整结果后处理，自动匹配复用候选，窗口不复制算法；新GUI选择法向65536批次并保持两帧各两worker，旧选面默认4096。60仅增加法向调度/预算回退与诊断，20内部递增映射采用二分反查，均不反向依赖apps。性能字段只进会话JSONL，不改正式schema。新GUI区分加载首显、切帧等待及可见等待，正常成功说明进入message，质量warning，失败error。SHA/摘要/输出和512MiB保留。公共DTO需完整重编；本轮静态交付，用户执行全部运行验收。[接口与测试](../development/scan_geometry_load_performance_v2.md)。
+
+## 2026-11-05 性能优化 v3 协同
+
+新GUI会话维护SourceVerificationV3和revision/id/attempt/token；PLY先只读预览，摘要+索引共用后续任务槽，未校验不提交旧区域/提醒或审核。60维护临时法向邻接、连通私有workspace和完整面片dense/sparse回退，算法留在模块，20无新业务依赖。共享任务仅透传参数/诊断，新GUI启用邻居表，旧调用方默认直查。总预算/并发不变；运行与等价验收由用户执行。[接口和边界](../development/scan_geometry_load_performance_v3.md)。
+
+## 2026-11-05 最终结果区域协同 v1
+
+应用私有结果区域DTO/Task组织完整点区域与有效帧红色修正，input/reference/result/trim/annotation/token门控；仅复用30 corrections、50刚体校验、60掩码和20叠加。共享任务Kind尾追加BuildResultRegions不改变旧值。60掩码返回有效double间距/原点，可选固定原点默认关闭；公共DTO需全量重编。拼接事务与显示生成分开计时，区域失败不改事务结果，不改schema。[开发说明](../development/scan_geometry_result_regions_v1.md)。
+
+
+## STEP 模板与自动匹配 v1
+
+2026-11-05 STEP模板协同：新GUI独立Designer对话框编排；20角色显示/掩码，60完整平面/边界及角色包，40改STATIC保留30/60 PUBLIC聚合并实现模板搜索/评分/精化，50唯一刚体数学。30不变，机器人移动判定仍未实现。共用512MiB，模板任务等待扫描后台收敛，revision/token失效、关闭join。 [开发与验收](../development/step_template_matching_v1.md)。本轮未执行构建、CTest、GUI/DPI或真实样本验证，由用户执行。

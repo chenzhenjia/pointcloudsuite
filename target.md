@@ -1,5 +1,17 @@
 # PointCloudSuite 顶层目标与交付状态
 
+2026-11-05 Codex：最终结果起灰点、蓝色统一模板与红色确认干涉区域（25%），完整结果固定间距/网格原点，修剪后台重建、取消失败可重试；input/result/trim/annotation/token门控，面片更新不重传点。60掩码仅补显示元数据/固定原点，正式输出不变。新增测试源码，用户运行构建/CTest/GUI；[说明](docs/development/scan_geometry_result_regions_v1.md)。保留已有修改，不提交推送。
+
+2026-11-05 Codex：应用入口收敛为scan_geometry_demo_v1与pointcloudview；删除独立亮度/拼接应用（含--regression）、旧模拟源码与专属测试，共32个受控文件，移除16个无引用兼容target及旧模拟库。公共兼容头、必要后端、真实任务/共享窗口、CLI/诊断/转换工具保留；Tools默认OFF、CLI-only关闭两个GUI、修正配置依赖。仅静态检查，构建/CTest/GUI由用户执行；本机build/.qtcreator及已有修改保留，未提交推送。[清单与验收命令](docs/development/application_target_cleanup_v1.md) · [日志](docs/changelog/v0.5.md#application-target-cleanup-v1)。
+
+2026-11-04 Codex：新GUI默认高度色，逐帧工件候选有效后切灰（含自动匹配/网格失败），清除/失效恢复；结果/修剪高度色，蓝红25%平面叠加保持。完整Z按帧来源/结果revision缓存，配色不上传点，图例/色条同步。补测试源码，本轮只静态检查，不构建/CTest/GUI/性能，由用户验证；保留既有修改、未提交推送。[说明](docs/development/scan_geometry_real_selected_plane_v2.md#2026-11-04-按工件拟合状态切换配色) · [日志](docs/changelog/v0.5.md#scan-geometry-fit-color-mode-v1)。
+
+2026-11-05 Codex：`scan_geometry_demo_v1`增加可选SR-2026候选几何契约导出，事务提交`point_cloud_result.json`、base完整/候选PLY、0/128/255掩码及原始输入证据；缺实际扫描来源为partial，旧sidecar保留，不发布模板。附Schema、样例、只读校验工具；Debug/Release构建与定向验证及全量失败记录见[开发说明](docs/development/scan_geometry_contract_adapter_v1.md) · [日志](docs/changelog/v0.5.md#scan-geometry-contract-adapter-v1)。保留已有及并行修改，未提交推送。
+
+2026-11-05 Codex：新扫描几何三维画布统一 `#59636f` 灰点、关闭高度色条，蓝/红色仅用于 25% 拟合区域及闭合边界；三点十字与修剪边框/计数独立显示。新增20实例颜色/控制点接口和应用显示/区域增量缓存，保留百万点、512 MiB、旧外观及二维预览。测试源码已补，本轮不构建/CTest/GUI；[开发说明](docs/development/scan_geometry_real_selected_plane_v2.md#2026-11-05-灰色点云与独立拟合面显示) · [日志](docs/changelog/v0.5.md#scan-geometry-gray-points-v1)。
+
+2026-10-30 Codex：`pointcloudview`新增独立深度图连续取流页，复用10有界完整帧队列和事务写入，逐帧输出纯C16 RAW、配置/校准状态 JSON、SDK离线转换亮度及可用行元数据；增加SDK一致性校验的 C++ RAW→PLY 工具和文件契约测试。源码树外Debug/Release、CTest及虚拟相机验收见[开发说明](docs/development/depth_raw_capture_v1.md)。真机、持久化吞吐及物理精度需现场验证；保留未提交修改。
+
 2026-10-30 Codex：`scan_geometry_demo_v1` 增加SDK深度会话帧预览和按需点云物化；轮次缓存C16/辅助亮度，显式处理或自动匹配时由官方SDK生成XYZ，模块50按原始栅格行插值位姿，审核确认后释放该帧活动XYZ/索引/显示缓存。旧PLY流程不变。构建、CTest、原生GUI、无SDK及真实相机验证结果见开发说明；单帧峰值内存尚未声称下降。[开发说明](docs/development/scan_geometry_demo_v1.md#2026-10-30-sdk深度缓存与按需物化)。
 
 文档版本 v0.5。更新日期：2026-10-15。责任人：陈振佳（后端/主线）、于海军（前端/外部项目）。基线：HEAD 75d3e3b 加当前未提交/未跟踪实现；不代表发布版本。
@@ -126,3 +138,22 @@ Owner：Codex（实现），用户（验证）。提供三组 v2 测试源码、
 2026-10-30 标注可见性与世界 Z 高侧提醒：模块 20 新增独立 marker overlay buffer；GUI 工件蓝、干涉红标注采用大点、深色外缘和浅色内缘，point size 按 DPR 缩放，不改变原高度色或纹理 overlay。模块 60 高侧高度改为候选平面中心 Z 减工件面中心 Z，水平/倾斜工件均按 robot_base 世界 Z 判定；Designer 明示世界 Z 门限。补充 marker 显示与世界 Z 测试源码及验收命令。依用户分工未运行构建、CTest、GUI/DPI 验收；见[开发说明](docs/development/scan_geometry_real_selected_plane_v2.md#2026-10-30-标注可见性与世界-z-高侧提醒)。
 
 2026-10-30 本地版本归档：按用户要求仅将当前工作区提交到本地 Git 并输出提交号，不推送远端。提交包含真实所选平面拼接 v2、扫描几何演示、高侧提醒/标注、渲染与主窗口更新及对应测试/文档。已执行 diff 检查；本轮未重跑构建/CTest/GUI，验证边界沿用对应开发说明。
+
+## 2026-11-05 新 GUI 加载计时与日志 v1
+
+新GUI拆分LoadDisplay/PrepareIndex，先显示后建完整索引；当前帧就绪即可选面，前台任务优先且最多两个帧任务/各2 workers。完整Z统计后台化，模块20增加可选发布/上传CPU计时和独立点云revision。新增折叠日志区、源码外会话JSONL，记录操作/任务/耗时/错误。保留百万展示/六帧/512MiB及旧工作台。静态检查；构建/CTest/GUI/真实性能待用户执行，无加速结论。详见 [开发与验收](docs/development/scan_geometry_load_performance_v1.md)。
+
+计时补充：10记录缓存身份头读取，60新增budgetAcquireMs透传，均只观测不改变算法；新GUI日志范围经用户确认，操作/任务/耗时/错误，无全局Qt捕获。
+
+## 2026-11-05 真实日志耗时优化 v2
+
+新GUI复用自动匹配完整选面结果，共享快照/面片后处理并预留完整点向量；索引法向显式65536网格批次、预算不足4096/串行回退，仍2帧×2workers。模块20递增映射采用二分反查、乱序保留QHash。补选面/匹配/法向诊断、独立切帧可见等待及成功message/质量warning，新增源码外日志汇总工具与等价测试。保留SHA256、完整摘要、512MiB、正式schema及既有未提交修改。只做静态检查；构建/CTest/GUI/Release实测由用户执行，无新版EXE或加速结论。详见[开发与验收](docs/development/scan_geometry_load_performance_v2.md)。
+
+## 2026-11-05 点云加载与选面耗时优化 v3
+
+新GUI先显示PLY，后续任务顺序校验完整摘要/准备索引；未校验隐藏旧面片/提醒并禁止选面审核，同源恢复/变化失效，失败保留只读预览并重试。60新增瞬时27邻居表（13方向双填、原序PCA）、任务内连通workspace、完整面片稠密/稀疏预算回退及细项计时；不增加512MiB或2帧×2workers。日志增加v3/variant和校验/索引里程碑；测试源码、文档已补，未构建/CTest/GUI/性能，无新EXE/提速结论。[说明与命令](docs/development/scan_geometry_load_performance_v3.md)。
+
+
+## 2026-11-05 STEP 选面模板与自动匹配 v1
+
+新GUI增加独立Designer模板制作/匹配审核窗口，多解析平面蓝工件/红干涉、完整采样及旧schema兼容角色伴随事务包；40新增STATIC模板6DoF搜索/精化/证据门控，50新增刚体估计/组合/约束秩，60复用完整选面/区域和CAD特征。当前完整修剪结果作目标，候选须人工确认后另存版本化JSON；原模板/扫描产物与30算法不变。STEP开关/OCCT部署、日志、revision/token、关闭join及测试源码已接入。仅静态检查，未配置/构建/CTest/GUI/真实样本，无EXE/成功率结论。保留已有修改/删除，不提交推送。[开发说明与用户命令](docs/development/step_template_matching_v1.md)。

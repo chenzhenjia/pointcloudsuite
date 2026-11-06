@@ -268,6 +268,12 @@ static WorkpieceTemplateResult saveTemplateFormat(const SaveWorkpieceTemplateReq
         return failure("PCV_INPUT_002", error, error == QStringLiteral("已取消"));
     if (cad && !validCadPoints(request.points, request.source, request.isCancelled))
         return failure("PCV_CONTRACT_001", QStringLiteral("CAD 模板来源、点数或单位法向无效"), isCancelled(request.isCancelled));
+    if (!request.roleCompanion.isEmpty()) {
+        WorkpieceTemplateInfo extra;
+        if(request.roleCompanion.value("schema_version").toString()!=QStringLiteral("pcv-template-roles-v1")
+           || (!request.interferencePoints.isEmpty() && !inspectPoints(request.interferencePoints,&extra,request.isCancelled,{},&error)))
+            return failure("PCV_CONTRACT_001",QStringLiteral("模板角色伴随信息或干涉点无效"));
+    }
     const QString rootPath = request.outputRoot.isEmpty() ? defaultWorkpieceTemplateRoot() : request.outputRoot;
     const QString resolvedRoot = resolvedPath(rootPath);
     if (within(resolvedRoot, resolvedPath(QString::fromUtf8(PCV_WORKPIECE_TEMPLATE_SOURCE_DIR))))
@@ -299,6 +305,11 @@ static WorkpieceTemplateResult saveTemplateFormat(const SaveWorkpieceTemplateReq
     if (ok) {
         report(request.progress, WorkpieceTemplateStage::WritingMetadata);
         ok = transaction.stageJson(QString::fromLatin1(cad ? kCadTemplateJson : kWorkpieceTemplateJson), serialize(info, cad));
+    }
+    if(ok && !request.roleCompanion.isEmpty()) {
+        ok=transaction.stageJson(QStringLiteral("template_roles_v1.json"),QJsonDocument(request.roleCompanion).toJson());
+        if(ok && !request.interferencePoints.isEmpty())
+            ok=transaction.stageBinaryPly(QStringLiteral("template_interference_v1.ply"),request.interferencePoints,true);
     }
     if (ok) {
         report(request.progress, WorkpieceTemplateStage::Committing);

@@ -11,7 +11,12 @@ inline constexpr const char *kCadTemplateJson = "workpiece_cad_template_info.jso
 inline constexpr qint64 kCadMaximumPoints = 10000000;
 enum class CadStage { Reading, Validating, Meshing, Sampling };
 using CadProgress = std::function<void(CadStage, qint64, qint64)>;
-struct CadFaceInfo { int id = 0; QString surfaceType; double areaMm2 = 0; };
+struct CadFaceInfo {
+    int id = 0; QString surfaceType; double areaMm2 = 0;
+    bool planar = false;
+    QVector3D planeOrigin, planeNormal;
+};
+struct CadFacePointRangeV1 { int faceId=0; qsizetype first=0,count=0; };
 class CadModel;
 struct ReadStepModelRequest {
     QString file;
@@ -39,6 +44,7 @@ struct CadCloudResult {
     QString errorCode, message;
     QVector<pointcloud::Point3D> points;
     QJsonObject source;
+    QVector<CadFacePointRangeV1> faceRanges;
 };
 StepModelResult readStepModel(const ReadStepModelRequest &request);
 CadCloudResult generateCadTemplateCloud(const GenerateCadTemplateRequest &request);

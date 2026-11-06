@@ -43,19 +43,35 @@ bool readChecked(const QDir &dir, const QString &name, qint64 size, const QStrin
 }
 
 bool saveDepthFrame(const QString &root, quint64 id, const CameraFrame &frame,
-                    bool intensity, CaptureFrameRecord *record, QString *error) {
+                    bool intensity, CaptureFrameRecord *record, QString *error,
+                    const QString &calibrationPath, bool pureRaw,
+                    const QString &deviceModel, const QString &deviceSerial) {
     QElapsedTimer timer; timer.start();
     const quint64 samples = quint64(frame.width) * frame.height;
     if (frame.frameType != FrameType::DepthC16 || !frame.valid || !frame.completeScan
         || !samples || samples > (256 * 1024 * 1024 / 12) || frame.data.size() != qsizetype(samples * 2)
         || frame.sdkVersion.isEmpty() || frame.conversionFingerprint.isEmpty()
+        || (pureRaw && (frame.intensityData.size() != qsizetype(samples) || frame.sdkReserved.size() != 8))
         || (!frame.intensityData.isEmpty() && frame.intensityData.size() != qsizetype(samples))
         || (!frame.exposureTimeStamps.isEmpty() && frame.exposureTimeStamps.size() != frame.height)
         || (!frame.encoders.isEmpty() && frame.encoders.size() != frame.height)) {
         *error = QStringLiteral("原始深度帧及转换元数据无效，拒绝保存"); return false;
     }
     const auto exposure = encode(frame.exposureTimeStamps), encoder = encode(frame.encoders);
-    QJsonObject meta{{"schema", "pcv-camera-frame-v2"}, {"id", qint64(id)},
+    QByteArray calibrationBytes;
+    QString calibrationRelativePath;
+    if (pureRaw && !calibrationPath.isEmpty()) {
+        QFile calibration(calibrationPath);
+        if (!calibration.open(QIODevice::ReadOnly)) { *error = calibration.errorString(); return false; }
+        calibrationBytes = calibration.readAll();
+        if (calibrationBytes.isEmpty() || calibration.error() != QFile::NoError) {
+            *error = QStringLiteral("厂商标定附件为空或读取失败"); return false;
+        }
+        calibrationRelativePath = QStringLiteral("vendor_calibration");
+        const auto suffix = QFileInfo(calibrationPath).suffix();
+        if (!suffix.isEmpty()) calibrationRelativePath += QLatin1Char('.') + suffix;
+    }
+    QJsonObject meta{{"schema", pureRaw ? "pcv-depth-raw-frame-v1" : "pcv-camera-frame-v2"}, {"id", qint64(id)},
         {"width", qint64(frame.width)}, {"height", qint64(frame.height)},
         {"sdk_frame_number", qint64(frame.frameNumber)}, {"timestamp", frame.timeStamp},
         {"coordinate_frame", "camera"}, {"units", "mm"}, {"progress_source", "raster_row"},
@@ -70,14 +86,65 @@ bool saveDepthFrame(const QString &root, quint64 id, const CameraFrame &frame,
         {"encoder_bytes", encoder.size()}, {"encoder_sha256", digest(encoder)},
         {"conversion_intensity_bytes", frame.intensityData.size()},
         {"conversion_intensity_sha256", digest(frame.intensityData)}};
+    if (pureRaw) {
+        const auto env = cameraConversionEnvironment();
+        if (!env.error.isEmpty() || env.sdkVersion != frame.sdkVersion || env.fingerprint != frame.conversionFingerprint) {
+            *error = env.error.isEmpty() ? QStringLiteral("SDK 配置已变化，无法为 RAW 帧保存匹配配置") : env.error; return false;
+        }
+        meta.insert("raw_file", "depth.raw"); meta.insert("raw_type", "pure_c16");
+        meta.insert("data_bytes", frame.data.size()); meta.insert("raw_sha256", digest(frame.data));
+        meta.insert("pixel_format", "C16"); meta.insert("sample_type", "int16");
+        meta.insert("header_bytes", 0); meta.insert("data_offset_bytes", 0);
+        meta.insert("row_stride_bytes", qint64(frame.width) * 2);
+        meta.insert("layout", "row_major"); meta.insert("raw_depth_unit", "sdk_c16_encoded");
+        meta.insert("conversion_output_unit", "mm");
+        meta.insert("valid", frame.valid); meta.insert("complete_scan", frame.completeScan);
+        meta.insert("invalid_depth", QJsonObject{{"encoding", "int16"}, {"value", -32768},
+            {"zero_is_invalid", false}, {"sdk_policy_key", "CameraConfig/AlgorithmInvalidHeight"},
+            {"sdk_policy_value", env.configuration.value("CameraConfig/AlgorithmInvalidHeight")}});
+        meta.insert("sdk_frame_number", QString::number(frame.frameNumber));
+        meta.insert("timestamp", QString::number(frame.timeStamp));
+        meta.insert("scale", QJsonObject{{"x", frame.xScale}, {"y", frame.yScale}, {"z", frame.zScale}});
+        meta.insert("offset", QJsonObject{{"x", frame.xOffset}, {"y", frame.yOffset}, {"z", frame.zOffset}});
+        meta.insert("conversion_api", "MV3D_LP_MapDepthToPointCloud");
+        meta.insert("device_model", deviceModel.isEmpty() ? "not_exposed" : deviceModel);
+        meta.insert("device_serial", deviceSerial.isEmpty() ? "not_exposed" : deviceSerial);
+        meta.insert("conversion_config", env.configuration);
+        meta.insert("conversion_fingerprint", env.fingerprint);
+        QJsonObject calibration{{"status", "not_exposed"}, {"source", "sdk_callback"},
+            {"reason", "SDK callback does not expose camera intrinsic or laser-plane calibration"}};
+        if (!calibrationBytes.isEmpty()) {
+            calibration = QJsonObject{{"status", "user_supplied_unverified"}, {"source", "user"},
+                {"file", calibrationRelativePath}, {"sha256", digest(calibrationBytes)}};
+        }
+        meta.insert("calibration", calibration);
+        meta.insert("sdk_reserved", QString::fromLatin1(frame.sdkReserved.toHex()));
+        meta.insert("exposure_present", !exposure.isEmpty()); meta.insert("encoder_present", !encoder.isEmpty());
+        meta.insert("exposure_file", exposure.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue("exposure.i64"));
+        meta.insert("encoder_file", encoder.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue("encoder.i32"));
+        meta.insert("conversion_intensity", QJsonObject{{"file", "conversion_intensity.mono8"},
+            {"sample_type", "uint8"}, {"byte_order", "not_applicable"}, {"count", qint64(samples)},
+            {"bytes", frame.intensityData.size()}, {"sha256", digest(frame.intensityData)}});
+        meta.insert("exposure", QJsonObject{{"present", !exposure.isEmpty()}, {"file", exposure.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue("exposure.i64")},
+            {"sample_type", "int64"}, {"byte_order", "little_endian"}, {"count", qint64(frame.exposureTimeStamps.size())},
+            {"bytes", exposure.size()}, {"sha256", digest(exposure)}});
+        meta.insert("encoder", QJsonObject{{"present", !encoder.isEmpty()}, {"file", encoder.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue("encoder.i32")},
+            {"sample_type", "int32"}, {"byte_order", "little_endian"}, {"count", qint64(frame.encoders.size())},
+            {"bytes", encoder.size()}, {"sha256", digest(encoder)}});
+        meta.insert("sdk_reserved_data", QJsonObject{{"encoding", "hex"}, {"byte_order", "opaque_sdk_bytes"},
+            {"bytes", frame.sdkReserved.size()}, {"value", QString::fromLatin1(frame.sdkReserved.toHex())}});
+    }
     const QString folder = QStringLiteral("frame_%1").arg(id, 8, 10, QLatin1Char('0'));
     pcv::io::ArtifactTransaction tx(QDir(root).filePath(folder));
-    if (!tx.stageBytes("depth.c16", frame.data)
+    if (!tx.stageBytes(pureRaw ? "depth.raw" : "depth.c16", frame.data)
         || (!exposure.isEmpty() && !tx.stageBytes("exposure.i64", exposure))
         || (!encoder.isEmpty() && !tx.stageBytes("encoder.i32", encoder))
         || (!frame.intensityData.isEmpty() && !tx.stageBytes("conversion_intensity.mono8",frame.intensityData))) { *error = tx.error(); return false; }
+    if (!calibrationBytes.isEmpty() && !tx.stageBytes(calibrationRelativePath, calibrationBytes)) {
+        *error = tx.error(); return false;
+    }
     qint64 savedBytes = frame.data.size() + exposure.size() + encoder.size() + frame.intensityData.size();
-    if (intensity) {
+    if (intensity && !pureRaw) {
         if (frame.intensityWidth != frame.width || frame.intensityHeight != frame.height
             || frame.intensityData.size() != qsizetype(samples)) {
             *error = QStringLiteral("当前扫描缺少有效 Mono8 亮度图"); return false;
@@ -96,10 +163,11 @@ bool saveDepthFrame(const QString &root, quint64 id, const CameraFrame &frame,
         savedBytes += frame.intensityData.size() + png.size();
     }
     const auto json = QJsonDocument(meta).toJson();
-    if (!tx.stageJson("frame.json", json) || !tx.commit()) { *error = tx.error(); return false; }
+    if (!tx.stageJson(pureRaw ? "depth.json" : "frame.json", json) || !tx.commit()) { *error = tx.error(); return false; }
     *record = {QDir(root).filePath(folder), id, frame.width, frame.height, frame.frameNumber, frame.timeStamp, 0};
-    record->depthAvailable = true; record->intensityAvailable = intensity;
+    record->depthAvailable = true; record->intensityAvailable = intensity && !pureRaw;
     record->writeWorkNs = timer.nsecsElapsed(); record->savedBytes = savedBytes + json.size();
+    record->savedBytes += calibrationBytes.size();
     return true;
 }
 

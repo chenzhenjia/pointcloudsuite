@@ -1,8 +1,12 @@
 # 当前数据与接口契约 v0.5
 
+2026-11-05 扫描候选几何交接：应用新增 `sr2026.point-cloud-result` v1 的首次建模子集，formal引用相对runtime root，base/mm三维成果、0/128/255 PNG、候选WObj与原始XML快照；缺实际扫描成果省略该引用并记partial。保留旧sidecar/schema，模板/current不发布。[字段与限制](../development/scan_geometry_contract_adapter_v1.md) · [可执行Schema](point_cloud_result_v1.schema.json)。
+
 日期：2026-10-15。v0.5 是文档版本，不升级实际 schema 或格式。依据源码、公共头和测试；[需求](../requirements/pointcloudview_v0.5.md) · [架构](../architecture/software_architecture_v0.5.md) · [更新记录](../changelog/v0.5.md)。
 
 ## 坐标、单位与来源
+
+新增`pcv-depth-raw-session-v1`/`pcv-depth-raw-frame-v1`，与既有`pcv-camera-session-v3/frame-v2`独立。每帧用无头Little Endian有符号C16 `depth.raw`，row-major，`header_bytes/data_offset_bytes=0`，`row_stride_bytes=width*2`；每个RAW帧必须同时携带官方SDK转换所需真实`conversion_intensity.mono8`及8字节SDK reserved 原始值。回调提供逐行数据时保存`exposure.i64`（int64 LE）/`encoder.i32`（int32 LE），缺失时JSON明确`present=false`、数量为0。JSON记录每种载荷的长度/数量/类型/字节序/SHA-256、实际宽高、原始scale/offset、C16无效值-32768（0不默认无效）、SDK策略键、配置快照/指纹、设备信息和附件状态。RAW单位为`sdk_c16_encoded`，转换输出单位为camera/mm；SDK接口未公开的相机内部标定标记`not_exposed`，用户附件按帧保存为相对路径并标记`user_supplied_unverified`。离线SDK工具仅接受版本和配置指纹一致的帧。
 
 连续采集v2经用户授权新增独立pcv-camera-session-v2：boundary_mode=sdk_image、boundary_verification=operator_confirmed_device_configuration，逐帧独立height，不将session的统一rows作为门槛；旧v1固定行数读写保留。逐帧frame-v1/PLY/索引格式复用，追加边界来源及原始类型/计时诊断，既有正式拼接manifest不升级。CaptureConfiguration显式选择边界模式，默认仍FixedRows；CameraFrame新增来源字段默认Unspecified，不能由completeScan默认值冒充SDK确认。[定义与验收](../development/camera_capture_sdk_frame_v2.md)。
 
@@ -119,3 +123,8 @@ CLI 退出码 0/2/10/20/30/40/130 对应成功、契约、输入、转换、平�
 既有 SelectedPlaneFrame.selectionParameters 开放对象中补充 `frame_id`，自动候选另记录 `seed_origin=reference_plane_match_v2`、`reference_frame_id`、`reference_source_file`、`automatic_seed_full_index`、`attempted_seed_full_indices`、`search_distance_mm`、`search_angle_deg`、`maximum_seeds`、`attempted_seeds`。frame_id 为会话稳定字符串标识；full_index 为该转换后完整帧下标，不能冒充 PLY source_index；正式 seedSourceIndices 仍为原始来源下标。其余 manifest/PCVMAP 结构与默认值不变，无独立 schema 字段升级。
 
 GUI 新增六帧窗口/重载 SHA256 只用于会话一致性，原始帧按 frame_id+完整点下标标识；修剪按 result revision+原结果下标，会话内支持撤销/恢复，持久化时写入 `selected_plane_geometry_v1.json` 及独立修剪 PLY/PCVMAP，不覆盖正式产物。人工干涉不作为拼接 frame，随几何 sidecar 保存。输入仍遵循手眼 XML、Start/End、mm/deg、LineProfileXz；不按文件名推断坐标系，30 不再次转换。WObj1 由完整参考候选生成并随几何结果保存。详见 [v2 说明](../development/scan_geometry_real_selected_plane_v2.md) 和 [几何结果说明](../development/scan_geometry_demo_v1.md)。
+
+
+## STEP 模板与自动匹配 v1
+
+2026-11-05：新增独立 `pcv-template-roles-v1` 与 `pcv-template-match-v1`，原模板/扫描schema保持。角色伴随同事务保存逐面范围/索引、模型、裁剪区域和点摘要；匹配矩阵逐行4×4，列向量 `T_target_from_template`，CAD明确 `T_robot_base_from_cad_model`，mm，不生成机器人指令。 [开发与验收](../development/step_template_matching_v1.md)。本轮未执行构建、CTest、GUI/DPI或真实样本验证，由用户执行。

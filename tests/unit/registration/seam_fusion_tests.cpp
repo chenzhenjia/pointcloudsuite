@@ -30,8 +30,7 @@ pointcloud::RobotBaseFrame malformedFrame()
 // ---------------------------------------------------------------------------
 // Parallel seam fusion regression fixtures.
 //
-// The GUI wrapper (apps/pointcloudstitch/seamfusion.cpp) hands the caller's
-// containers to applyTrajectorySeamFusionKernel, and the kernel immediately
+// applyTrajectorySeamFusionKernel receives the caller's containers and immediately
 // shares them (merge.points = *points). Qt's NON-const operator[] detaches a
 // shared buffer, so a worker that indexed merge->points reallocated while its
 // peers were still reading the old buffer -- the heap corruption this suite

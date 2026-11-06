@@ -11,6 +11,7 @@
 #include <QWheelEvent>
 #include <cmath>
 #include <limits>
+#include <algorithm>
 
 namespace pcv::demo {
 ScanGeometryCanvasV2::ScanGeometryCanvasV2(QWidget *parent) : QWidget(parent) {
@@ -23,6 +24,7 @@ ScanGeometryCanvasV2::ScanGeometryCanvasV2(QWidget *parent) : QWidget(parent) {
     m_canvas->setAppearance(QColor("#eef1f4"), QColor("#344255"));
     m_canvas->setEmptyMessage(QString());
     m_canvas->setPointSize(2);
+    m_canvas->setDisplayOptions(0,1.0,0.0,1.0);
     m_canvas->setStandardView(2);
     auto options = m_canvas->overlayOptions();
     options.showColorBar = true;
@@ -32,6 +34,23 @@ ScanGeometryCanvasV2::ScanGeometryCanvasV2(QWidget *parent) : QWidget(parent) {
     m_depthCanvas = new pcv::render::DepthImageCanvasV1(m_stack);
     m_stack->addWidget(m_canvas);m_stack->addWidget(m_depthCanvas);layout->addWidget(m_stack);
     m_canvas->installEventFilter(this);
+    m_canvas->displayTiming=[this](quint64 revision,const QJsonObject &timing) {
+        if(timing.value("event").toString()=="canvas_publish_cpu")m_observedCloud=revision;
+        if(m_observedFrame&&revision==m_observedCloud&&loadCanvasTiming)
+            loadCanvasTiming(m_observedFrame,m_observedAttempt,timing);
+    };
+    connect(m_canvas,&QOpenGLWidget::frameSwapped,this,[this] {
+        if(m_canvas->isVisible()&&!showingDepth()&&m_observedFrame&&!m_observedFirst&&m_canvas->displayCloudRevision()==m_observedCloud
+            &&m_canvas->hasRenderedCurrentCloud()) {
+            m_observedFirst=true;
+            if(loadCanvasTiming&&m_viewStarted.isValid())loadCanvasTiming(m_observedFrame,m_observedAttempt,
+                {{"event","view_frame_swapped"},{"view_sequence",QString::number(m_viewSequence)},
+                 {"display_revision",QString::number(m_observedCloud)},
+                 {"view_wait_ms",double(m_viewStarted.elapsed())},
+                 {"visible_wait_ms",double(m_visibleMs+(m_visibleStarted.isValid()?m_visibleStarted.elapsed():0))}});
+            if(loadFirstFrame)loadFirstFrame(m_observedFrame,m_observedAttempt);
+        }
+    });
     m_canvas->pointPicked = [this](int index) {
         if ((m_tool == Tool::Workpiece || m_tool == Tool::Interference)
             && index >= 0 && index < m_fullCount && planePicked)
@@ -46,6 +65,15 @@ ScanGeometryCanvasV2::ScanGeometryCanvasV2(QWidget *parent) : QWidget(parent) {
     m_empty->setStyleSheet("color:#526174; font-size:14px; background:transparent;");
     m_empty->setAttribute(Qt::WA_TransparentForMouseEvents);
     setTool(Tool::Browse);
+}
+void ScanGeometryCanvasV2::bindLoadObservation(quint64 frameId,quint64 attempt) {
+    if(m_observedFrame==frameId&&m_observedAttempt==attempt)return;
+    m_observedFrame=frameId;m_observedAttempt=attempt;m_observedCloud=0;m_observedFirst=false;
+    ++m_viewSequence;m_viewStarted.start();m_visibleMs=0;m_visibleStarted.invalidate();
+    if(m_canvas->isVisible())m_visibleStarted.start();
+}
+void ScanGeometryCanvasV2::beginViewObservation(quint64 frameId,quint64 attempt) {
+    m_observedFrame=0;m_observedAttempt=0;bindLoadObservation(frameId,attempt);
 }
 void ScanGeometryCanvasV2::showDepthFrame(const std::shared_ptr<const pcv::camera::CameraFrame> &frame,
                                            const QVector<qsizetype> &highlightedPixels) {
@@ -64,36 +92,84 @@ void ScanGeometryCanvasV2::publish(const QVector<pointcloud::Point3D> &points, c
     const QVector<int> &pending,bool candidate,bool fit,quint64 revision,const QVector<pointcloud::Point3D> &fullPoints,
     const pcv::planefitting::PlaneMaskMeshV1 *workpieceMask,
     const pcv::planefitting::PlaneMaskMeshV1 *interferenceMask,
-    const pcv::planefitting::PlaneMaskMeshV1 *pendingMask) {
+    const pcv::planefitting::PlaneMaskMeshV1 *pendingMask,DisplayMode mode,const QByteArray &heightSource,std::optional<QPair<float,float>> preparedHeightRange) {
     Q_UNUSED(candidate);
-    clearSelection();m_fullCount=fullCount;m_revision=revision;
-    pcv::render::PointColorOverlay markers;
-    const auto rgba=[](const char *hex) {const QColor c(hex);return QVector4D(c.redF(),c.greenF(),c.blueF(),1);};
-    markers.colors.fill(QVector4D(0,0,0,0),fullCount);markers.valid.fill(0,fullCount);
-    for(int i:workpiece)if(i>=0&&i<fullCount){markers.colors[i]=rgba("#1675e8");markers.valid[i]=1;}
-    for(int i:interference)if(i>=0&&i<fullCount){markers.colors[i]=rgba("#f04452");markers.valid[i]=1;}
-    for(int i:pending)if(i>=0&&i<fullCount){markers.colors[i]=rgba("#f04452");markers.valid[i]=1;}
-    m_canvas->setDisplayCloud(points,displayToFull,fullCount);
-    m_canvas->setPointMarkerOverlay(markers);
-    QVector<pcv::render::PlanarMaskOverlay> masks;
-    const auto appendMask=[&](const pcv::planefitting::PlaneMaskMeshV1 *mask,const QColor &color) {
-        if(!mask||mask->triangleIndices.isEmpty())return;
-        pcv::render::PlanarMaskOverlay overlay;overlay.vertices=mask->vertices;overlay.triangleIndices=mask->triangleIndices;
-        overlay.boundaryVertices=mask->boundaryVertices;overlay.boundaryRanges=mask->boundaryRanges;
-        overlay.color=QVector4D(color.redF(),color.greenF(),color.blueF(),1.0f);overlay.opacity=0.25f;masks.append(std::move(overlay));
+    Q_UNUSED(workpiece);Q_UNUSED(interference);Q_UNUSED(pending);
+    const auto &heightPoints=fullPoints.isEmpty()?points:fullPoints;
+    const auto measureHeight=[&] {
+        float lower=std::numeric_limits<float>::infinity(),upper=-lower;
+        for(const auto &point:heightPoints)if(std::isfinite(point.z)) {
+            lower=std::min(lower,point.z);upper=std::max(upper,point.z);
+        }
+        if(!std::isfinite(lower))return qMakePair(0.0f,1.0f);
+        if(upper<=lower)upper=lower+1.0f;
+        if(upper<=lower)upper=std::nextafter(lower,std::numeric_limits<float>::infinity());
+        ++m_heightRangeRevision;
+        return qMakePair(lower,upper);
     };
-    appendMask(workpieceMask,QColor("#1675e8"));appendMask(interferenceMask,QColor("#f04452"));appendMask(pendingMask,QColor("#f04452"));
-    m_canvas->setPlanarMaskOverlays(masks);
-    float minimum=std::numeric_limits<float>::max(),maximum=std::numeric_limits<float>::lowest();
-    const auto &rangePoints=fullPoints.isEmpty()?points:fullPoints;
-    for(const auto &point:rangePoints)if(std::isfinite(point.z)){minimum=qMin(minimum,point.z);maximum=qMax(maximum,point.z);}
-    if(minimum==std::numeric_limits<float>::max()){minimum=0;maximum=1;}
-    else if(!(maximum>minimum))maximum=minimum+1.0f;
-    m_canvas->setDisplayOptions(0, 1, minimum, maximum);
+    QPair<float,float> heightRange;
+    if(preparedHeightRange) {
+        heightRange=*preparedHeightRange;
+        if(!heightSource.isEmpty())m_heightRanges.insert(heightSource,heightRange);
+    } else if(!heightSource.isEmpty()) {
+        auto found=m_heightRanges.constFind(heightSource);
+        if(found==m_heightRanges.cend()) {
+            heightRange=measureHeight();m_heightRanges.insert(heightSource,heightRange);
+        } else heightRange=found.value();
+        m_unkeyedHeightSnapshot.clear();
+        m_unkeyedHeightRange={0.0f,1.0f};
+    } else {
+        if(m_unkeyedHeightSnapshot.constData()!=heightPoints.constData()
+            ||m_unkeyedHeightSnapshot.size()!=heightPoints.size()) {
+            m_unkeyedHeightRange=measureHeight();m_unkeyedHeightSnapshot=heightPoints;
+        }
+        heightRange=m_unkeyedHeightRange;
+    }
+    const bool cloudChanged = m_displayRevision==0 || fit || m_fullCount!=fullCount || m_revision!=revision
+        || m_displaySnapshot.constData()!=points.constData() || m_displaySnapshot.size()!=points.size()
+        || m_mappingSnapshot.constData()!=displayToFull.constData() || m_mappingSnapshot.size()!=displayToFull.size();
+    bool regionsChanged=cloudChanged;
+    const pcv::planefitting::PlaneMaskMeshV1 emptyMask;
+    const pcv::planefitting::PlaneMaskMeshV1 *sources[]={workpieceMask,interferenceMask,pendingMask};
+    for(int i=0;i<3;++i) {
+        const auto &source=sources[i]?*sources[i]:emptyMask;
+        const auto &old=m_maskSnapshots[i];
+        regionsChanged=regionsChanged || old.vertices.constData()!=source.vertices.constData()
+            || old.triangleIndices.constData()!=source.triangleIndices.constData()
+            || old.boundaryVertices.constData()!=source.boundaryVertices.constData()
+            || old.boundaryRanges.constData()!=source.boundaryRanges.constData();
+    }
+    if(cloudChanged) {
+        clearSelection();m_fullCount=fullCount;m_revision=revision;
+        m_canvas->setDisplayCloud(points,displayToFull,fullCount);
+        m_displaySnapshot=points;m_mappingSnapshot=displayToFull;++m_displayRevision;
+    }
+    if(!cloudChanged&&m_observedFrame&&m_observedCloud==0)m_observedCloud=m_canvas->displayCloudRevision();
+    if(regionsChanged) {
+        QVector<pcv::render::PlanarMaskOverlay> masks;
+        const auto appendMask=[&](const pcv::planefitting::PlaneMaskMeshV1 *mask,const QColor &color) {
+            if(!mask||mask->triangleIndices.isEmpty())return;
+            pcv::render::PlanarMaskOverlay overlay;overlay.vertices=mask->vertices;overlay.triangleIndices=mask->triangleIndices;
+            overlay.boundaryVertices=mask->boundaryVertices;overlay.boundaryRanges=mask->boundaryRanges;
+            overlay.color=QVector4D(color.redF(),color.greenF(),color.blueF(),1.0f);overlay.opacity=0.25f;masks.append(std::move(overlay));
+        };
+        appendMask(workpieceMask,QColor("#1675e8"));appendMask(interferenceMask,QColor("#f04452"));appendMask(pendingMask,QColor("#f04452"));
+        m_canvas->setPlanarMaskOverlays(masks);
+        for(int i=0;i<3;++i)m_maskSnapshots[i]=sources[i]?*sources[i]:emptyMask;
+        ++m_regionRevision;
+    }
+    // setDisplayCloud resets map bounds to the display subset: restore the
+    // complete source range afterwards, including when every result is trimmed.
+    m_canvas->setDisplayOptions(0,1.0,heightRange.first,heightRange.second);
+    if(mode==DisplayMode::UniformGray)m_canvas->setUniformPointColor(QColor("#59636f"));
+    else m_canvas->clearUniformPointColor();
+    auto options=m_canvas->overlayOptions();options.showColorBar=mode==DisplayMode::Height;
+    m_canvas->setOverlayOptions(options);
     if (fit) m_canvas->fitView();
 }
 void ScanGeometryCanvasV2::setTool(Tool tool) {
     clearSelection(); m_tool = tool;
+    m_canvas->setControlPointIndices({});
     m_canvas->setSelectionMode(tool == Tool::Workpiece || tool == Tool::Interference);
     m_canvas->setCursor(tool == Tool::Browse ? Qt::ArrowCursor : Qt::CrossCursor);
     m_canvas->setToolTip(tool == Tool::Browse ? tr("左键旋转，右键平移，滚轮缩放")
@@ -128,13 +204,16 @@ void ScanGeometryCanvasV2::finishRectangle(const QPoint &point) {
     m_selectionRevision=m_revision;
     m_selectedIds.clear();
     for (int index : indices) if (index >= 0 && index < m_fullCount) m_selectedIds.append(index);
-    m_canvas->setSelectedIndices(indices);
     m_rubberBand->setGeometry(m_rectangle); m_rubberBand->show();
+    m_erase->setText(tr("擦除 %1 点").arg(m_selectedIds.size()));
     m_erase->setEnabled(!m_selectedIds.isEmpty()); m_erase->show(); placeOverlays();
     if (selectionChanged) selectionChanged();
 }
 bool ScanGeometryCanvasV2::eventFilter(QObject *object, QEvent *event) {
     if (object != m_canvas) return QWidget::eventFilter(object, event);
+    if(event->type()==QEvent::Hide&&m_visibleStarted.isValid()) {
+        m_visibleMs+=m_visibleStarted.elapsed();m_visibleStarted.invalidate();
+    } else if(event->type()==QEvent::Show&&m_viewStarted.isValid()&&!m_observedFirst&&!m_visibleStarted.isValid())m_visibleStarted.start();
     if (event->type() == QEvent::KeyPress && static_cast<QKeyEvent *>(event)->key() == Qt::Key_Escape) {
         setTool(Tool::Browse); if (toolCancelled) toolCancelled(); return true;
     }

@@ -9,6 +9,46 @@ class ReferencePlaneMatchTestsV2 : public QObject {
         QVector<pointcloud::Point3D> points;for(int y=0;y<40;++y)for(int x=0;x<40;++x)points.append({x0+x*spacing,y*spacing,z});return points;
     }
 private slots:
+    void reusedSelectionSnapshotMatchesFreshFit() {
+        pointcloud::RobotBaseFrame source;source.fullPoints=patch();
+        const auto retained=source.fullPoints;Q_UNUSED(retained);
+        for(int i=0;i<source.fullPoints.size();++i){source.sourceIndices.append(i*2);source.scanRatios.append(float(i)/source.fullPoints.size());}
+        const auto prepared=preparePlaneSelectionIndex(source.fullPoints);QVERIFY(prepared.index);
+        const auto matched=matchReferencePlaneV2(source.fullPoints,prepared.index,{});
+        QCOMPARE(matched.status,ReferencePlaneMatchStatusV2::Unique);
+        QCOMPARE(matched.seedSelectionMs.size(),matched.attemptedSeeds);
+        const auto &candidate=matched.candidates.first();
+        auto token=std::make_shared<std::atomic_bool>(false);
+        auto budget=std::make_shared<pcv::ProcessingBudget>(512u*1024u*1024u);
+        const auto reused=pcv::ui::snapshotFromSingleClickV2(source,{candidate.seedIndex},0.4f,candidate.selection,token,budget);
+        const auto fresh=pcv::ui::fitFullPlaneV2(source,{candidate.seedIndex},0.4f,3,true,prepared.index,token,2,budget);
+        QVERIFY2(reused.ok,qPrintable(reused.error));QVERIFY(fresh.ok);
+        QCOMPARE(reused.planeIndices,candidate.selection.planeIndices);QCOMPARE(reused.planeIndices,fresh.planeIndices);
+        QCOMPARE(reused.selected.normal,fresh.selected.normal);QCOMPARE(reused.selected.center,fresh.selected.center);
+        QCOMPARE(reused.selected.rmsMm,fresh.selected.rmsMm);QCOMPARE(reused.selected.seedSourceIndices,fresh.selected.seedSourceIndices);
+        auto reusedParameters=reused.selected.selectionParameters,freshParameters=fresh.selected.selectionParameters;
+        for(const char *key:{"algorithm_ms","local_fit_ms","grid_growth_ms","classification_ms","connectivity_ms","pca_ms","gap_merge_ms"}) {
+            reusedParameters.remove(key);freshParameters.remove(key);
+        }
+        QCOMPARE(reusedParameters,freshParameters);
+        QCOMPARE(reused.selected.cloud.sourceIndices,fresh.selected.cloud.sourceIndices);
+        QCOMPARE(reused.selected.cloud.scanRatios,fresh.selected.cloud.scanRatios);
+        for(int j=0;j<reused.planeIndices.size();++j) {
+            const int i=reused.planeIndices.at(j);const auto &p=reused.selected.cloud.fullPoints.at(j);
+            QCOMPARE(p.x,source.fullPoints.at(i).x);QCOMPARE(p.y,source.fullPoints.at(i).y);QCOMPARE(p.z,source.fullPoints.at(i).z);
+        }
+        QCOMPARE(reused.planeMask.vertices,fresh.planeMask.vertices);
+        QCOMPARE(reused.planeMask.triangleIndices,fresh.planeMask.triangleIndices);
+        QCOMPARE(reused.planeMask.boundaryVertices,fresh.planeMask.boundaryVertices);
+        QCOMPARE(reused.planeMask.boundaryRanges,fresh.planeMask.boundaryRanges);
+        QVERIFY(reused.performance.value("snapshot_copy_ms").isDouble());QVERIFY(reused.performance.value("mask_ms").isDouble());
+        auto invalid=candidate.selection;invalid.planeIndices.append(invalid.planeIndices.first());
+        QVERIFY(!pcv::ui::snapshotFromSingleClickV2(source,{candidate.seedIndex},0.4f,invalid,token,budget).ok);
+        invalid=candidate.selection;invalid.planeIndices.append(source.fullPoints.size());
+        QVERIFY(!pcv::ui::snapshotFromSingleClickV2(source,{candidate.seedIndex},0.4f,invalid,token,budget).ok);
+        token->store(true);const auto cancelled=pcv::ui::snapshotFromSingleClickV2(source,{candidate.seedIndex},0.4f,candidate.selection,token,budget);
+        QVERIFY(!cancelled.ok);QVERIFY(cancelled.cancelled);QVERIFY(cancelled.selected.cloud.fullPoints.isEmpty());
+    }
     void uniqueAndNormalSign() {
         const auto points=patch();const auto extraShared=points;Q_UNUSED(extraShared);
         const auto index=preparePlaneSelectionIndex(points);QVERIFY2(index.index,qPrintable(index.error));

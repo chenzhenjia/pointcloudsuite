@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>StepTemplateDialogV1</class>
+ <widget class="QDialog" name="StepTemplateDialogV1">
+  <property name="windowTitle"><string>STEP 模板制作与自动匹配</string></property>
+  <property name="minimumSize"><size><width>1024</width><height>640</height></size></property>
+  <property name="geometry"><rect><x>0</x><y>0</y><width>1280</width><height>800</height></rect></property>
+  <layout class="QVBoxLayout" name="mainLayout">
+   <item><widget class="QLabel" name="notice"><property name="text"><string>离线模板 · cad_model / mm · 匹配目标为当前修剪后的完整 robot_base 点云 · 候选需人工确认</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+   <item><widget class="QTabWidget" name="modes">
+    <widget class="QWidget" name="cadPage"><attribute name="title"><string>制作 STEP 模板</string></attribute>
+     <layout class="QHBoxLayout" name="cadLayout">
+      <item><widget class="QWidget" name="cadHost"><layout class="QVBoxLayout" name="cadCanvasLayout"/></widget></item>
+      <item><widget class="QWidget" name="cadControls"><property name="maximumSize"><size><width>360</width><height>16777215</height></size></property><layout class="QVBoxLayout" name="cadControlsLayout">
+       <item><widget class="QPushButton" name="importStep"><property name="text"><string>导入 STEP…</string></property></widget></item>
+       <item><widget class="QPushButton" name="reopenStep"><property name="text"><string>从模板重新打开原 STEP…</string></property></widget></item>
+       <item><widget class="QComboBox" name="faceRole"><item><property name="text"><string>选择工件面（蓝色）</string></property></item><item><property name="text"><string>选择干涉面（红色）</string></property></item><item><property name="text"><string>清除点击面的分类</string></property></item></widget></item>
+       <item><widget class="QListWidget" name="faces"/></item>
+       <item><widget class="QLabel" name="spacingLabel"><property name="text"><string>采样间距（mm），最多 10,000,000 点</string></property></widget></item>
+       <item><widget class="QDoubleSpinBox" name="spacing"><property name="decimals"><number>3</number></property><property name="minimum"><double>0.001</double></property><property name="maximum"><double>1000</double></property><property name="value"><double>0.5</double></property></widget></item>
+       <item><widget class="QPushButton" name="clearFaces"><property name="text"><string>清除全部分类</string></property></widget></item>
+       <item><widget class="QPushButton" name="generateTemplate"><property name="text"><string>生成点云模板</string></property></widget></item>
+       <item><widget class="QPushButton" name="saveTemplate"><property name="text"><string>另存模板包…</string></property></widget></item>
+       <item><widget class="QLabel" name="cadLegend"><property name="text"><string>灰：未选面 · 蓝：工件面 · 红：干涉面
+只接受解析平面。坐标不居中、不翻转。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+      </layout></widget></item>
+     </layout>
+    </widget>
+    <widget class="QWidget" name="matchPage"><attribute name="title"><string>使用模板与审核匹配</string></attribute>
+     <layout class="QHBoxLayout" name="matchLayout">
+      <item><widget class="QWidget" name="matchHost"><layout class="QVBoxLayout" name="matchCanvasLayout"/></widget></item>
+      <item><widget class="QScrollArea" name="matchScroll"><property name="maximumSize"><size><width>380</width><height>16777215</height></size></property><property name="widgetResizable"><bool>true</bool></property><widget class="QWidget" name="matchControls"><layout class="QVBoxLayout" name="matchControlsLayout">
+       <item><widget class="QPushButton" name="loadTemplate"><property name="text"><string>读取模板 JSON…</string></property></widget></item>
+       <item><widget class="QPushButton" name="loadTemplateDirectory"><property name="text"><string>读取模板 / 几何结果目录…</string></property></widget></item>
+       <item><widget class="QLabel" name="templateInfo"><property name="text"><string>尚未读取或生成模板</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+       <item><layout class="QFormLayout" name="parametersLayout">
+        <item row="0" column="0"><widget class="QLabel" name="distanceLabel"><property name="text"><string>对应距离 mm</string></property></widget></item>
+        <item row="0" column="1"><widget class="QDoubleSpinBox" name="distance"><property name="minimum"><double>0.01</double></property><property name="maximum"><double>1000</double></property><property name="value"><double>2</double></property></widget></item>
+        <item row="1" column="0"><widget class="QLabel" name="coverageLabel"><property name="text"><string>最小覆盖 %</string></property></widget></item>
+        <item row="1" column="1"><widget class="QDoubleSpinBox" name="coverage"><property name="minimum"><double>1</double></property><property name="maximum"><double>100</double></property><property name="value"><double>30</double></property></widget></item>
+        <item row="2" column="0"><widget class="QLabel" name="matchesLabel"><property name="text"><string>最少有效点</string></property></widget></item>
+        <item row="2" column="1"><widget class="QSpinBox" name="matches"><property name="minimum"><number>100</number></property><property name="maximum"><number>10000000</number></property><property name="value"><number>100</number></property></widget></item>
+        <item row="3" column="0"><widget class="QLabel" name="hypothesesLabel"><property name="text"><string>粗假设上限</string></property></widget></item>
+        <item row="3" column="1"><widget class="QSpinBox" name="hypotheses"><property name="minimum"><number>1</number></property><property name="maximum"><number>4096</number></property><property name="value"><number>4096</number></property></widget></item>
+        <item row="4" column="0"><widget class="QLabel" name="refineLabel"><property name="text"><string>精化候选数</string></property></widget></item>
+        <item row="4" column="1"><widget class="QSpinBox" name="refinements"><property name="minimum"><number>1</number></property><property name="maximum"><number>16</number></property><property name="value"><number>16</number></property></widget></item>
+       </layout></item>
+       <item><widget class="QPushButton" name="startMatch"><property name="text"><string>全自动匹配当前修剪结果</string></property></widget></item>
+       <item><widget class="QListWidget" name="candidates"><property name="minimumSize"><size><width>0</width><height>170</height></size></property></widget></item>
+       <item><widget class="QPushButton" name="confirmCandidate"><property name="text"><string>人工确认当前候选</string></property></widget></item>
+       <item><widget class="QPushButton" name="saveMatch"><property name="text"><string>另存匹配结果…</string></property></widget></item>
+       <item><widget class="QLabel" name="matchLegend"><property name="text"><string>灰：实测点 · 蓝：模板工件面 · 红：模板干涉面
+干涉面不参与评分。对称结构可能出现多解；需人工检查。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+      </layout></widget></widget></item>
+     </layout>
+    </widget>
+   </widget></item>
+   <item><widget class="QLabel" name="status"><property name="text"><string>请选择制作模板或使用模板</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+   <item><widget class="QPlainTextEdit" name="events"><property name="maximumSize"><size><width>16777215</width><height>100</height></size></property><property name="readOnly"><bool>true</bool></property></widget></item>
+   <item><layout class="QHBoxLayout" name="footerLayout"><item><widget class="QPushButton" name="openLogs"><property name="text"><string>打开日志目录</string></property></widget></item><item><spacer name="footerSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item><item><widget class="QPushButton" name="cancelTask"><property name="text"><string>取消任务</string></property></widget></item><item><widget class="QPushButton" name="closeDialog"><property name="text"><string>关闭</string></property></widget></item></layout></item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

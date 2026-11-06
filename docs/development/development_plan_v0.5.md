@@ -1,5 +1,7 @@
 # v0.5 文档交付与后续软件开发方案
 
+当前补充：两个桌面入口现为scan_geometry_demo_v1及pointcloudview，旧独立拼接/亮度应用及无引用target已按用户授权清理。下方2026-10-15阶段规则和组合名称为历史；当前构建/验收矩阵以[清理说明](application_target_cleanup_v1.md)及[Windows构建](build-windows.md)为准，本次未运行构建或验收。
+
 日期：2026-10-15。[当前架构](../architecture/software_architecture_v0.5.md) · [需求](../requirements/pointcloudview_v0.5.md) · [版本日志](../changelog/v0.5.md)。
 
 ## 本轮实施边界
