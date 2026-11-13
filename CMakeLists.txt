@@ -1,4 +1,18 @@
 cmake_minimum_required(VERSION 3.19)
+
+# Force the English /showIncludes prefix while CMake detects MSVC. The same
+# environment is applied to every compile through the launcher below and by
+# scripts/build_windows.ps1, so the dependency database stays usable.
+if(CMAKE_HOST_WIN32)
+    set(ENV{VSLANG} 1033)
+endif()
+
+if(CMAKE_GENERATOR MATCHES "NMake Makefiles JOM")
+    message(
+        "NMake Makefiles JOM is unsupported because it records localized MSVC /showIncludes output as dependency names. "
+        "Select the NMake Makefiles generator and configure a fresh build directory.")
+endif()
+
 project(PointCloudSuite VERSION 1.0.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
@@ -7,40 +21,69 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# The maintained desktop entrypoints can also be configured independently.
 option(PCV_BUILD_POINTCLOUDVIEW "Build the point cloud viewer" ON)
-option(PCV_BUILD_POINTCLOUDSTITCH "Build the point cloud stitching application" ON)
+option(PCV_BUILD_SCAN_GEOMETRY_DEMO_V1 "Build the offline PLY selected-plane GUI (legacy target name)" ON)
+option(PCV_BUILD_STEP_TEMPLATE_BUILDER_V1 "Build the standalone STEP template builder GUI" ON)
+option(PCV_BUILD_CLI "Build the PointCloudSuite CLI" OFF)
 option(PCV_BUILD_TOOLS "Build diagnostic command-line tools" OFF)
+option(PCV_BUILD_STEP_IMPORT "Enable OCCT STEP import" ON)
 option(PCV_BUILD_TESTS "Build all automated tests" OFF)
+option(PCV_BUILD_EXPERIMENTAL_CAMERA
+    "Build Hikvision camera acquisition and its UI/tests" ON)
 
-if(WIN32)
-    string(REGEX MATCH "[^ -~]" PCV_SOURCE_PATH_NON_ASCII "${CMAKE_SOURCE_DIR}")
-    string(REGEX MATCH "[^ -~]" PCV_BINARY_PATH_NON_ASCII "${CMAKE_BINARY_DIR}")
-    if(PCV_SOURCE_PATH_NON_ASCII OR PCV_BINARY_PATH_NON_ASCII)
+if(MSVC)
+    set(CMAKE_CXX_COMPILER_LAUNCHER
+        "${CMAKE_COMMAND};-E;env;VSLANG=1033")
+    if(NOT CMAKE_CXX_ABI_COMPILED OR NOT CMAKE_CXX_SIZEOF_DATA_PTR STREQUAL "8")
         message(FATAL_ERROR
-            "Qt Windows builds require ASCII-only source and build paths.\n"
-            "Source: ${CMAKE_SOURCE_DIR}\nBuild: ${CMAKE_BINARY_DIR}")
+            "MSVC ABI detection failed. CMAKE_CXX_ABI_COMPILED=${CMAKE_CXX_ABI_COMPILED}, "
+            "CMAKE_CXX_SIZEOF_DATA_PTR=${CMAKE_CXX_SIZEOF_DATA_PTR}. Configure with VSLANG=1033.")
     endif()
 endif()
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS
-    Core Gui Widgets Concurrent OpenGL OpenGLWidgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui)
+if(PCV_BUILD_CLI OR PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_TOOLS
+   OR PCV_BUILD_TESTS OR PCV_BUILD_SCAN_GEOMETRY_DEMO_V1 OR PCV_BUILD_STEP_TEMPLATE_BUILDER_V1)
+    find_package(Qt6 6.5 REQUIRED COMPONENTS Concurrent)
+endif()
+if(PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_SCAN_GEOMETRY_DEMO_V1 OR PCV_BUILD_STEP_TEMPLATE_BUILDER_V1)
+    find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets)
+endif()
 qt_standard_project_setup()
 
 if(PCV_BUILD_TESTS)
     enable_testing()
 endif()
 
+if(PCV_BUILD_STEP_IMPORT)
+    find_package(OpenCASCADE 7.9.3 EXACT REQUIRED COMPONENTS FoundationClasses ModelingData ModelingAlgorithms Visualization ApplicationFramework DataExchange)
+endif()
+
+include(cmake/step_runtime_v1.cmake)
+
 add_subdirectory(src)
 add_subdirectory(modules)
+if(PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_SCAN_GEOMETRY_DEMO_V1)
+    add_subdirectory(apps/stitching_ui)
+endif()
 
+# Keep the desktop applications directly connected to the root project. This
+# makes both executable targets visible to Qt Creator after CMake reconfigure.
 if(PCV_BUILD_POINTCLOUDVIEW)
     add_subdirectory(apps/pointcloudview)
 endif()
-if(PCV_BUILD_POINTCLOUDSTITCH)
-    add_subdirectory(apps/pointcloudstitch)
+if(PCV_BUILD_SCAN_GEOMETRY_DEMO_V1)
+    add_subdirectory(apps/scan_geometry_demo_v1)
+endif()
+if(PCV_BUILD_STEP_TEMPLATE_BUILDER_V1)
+    add_subdirectory(apps/step_template_builder_v1)
 endif()
 if(PCV_BUILD_TOOLS)
     add_subdirectory(tools)
+endif()
+if(PCV_BUILD_CLI)
+    add_subdirectory(apps/pointcloudcli)
 endif()
 if(PCV_BUILD_TESTS)
     add_subdirectory(tests)

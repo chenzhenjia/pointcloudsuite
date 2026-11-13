@@ -1,0 +1,21 @@
+QMainWindow { background: #f3f6fa; color: #233348; }
+QWidget { font-family: "Microsoft YaHei UI", "Segoe UI"; font-size: 13px; }
+QFrame[class="card"] { background: white; border: 1px solid #dfe6ee; border-radius: 10px; }
+QFrame[class="card"] > QLabel { border: none; }
+QLabel[class="title"] { font-size: 18px; font-weight: 600; color: #243750; }
+QLabel#pageTitle { font-size: 25px; }
+QLabel#pageSubtitle, QLabel#canvasHint, QLabel#importHint { color: #697b90; }
+QPushButton, QToolButton { background: white; border: 1px solid #d5deea; border-radius: 6px; padding: 8px 12px; color: #334a65; }
+QPushButton:hover, QToolButton:hover { background: #edf5ff; border-color: #75a9e3; }
+QPushButton[class="primary"], QToolButton:checked { background: #1769c2; color: white; border-color: #1769c2; }
+QPushButton:disabled, QToolButton:disabled { color: #9aa8b6; background: #f0f3f6; border-color: #e0e6ed; }
+QToolButton#toolInterference:checked { background: #c53b43; border-color: #c53b43; }
+QToolButton#step0, QToolButton#step1, QToolButton#step2 { padding: 12px 28px; }
+QLineEdit, QComboBox, QDoubleSpinBox { background: white; border: 1px solid #cfdae7; border-radius: 5px; padding: 8px; }
+QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus { border-color: #1769c2; }
+QTextBrowser, QListWidget { border: 1px solid #e0e7ef; border-radius: 5px; background: #fafcfe; }
+QScrollArea { border: none; background: transparent; }
+QWidget#importControls { background: #f3f6fa; }
+QLabel#taskStatus { color: #45617d; }
+QProgressBar { border: 1px solid #c9daed; border-radius: 4px; height: 8px; }
+QProgressBar::chunk { background: #1769c2; }

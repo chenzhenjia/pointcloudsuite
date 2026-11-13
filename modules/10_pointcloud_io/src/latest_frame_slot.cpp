@@ -1,0 +1,77 @@
+#include <pcv/camera/frame_source.h>
+#include <pcv/camera/capture_session_v1.h>
+
+namespace pcv::camera {
+
+bool LatestFrameSlot::publish(std::shared_ptr<const CameraFrame> frame)
+{
+    std::function<void()> notify;
+    bool dropped = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_captureQueue) m_captureQueue->push(frame);
+        dropped = static_cast<bool>(m_latest);
+        ++m_publishedCount;
+        if (dropped) ++m_droppedCount;
+        m_latest = std::move(frame);
+        notify = m_onFramePublished;
+    }
+    // Notify outside the lock so the consumer can take() immediately.
+    if (notify) notify();
+    return dropped;
+}
+
+void LatestFrameSlot::setFramePublishedCallback(std::function<void()> callback)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_onFramePublished = std::move(callback);
+}
+
+void LatestFrameSlot::clearFramePublishedCallback()
+{
+    setFramePublishedCallback({});
+}
+
+std::shared_ptr<const CameraFrame> LatestFrameSlot::take()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return std::exchange(m_latest, nullptr);
+}
+
+std::uint32_t LatestFrameSlot::latestFrameNumber() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_latest ? m_latest->frameNumber : 0u;
+}
+
+quint64 LatestFrameSlot::publishedCount() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_publishedCount;
+}
+
+quint64 LatestFrameSlot::droppedCount() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_droppedCount;
+}
+
+void LatestFrameSlot::resetStatistics()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_publishedCount = 0;
+    m_droppedCount = 0;
+}
+
+void LatestFrameSlot::setCaptureQueue(std::shared_ptr<CaptureFrameQueue> queue)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_captureQueue = std::move(queue);
+}
+void LatestFrameSlot::failCapture(const QString &reason)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_captureQueue) m_captureQueue->fail(reason);
+}
+
+} // namespace pcv::camera

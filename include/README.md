@@ -1,18 +1,15 @@
-# 公共头文件
+# 公共头与兼容入口
 
-`include/pcv/` 保存共享模块的公共头文件和迁移期 forwarding header。
-
-当前规范头路径按模块组织，例如：
+v0.5，2026-10-15。include/pcv保存core/infrastructure及迁移期forwarding，模块公共头位于各modules的include。使用实际公共路径：
 
 ```cpp
 #include <pcv/io/ply_reader.h>
-#include <pcv/registration/multiframe_registration.h>
+#include <pcv/io/artifact_transaction.h>
 #include <pcv/interface/stitching_interface.h>
-#include <pcv/planefitting/plane_fitting.h>
+#include <pcv/stitching/selected_plane_stitch.h>
+#include <pcv/registration/handeye_transform.h>
+#include <pcv/planefitting/single_click_plane_selection_v1.h>
 #include <pcv/render/pointcloud_canvas.h>
-#include <pcv/output/plane_output.h>
 ```
 
-公共头必须保持与规范模块 API 一致。兼容头仅用于迁移，不得新增重复实现，也不代表独立 SDK 的长期兼容承诺。
-
-最后核对日期：2026-08-31。
+v1选面头承载当前v2行为以保兼容；PointCloudCanvas是全局类，头路径render不是namespace。IO、整帧、坐标等旧namespace仍在，不能声称已统一或全部deprecated。[实际映射](../docs/architecture/software_architecture_v0.5.md)与[迁移规则](../docs/architecture/module_ui_integration_v0.5.md)。兼容头不得新增第二套实现。

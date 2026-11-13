@@ -1,141 +1,72 @@
 #include <pcv/interface/stitching_interface.h>
-
+#include <pcv/io/ply_reader.h>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QHash>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QRegularExpression>
+#include <QSet>
 #include <QTextStream>
 
 namespace {
+struct PoseRecord { pointcloud::RobotPose start; pointcloud::RobotPose end; };
 
-pointcloud::RobotPose makePose(double x, double y, double z)
+bool parsePoseLine(const QString &line, int *scan, PoseRecord *record)
 {
-    pointcloud::RobotPose pose;
-    pose.x = x;
-    pose.y = y;
-    pose.z = z;
-    pose.rz = 180.0;
-    return pose;
+    const QString n = QStringLiteral("([-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?)");
+    const QRegularExpression rx(QStringLiteral("A(\\d+)\\s+Start\\s+X%1\\s+Y%1\\s+Z%1\\s+A%1\\s+B%1\\s+C%1\\s*;\\s*END\\s+X%1\\s+Y%1\\s+Z%1\\s+A%1\\s+B%1\\s+C%1").arg(n), QRegularExpression::CaseInsensitiveOption);
+    const auto m = rx.match(line.trimmed()); if (!m.hasMatch()) return false;
+    *scan = m.captured(1).toInt();
+    double *a[] = {&record->start.x,&record->start.y,&record->start.z,&record->start.rx,&record->start.ry,&record->start.rz,&record->end.x,&record->end.y,&record->end.z,&record->end.rx,&record->end.ry,&record->end.rz};
+    for (int i=0;i<12;++i) { bool ok=false; *a[i]=m.captured(i+2).toDouble(&ok); if(!ok) return false; }
+    return true;
 }
 
-void printDiagnostics(const pcv::interface::StitchingResult &result,
-                      const QString &label,
-                      QTextStream &out)
+bool readPoses(const QString &path, QHash<int,PoseRecord> *poses, QString *error)
 {
-    out << label << " success=" << result.success
-        << " cancelled=" << result.cancelled
-        << " points=" << result.points.size()
-        << " error_code=" << result.errorCode
-        << " message=" << result.message << "\n";
-    if (!result.outputPly.isEmpty())
-        out << "formal_output=" << result.outputPly << "\n";
-    for (const auto &diagnostic : result.icpDiagnostics) {
-        out << "icp file=" << diagnostic.filePath
-            << " attempted=" << diagnostic.attempted
-            << " accepted=" << diagnostic.accepted
-            << " converged=" << diagnostic.converged
-            << " correspondences=" << diagnostic.correspondences
-            << " fitness=" << diagnostic.fitness
-            << " rmse=" << diagnostic.rmse
-            << " overlap=" << diagnostic.overlapRatio
-            << " reason=" << diagnostic.reason << "\n";
-    }
-    for (const auto &diagnostic : result.seamDiagnostics) {
-        out << "seam pair=" << diagnostic.cloudA + 1 << "-" << diagnostic.cloudB + 1
-            << " applied=" << diagnostic.applied
-            << " actual_overlap=" << diagnostic.actualOverlapValid
-            << " band_points=" << diagnostic.bandPoints
-            << " mutual_pairs=" << diagnostic.mutualPairs
-            << " interpolated=" << diagnostic.interpolatedPoints
-            << " unmatched_preserved=" << diagnostic.unmatchedPreserved
-            << " reason=" << diagnostic.reason << "\n";
-    }
-    if (!result.diagnostics.isEmpty())
-        out << result.diagnostics;
+    QFile f(path); if(!f.open(QIODevice::ReadOnly|QIODevice::Text)){*error=f.errorString();return false;}
+    while(!f.atEnd()){int scan;PoseRecord r;if(!parsePoseLine(QString::fromUtf8(f.readLine()),&scan,&r))continue;if(poses->contains(scan)){*error=QStringLiteral("位姿文件包含重复扫描编号 A%1").arg(scan);return false;}poses->insert(scan,r);}
+    if(poses->size()<2){*error=QStringLiteral("位姿文件中少于两组有效 Start/End");return false;} return true;
 }
 
-pcv::interface::StitchingResult runCase(const QString &inputDirectory,
-                                        const QString &calibrationPath,
-                                        const QString &outputDirectory,
-                                        bool seamEnabled)
+int scanIdFor(const QString &path)
 {
-    pcv::interface::StitchingOptions options;
-    options.calibrationPath = calibrationPath;
-    options.outputDirectory = outputDirectory;
-    options.sampleStride = 8;
-    options.seamEnabled = seamEnabled;
-    options.seamHalfWidthMm = 8.0f;
-    const QStringList names = {
-        QStringLiteral("Point_Cloud_A01.ply"),
-        QStringLiteral("Point_Cloud_A02.ply"),
-        QStringLiteral("Point_Cloud_A03.ply"),
-        QStringLiteral("Point_Cloud_A04.ply")};
-    const double x[] = {500.0, 600.0, 700.0, 800.0};
-    for (int index = 0; index < names.size(); ++index) {
-        pcv::interface::StitchingFrameInput frame;
-        frame.plyPath = QDir(inputDirectory).filePath(names[index]);
-        frame.startPose = makePose(x[index], 150.0, 700.0);
-        frame.endPose = makePose(x[index], -150.0, 700.0);
-        options.frames.push_back(std::move(frame));
-    }
-    return pcv::interface::stitchRawLineProfiles(options);
+    const auto m=QRegularExpression(QStringLiteral("A(\\d+)(?:\\.ply)?$"),QRegularExpression::CaseInsensitiveOption).match(QFileInfo(path).fileName());
+    return m.hasMatch()?m.captured(1).toInt():-1;
 }
 
-} // namespace
-
-int main(int argc, char **argv)
+QStringList collectInputs(const QCommandLineParser &p,const QCommandLineOption &input,const QCommandLineOption &dir,QString *error)
 {
-    QCoreApplication app(argc, argv);
-    QCommandLineParser parser;
-    parser.setApplicationDescription(QStringLiteral("PointCloudSuite registration diagnostic"));
-    parser.addHelpOption();
-    const QCommandLineOption inputOption(
-        QStringList{QStringLiteral("input-dir")},
-        QStringLiteral("Directory containing Point_Cloud_A01.ply through Point_Cloud_A04.ply."),
-        QStringLiteral("directory"));
-    const QCommandLineOption calibrationOption(
-        QStringList{QStringLiteral("calibration")},
-        QStringLiteral("Eye-in-hand calibration XML."), QStringLiteral("xml"));
-    const QCommandLineOption outputOption(
-        QStringList{QStringLiteral("output-dir")},
-        QStringLiteral("Directory for formal stitching output and diagnostics."),
-        QStringLiteral("directory"));
-    parser.addOption(inputOption);
-    parser.addOption(calibrationOption);
-    parser.addOption(outputOption);
-    parser.process(app);
-
-    QTextStream out(stdout);
-    QTextStream err(stderr);
-    if (!parser.isSet(inputOption) || !parser.isSet(calibrationOption)
-        || !parser.isSet(outputOption)) {
-        err << "Usage: registration_diagnostic --input-dir <directory>"
-            << " --calibration <xml> --output-dir <directory>\n";
-        return 2;
-    }
-    const QString inputDirectory = QFileInfo(parser.value(inputOption)).absoluteFilePath();
-    const QString calibrationPath = QFileInfo(parser.value(calibrationOption)).absoluteFilePath();
-    const QString outputDirectory = QFileInfo(parser.value(outputOption)).absoluteFilePath();
-    if (!QDir(inputDirectory).exists()) {
-        err << "Input directory does not exist: " << inputDirectory << '\n';
-        return 2;
-    }
-    if (!QFileInfo::exists(calibrationPath)) {
-        err << "Calibration XML does not exist: " << calibrationPath << '\n';
-        return 2;
-    }
-    if (!QDir().mkpath(outputDirectory)) {
-        err << "Could not create output directory: " << outputDirectory << '\n';
-        return 2;
-    }
-
-    const auto noSeam = runCase(inputDirectory, calibrationPath,
-                                QDir(outputDirectory).filePath(QStringLiteral("no-seam")), false);
-    printDiagnostics(noSeam, QStringLiteral("NO_SEAM"), out);
-    const auto seam = runCase(inputDirectory, calibrationPath,
-                              QDir(outputDirectory).filePath(QStringLiteral("seam")), true);
-    printDiagnostics(seam, QStringLiteral("SEAM"), out);
-    return noSeam.success && seam.success ? 0 : 2;
+    QStringList files=p.values(input);
+    if(p.isSet(dir)){QDir d(QFileInfo(p.value(dir)).absoluteFilePath());if(!d.exists()){*error=QStringLiteral("输入目录不存在：%1").arg(d.absolutePath());return{};}for(const QString &f:d.entryList({QStringLiteral("*.ply")},QDir::Files,QDir::Name))files<<d.absoluteFilePath(f);}
+    QStringList out;QSet<QString> seen;for(const QString &v:files){const QString path=QFileInfo(v).absoluteFilePath(),key=QDir::cleanPath(path).toLower();if(seen.contains(key)){*error=QStringLiteral("同一 PLY 不能重复添加：%1").arg(path);return{};}seen.insert(key);out<<path;}
+    if(out.isEmpty())*error=QStringLiteral("至少需要 --input 或 --input-dir"); return out;
 }
 
+QString formatName(pcv::detail::io::PlyFormat f){return f==pcv::detail::io::PlyFormat::Ascii?QStringLiteral("ascii"):f==pcv::detail::io::PlyFormat::BinaryLittleEndian?QStringLiteral("binary_little_endian"):QStringLiteral("binary_big_endian");}
+
+int runInspect(const QCommandLineParser &p,const QCommandLineOption &input,const QCommandLineOption &dir,const QCommandLineOption &json,QTextStream &out,QTextStream &err)
+{
+    QString error;const QStringList files=collectInputs(p,input,dir,&error);if(files.isEmpty()){err<<error<<'\n';return 2;}QJsonArray records;bool all=true;
+    for(const QString &path:files){const auto info=pcv::detail::io::inspectPlyHeader(path);const bool conversion=info.ok&&info.format!=pcv::detail::io::PlyFormat::BinaryLittleEndian;all=all&&info.ok;QJsonObject item{{QStringLiteral("file"),path},{QStringLiteral("ok"),info.ok},{QStringLiteral("format"),formatName(info.format)},{QStringLiteral("version"),info.version},{QStringLiteral("vertices"),info.declaredPointCount},{QStringLiteral("requires_conversion"),conversion},{QStringLiteral("canonical_format"),QStringLiteral("binary_little_endian")},{QStringLiteral("error"),info.error}};records.append(item);if(!p.isSet(json))out<<"file="<<path<<" ok="<<info.ok<<" format="<<formatName(info.format)<<" requires_conversion="<<conversion<<" canonical_format=binary_little_endian version="<<info.version<<" vertices="<<info.declaredPointCount<<" error="<<info.error<<'\n';}
+    if(p.isSet(json))out<<QJsonDocument(records).toJson(QJsonDocument::Compact)<<'\n';return all?0:2;
+}
+
+void printResult(const pcv::interface::StitchingResult &r,const QString &label,QTextStream &out){out<<label<<" success="<<r.success<<" cancelled="<<r.cancelled<<" points="<<r.points.size()<<" error_code="<<r.errorCode<<" message="<<r.message<<"\n";if(!r.outputPly.isEmpty())out<<"formal_output="<<r.outputPly<<"\n";if(!r.diagnostics.isEmpty())out<<r.diagnostics;}
+
+}
+
+int main(int argc,char **argv)
+{
+    QCoreApplication app(argc,argv);QStringList args=app.arguments();const bool inspect=args.size()>1&&args[1]==QStringLiteral("inspect");if(inspect|| (args.size()>1&&args[1]==QStringLiteral("stitch")))args.removeAt(1);
+    QCommandLineParser p;p.addHelpOption();QCommandLineOption input(QStringList{QStringLiteral("input")},QStringLiteral("PLY 文件，可重复"),QStringLiteral("file")),dir(QStringList{QStringLiteral("input-dir")},QStringLiteral("PLY 目录"),QStringLiteral("directory")),pose(QStringList{QStringLiteral("pose-info")},QStringLiteral("Start/End 位姿 TXT"),QStringLiteral("txt")),cal(QStringList{QStringLiteral("calibration")},QStringLiteral("Eye-in-hand XML"),QStringLiteral("xml")),outOpt(QStringList{QStringLiteral("output-dir")},QStringLiteral("输出目录"),QStringLiteral("directory")),json(QStringList{QStringLiteral("json")},QStringLiteral("inspect 输出 JSON"));p.addOption(input);p.addOption(dir);p.addOption(pose);p.addOption(cal);p.addOption(outOpt);p.addOption(json);p.process(args);QTextStream out(stdout),err(stderr);
+    if(inspect)return runInspect(p,input,dir,json,out,err);
+    QString error;const QStringList files=collectInputs(p,input,dir,&error);if(files.size()<2||!p.isSet(pose)||!p.isSet(cal)||!p.isSet(outOpt)){err<<"Usage: registration_diagnostic stitch --input <file>... --input-dir <directory> --pose-info <txt> --calibration <xml> --output-dir <directory>\n";return 2;}QHash<int,PoseRecord> poses;if(!readPoses(p.value(pose),&poses,&error)){err<<error<<'\n';return 2;}for(const QString &f:files){if(!QFileInfo::exists(f)||!poses.contains(scanIdFor(f))){err<<"PLY 文件或对应位姿不存在："<<f<<'\n';return 2;}}const QString cp=QFileInfo(p.value(cal)).absoluteFilePath();if(!QFileInfo::exists(cp)){err<<"Calibration XML does not exist: "<<cp<<'\n';return 2;}const QString od=QFileInfo(p.value(outOpt)).absoluteFilePath();if(!QDir().mkpath(od)){err<<"Could not create output directory: "<<od<<'\n';return 2;}
+    auto run=[&](bool seam){pcv::interface::StitchingOptions o;o.calibrationPath=cp;o.outputDirectory=QDir(od).filePath(seam?QStringLiteral("seam"):QStringLiteral("no-seam"));o.sampleStride=8;o.seamEnabled=seam;for(const QString &f:files){pcv::interface::StitchingFrameInput frame;frame.plyPath=f;frame.startPose=poses[scanIdFor(f)].start;frame.endPose=poses[scanIdFor(f)].end;o.frames<<frame;}return pcv::interface::stitchRawLineProfiles(o);};const auto a=run(false);printResult(a,QStringLiteral("NO_SEAM"),out);const auto b=run(true);printResult(b,QStringLiteral("SEAM"),out);return a.success&&b.success?0:2;
+}

@@ -62,7 +62,7 @@ bool readNumber(const QJsonObject &object, const QString &key, T *value, T minim
 
 QJsonObject templateObject()
 {
-    QJsonObject render{{QStringLiteral("point_size"), 1},
+    QJsonObject render{{QStringLiteral("point_size"), 2},
                        {QStringLiteral("color_mode"), 0},
                        {QStringLiteral("overlay"), 1.0}};
     QJsonObject noise{{QStringLiteral("voxel_enabled"), true},

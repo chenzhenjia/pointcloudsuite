@@ -17,19 +17,87 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "PCV_BUILD_TESTS": "ON",
-        "PCV_BUILD_TOOLS": "ON"
+        "PCV_BUILD_TOOLS": "OFF"
+      }
+    },
+    {
+      "name": "step-template-debug",
+      "displayName": "Standalone STEP Template Debug",
+      "generator": "NMake Makefiles",
+      "binaryDir": "${sourceDir}/../build-step-template-debug",
+      "cacheVariables": {
+        "PCV_BUILD_STEP_TEMPLATE_BUILDER_V1": "ON",
+        "PCV_BUILD_STEP_IMPORT": "ON",
+        "PCV_BUILD_POINTCLOUDVIEW": "OFF",
+        "PCV_BUILD_SCAN_GEOMETRY_DEMO_V1": "OFF",
+        "PCV_BUILD_EXPERIMENTAL_CAMERA": "OFF",
+        "PCV_BUILD_CLI": "OFF",
+        "PCV_BUILD_TOOLS": "OFF",
+        "PCV_BUILD_TESTS": "ON",
+        "CMAKE_PREFIX_PATH": "C:/Qt/6.8.3/msvc2022_64;D:/Dev/vcpkg/installed/x64-windows",
+        "OpenCASCADE_DIR": "D:/Dev/vcpkg/installed/x64-windows/share/opencascade",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "step-template-release",
+      "displayName": "Standalone STEP Template Release",
+      "generator": "NMake Makefiles",
+      "binaryDir": "${sourceDir}/../build-step-template-release",
+      "cacheVariables": {
+        "PCV_BUILD_STEP_TEMPLATE_BUILDER_V1": "ON",
+        "PCV_BUILD_STEP_IMPORT": "ON",
+        "PCV_BUILD_POINTCLOUDVIEW": "OFF",
+        "PCV_BUILD_SCAN_GEOMETRY_DEMO_V1": "OFF",
+        "PCV_BUILD_EXPERIMENTAL_CAMERA": "OFF",
+        "PCV_BUILD_CLI": "OFF",
+        "PCV_BUILD_TOOLS": "OFF",
+        "PCV_BUILD_TESTS": "ON",
+        "CMAKE_PREFIX_PATH": "C:/Qt/6.8.3/msvc2022_64;D:/Dev/vcpkg/installed/x64-windows",
+        "OpenCASCADE_DIR": "D:/Dev/vcpkg/installed/x64-windows/share/opencascade",
+        "CMAKE_BUILD_TYPE": "Release"
       }
     }
   ],
   "buildPresets": [
-    { "name": "build-release", "configurePreset": "windows-msvc-release" },
-    { "name": "build-debug", "configurePreset": "windows-msvc-debug" }
+    {
+      "name": "build-release",
+      "configurePreset": "windows-msvc-release"
+    },
+    {
+      "name": "build-debug",
+      "configurePreset": "windows-msvc-debug"
+    },
+    {
+      "name": "build-step-template-debug",
+      "configurePreset": "step-template-debug"
+    },
+    {
+      "name": "build-step-template-release",
+      "configurePreset": "step-template-release"
+    }
   ],
   "testPresets": [
     {
       "name": "test-debug",
       "configurePreset": "windows-msvc-debug",
-      "output": { "outputOnFailure": true }
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "test-step-template-debug",
+      "configurePreset": "step-template-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "test-step-template-release",
+      "configurePreset": "step-template-release",
+      "output": {
+        "outputOnFailure": true
+      }
     }
   ]
 }

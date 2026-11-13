@@ -1,0 +1,40 @@
+{
+  "schema": "sr2026.point-cloud-result",
+  "schema_version": 1,
+  "job_id": "JOB-EXAMPLE",
+  "run_id": "RUN-001",
+  "step_id": "STEP-001",
+  "business_code": "global_scan",
+  "workpiece_id": "WP-001",
+  "template_ref": null,
+  "template_version": null,
+  "algorithm_version": "point-cloud-processing-v001",
+  "status": "partial",
+  "inputs": {
+    "calibration_ref": "jobs/JOB-EXAMPLE/runs/RUN-001/03-point-cloud/source/handeye.xml",
+    "raw_clouds": [
+      {"path_index": 1, "ref": "jobs/JOB-EXAMPLE/runs/RUN-001/03-point-cloud/raw/scan_001.ply"},
+      {"path_index": 2, "ref": "jobs/JOB-EXAMPLE/runs/RUN-001/03-point-cloud/raw/scan_002.ply"}
+    ]
+  },
+  "outputs": {
+    "base_cloud_ref": "jobs/JOB-EXAMPLE/runs/RUN-001/03-point-cloud/stitched_base.ply",
+    "template_geometry": {
+      "coordinate_frame": "base",
+      "point_cloud_ref": "jobs/JOB-EXAMPLE/runs/RUN-001/03-point-cloud/template_candidate.ply",
+      "plane_mask": {
+        "ref": "jobs/JOB-EXAMPLE/runs/RUN-001/03-point-cloud/plane_mask.png",
+        "pixel_size_px": [50, 50],
+        "physical_size_mm": [12.5, 12.5],
+        "mm_per_pixel": [0.25, 0.25],
+        "gray_value_map": {"background": 0, "template": 128, "forbidden": 255}
+      }
+    },
+    "wobj_candidate": {
+      "coordinate_frame": "base", "controller_id": "ROBOT-001", "wobj_id": 1,
+      "wobj_pose": [6.0, 6.0, 30.0, 0.0, 0.0, 0.0], "method": "point_cloud_fit"
+    }
+  },
+  "validation": {"errors": [], "warnings": ["probe_targets_not_available", "stitch_quality_warn_only", "scan_path_output_not_available"]},
+  "generated_at": "2026-11-05T10:00:00+08:00"
+}

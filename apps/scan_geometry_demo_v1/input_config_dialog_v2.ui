@@ -1,0 +1,372 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ui version="4.0">
+  <class>InputConfigDialogV2</class>
+  <widget class="QDialog" name="InputConfigDialogV2">
+    <property name="windowTitle">
+      <string>离线扫描数据配置</string>
+    </property>
+    <property name="geometry">
+      <rect>
+        <x>0</x>
+        <y>0</y>
+        <width>1120</width>
+        <height>720</height>
+      </rect>
+    </property>
+    <property name="minimumSize">
+      <size>
+        <width>800</width>
+        <height>560</height>
+      </size>
+    </property>
+    <layout class="QVBoxLayout" name="rootLayout">
+      <item>
+        <widget class="QLabel" name="contract">
+          <property name="text">
+            <string>添加 PLY 或逐帧SDK深度帧（需配对扫描JSON）。位姿为 [X,Y,Z,A,B,C]（mm/deg）。</string>
+          </property>
+          <property name="wordWrap">
+            <bool>true</bool>
+          </property>
+        </widget>
+      </item>
+      <item>
+        <layout class="QHBoxLayout" name="fileActions">
+          <item>
+            <widget class="QPushButton" name="openScanJson">
+              <property name="text"><string>打开扫描 JSON…</string></property>
+            </widget>
+          </item>
+          <item>
+            <widget class="QPushButton" name="addFiles">
+              <property name="text">
+                <string>添加 PLY…</string>
+              </property>
+            </widget>
+          </item>
+          <item>
+            <widget class="QPushButton" name="addDepthFrame">
+              <property name="text"><string>添加SDK深度帧…</string></property>
+            </widget>
+          </item>
+          <item>
+            <widget class="QPushButton" name="remove">
+              <property name="text">
+                <string>移除当前行</string>
+              </property>
+            </widget>
+          </item>
+          <item>
+            <widget class="QPushButton" name="up">
+              <property name="text">
+                <string>上移</string>
+              </property>
+            </widget>
+          </item>
+          <item>
+            <widget class="QPushButton" name="down">
+              <property name="text">
+                <string>下移</string>
+              </property>
+            </widget>
+          </item>
+        </layout>
+      </item>
+      <item>
+        <widget class="QTableWidget" name="frames">
+          <property name="alternatingRowColors">
+            <bool>true</bool>
+          </property>
+          <column>
+            <property name="text">
+              <string>PLY / SDK深度帧目录</string>
+            </property>
+          </column>
+          <column>
+            <property name="text">
+              <string>Start X</string>
+            </property>
+          </column>
+          <column>
+            <property name="text">
+              <string>Start Y</string>
+            </property>
+          </column>
+          <column>
+            <property name="text">
+              <string>Start Z</string>
+            </property>
+          </column>
+          <column>
+            <property name="text">
+              <string>Start A</string>
+            </property>
+          </column>
+          <column>
+            <property name="text">
+              <string>Start B</string>
+            </property>
+          </column>
+          <column>
+            <property name="text">
+              <string>Start C</string>
+            </property>
+          </column>
+          <column>
+            <property name="text">
+              <string>End X</string>
+            </property>
+          </column>
+          <column>
+            <property name="text">
+              <string>End Y</string>
+            </property>
+          </column>
+          <column>
+            <property name="text">
+              <string>End Z</string>
+            </property>
+          </column>
+          <column>
+            <property name="text">
+              <string>End A</string>
+            </property>
+          </column>
+          <column>
+            <property name="text">
+              <string>End B</string>
+            </property>
+          </column>
+          <column>
+            <property name="text">
+              <string>End C</string>
+            </property>
+          </column>
+        </widget>
+      </item>
+      <item>
+        <layout class="QGridLayout" name="pathsLayout">
+          <item row="0" column="0">
+            <widget class="QLabel" name="xmlLabel">
+              <property name="text">
+                <string>共用手眼 XML</string>
+              </property>
+            </widget>
+          </item>
+          <item row="0" column="1">
+            <widget class="QLineEdit" name="calibration" />
+          </item>
+          <item row="0" column="2">
+            <widget class="QPushButton" name="browseXml">
+              <property name="text">
+                <string>浏览…</string>
+              </property>
+            </widget>
+          </item>
+          <item row="1" column="0">
+            <widget class="QLabel" name="outputLabel">
+              <property name="text">
+                <string>输出根目录</string>
+              </property>
+            </widget>
+          </item>
+          <item row="1" column="1">
+            <widget class="QLineEdit" name="outputRoot" />
+          </item>
+          <item row="1" column="2">
+            <widget class="QPushButton" name="browseOutput">
+              <property name="text">
+                <string>浏览…</string>
+              </property>
+            </widget>
+          </item>
+        </layout>
+      </item>
+      <item>
+        <widget class="QGroupBox" name="advanced">
+          <property name="title">
+            <string>高级设置 · 搜索门限不放宽正式选面容差</string>
+          </property>
+          <layout class="QGridLayout" name="advancedLayout">
+            <item row="0" column="0">
+              <widget class="QLabel" name="toleranceLabel">
+                <property name="text">
+                  <string>选面垂距容差 / mm</string>
+                </property>
+              </widget>
+            </item>
+            <item row="0" column="1">
+              <widget class="QDoubleSpinBox" name="tolerance">
+                <property name="decimals">
+                  <number>3</number>
+                </property>
+                <property name="minimum">
+                  <double>0.001</double>
+                </property>
+                <property name="maximum">
+                  <double>100.0</double>
+                </property>
+                <property name="value">
+                  <double>0.4</double>
+                </property>
+              </widget>
+            </item>
+            <item row="0" column="2">
+              <widget class="QLabel" name="gapLabel">
+                <property name="text">
+                  <string>最大缺失带 / mm</string>
+                </property>
+              </widget>
+            </item>
+            <item row="0" column="3">
+              <widget class="QDoubleSpinBox" name="maximumGap">
+                <property name="maximum">
+                  <double>50.0</double>
+                </property>
+                <property name="value">
+                  <double>3.0</double>
+                </property>
+              </widget>
+            </item>
+            <item row="1" column="0">
+              <widget class="QLabel" name="distanceLabel">
+                <property name="text">
+                  <string>参考面搜索距离 / mm</string>
+                </property>
+              </widget>
+            </item>
+            <item row="1" column="1">
+              <widget class="QDoubleSpinBox" name="distance">
+                <property name="minimum">
+                  <double>0.01</double>
+                </property>
+                <property name="maximum">
+                  <double>1000.0</double>
+                </property>
+                <property name="value">
+                  <double>10.0</double>
+                </property>
+              </widget>
+            </item>
+            <item row="1" column="2">
+              <widget class="QLabel" name="angleLabel">
+                <property name="text">
+                  <string>法向夹角 / deg</string>
+                </property>
+              </widget>
+            </item>
+            <item row="1" column="3">
+              <widget class="QDoubleSpinBox" name="angle">
+                <property name="minimum">
+                  <double>0.01</double>
+                </property>
+                <property name="maximum">
+                  <double>90.0</double>
+                </property>
+                <property name="value">
+                  <double>5.0</double>
+                </property>
+              </widget>
+            </item>
+            <item row="2" column="0">
+              <widget class="QLabel" name="seedsLabel">
+                <property name="text">
+                  <string>最多确定性种子（匹配/高侧）</string>
+                </property>
+              </widget>
+            </item>
+            <item row="2" column="1">
+              <widget class="QSpinBox" name="seeds">
+                <property name="minimum">
+                  <number>1</number>
+                </property>
+                <property name="maximum">
+                  <number>64</number>
+                </property>
+                <property name="value">
+                  <number>16</number>
+                </property>
+              </widget>
+            </item>
+            <item row="2" column="2">
+              <widget class="QCheckBox" name="poseOnly">
+                <property name="text">
+                  <string>仅位姿对照（关闭精配准）</string>
+                </property>
+              </widget>
+            </item>
+            <item row="2" column="3">
+              <widget class="QCheckBox" name="threePoint">
+                <property name="text">
+                  <string>三点选面备用</string>
+                </property>
+              </widget>
+            </item>
+            <item row="3" column="0">
+              <widget class="QLabel" name="highSideHeightLabel">
+                <property name="text">
+                  <string>世界 Z 高差门限 / mm</string>
+                </property>
+              </widget>
+            </item>
+            <item row="3" column="1">
+              <widget class="QDoubleSpinBox" name="highSideHeight">
+                <property name="decimals">
+                  <number>2</number>
+                </property>
+                <property name="minimum">
+                  <double>0.0</double>
+                </property>
+                <property name="maximum">
+                  <double>1000.0</double>
+                </property>
+                <property name="value">
+                  <double>2.0</double>
+                </property>
+              </widget>
+            </item>
+            <item row="3" column="2">
+              <widget class="QLabel" name="highSidePointsLabel">
+                <property name="text">
+                  <string>世界 Z 高侧候选最少点数</string>
+                </property>
+              </widget>
+            </item>
+            <item row="3" column="3">
+              <widget class="QSpinBox" name="highSidePoints">
+                <property name="minimum">
+                  <number>1</number>
+                </property>
+                <property name="maximum">
+                  <number>2000000</number>
+                </property>
+                <property name="value">
+                  <number>100</number>
+                </property>
+              </widget>
+            </item>
+          </layout>
+        </widget>
+      </item>
+      <item>
+        <widget class="QLabel" name="notice">
+          <property name="text">
+            <string>应用配置会重置当前会话。正式输出使用独立版本目录，修剪不会写回磁盘产物。此配置不接入相机或机器人。</string>
+          </property>
+          <property name="wordWrap">
+            <bool>true</bool>
+          </property>
+        </widget>
+      </item>
+      <item>
+        <widget class="QDialogButtonBox" name="buttons">
+          <property name="standardButtons">
+            <set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set>
+          </property>
+        </widget>
+      </item>
+    </layout>
+  </widget>
+  <resources />
+  <connections />
+</ui>

@@ -1,15 +1,5 @@
-# 70_roi_template
+# 70_roi_template：兼容转发
 
-## 当前状态
+v0.5。仅保留公共兼容头，规范实现归[60_geometry_workpiece](../../docs/modules/60_geometry_workpiece.md)，调用方链接`pcv_m60_geometry_workpiece`。旧INTERFACE target及其CMake文件已按用户授权移除，不新增独立算法或writer。
 
-接口已实现，应用仍负责部分 UI 编排。规范代码位于 `modules/70_roi_template`，target 为 `pcv_m70_roi_template`。
-
-## 职责
-
-临时扫描信息解析、工件坐标系、矩形 ROI、平面映射、模板点云和 Mask 流程。纯几何拟合调用 `pcv_m60_planefitting`，输出调用 `pcv_m80_planeoutput`。
-
-## 接口与测试
-
-主要接口为 `generateTempWorkpiece` 和临时工件相关接口。主要测试为 `temp_workpiece_interface_tests` 及几何回归测试。
-
-最后核对日期：2026-08-31。
+本轮不迁移或删除公共头；构建/GUI验收由用户执行。[清理说明](../../docs/development/application_target_cleanup_v1.md) · [架构](../../docs/architecture/software_architecture_v0.5.md) · [历史](../../docs/archive/history_pre_v0.5.md)。

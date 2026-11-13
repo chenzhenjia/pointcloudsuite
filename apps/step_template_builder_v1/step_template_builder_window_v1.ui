@@ -1,0 +1,1054 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>StepTemplateBuilderWindowV1</class>
+ <widget class="QMainWindow" name="StepTemplateBuilderWindowV1">
+  <property name="windowTitle">
+   <string>STEP 数模模板制作</string>
+  </property>
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1280</width>
+    <height>820</height>
+   </rect>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>1024</width>
+    <height>640</height>
+   </size>
+  </property>
+  <widget class="QWidget" name="centralWidget">
+   <layout class="QVBoxLayout" name="rootLayout">
+    <property name="leftMargin">
+     <number>16</number>
+    </property>
+    <property name="topMargin">
+     <number>16</number>
+    </property>
+    <property name="rightMargin">
+     <number>16</number>
+    </property>
+    <property name="bottomMargin">
+     <number>16</number>
+    </property>
+    <item>
+     <layout class="QHBoxLayout" name="headerLayout" stretch="1,0">
+      <item>
+       <layout class="QVBoxLayout" name="titlesLayout">
+        <item>
+         <widget class="QLabel" name="pageTitle">
+          <property name="text">
+           <string>创建数模模板</string>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+          <property name="class" stdset="0">
+           <string>title</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="pageSubtitle">
+          <property name="text">
+           <string>从 STEP 数模制作工件几何模板</string>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QLabel" name="statusBadge">
+        <property name="text">
+         <string>离线制作 · STEP</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="stepsLayout" stretch="1,1,1">
+      <item>
+       <widget class="QToolButton" name="step0">
+        <property name="text">
+         <string>1  工件信息</string>
+        </property>
+        <property name="checkable">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QToolButton" name="step1">
+        <property name="text">
+         <string>2  导入数模</string>
+        </property>
+        <property name="checkable">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QToolButton" name="step2">
+        <property name="text">
+         <string>3  创建模板草案</string>
+        </property>
+        <property name="checkable">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <widget class="QStackedWidget" name="pages">
+      <widget class="QWidget" name="identityPage">
+       <layout class="QHBoxLayout" name="identityLayout" stretch="1,0">
+        <item>
+         <widget class="QFrame" name="identityCard">
+          <property name="class" stdset="0">
+           <string>card</string>
+          </property>
+          <layout class="QVBoxLayout" name="identityCardLayout">
+           <property name="leftMargin">
+            <number>16</number>
+           </property>
+           <property name="topMargin">
+            <number>16</number>
+           </property>
+           <property name="rightMargin">
+            <number>16</number>
+           </property>
+           <property name="bottomMargin">
+            <number>16</number>
+           </property>
+           <item>
+            <widget class="QLabel" name="identityCardTitle">
+             <property name="text">
+              <string>工件信息</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+             <property name="class" stdset="0">
+              <string>title</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="identityHelp">
+             <property name="text">
+              <string>填写工件名称，选择材料后开始制作。</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="nameLabel">
+             <property name="text">
+              <string>工件名称 *</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLineEdit" name="workpieceName" />
+           </item>
+           <item>
+            <widget class="QLabel" name="presetLabel">
+             <property name="text">
+              <string>常用名称</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <layout class="QGridLayout" name="presetLayout">
+             <item row="0" column="0">
+              <widget class="QPushButton" name="preset0">
+               <property name="text">
+                <string>机床立柱</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QPushButton" name="preset1">
+               <property name="text">
+                <string>机床床身</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="2">
+              <widget class="QPushButton" name="preset2">
+               <property name="text">
+                <string>丝杆座</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="3">
+              <widget class="QPushButton" name="preset3">
+               <property name="text">
+                <string>尾座</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="0">
+              <widget class="QPushButton" name="preset4">
+               <property name="text">
+                <string>主轴座</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="QPushButton" name="preset5">
+               <property name="text">
+                <string>方箱</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="2">
+              <widget class="QPushButton" name="preset6">
+               <property name="text">
+                <string>平板</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="3">
+              <widget class="QPushButton" name="preset7">
+               <property name="text">
+                <string>平尺</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <widget class="QLabel" name="materialLabel">
+             <property name="text">
+              <string>工件材料</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QComboBox" name="material">
+             <item>
+              <property name="text">
+               <string>铸铁</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>钢件</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>其他</string>
+              </property>
+             </item>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="workpieceId">
+             <property name="text">
+              <string />
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="identityNote">
+             <property name="text">
+              <string>编号在当前制作会话中生成，模板版本以实际保存结果为准。</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="identitySpacer">
+             <property name="orientation">
+              <enum>Qt::Vertical</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>20</width>
+               <height>20</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QFrame" name="identityGate">
+          <property name="class" stdset="0">
+           <string>card</string>
+          </property>
+          <layout class="QVBoxLayout" name="identityGateLayout">
+           <property name="leftMargin">
+            <number>16</number>
+           </property>
+           <property name="topMargin">
+            <number>16</number>
+           </property>
+           <property name="rightMargin">
+            <number>16</number>
+           </property>
+           <property name="bottomMargin">
+            <number>16</number>
+           </property>
+           <item>
+            <widget class="QLabel" name="identityGateTitle">
+             <property name="text">
+              <string>创建检查</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+             <property name="class" stdset="0">
+              <string>title</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="identityGateStatus">
+             <property name="text">
+              <string>待填写工件名称</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="identityGateHint">
+             <property name="text">
+              <string>完成工件信息后，导入数模并确认几何结果。</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="identityGateSpacer">
+             <property name="orientation">
+              <enum>Qt::Vertical</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>20</width>
+               <height>20</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+          </layout>
+          <property name="minimumWidth">
+           <number>270</number>
+          </property>
+          <property name="maximumWidth">
+           <number>310</number>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="importPage">
+       <layout class="QHBoxLayout" name="importLayout" stretch="1,0">
+        <item>
+         <widget class="QFrame" name="canvasCard">
+          <property name="class" stdset="0">
+           <string>card</string>
+          </property>
+          <layout class="QVBoxLayout" name="canvasCardLayout">
+           <property name="leftMargin">
+            <number>16</number>
+           </property>
+           <property name="topMargin">
+            <number>16</number>
+           </property>
+           <property name="rightMargin">
+            <number>16</number>
+           </property>
+           <property name="bottomMargin">
+            <number>16</number>
+           </property>
+           <item>
+            <widget class="QLabel" name="canvasCardTitle">
+             <property name="text">
+              <string>数模点云</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+             <property name="class" stdset="0">
+              <string>title</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="viewActionsLayout">
+             <item>
+              <widget class="QLabel" name="legend">
+               <property name="text">
+                <string>● 工件面（蓝）   ● 干涉面（红）   ● 未选择（灰）</string>
+               </property>
+               <property name="wordWrap">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="fitView">
+               <property name="text">
+                <string>适应视图</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="topView">
+               <property name="text">
+                <string>俯视</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="viewLayout" stretch="0,1">
+             <item>
+              <layout class="QVBoxLayout" name="canvasToolsLayout">
+               <item>
+                <widget class="QToolButton" name="toolWorkpiece">
+                 <property name="text">
+                  <string>工件面</string>
+                 </property>
+                 <property name="checkable">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QToolButton" name="toolInterference">
+                 <property name="text">
+                  <string>干涉面</string>
+                 </property>
+                 <property name="checkable">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QToolButton" name="clearRoles">
+                 <property name="text">
+                  <string>清空选面</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QToolButton" name="toolTrim">
+                 <property name="text">
+                  <string>矩形修剪</string>
+                 </property>
+                 <property name="checkable">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QToolButton" name="undoTrim">
+                 <property name="text">
+                  <string>撤销修剪</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QToolButton" name="restoreTrim">
+                 <property name="text">
+                  <string>恢复全部</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="toolsSpacer">
+                 <property name="orientation">
+                  <enum>Qt::Vertical</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>20</width>
+                   <height>20</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+              </layout>
+             </item>
+             <item>
+              <widget class="QWidget" name="canvasHost">
+               <layout class="QVBoxLayout" name="canvasHostLayout" />
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <widget class="QLabel" name="canvasHint">
+             <property name="text">
+              <string>左键旋转 · 右键平移 · 滚轮缩放；矩形修剪沿视线贯穿，Esc 取消框选。</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="eraseSelection">
+             <property name="text">
+              <string>擦除框选点</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="sourceSummary">
+             <property name="text">
+              <string>尚未导入 STEP</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QScrollArea" name="importScroll">
+          <property name="widgetResizable">
+           <bool>true</bool>
+          </property>
+          <property name="minimumWidth">
+           <number>295</number>
+          </property>
+          <property name="maximumWidth">
+           <number>330</number>
+          </property>
+          <widget class="QWidget" name="importControls">
+           <layout class="QVBoxLayout" name="importControlsLayout">
+            <item>
+             <widget class="QFrame" name="loadCard">
+              <property name="class" stdset="0">
+               <string>card</string>
+              </property>
+              <layout class="QVBoxLayout" name="loadCardLayout">
+               <property name="leftMargin">
+                <number>16</number>
+               </property>
+               <property name="topMargin">
+                <number>16</number>
+               </property>
+               <property name="rightMargin">
+                <number>16</number>
+               </property>
+               <property name="bottomMargin">
+                <number>16</number>
+               </property>
+               <item>
+                <widget class="QLabel" name="loadCardTitle">
+                 <property name="text">
+                  <string>导入数模</string>
+                 </property>
+                 <property name="wordWrap">
+                  <bool>true</bool>
+                 </property>
+                 <property name="class" stdset="0">
+                  <string>title</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLabel" name="spacingLabel">
+                 <property name="text">
+                  <string>采样间距（mm）</string>
+                 </property>
+                 <property name="wordWrap">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QDoubleSpinBox" name="spacing">
+                 <property name="decimals">
+                  <number>3</number>
+                 </property>
+                 <property name="minimum">
+                  <double>0.001</double>
+                 </property>
+                 <property name="maximum">
+                  <double>1000</double>
+                 </property>
+                 <property name="value">
+                  <double>0.5</double>
+                 </property>
+                 <property name="singleStep">
+                  <double>0.1</double>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="importStep">
+                 <property name="text">
+                  <string>导入 STEP 并转换点云…</string>
+                 </property>
+                 <property name="class" stdset="0">
+                  <string>primary</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLabel" name="importHint">
+                 <property name="text">
+                  <string>支持 .step / .stp；修改间距后需重新导入。</string>
+                 </property>
+                 <property name="wordWrap">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </item>
+            <item>
+             <widget class="QFrame" name="roleCard">
+              <property name="class" stdset="0">
+               <string>card</string>
+              </property>
+              <layout class="QVBoxLayout" name="roleCardLayout">
+               <property name="leftMargin">
+                <number>16</number>
+               </property>
+               <property name="topMargin">
+                <number>16</number>
+               </property>
+               <property name="rightMargin">
+                <number>16</number>
+               </property>
+               <property name="bottomMargin">
+                <number>16</number>
+               </property>
+               <item>
+                <widget class="QLabel" name="roleCardTitle">
+                 <property name="text">
+                  <string>选面检查</string>
+                 </property>
+                 <property name="wordWrap">
+                  <bool>true</bool>
+                 </property>
+                 <property name="class" stdset="0">
+                  <string>title</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QListWidget" name="faceList">
+                 <property name="maximumHeight">
+                  <number>145</number>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLabel" name="roleSummary">
+                 <property name="text">
+                  <string>请选择工件面</string>
+                 </property>
+                 <property name="wordWrap">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </item>
+            <item>
+             <widget class="QFrame" name="processCard">
+              <property name="class" stdset="0">
+               <string>card</string>
+              </property>
+              <layout class="QVBoxLayout" name="processCardLayout">
+               <property name="leftMargin">
+                <number>16</number>
+               </property>
+               <property name="topMargin">
+                <number>16</number>
+               </property>
+               <property name="rightMargin">
+                <number>16</number>
+               </property>
+               <property name="bottomMargin">
+                <number>16</number>
+               </property>
+               <item>
+                <widget class="QLabel" name="processCardTitle">
+                 <property name="text">
+                  <string>处理操作</string>
+                 </property>
+                 <property name="wordWrap">
+                  <bool>true</bool>
+                 </property>
+                 <property name="class" stdset="0">
+                  <string>title</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="processCloud">
+                 <property name="text">
+                  <string>处理数模点云</string>
+                 </property>
+                 <property name="class" stdset="0">
+                  <string>primary</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLabel" name="processHint">
+                 <property name="text">
+                  <string>选面与修剪完成后，生成当前几何候选。</string>
+                 </property>
+                 <property name="wordWrap">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </item>
+            <item>
+             <widget class="QFrame" name="geometryCard">
+              <property name="class" stdset="0">
+               <string>card</string>
+              </property>
+              <layout class="QVBoxLayout" name="geometryCardLayout">
+               <property name="leftMargin">
+                <number>16</number>
+               </property>
+               <property name="topMargin">
+                <number>16</number>
+               </property>
+               <property name="rightMargin">
+                <number>16</number>
+               </property>
+               <property name="bottomMargin">
+                <number>16</number>
+               </property>
+               <item>
+                <widget class="QLabel" name="geometryCardTitle">
+                 <property name="text">
+                  <string>几何确认</string>
+                 </property>
+                 <property name="wordWrap">
+                  <bool>true</bool>
+                 </property>
+                 <property name="class" stdset="0">
+                  <string>title</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLabel" name="geometrySummary">
+                 <property name="text">
+                  <string>等待有效工件点云</string>
+                 </property>
+                 <property name="wordWrap">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="confirmGeometry">
+                 <property name="text">
+                  <string>确认几何结果</string>
+                 </property>
+                 <property name="class" stdset="0">
+                  <string>primary</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </item>
+            <item>
+             <spacer name="importControlsSpacer">
+              <property name="orientation">
+               <enum>Qt::Vertical</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>20</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+           </layout>
+          </widget>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="draftPage">
+       <layout class="QHBoxLayout" name="draftLayout" stretch="1,0">
+        <item>
+         <widget class="QFrame" name="draftCard">
+          <property name="class" stdset="0">
+           <string>card</string>
+          </property>
+          <layout class="QVBoxLayout" name="draftCardLayout">
+           <property name="leftMargin">
+            <number>16</number>
+           </property>
+           <property name="topMargin">
+            <number>16</number>
+           </property>
+           <property name="rightMargin">
+            <number>16</number>
+           </property>
+           <property name="bottomMargin">
+            <number>16</number>
+           </property>
+           <item>
+            <widget class="QLabel" name="draftCardTitle">
+             <property name="text">
+              <string>创建模板草案</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+             <property name="class" stdset="0">
+              <string>title</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="draftHelp">
+             <property name="text">
+              <string>复核真实来源与几何结果，保存为一个新的模板版本。</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QTextBrowser" name="draftSummary" />
+           </item>
+           <item>
+            <widget class="QCheckBox" name="draftReview">
+             <property name="text">
+              <string>已复核工件信息与模板几何</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="saveDraft">
+             <property name="text">
+              <string>创建并保存模板草案…</string>
+             </property>
+             <property name="class" stdset="0">
+              <string>primary</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="saveStatus">
+             <property name="text">
+              <string>尚未保存</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="openDirectory">
+             <property name="text">
+              <string>打开保存目录</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QFrame" name="draftGate">
+          <property name="class" stdset="0">
+           <string>card</string>
+          </property>
+          <layout class="QVBoxLayout" name="draftGateLayout">
+           <property name="leftMargin">
+            <number>16</number>
+           </property>
+           <property name="topMargin">
+            <number>16</number>
+           </property>
+           <property name="rightMargin">
+            <number>16</number>
+           </property>
+           <property name="bottomMargin">
+            <number>16</number>
+           </property>
+           <item>
+            <widget class="QLabel" name="draftGateTitle">
+             <property name="text">
+              <string>创建检查</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+             <property name="class" stdset="0">
+              <string>title</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="draftGateStatus">
+             <property name="text">
+              <string>待确认几何</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="draftGateHint">
+             <property name="text">
+              <string>选择源码树外目录，新版本保存成功后显示实际路径。</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="draftGateSpacer">
+             <property name="orientation">
+              <enum>Qt::Vertical</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>20</width>
+               <height>20</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+          </layout>
+          <property name="minimumWidth">
+           <number>270</number>
+          </property>
+          <property name="maximumWidth">
+           <number>310</number>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+     </widget>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="activityLayout">
+      <item>
+       <widget class="QLabel" name="taskStatus">
+        <property name="text">
+         <string>填写工件信息后开始制作</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QProgressBar" name="taskProgress">
+        <property name="minimum">
+         <number>0</number>
+        </property>
+        <property name="maximum">
+         <number>0</number>
+        </property>
+        <property name="maximumWidth">
+         <number>140</number>
+        </property>
+        <property name="textVisible">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="cancelTask">
+        <property name="text">
+         <string>取消任务</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="footerLayout" stretch="0,1,0">
+      <item>
+       <widget class="QPushButton" name="previous">
+        <property name="text">
+         <string>上一步</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="progress">
+        <property name="text">
+         <string>步骤 1 / 3</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="next">
+        <property name="text">
+         <string>下一步</string>
+        </property>
+        <property name="class" stdset="0">
+         <string>primary</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </item>
+   </layout>
+  </widget>
+ </widget>
+ <resources />
+ <connections />
+</ui>

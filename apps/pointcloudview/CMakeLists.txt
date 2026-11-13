@@ -3,14 +3,47 @@ qt_add_executable(pointcloudview
     main.cpp
     mainwindow.cpp
     mainwindow.h
+    workbench_shell_v1.h
+    cloud_source_context_v1.h
+    cad_template_ui_v1.cpp
+    features/cad_import_dialog_v1.cpp
+    features/cad_import_dialog_v1.h
+    workpiece_template_ui_v1.cpp
+    features/workpiece_template_dialog_v1.cpp
+    features/workpiece_template_dialog_v1.h
+    process_memory_usage_v1.cpp
+    process_memory_usage_v1.h
     ui/mainwindow.ui
-    registrationdialog.cpp
-    registrationdialog.h
+    renderdialog.cpp
+    renderdialog.h
+    ui/renderdialog.ui
+    selectedplanedialog.cpp
+    selectedplanedialog.h
+    selected_plane_launcher.h
     pointcloudprocessor.cpp
     pointcloudprocessor.h
+    pointcloudview.qrc
 )
+if(PCV_BUILD_EXPERIMENTAL_CAMERA)
+    target_compile_definitions(pointcloudview PRIVATE PCV_CAPTURE_UI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
+    target_sources(pointcloudview PRIVATE
+        live_pipeline.cpp
+        live_pipeline.h
+        cameradialog.cpp
+        cameradialog.h
+        features/camera_capture_panel_v1.cpp
+        features/camera_capture_panel_v1.h
+        features/camera_capture_wizard.h
+        features/camera_depth_preview_v1.cpp
+        features/camera_depth_preview_v1.h
+        features/depth_raw_capture_page_v1.cpp
+        features/depth_raw_capture_page_v1.h
+        ui/cameradialog.ui
+    )
+endif()
 set_property(TARGET pointcloudview PROPERTY AUTOUIC_SEARCH_PATHS
     "${CMAKE_CURRENT_SOURCE_DIR}/ui")
+set_property(TARGET pointcloudview PROPERTY AUTORCC ON)
 
 # Localized MSVC /showIncludes output can leave an empty dependency file with
 # this Qt Creator Makefile kit. Keep this ABI-critical dependency explicit.
@@ -26,14 +59,20 @@ target_link_libraries(pointcloudview
         Qt::OpenGLWidgets
         pcv_core
         pcv_infrastructure
-        pcv_m10_pointcloudread
-        pcv_m20_pointcloudrender
-        pcv_filtering
-        pcv_m60_planefitting
-        pcv_m70_roi_template
-        pcv_m30_pointcloudstitch
-        pcv_m80_planeoutput
+        pcv_m10_pointcloud_io
+        pcv_m20_pointcloud_render
+        pcv_m60_geometry_workpiece
+        pcv_m30_pointcloud_stitch
+        pcv_stitching_ui
+        pcv_selected_plane_tasks_v2
 )
+if (WIN32)
+    target_link_libraries(pointcloudview PRIVATE Psapi)
+endif()
+if(PCV_BUILD_EXPERIMENTAL_CAMERA)
+    target_link_libraries(pointcloudview PRIVATE pcv_m10_pointcloud_io)
+    target_compile_definitions(pointcloudview PRIVATE PCV_BUILD_EXPERIMENTAL_CAMERA=1)
+endif()
 
 if (WIN32)
     add_custom_command(TARGET pointcloudview POST_BUILD
@@ -45,6 +84,20 @@ if (WIN32)
         COMMENT "Deploying Qt runtime next to pointcloudview.exe"
         VERBATIM
     )
+    if(PCV_BUILD_EXPERIMENTAL_CAMERA)
+        # Deploy the Hikvision Mv3dLp runtime only for the experimental UI.
+        set(PCV_MV3D_RUNTIME_DIR
+            "C:/Program Files (x86)/Common Files/Mv3dLpSDK/Runtime/Win64_x64")
+        if(EXISTS "${PCV_MV3D_RUNTIME_DIR}/Mv3dLp.dll")
+            add_custom_command(TARGET pointcloudview POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_directory
+                    "${PCV_MV3D_RUNTIME_DIR}"
+                    "$<TARGET_FILE_DIR:pointcloudview>"
+                COMMENT "Deploying Mv3dLp SDK runtime next to pointcloudview.exe"
+                VERBATIM
+            )
+        endif()
+    endif()
 endif()
 
 install(TARGETS pointcloudview
@@ -59,3 +112,5 @@ qt_generate_deploy_app_script(
     NO_UNSUPPORTED_PLATFORM_ERROR
 )
 install(SCRIPT ${deploy_script})
+
+pcv_deploy_step_runtime(pointcloudview)

@@ -2,10 +2,15 @@
 #include <pcv/io/ply_writer.h>
 
 #include <QCoreApplication>
+#include <QDataStream>
+#include <QDateTime>
 #include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 
 #include <iostream>
+#include <cstring>
+#include <atomic>
 
 namespace {
 bool writeCloud(const QString &path, float value) {
@@ -21,29 +26,166 @@ int fail(const char *message) {
     std::cerr << message << '\n';
     return 1;
 }
+bool writeLargeCloud(const QString &path, int count) {
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+    const QByteArray header = QByteArray("ply\nformat ascii 1.0\nelement vertex ")
+        + QByteArray::number(count)
+        + "\nproperty float x\nproperty float y\nproperty float z\nend_header\n";
+    if (file.write(header) != header.size()) return false;
+    for (int i = 0; i < count; ++i) {
+        if (file.write("1.0 2.0 3.0\n") != 12) return false;
+    }
+    return true;
+}
+bool writeBigEndianCloud(const QString &path, float x, float y, float z) {
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+    const QByteArray header = QByteArrayLiteral(
+        "ply\nformat binary_big_endian 1.0\nelement vertex 1\n"
+        "property float x\nproperty float y\nproperty float z\nend_header\n");
+    if (file.write(header) != header.size()) return false;
+    QDataStream stream(&file);
+    stream.setByteOrder(QDataStream::BigEndian);
+    stream.setFloatingPointPrecision(QDataStream::SinglePrecision);
+    stream << x << y << z;
+    return stream.status() == QDataStream::Ok;
+}
 }
 
 int main(int argc, char **argv) {
     QCoreApplication application(argc, argv);
     QTemporaryDir directory;
     if (!directory.isValid()) return fail("temporary directory creation failed");
-    const QString source = directory.filePath(QStringLiteral("source.ply"));
-    const QString cache = directory.filePath(QStringLiteral("cache"));
+    const QString source = directory.filePath(QStringLiteral("输入点云.ply"));
+    const QString cache = directory.filePath(QStringLiteral("缓存"));
     if (!writeCloud(source, 1.0f)) return fail("fixture write failed");
 
     const pcv::detail::io::CachedCloudResult first = pcv::detail::io::readPlyCached(source, cache);
-    if (!first.ok || first.usedCache || first.points.size() != 1)
+    if (!first.ok || first.usedCache || first.points.size() != 1
+        || !first.canonicalReady || first.sourceFormat != pcv::detail::io::PlyFormat::Ascii)
         return fail("first read did not parse source");
     const QString canonical = pcv::detail::io::canonicalPlyFilePath(source, cache);
+    if (first.canonicalPlyPath != canonical) return fail("canonical PLY path mismatch");
     QFile canonicalFile(canonical);
     if (!canonicalFile.open(QIODevice::ReadOnly)) return fail("canonical PLY was not written");
     const QByteArray canonicalHeader = canonicalFile.read(256);
     if (!canonicalHeader.contains("format binary_little_endian 1.0")
         || !canonicalHeader.contains("property float nx"))
         return fail("canonical PLY header is not binary with normals");
+    canonicalFile.close();
+    const auto canonicalRead = pcv::detail::io::readPly(canonical);
+    if (!canonicalRead.ok || canonicalRead.points.size() != 1 || canonicalRead.points[0].x != 1.0f)
+        return fail("canonical PLY did not preserve source points");
     const pcv::detail::io::CachedCloudResult second = pcv::detail::io::readPlyCached(source, cache);
-    if (!second.ok || !second.usedCache)
+    if (!second.ok || !second.usedCache || !second.canonicalReady)
         return fail("second read did not use cache");
+
+    // A header-only check is insufficient: damaged payload must trigger a
+    // cache-hit canonical rebuild before the result can be published.
+    if (!canonicalFile.open(QIODevice::ReadWrite)) return fail("canonical PLY reopen failed");
+    const qint64 payloadOffset = canonicalFile.readAll().indexOf("end_header\n")
+        + QByteArrayLiteral("end_header\n").size();
+    if (payloadOffset < QByteArrayLiteral("end_header\n").size()
+        || !canonicalFile.seek(payloadOffset)
+        || canonicalFile.write(QByteArray(6 * int(sizeof(float)), '\0'))
+            != 6 * int(sizeof(float)))
+        return fail("canonical PLY corruption failed");
+    canonicalFile.close();
+    const auto rebuilt = pcv::detail::io::readPlyCached(source, cache);
+    const auto rebuiltCanonical = pcv::detail::io::readPly(canonical);
+    if (!rebuilt.ok || !rebuilt.usedCache || !rebuilt.canonicalReady
+        || !rebuiltCanonical.ok || rebuiltCanonical.points[0].x != 1.0f)
+        return fail("damaged canonical PLY was not rebuilt");
+
+    const QString bigEndianSource = directory.filePath(QStringLiteral("big_endian.ply"));
+    if (!writeBigEndianCloud(bigEndianSource, 4.0f, 5.0f, 6.0f))
+        return fail("big-endian fixture write failed");
+    const auto bigEndian = pcv::detail::io::readPlyCached(bigEndianSource, cache);
+    const auto bigEndianCanonical = pcv::detail::io::readPly(bigEndian.canonicalPlyPath);
+    if (!bigEndian.ok || !bigEndian.canonicalReady
+        || bigEndian.sourceFormat != pcv::detail::io::PlyFormat::BinaryBigEndian
+        || !bigEndianCanonical.ok || bigEndianCanonical.points.size() != 1
+        || bigEndianCanonical.points[0].x != 4.0f)
+        return fail("big-endian input was not canonicalized");
+
+    // A failed canonical write is fatal even when the point cache is usable.
+    if (!QFile::remove(canonical) || !QDir().mkpath(canonical))
+        return fail("canonical write failure fixture setup failed");
+    const auto blockedCanonical = pcv::detail::io::readPlyCached(source, cache);
+    if (blockedCanonical.ok || !blockedCanonical.points.isEmpty())
+        return fail("canonical write failure published points");
+
+    const QString largeSource = directory.filePath(QStringLiteral("large_source.ply"));
+    if (!writeLargeCloud(largeSource, 12000)) return fail("large fixture write failed");
+    const auto largeFirst = pcv::detail::io::readPlyCached(largeSource, cache);
+    if (!largeFirst.ok || largeFirst.usedCache) return fail("large first read did not parse source");
+    const QDateTime originalTime = QFileInfo(largeSource).lastModified();
+    QFile largeFile(largeSource);
+    if (!largeFile.open(QIODevice::ReadWrite)) return fail("large fixture reopen failed");
+    const QByteArray needle("1.0 2.0 3.0\n");
+    const qint64 offset = largeFile.size() / 2;
+    if (!largeFile.seek(offset)) return fail("large fixture seek failed");
+    const QByteArray tail = largeFile.readAll();
+    const int local = tail.indexOf(needle);
+    if (local < 0 || !largeFile.seek(offset + local)
+        || largeFile.write("9.0 2.0 3.0\n") != needle.size())
+        return fail("large fixture same-size edit failed");
+    if (!largeFile.setFileTime(originalTime, QFileDevice::FileModificationTime))
+        return fail("large fixture mtime restore failed");
+    largeFile.close();
+    const auto largeSecond = pcv::detail::io::readPlyCached(largeSource, cache);
+    if (!largeSecond.ok || largeSecond.usedCache)
+        return fail("same-size same-mtime source edit incorrectly used cache");
+    bool foundChangedPoint = false;
+    for (const auto &point : largeSecond.points) {
+        if (point.x == 9.0f) { foundChangedPoint = true; break; }
+    }
+    if (!foundChangedPoint) return fail("cache miss did not read modified source content");
+
+    QVector<pointcloud::Point3D> binaryPoints{{1.0f, 2.0f, 3.0f, 0.0f, 1.0f, 0.0f}};
+    const QString binaryWithNormals = directory.filePath(QStringLiteral("with_normals.ply"));
+    QString binaryError;
+    if (!pcv::detail::io::writeBinaryPly(binaryWithNormals, binaryPoints, &binaryError)
+        || !pcv::detail::io::readPly(binaryWithNormals).ok)
+        return fail("binary PLY with normals write/read failed");
+    const auto withNormals = pcv::detail::io::readPly(binaryWithNormals);
+    if (withNormals.points.size() != 1 || withNormals.points[0].nz != 0.0f
+        || withNormals.points[0].ny != 1.0f)
+        return fail("binary PLY normals fields did not round trip");
+    pcv::detail::io::BinaryPlyWriteOptions noNormals;
+    noNormals.includeNormals = false;
+    const QString binaryWithoutNormals = directory.filePath(QStringLiteral("without_normals.ply"));
+    if (!pcv::detail::io::writeBinaryPly(binaryWithoutNormals, binaryPoints, &binaryError, noNormals))
+        return fail("binary PLY without normals write failed");
+    const auto withoutNormals = pcv::detail::io::readPly(binaryWithoutNormals);
+    if (!withoutNormals.ok || withoutNormals.points.size() != 1
+        || withoutNormals.points[0].x != 1.0f || withoutNormals.points[0].y != 2.0f
+        || withoutNormals.points[0].z != 3.0f)
+        return fail("binary PLY xyz fields did not round trip");
+
+    // Batch policy keeps fingerprints/decoded order while avoiding the unused
+    // canonical artifact. Test both miss/hit, corruption and chunk cancellation.
+    const QString leanSource=directory.filePath(QStringLiteral("batch_source.ply"));
+    if(!writeLargeCloud(leanSource,90000))return fail("batch fixture failed");
+    const pcv::detail::io::CloudCachePolicy leanPolicy{false};
+    const auto lean=pcv::detail::io::readPlyCached(leanSource,cache,{},leanPolicy);
+    if(!lean.ok||lean.usedCache||lean.canonicalReady||QFileInfo::exists(lean.canonicalPlyPath))return fail("batch policy generated canonical PLY");
+    const auto leanHit=pcv::detail::io::readPlyCached(leanSource,cache,{},leanPolicy);
+    if(!leanHit.ok||!leanHit.usedCache||leanHit.points.size()!=lean.points.size()
+        ||std::memcmp(leanHit.points.constData(),lean.points.constData(),size_t(lean.points.size())*sizeof(pointcloud::Point3D)))return fail("batch cache hit differs");
+    QFile damaged(pcv::detail::io::cacheFilePath(leanSource,cache));
+    if(!damaged.open(QIODevice::ReadWrite)||!damaged.resize(damaged.size()-1))return fail("cache corruption setup failed");
+    damaged.close();
+    const auto repaired=pcv::detail::io::readPlyCached(leanSource,cache,{},leanPolicy);
+    if(!repaired.ok||repaired.usedCache||repaired.points.size()!=lean.points.size())return fail("damaged batch cache not rebuilt");
+    std::atomic_int calls{0};pcv::detail::io::PlyReadOptions stop;
+    stop.isCancelled=[&calls]{return ++calls>=4;};
+    const auto cancelled=pcv::detail::io::readPlyCached(leanSource,cache,stop,leanPolicy);
+    if(!cancelled.cancelled||cancelled.ok||!cancelled.points.isEmpty())return fail("chunk cancellation published cache points");
+    const auto compatible=pcv::detail::io::readPlyCached(leanSource,cache);
+    if(!compatible.ok||!compatible.canonicalReady||compatible.points.size()!=lean.points.size()
+        ||std::memcmp(compatible.points.constData(),lean.points.constData(),size_t(lean.points.size())*sizeof(pointcloud::Point3D)))return fail("batch/default decode mismatch");
 
     return 0;
 }

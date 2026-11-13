@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1400</width>
-    <height>860</height>
+    <width>1280</width>
+    <height>720</height>
    </rect>
   </property>
   <property name="minimumSize">
@@ -19,13 +19,121 @@
   <property name="windowTitle">
    <string>点云预览工作台</string>
   </property>
+  <property name="styleSheet">
+   <string notr="true">QMainWindow, QWidget#main_window, QWidget#wgt_central,
+QWidget#wgt_source_panel, QWidget#wgt_render, QWidget#wgt_clean,
+QWidget#wgt_plane, QWidget#wgt_edge, QWidget#tw_main,
+QWidget#toolbar_workflow, QFrame, QStackedWidget {
+    background-color: #ffffff;
+    color: #1f2937;
+    font-family: &quot;Microsoft YaHei&quot;;
+    font-size: 10pt;
+}
+QWidget { background-color: #ffffff; color: #344054; }
+QMenuBar, QToolBar, QMenu, QAbstractItemView {
+    background-color: #ffffff;
+    color: #1f2937;
+    border-bottom: 1px solid #d9e0e8;
+    padding: 2px 8px;
+}
+QMenuBar::item { padding: 1px 10px; }
+QMenuBar::item:selected, QMenu::item:selected, QToolButton:hover { background-color: #edf5ff; color: #1769aa; }
+QMenu { border: 1px solid #d9e0e8; padding: 4px; }
+QMenu::item { padding: 6px 24px 6px 12px; }
+QToolButton { color: #344054; border: 1px solid transparent; border-radius: 4px; padding: 4px 8px; }
+QToolButton:checked { background-color: #e5f1ff; color: #1769aa; border-color: #91caff; }
+QPushButton {
+    background-color: #ffffff;
+    color: #344054;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 3px 8px;
+    min-height: 22px;
+}
+QPushButton:hover { background-color: #edf5ff; border-color: #5b9bd5; color: #1769aa; }
+QPushButton:pressed { background-color: #dceeff; }
+QPushButton:disabled { color: #98a2b3; background-color: #f5f7fa; border-color: #e3e8ef; }
+QLineEdit, QPlainTextEdit, QListWidget, QComboBox, QSpinBox, QDoubleSpinBox,
+QAbstractSpinBox, QScrollArea, QScrollBar {
+    background-color: #ffffff;
+    color: #1f2937;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 4px 6px;
+    selection-background-color: #b9ddff;
+}
+QListWidget { outline: none; }
+QListWidget::item { padding: 7px 8px; border-radius: 3px; }
+QListWidget::item:selected { background-color: #dceeff; color: #1769aa; }
+QAbstractItemView { background-color: #ffffff; color: #1f2937; border: 1px solid #cbd5e1; selection-background-color: #dceeff; selection-color: #1769aa; }
+QComboBox QAbstractItemView { background-color: #ffffff; color: #1f2937; border: 1px solid #cbd5e1; padding: 2px; }
+QComboBox::drop-down { background-color: #f5f7fa; border-left: 1px solid #d9e0e8; width: 22px; }
+QComboBox::down-arrow { image: none; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid #667085; width: 0; height: 0; }
+QAbstractSpinBox::up-button, QAbstractSpinBox::down-button { background-color: #f5f7fa; border-left: 1px solid #d9e0e8; }
+QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover { background-color: #edf5ff; }
+QScrollBar:vertical { background: #f5f7fa; width: 12px; margin: 0; }
+QScrollBar:horizontal { background: #f5f7fa; height: 12px; margin: 0; }
+QScrollBar::handle:vertical, QScrollBar::handle:horizontal { background: #cbd5e1; border-radius: 5px; min-height: 24px; min-width: 24px; }
+QScrollBar::handle:hover { background: #91caff; }
+QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page { background: none; border: none; }
+QCheckBox { color: #344054; spacing: 6px; }
+QCheckBox::indicator { width: 15px; height: 15px; border: 1px solid #98a2b3; border-radius: 3px; background: #ffffff; }
+QCheckBox::indicator:checked { background: #2f80c9; border-color: #2472b8; }
+QCheckBox::indicator:disabled { background: #f5f7fa; border-color: #d9e0e8; }
+QTabWidget::pane { border: 1px solid #d9e0e8; background-color: #ffffff; }
+QTabBar::tab { background-color: #f5f7fa; color: #667085; padding: 8px 14px; border: 1px solid #d9e0e8; border-bottom: none; }
+QTabBar::tab:selected { color: #1769aa; background-color: #ffffff; }
+QGroupBox { border: 1px solid #d9e0e8; border-radius: 5px; margin-top: 10px; padding: 10px 8px 8px; }
+QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #1769aa; }
+QSplitter::handle { background-color: #e7ecf2; }
+QStatusBar { background-color: #f8fafc; color: #667085; border-top: 1px solid #d9e0e8; }
+QProgressBar { background-color: #e7ecf2; border: none; height: 3px; }
+QProgressBar::chunk { background-color: #2f80c9; }
+QLabel#lbl_main_title { color: #172b4d; font-size: 15pt; font-weight: 600; }
+QLabel { color: #344054; }
+QLabel#lbl_header_subtitle, QLabel#lbl_file_info, QLabel#lbl_canvas_info { color: #667085; }
+QLabel#lbl_workflow_title, QLabel#lbl_source_title, QLabel#lbl_render_title, QLabel#lbl_clean_title, QLabel#lbl_plane_title, QLabel#lbl_edge_title { color: #1769aa; font-size: 11pt; font-weight: 600; padding: 4px 0; }
+QPushButton#btn_open_point_cloud, QPushButton#btn_open_scanning_info { background-color: #2f80c9; border-color: #2472b8; color: #ffffff; }
+QPushButton#btn_open_point_cloud:hover, QPushButton#btn_open_scanning_info:hover { background-color: #1769aa; }
+QLabel#lbl_device_empty { color: #667085; padding: 18px 8px; }
+QWidget#wgt_canvas_panel { background-color: #f8fafc; border: 1px solid #d9e0e8; }
+QWidget#wgt_canvas_host { background-color: #000000; }
+QWidget#workbench_header, QWidget#workbench_header QLabel { background:#185bb8; color:white; }
+QWidget#workbench_header QPushButton { background:#185bb8; border:1px solid #6c99d8; color:white; min-height:20px; padding:2px 10px; }
+QWidget#workbench_header QPushButton:hover { background:#286bc8; }
+QWidget#workbench_header QComboBox { min-height:20px; padding:2px 8px; }
+QLabel#workbench_brand { font-size:14px; font-weight:600; }
+QWidget#preview_toolbar { background:#eef2f8; }
+QWidget#preview_toolbar QPushButton { background:transparent; border:none; min-height:20px; padding:1px 10px; }
+QWidget#workbench_drawer { background:white; border-left:1px solid #d5deeb; }
+QWidget#workbench_drawer QTabBar::tab { padding:5px 6px; min-width:52px; }
+QWidget#workbench_drawer QPushButton { padding:3px 6px; }
+QWidget#wgt_canvas_panel { border:none; background:black; }
+
+</string>
+  </property>
   <widget class="QWidget" name="wgt_central">
    <layout class="QVBoxLayout" name="rootLayout">
     <property name="spacing">
      <number>0</number>
     </property>
+    <property name="leftMargin">
+     <number>10</number>
+    </property>
+    <property name="topMargin">
+     <number>8</number>
+    </property>
+    <property name="rightMargin">
+     <number>10</number>
+    </property>
+    <property name="bottomMargin">
+     <number>6</number>
+    </property>
     <item>
      <layout class="QHBoxLayout" name="headerLayout">
+      <property name="spacing">
+       <number>8</number>
+      </property>
       <item>
        <layout class="QVBoxLayout" name="titleLayout">
         <property name="spacing">
@@ -39,7 +147,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QLabel" name="lbl_subtitle">
+         <widget class="QLabel" name="lbl_header_subtitle">
           <property name="text">
            <string>PLY  ·  3D VIEW</string>
           </property>
@@ -81,7 +189,38 @@
         </property>
        </widget>
       </item>
+      <item>
+       <widget class="QPushButton" name="btn_camera_device">
+        <property name="text">
+         <string>相机设备</string>
+        </property>
+       </widget>
+      </item>
      </layout>
+    </item>
+    <item>
+     <widget class="QToolBar" name="toolbar_workflow">
+      <property name="movable">
+       <bool>false</bool>
+      </property>
+      <property name="iconSize">
+       <size>
+        <width>22</width>
+        <height>22</height>
+       </size>
+      </property>
+      <property name="toolButtonStyle">
+       <enum>Qt::ToolButtonStyle::ToolButtonTextUnderIcon</enum>
+      </property>
+      <addaction name="act_device_list"/>
+      <addaction name="act_layout_manage"/>
+      <addaction name="act_coordinate_transform"/>
+      <addaction name="act_file_io"/>
+      <addaction name="act_property_save"/>
+      <addaction name="act_camera_stream"/>
+      <addaction name="act_render_settings"/>
+      <addaction name="act_canvas_reset"/>
+     </widget>
     </item>
     <item>
      <widget class="QSplitter" name="splitter_main">
@@ -106,76 +245,103 @@
        </property>
        <layout class="QVBoxLayout" name="vbl_source">
         <property name="spacing">
-         <number>0</number>
+         <number>8</number>
+        </property>
+        <property name="leftMargin">
+         <number>10</number>
+        </property>
+        <property name="topMargin">
+         <number>8</number>
+        </property>
+        <property name="rightMargin">
+         <number>10</number>
+        </property>
+        <property name="bottomMargin">
+         <number>8</number>
         </property>
         <item>
-         <widget class="QLabel" name="lbl_source_title">
+         <widget class="QLabel" name="lbl_workflow_title">
           <property name="text">
-           <string>数据源</string>
+           <string>采集与处理总控中心</string>
           </property>
          </widget>
         </item>
         <item>
-         <widget class="QListWidget" name="lw_files">
-          <property name="selectionMode">
-           <enum>QAbstractItemView::SelectionMode::ExtendedSelection</enum>
-          </property>
-         </widget>
+         <layout class="QHBoxLayout" name="workflowNavLayout">
+          <item>
+           <widget class="QToolButton" name="btn_step_acquire">
+            <property name="text">
+             <string>1 采集</string>
+            </property>
+            <property name="checkable">
+             <bool>true</bool>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QToolButton" name="btn_step_clean">
+            <property name="text">
+             <string>2 清理</string>
+            </property>
+            <property name="checkable">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QToolButton" name="btn_step_plane">
+            <property name="text">
+             <string>3 平面</string>
+            </property>
+            <property name="checkable">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QToolButton" name="btn_step_output">
+            <property name="text">
+             <string>4 输出</string>
+            </property>
+            <property name="checkable">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+         </layout>
         </item>
         <item>
-         <widget class="QLabel" name="lbl_subtitle">
-          <property name="text">
-           <string>尚未加载点云</string>
-          </property>
-          <property name="wordWrap">
-           <bool>true</bool>
-          </property>
-         </widget>
+         <layout class="QHBoxLayout" name="workflowPagerLayout">
+          <item>
+           <widget class="QPushButton" name="btn_prev_step">
+            <property name="text">
+             <string>上一步</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="lbl_step_status">
+            <property name="text">
+             <string> 采集与数据源</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="btn_next_step">
+            <property name="text">
+             <string>下一步</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
         </item>
-       </layout>
-      </widget>
-      <widget class="QWidget" name="wgt_canvas_panel">
-       <layout class="QVBoxLayout" name="vbl_canvas">
-        <property name="spacing">
-         <number>0</number>
-        </property>
-        <item>
-         <widget class="QWidget" name="wgt_canvas_host" native="true">
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QLabel" name="lbl_subtitle">
-          <property name="text">
-           <string>就绪</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </widget>
-      <widget class="QWidget" name="wgt_source_panel">
-       <property name="minimumSize">
-        <size>
-         <width>270</width>
-         <height>0</height>
-        </size>
-       </property>
-       <property name="maximumSize">
-        <size>
-         <width>340</width>
-         <height>16777215</height>
-        </size>
-       </property>
-       <layout class="QVBoxLayout" name="vbl_control">
         <item>
          <widget class="QTabWidget" name="tw_main">
           <property name="currentIndex">
-           <number>0</number>
+           <number>3</number>
           </property>
           <widget class="QWidget" name="wgt_render">
            <attribute name="title">
@@ -213,7 +379,7 @@
              </widget>
             </item>
             <item row="2" column="0" colspan="2">
-             <widget class="QLabel" name="lbl_source_title">
+             <widget class="QLabel" name="lbl_render_title">
               <property name="text">
                <string>渲染效果</string>
               </property>
@@ -241,6 +407,11 @@
               <item>
                <property name="text">
                 <string>法向量</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>纹理灰度</string>
                </property>
               </item>
              </widget>
@@ -316,7 +487,7 @@
            </attribute>
            <layout class="QVBoxLayout" name="vbl_clean">
             <item>
-             <widget class="QLabel" name="lbl_source_title">
+             <widget class="QLabel" name="lbl_clean_title">
               <property name="text">
                <string>点云清理 · 后台处理</string>
               </property>
@@ -349,7 +520,7 @@
                 <property name="minimum">
                  <double>0.001000000000000</double>
                 </property>
-               <property name="maximum">
+                <property name="maximum">
                  <double>1000.000000000000000</double>
                 </property>
                 <property name="value">
@@ -454,7 +625,7 @@
            </attribute>
            <layout class="QVBoxLayout" name="vbl_plane">
             <item>
-             <widget class="QLabel" name="lbl_source_title">
+             <widget class="QLabel" name="lbl_plane_title">
               <property name="text">
                <string>2.5D 平面提取</string>
               </property>
@@ -536,8 +707,20 @@
             </item>
             <item>
              <layout class="QHBoxLayout" name="hbl_workpiece_axes">
-              <item><widget class="QPushButton" name="btn_pick_axes"><property name="text"><string>选择 X/Y 轴点</string></property></widget></item>
-              <item><widget class="QPushButton" name="btn_clear_axes"><property name="text"><string>清除轴点</string></property></widget></item>
+              <item>
+               <widget class="QPushButton" name="btn_pick_axes">
+                <property name="text">
+                 <string>选择 X/Y 轴点</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QPushButton" name="btn_clear_axes">
+                <property name="text">
+                 <string>清除轴点</string>
+                </property>
+               </widget>
+              </item>
              </layout>
             </item>
            </layout>
@@ -548,7 +731,7 @@
            </attribute>
            <layout class="QVBoxLayout" name="vbl_edge">
             <item>
-             <widget class="QLabel" name="lbl_source_title">
+             <widget class="QLabel" name="lbl_edge_title">
               <property name="text">
                <string>平面边缘分割</string>
               </property>
@@ -612,28 +795,48 @@
               </item>
               <item row="3" column="0">
                <widget class="QLabel" name="lbl_plane_image_width">
-                <property name="text"><string>图片宽度 mm</string></property>
+                <property name="text">
+                 <string>图片宽度 mm</string>
+                </property>
                </widget>
               </item>
               <item row="3" column="1">
                <widget class="QDoubleSpinBox" name="dsb_plane_image_width">
-                <property name="decimals"><number>2</number></property>
-                <property name="minimum"><double>1.000000000000000</double></property>
-                <property name="maximum"><double>10000.000000000000000</double></property>
-                <property name="value"><double>100.000000000000000</double></property>
+                <property name="decimals">
+                 <number>2</number>
+                </property>
+                <property name="minimum">
+                 <double>1.000000000000000</double>
+                </property>
+                <property name="maximum">
+                 <double>10000.000000000000000</double>
+                </property>
+                <property name="value">
+                 <double>100.000000000000000</double>
+                </property>
                </widget>
               </item>
               <item row="4" column="0">
                <widget class="QLabel" name="lbl_plane_image_height">
-                <property name="text"><string>图片高度 mm</string></property>
+                <property name="text">
+                 <string>图片高度 mm</string>
+                </property>
                </widget>
               </item>
               <item row="4" column="1">
                <widget class="QDoubleSpinBox" name="dsb_plane_image_height">
-                <property name="decimals"><number>2</number></property>
-                <property name="minimum"><double>1.000000000000000</double></property>
-                <property name="maximum"><double>10000.000000000000000</double></property>
-                <property name="value"><double>100.000000000000000</double></property>
+                <property name="decimals">
+                 <number>2</number>
+                </property>
+                <property name="minimum">
+                 <double>1.000000000000000</double>
+                </property>
+                <property name="maximum">
+                 <double>10000.000000000000000</double>
+                </property>
+                <property name="value">
+                 <double>100.000000000000000</double>
+                </property>
                </widget>
               </item>
              </layout>
@@ -642,6 +845,13 @@
              <widget class="QPushButton" name="btn_extract_plane_image">
               <property name="text">
                <string>提取平面 2D 图像</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="btn_select_texture_image">
+              <property name="text">
+               <string>选择同次扫描亮度图并贴到平面</string>
               </property>
              </widget>
             </item>
@@ -710,6 +920,76 @@
           </widget>
          </widget>
         </item>
+        <item>
+         <widget class="QLabel" name="lbl_source_title">
+          <property name="text">
+           <string>设备 / 数据源</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QListWidget" name="lw_files">
+          <property name="selectionMode">
+           <enum>QAbstractItemView::SelectionMode::ExtendedSelection</enum>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="lbl_device_empty">
+          <property name="text">
+           <string>尚未加载点云</string>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btn_device_placeholder">
+          <property name="enabled">
+           <bool>false</bool>
+          </property>
+          <property name="text">
+           <string>设备连接（待接入）</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="wgt_canvas_panel">
+       <layout class="QVBoxLayout" name="vbl_canvas">
+        <property name="spacing">
+         <number>0</number>
+        </property>
+        <property name="leftMargin">
+         <number>6</number>
+        </property>
+        <property name="topMargin">
+         <number>0</number>
+        </property>
+        <property name="rightMargin">
+         <number>6</number>
+        </property>
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
+        <item>
+         <widget class="QWidget" name="wgt_canvas_host" native="true">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="lbl_canvas_info">
+          <property name="text">
+           <string>就绪</string>
+          </property>
+         </widget>
+        </item>
        </layout>
       </widget>
      </widget>
@@ -731,12 +1011,107 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>1400</width>
-     <height>20</height>
+     <width>1280</width>
+     <height>27</height>
     </rect>
    </property>
   </widget>
   <widget class="QStatusBar" name="statusbar_main"/>
+  <action name="act_device_list">
+   <property name="icon">
+    <iconset resource="../pointcloudview.qrc">
+     <normaloff>:/pointcloudview/icons/device.svg</normaloff>:/pointcloudview/icons/device.svg</iconset>
+   </property>
+   <property name="text">
+    <string>设备列表</string>
+   </property>
+   <property name="toolTip">
+    <string>打开设备列表与实时取流</string>
+   </property>
+  </action>
+  <action name="act_layout_manage">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="icon">
+    <iconset resource="../pointcloudview.qrc">
+     <normaloff>:/pointcloudview/icons/layout.svg</normaloff>:/pointcloudview/icons/layout.svg</iconset>
+   </property>
+   <property name="text">
+    <string>布局管理</string>
+   </property>
+   <property name="toolTip">
+    <string>布局管理（待接入）</string>
+   </property>
+  </action>
+  <action name="act_coordinate_transform">
+   <property name="icon">
+    <iconset resource="../pointcloudview.qrc">
+     <normaloff>:/pointcloudview/icons/transform.svg</normaloff>:/pointcloudview/icons/transform.svg</iconset>
+   </property>
+   <property name="text">
+    <string>标定/坐标转换</string>
+   </property>
+   <property name="toolTip">
+    <string>打开扫描 JSON 并执行 camera 到 robot_base 转换</string>
+   </property>
+  </action>
+  <action name="act_file_io">
+   <property name="icon">
+    <iconset resource="../pointcloudview.qrc">
+     <normaloff>:/pointcloudview/icons/file.svg</normaloff>:/pointcloudview/icons/file.svg</iconset>
+   </property>
+   <property name="text">
+    <string>文件存取</string>
+   </property>
+   <property name="toolTip">
+    <string>打开点云或扫描 JSON</string>
+   </property>
+  </action>
+  <action name="act_property_save">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="icon">
+    <iconset resource="../pointcloudview.qrc">
+     <normaloff>:/pointcloudview/icons/save.svg</normaloff>:/pointcloudview/icons/save.svg</iconset>
+   </property>
+   <property name="text">
+    <string>属性保存</string>
+   </property>
+   <property name="toolTip">
+    <string>属性保存（待接入）</string>
+   </property>
+  </action>
+  <action name="act_camera_stream">
+   <property name="icon">
+    <iconset resource="../pointcloudview.qrc">
+     <normaloff>:/pointcloudview/icons/stream.svg</normaloff>:/pointcloudview/icons/stream.svg</iconset>
+   </property>
+   <property name="text">
+    <string>取流</string>
+   </property>
+   <property name="toolTip">
+    <string>打开相机取流</string>
+   </property>
+  </action>
+  <action name="act_canvas_reset">
+   <property name="icon">
+    <iconset resource="../pointcloudview.qrc">
+     <normaloff>:/pointcloudview/icons/reset.svg</normaloff>:/pointcloudview/icons/reset.svg</iconset>
+   </property>
+   <property name="text">
+    <string>重置视角</string>
+   </property>
+  </action>
+  <action name="act_render_settings">
+   <property name="text">
+    <string>渲染设置</string>
+   </property>
+   <property name="toolTip">
+    <string>打开点云渲染设置</string>
+   </property>
+  </action>
   <action name="act_open">
    <property name="text">
     <string>打开点云...</string>
@@ -756,10 +1131,8 @@
    </property>
   </action>
  </widget>
- <resources/>
+ <resources>
+  <include location="../pointcloudview.qrc"/>
+ </resources>
  <connections/>
 </ui>
-
-
-
-

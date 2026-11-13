@@ -1,158 +1,96 @@
 # PointCloudSuite Agent 工作手册
 
-适用范围：本仓库。沟通默认使用中文；代码、命令、变量名、文件名、路径和错误信息保留原文。
+适用本仓库，更新 2026-10-22，文档/架构 v0.5。[索引](docs/README.md) · [需求](docs/requirements/pointcloudview_v0.5.md) · [协同规范](docs/architecture/module_ui_integration_v0.5.md) · [pointcloudview 架构与算法导读](docs/development/pointcloudview_architecture_analysis_v1.md)。原正文与历史区重整记录见集中归档。
 
-## 1. 真相源与安全边界
+## 沟通、范围与安全
 
-- 当前源码、CMake 和测试是事实来源；历史文档只用于追溯。
-- 只修改用户明确指定的文件和模块，保留其他未提交修改。
-- 删除、覆盖、批量重命名、外部上传、账号或数据库操作前必须获得明确授权。
-- 禁止写入 password、secret、token、API key、private key。
-- 缓存、日志、导出物和运行数据不得写入源码树。
-- Windows 源码路径和构建路径使用 ASCII。
-- 不把 build*/、test_pointcloud_a/、mid_gap/ 或实验报告当作稳定 API。
-- 不使用 `git reset --hard`、`git checkout --` 等破坏性命令回退用户修改。
+默认中文，代码、命令、变量、路径、字段和错误保留原文。只处理用户明确指定任务/文件，简单稳定优先，不做无关重构或过度防御。报告做了什么、改了什么、如何验证和剩余风险。
 
-## 2. 当前项目基线
+保留已有未提交/未跟踪修改，不擅自覆盖；删除、覆盖、批量重命名/修改、上传、账号/数据库操作须有明确授权。不得写入凭据。禁止 reset --hard、checkout -- 等破坏性回退；用户仅要求本地提交时不 push。缓存、日志、构建、导出与运行数据必须在源码树外，Windows 路径支持 Unicode。
 
-- 项目基线：PointCloudSuite v0.3。
-- 语言和工具：C++17、CMake 3.19+、Qt 6.5+、Windows/MSVC。
-- 根选项：
-  - `PCV_BUILD_POINTCLOUDVIEW`
-  - `PCV_BUILD_POINTCLOUDSTITCH`
-  - `PCV_BUILD_TOOLS`
-  - `PCV_BUILD_TESTS`
-- 外部算法依赖：不依赖 Python、Open3D、PCL、VTK 或 CUDA。
-- 当前统筹需求文档：`docs/requirements/pointcloudview_v0.3.md`。
-- 模块详细记录：`docs/modules/<module>.md`。
+## 真相源与模块边界
 
-## 3. 模块与 target
+源码、公共头、CMake、测试是实现事实；当前规范为 v0.5 需求/架构/契约/协同文档，旧版本短页只指向当前和历史，不再定义现行规则。文档版本不等于 CMake PROJECT_VERSION，不能自行升级软件或 schema。
 
-规范模块及唯一职责：
+| module | target | responsibility |
+|---|---|---|
+| 10 | pcv_m10_pointcloud_io | PLY/缓存、相机实验输入、过滤、writer/事务 |
+| 20 | pcv_m20_pointcloud_render | 画布、OpenGL、拾取、渲染 DTO |
+| 30 | pcv_m30_pointcloud_stitch | 整帧/所选平面拼接、诊断与输出编排 |
+| 40 | pcv_m40_pointcloud_matching | INTERFACE 聚合 30/60，位置确认业务未实现 |
+| 50 | pcv_m50_coordinate_conversion | 唯一手眼/位姿/坐标数学 |
+| 60 | pcv_m60_geometry_workpiece | 平面/单击/边缘/ROI/WObj1、临时工件、扫描/纹理 |
 
-| 编号 | 模块 | 规范目录 | 规范 target |
-|---|---|---|---|
-| 10 | 点云读写 | `modules/10_pointcloudread` | `pcv_m10_pointcloudread` |
-| 20 | 点云渲染 | `modules/20_pointcloudrender` | `pcv_m20_pointcloudrender` |
-| 30 | 点云拼接 | `modules/30_pointcloudstitch` | `pcv_m30_pointcloudstitch` |
-| 40 | 点云配准 | `modules/40_pointcloudregistration` | `pcv_m40_pointcloudregistration` |
-| 50 | 坐标转换 | `modules/50_coordinateconversion` | `pcv_m50_coordinateconversion` |
-| 60 | 平面拟合 | `modules/60_planefitting` | `pcv_m60_planefitting` |
-| 70 | ROI/模板 | `modules/70_roi_template` | `pcv_m70_roi_template` |
-| 80 | 工具平面输出 | `modules/80_planeoutput` | `pcv_m80_planeoutput` |
-| 90 | `90_interferenceplane` 干涉平面检查 | 仅文档占位 | 未实现 |
-| 100 | `100_qualityreport` 质量报告 | 仅文档占位 | 未实现 |
+30→10/50，60→10/50，40→30/60，20→core；70/80 兼容转发 60/10。共享模块不得依赖 apps；20 是唯一允许 Widgets/OpenGL 的领域模块，apps/stitching_ui 是应用层共享库。core/infrastructure 位于基础层。40/90/100 不得写成功能已实现。
 
-兼容 target `pcv_io`、`pcv_registration`、`pcv_interface`、`pcv_output` 在迁移期间保留，不得新增与规范模块重复的实现。旧 forwarding header 只有在所有调用方迁移、弃用周期结束并完成独立评审后才能删除。
+算法实现放模块 src，公共头 include；wrapper 只做参数/结果映射。50 是唯一坐标数学，不复制 XML/SLERP/矩阵转换。30 不新增 60 依赖，应用负责选面 DTO；MainWindow 壳、任务生命周期、共享拼接 UI 和模块依赖由主线维护。同事白名单、临时 adapter 与交接冻结按协同规范执行。
 
-## 4. 依赖方向和代码边界
+### pointcloudview 架构与函数速查
 
-- 共享算法放在模块 `src/`，公共头放在模块 `include/`。
-- 共享模块不得依赖 `apps/`。
-- `20_pointcloudrender` 是唯一允许依赖 Qt Widgets/OpenGL 的共享模块；其他算法模块不得反向依赖 UI。
-- `30_pointcloudstitch` 只编排读取、坐标转换、配准、seam fusion 和输出。
-- `40_pointcloudregistration` 是 ICP、相邻帧配准、结构验证和 seam fusion 的唯一算法来源。
-- `60_planefitting` 只负责纯几何拟合、RANSAC/PCA、连通域和一致性诊断；ROI/Mask、二维图像映射和 UI 状态归属其他模块或应用。
-- `20_pointcloudrender` 的 `PointCloudCanvas` 实现位于 `modules/20_pointcloudrender/src/pointcloud_canvas.cpp`；应用只负责业务状态、异步生命周期和渲染 DTO 转换。
-- Qt Designer 文件位于 `apps/pointcloudview/ui/` 和 `apps/pointcloudstitch/ui/`，不得把生成头文件提交为手工 UI 源。
-- `registration_diagnostic` 仅通过 `pcv::interface::stitchRawLineProfiles` 调用统一拼接流水线。
-- 应用 wrapper 只能做参数转换和结果映射，不得保留第二套算法。
+pointcloudview 的分层是：入口 `apps/pointcloudview/main.cpp` → 应用编排 `MainWindow`/`SelectedPlaneDialog`/`apps/stitching_ui` → 领域模块 10/20/30/50/60 → `pcv_core`/`pcv_infrastructure`。PLY、JSON、PNG、PCVMAP、相机 SDK 是数据/外部边界，不是领域模块。`MainWindow` 持有当前点云、来源、revision 和临时工件会话；`SelectedPlaneDialog` 持有多帧顺序、六分屏、选面快照与调度状态；`PointCloudCanvas` 负责 GPU 显示、拾取及 overlay；共享拼接窗口只做整帧任务 UI/编排。相机 UI 仅在 `PCV_BUILD_EXPERIMENTAL_CAMERA` 开启时编译。
 
-## 5. 稳定契约
+| owner | 关键入口 | 责任 |
+|---|---|---|
+| `MainWindow` | `openPointCloud`、`loadSelectedSource`、`loadFinished`、`publishCanvasCache` | 读取输入、确认异步结果仍有效、发布画布与来源状态 |
+| `MainWindow` | `applyNoiseRemoval`、`noiseFinished` | 发起过滤并按输入 revision 接受/丢弃结果 |
+| `MainWindow` | `determinePlaneCandidate`、`confirmPlaneCandidate`、`runPlaneExtraction` | 三点平面候选、用户确认和正式平面处理编排 |
+| `MainWindow` | `planScanTrajectory`、`textureMappingFinished`、模板读写入口 | 调用 60 的扫描/纹理/模板 API 并更新 UI |
+| `SelectedPlaneDialog` | `loadRound`、`requestFit`、`picked`、`confirmRound` | 多帧加载、选面索引/候选、拾取回译与整轮快照确认 |
+| `SelectedPlaneDialog` | `schedule`、`startJob`、`finishJob`、`finishGlobal` | 有界后台任务调度、身份校验和结果收敛 |
+| `SelectedPlaneDialog` | `stitch`、`saveTemplate`、`cancelAndWait` | 完整快照拼接、成功模板保存、取消/join |
+| 模块 20 `PointCloudCanvas` | `setCloud`、`setDisplayCloud`、`setSelectedIndices`、`setTextureGrayOverlay` | 完整/展示点集、拾取映射、选择和灰度覆盖显示 |
+| 模块 10 | `pcv::detail::io::readPly`、`readPlyCached`、`voxelDownsample`、`removeStatisticalOutliers`、`ArtifactTransaction::commit` | PLY/缓存、预处理和正式文件事务 |
+| 模块 30 | `pcv::interface::stitch`、`stitchRawLineProfiles`、`pcv::stitching::stitchSelectedPlanes` | 整帧配准/仅转换，以及所选平面相邻精配准、合并和输出 |
+| 模块 50 | `loadHandEyeCalibration`、`robotPoseToMatrix`、`interpolateRobotTransform`、`composeBaseFromDepth`、`transformLineScanToRobotBase` | 唯一标定解析、位姿数学和点云坐标转换 |
+| 模块 60 | `fit`、`preparePlaneSelectionIndex`、`selectPlaneAtPoint`、`prepareTempWorkpiece`、`finalizeTempWorkpiece` | 平面、单击选面、临时工件几何及四件套输出 |
+| 模块 60 | `mapPlaneBrightness`、`planScanTrajectory`、`saveWorkpieceTemplate`、`loadWorkpieceTemplate` | 灰度映射、扫描轨迹和模板读写 |
 
-修改公共类型、输出格式、坐标约定或错误码前，先阅读 v0.3 需求文档和对应模块文档。
+算法实现和精确数据流程见[架构与算法导读](docs/development/pointcloudview_architecture_analysis_v1.md)。编码时按以下事实理解算法：
 
-- PLY 读写：按属性名读取坐标和法向，支持 ASCII、binary little-endian、binary big-endian；保留点序、source index、bounds、取消和错误语义。
-- 坐标转换：控制器位姿顺序为 `[X,Y,Z,A,B,C]`，其中 `A=Rx`、`B=Ry`、`C=Rz`；旋转约定为 `Rz(C)*Ry(B)*Rx(A)`。
-- 配准和拼接：使用统一的 `registerRobotBaseFrames()` 与 `applyTrajectorySeamFusion()`；取消或失败时不得发布部分结果或复用旧正式输出。
-- seam fusion 默认值：`halfWidth=8.0f`、`mutualDistance=0.6f`、`decisionCellSize=0.5f`。
-- 平面拟合：拒绝重复、越界、非有限和共线控制点；保留 RMS、内点、阈值、planarity、连通域和取消诊断。
-- 渲染：仅 GUI 线程修改 QWidget/OpenGL；拒绝点、轮廓、坐标系中的非有限值和越界索引。
-- 平面输出：PNG、PLY、JSON 必须成套提交；任一写入失败整体失败并回滚。PNG 使用 `Grayscale8` 和 0/255；平面 PLY 使用 binary little-endian。
-- 共享库不弹窗、不访问 QWidget；通过 Result 状态、错误码、取消标记和诊断返回结果。
-- 应用层负责用户提示、窗口生命周期和线程结果发布。
+- 单击选面先对完整点云建不可变索引，局部多尺度 RANSAC/PCA 找初始平面，全帧垂距分类，再投影网格连通、边界跨小缺失带并稳健精化；候选必须满足容差，不补点/加厚/压平，仍需用户预览确认。
+- 六分屏最多展示每格 300,000 个确定性抽样实测点；拾取映射回完整点下标，正式索引、确认快照、拼接和模板输入保留完整点集。
+- 整帧 ICP 的输入转换、降采样/法向、相邻帧多层级配准、结构验证/回退和原序合并归 30；关闭 ICP 时是仅转换。所选平面路径只收 robot_base 坐标，不得再次手眼转换；配准修正受预算约束，`formal_output` 只表示事务成功，不等于严格质量通过。
+- 60 临时工件以两组平面和来源信息生成 baseline/ROI/Mask/info；纹理依赖严格 row-major `source_raster_index` 对应，不做图像配准；扫描规划不等于刀路规划，不做 IK/碰撞/机器人控制。
+- PLY 读取、过滤、事务语义归 10；画布/拾取归 20；所有坐标数学归 50。UI wrapper 负责适配 DTO 和发布，不复制模块算法。
 
-详细字段、JSON schema、错误码和测试矩阵以：
-`docs/requirements/pointcloudview_v0.3.md`、`docs/modules/<module>.md`、公共头文件和测试源码为准。
+## 稳定契约与线程
 
-## 6. 单模块开发流程
+公共类型、输出、坐标/错误码变更前阅读[数据契约](docs/contracts/data_contracts_v0.5.md)及对应模块文档；既有 JSON/PLY/PCVMAP、schema 名称和默认值不得随命名整理改动。新命名规则及实际 namespace 债务见协同规范，不把头路径当 namespace。
 
-每个需求必须先登记主模块编号：
+位姿 [X,Y,Z,A,B,C]，A=Rx/B=Ry/C=Rz，Rz(C)*Ry(B)*Rx(A)；RTmatDepth2robot=T_flange_depth，T_base_depth=T_base_flange*T_flange_depth。LineProfileXz 为 [X,0,Z]，Y 仅作 y/signedTravel；负行程合法，法向只旋转不平移。禁止固定翻转/镜像补丁，已在 robot_base 的选面请求不再转换。
 
-1. 执行 `git status --short`，记录已有工作区修改。
-2. 阅读目标模块文档、公共头、CMake 和相关测试。
-3. 设计或确认接口，列出受影响模块和依赖方向。
-4. 只修改目标模块及必要的跨模块接口、测试和文档。
-5. 先运行目标模块测试，再构建直接依赖和应用。
-6. 涉及公共头、CMake、processor、UI 或输出契约时执行完整 Debug 构建和全量 CTest；发布相关改动补充 Release。
-7. 更新 `docs/modules/<module>.md` 和 v0.3 需求追踪，记录日期、需求、文件、行为、验证和风险。
-8. 提交前执行 `git diff --check` 和 `git status --short`。
+新业务正式输出经 10 ArtifactTransaction，30/60 可编排事务；旧 writePlaneOutput 在 10 内仍有自身回滚实现，收敛属于后续任务。Mask 为 Grayscale8 0/255，显示亮度 0～255。取消/失败不发布部分结果，已提交文件与 GUI 发布分别处理，不复用旧结果假装成功。
 
-跨模块修改必须在提交说明中列出影响模块、依赖变更和回归测试。未实现模块不得写入功能成功记录。
+worker 只经 const QVector 视图、at()/->at() 读取共享 Qt 容器，捕获列表显式只读对象；禁止非 const operator[] 触发 detach。worker 返回私有任务结构，全部 future join 后按确定顺序提交。新增并行路径保留 refcount>1 的额外共享副本，覆盖串行和 1/2/4 任务等价、取消与 join 生命周期。GUI 线程独占 QWidget/OpenGL；关闭先取消/等待，revision 过期结果不发布。
 
-## 7. 构建与验证
+平面拒绝重复/越界/非有限/共线控制点；渲染拒绝非法点/坐标/索引；来源映射与点序保留。seam 默认 8/0.6/0.5 mm。所选平面 warn_only、formal_output 仅为事务成功，不宣称严格质量通过。单击真实端到端性能不由合成模块基准替代。
 
-Windows + Qt/MSVC 推荐使用仓库脚本，并显式传入可写的 ASCII 路径：
+## 开发、验证与记录
 
-```powershell
-.\scripts\build_windows.ps1 -Config Debug -BuildTests -QtDir <QtDir> -BuildDir <DebugBuildDir> -CMakePath <cmake.exe>
-.\scripts\build_windows.ps1 -Config Release -BuildTests -QtDir <QtDir> -BuildDir <ReleaseBuildDir> -CMakePath <cmake.exe>
-```
+1. 先 git status --short，记录工作区及主责模块/应用层，阅读公共头、CMake、测试和当前文档。
+2. 明确接口、依赖和影响面，只改授权模块及必要跨界文件；并发修改先重读合并。
+3. 按风险运行定向测试/构建；涉及公共头、CMake、processor、UI 或输出时独立执行源码树外 Debug 完整构建/CTest，发布变更补 Release。用户明确暂缓时遵从，并标明未运行。
+4. 真实 GUI、相机、机器人、生产样例和部署分别验收，不由单元测试替代。只报告实际命令/结果，历史测试不得充当本轮通过。
+5. 所有代码更新必须同步模块当前文档、协同映射；在 target.md 登记简要摘要，详细记录只追加 docs/changelog/v0.5.md，包含日期、owner、文件/API、行为、验证、风险和回滚点。
+6. 交付前 git diff --check 与 git status --short，报告已有修改、任务增量、未跟踪/删除及未提交状态。
 
-CTest 使用对应构建目录和配置运行：
+推荐构建工具及命令见[Windows 构建](docs/development/build-windows.md)。C++17、Qt6.5+、MSVC；根 CMake3.19+，preset version6 另要求3.25+。优先 NMake Makefiles，避免 JOM；VSLANG/头文件依赖护栏保留，公共类型修改后全量重建。GUI/CLI/Tools/Tests 组合存在待验证项，不沿用“固定开启 GUI”等旧文字。
 
-```powershell
-ctest --test-dir <DebugBuildDir> -C Debug --output-on-failure
-ctest --test-dir <ReleaseBuildDir> -C Release --output-on-failure
-```
+## 兼容清理与本轮例外
 
-工具构建：
+2026-10-16 连续采集v2：用户授权实施、构建与测试。新入口默认SDK整图/自动行数，人工确认当前配置一次门控对应一整图；保留触发，未知轮廓拒绝，v2会话逐帧高度独立，v1固定行数兼容。异常只停软件接收，不控制机器人；30/50数学及选面不改。[说明](docs/development/camera_capture_sdk_frame_v2.md)与[本轮记录](docs/changelog/v0.5.md#camera-capture-sdk-frame-v2)。保留已有修改，不提交/推送/上传。
 
-```powershell
-cmake -S . -B <ToolsBuildDir> -DPCV_BUILD_TOOLS=ON
-cmake --build <ToolsBuildDir> --config Debug --target registration_diagnostic
-```
+2026-10-16 连续采集与位姿直拼v1：用户授权实施及实际构建测试。主责10/30/50，CameraDialog直接采集/填XML和位姿/直拼并发布主界面；固定行数、原栅格行序进度、完整逐帧事务保存，非预览点云输入。首版无ICP/seam，不改选面算法。接口、会话格式及最终验证见[说明](docs/development/camera_capture_pose_stitch_v1.md)和[日志](docs/changelog/v0.5.md#camera-capture-pose-v1)。保留已有用户修改，不提交/推送/上传。
 
-验证结论只报告本次实际运行的命令和结果；GUI 人工操作、真实生产夹具和未实现模块不能用单元测试替代。
+2026-10-16 当前帧展示加速 v2：选面对话框在完整读取/转换后，先显示最多 300,000 个确定性均匀抽取的实测点，再后台建立完整选面索引。画布拾取回译完整下标，完整候选只在展示子集上高亮，正式选面/快照/输出保持完整。已撤回上一轮模块 30 缓存及结果预览字段，拼接结果恢复完整显示，不新增 manifest 字段。按本任务用户安排不运行构建/CTest/GUI/性能测试；验收步骤见[开发说明](docs/development/current_frame_display_acceleration_v2.md)，上一轮 v1 说明仅保留历史。
 
-## 8. 兼容层清理
+旧 target/header/namespace 不新增重复实现；保留兼容周期。删除前须生产和工具引用清零、公共 include 迁移、无重复算法/流水线、构建/CTest/GUI/现场验收及弃用期或明确批准；删除独立评审/提交，不与迁移混合。
 
-删除兼容 target 或 forwarding header 前必须同时满足：
+本次用户已授权按 v0.5 清单重写文档、合并历史、删除18份重复 Markdown 和1份 txt，源码兼容层不删。本轮只静态审计，不构建/CTest/GUI/性能测试、不提交/push/上传。[详细结果](docs/changelog/v0.5.md#documentation-audit)与[文档迁移表](docs/archive/document_migration_v0.5.md)为本次记录；先前规则和变更可在历史归档追溯。
 
-- 生产源码、CMake、测试和工具不再引用旧名称；
-- 所有公共 include 已切换到规范模块路径；
-- 应用 processor 不再包含重复配准、拼接或平面算法；
-- GUI 和接口只保留一条 stitching/registration/seam pipeline；
-- Debug/Release 构建、全量 CTest、GUI smoke 和真实夹具验收通过；
-- 弃用周期结束或获得明确删除批准。
+2026-10-16 六分屏整合 v1：当前轮最多六帧完整数据和索引，每格展示≤300000确定性均匀实测点；两个帧级任务、每任务≤2计算worker，单任务≤4，共享256 MiB可选优化存储预算（不含业务数据/原有索引）。正式选面/结果/模板始终完整，30不依赖60。模板复用v1 PLY+JSON与主窗口读取。按用户安排仅静态检查，构建/CTest/GUI/性能由用户执行；见[开发说明](docs/development/batch_plane_selection_template_integration_v1.md)。
 
-删除动作必须独立提交，便于回退；不得与功能迁移混在同一提交。
 
-## 9. Git 与汇报
+2026-10-16 整合v2纠偏：以[当前说明](docs/development/batch_plane_selection_template_integration_v2.md)替代v1当前执行规则，历史保留。默认活动格不抢索引，完整选面请求优先；过期id/revision/token/kind结果不改变队列或内存暂停；所有轮次提交后任意轮可拼接；提交跳过释放旧快照/缓存，撤销重载重选。投影连续窗口并行、全join后原序归并，新增分阶段耗时仅会话日志。按用户安排本轮不构建/CTest/GUI/性能、不更新程序、不提交推送。
 
-- 默认保留用户修改，只提交明确属于本任务的文件。
-- 用户要求本地提交时只执行本地 `git commit`，不执行远端 push。
-- 汇报必须说明：
-  - 做了什么；
-  - 修改了哪些文件和 API；
-  - 如何验证及结果；
-  - 未验证项和剩余风险；
-  - 最终工作区状态。
-
-推荐汇报格式：
-
-```text
-做了什么：
-- ...
-
-改了什么：
-- 文件：...
-- 关键行为/API：...
-
-如何验证：
-- 命令：...
-- 结果：...
-
-风险/未验证项：
-- ...
-```
+2026-10-16 构建/运行修复：用户本轮明确授权实际构建与运行，以上静态交付限制仅属历史。修复60索引同作用域count重定义、应用/两主窗口测试target未启用AUTORCC导致图标缺失；新增资源加载及--native-gl六画布GPU拾取回归。全新源码树外Debug/Release全量构建成功，各43/43 CTest，原生六画布及两GUI自关闭均通过；不含相机/真实大样本/干净机部署。旧构建目录不覆盖，具体EXE、命令及风险见[修复记录](docs/development/build_runtime_repair_v1.md)。

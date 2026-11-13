@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pcv/core/point_types.h>
+#include <pcv/planefitting/plane_fitting.h>
 
 #include <QString>
 #include <QVector>
@@ -17,8 +18,13 @@ using LoadProgressCallback = std::function<void(qsizetype loaded, qsizetype tota
 struct LoadResult {
     QVector<Point3D> points;
     QString error;
+    QStringList warnings;
+    QString sourcePlyEncoding = QStringLiteral("unknown");
+    QString canonicalPlyPath;
+    bool canonicalReady = false;
     bool ok = false;
     bool usedCache = false;
+    qsizetype declaredPointCount = 0;
     Point3D minimum;
     Point3D maximum;
     bool hasBounds = false;
@@ -39,25 +45,29 @@ struct NoiseOptions {
 // One scan file and its fixed transform into the robot/world frame.  The
 // first integration stage intentionally treats each PLY as a rigid snapshot;
 // no per-point robot trajectory compensation is implied.
-struct WorldCloudInput {
+//
+// The camera -> robot_base conversion itself is owned by module 50 and uses
+// the same LineProfileXz contract as the scanning JSON entry: the camera point
+// is [X,0,Z], the input Y only yields the scan ratio input.y / signedTravel
+// and Start/End define the scan direction. The progress/direction/coordinate
+// mode knobs below are retained for the merge cache key and for API
+// compatibility only; they no longer select a second conversion algorithm.
+struct ViewLegacyWorldCloudInput {
     QString filePath;
     QMatrix4x4 startBaseFromFlange;
     QMatrix4x4 endBaseFromFlange;
+    // T_flange_depth (flange_from_depth) parsed from RTmatDepth2robot.
     QMatrix4x4 flangeFromDepth;
+    // Compatibility-only: never inverted, never a second conversion path.
     enum class ScanProgressSource : quint8 { VertexOrder, LocalX, LocalY, LocalZ };
     ScanProgressSource scanProgressSource = ScanProgressSource::VertexOrder;
     enum class ScanDirection : quint8 { Auto, Forward, Reverse };
-    // Forward maps the first scan sample to Start and the last to End.
-    // Reverse maps the first sample to End and the last to Start. Auto uses
-    // the world-axis displacement test implemented by the merge routine.
+    // Compatibility-only. The unified conversion takes the scan direction from
+    // Start/End (a negative signed travel is a valid reverse scan).
     ScanDirection scanDirection = ScanDirection::Auto;
     enum class ScanCoordinateMode : quint8 {
         Auto,
-        // The PLY scan axis already contains the metric Start-to-End motion.
-        // Apply one anchor flange pose to the complete local cloud.
         EmbeddedMotion,
-        // The PLY contains per-profile camera coordinates; interpolate the
-        // flange pose for every point using scan progress.
         PerPointPose
     };
     ScanCoordinateMode scanCoordinateMode = ScanCoordinateMode::Auto;
@@ -68,7 +78,7 @@ struct WorldCloudInput {
     bool applyRobotTransform = true;
 };
 
-struct IcpOptions {
+struct ViewLegacyIcpOptions {
     bool enabled = true;
     int maximumIterations = 30;
     float maximumCorrespondenceDistance = 2.0f;
@@ -98,7 +108,7 @@ struct IcpOptions {
     QVector<float> voxelLevels = {2.0f, 0.8f, 0.25f};
 };
 
-struct IcpDiagnostics {
+struct ViewLegacyIcpDiagnostics {
     QString filePath;
     bool attempted = false;
     bool converged = false;
@@ -120,13 +130,13 @@ struct IcpDiagnostics {
     QString reason;
 };
 
-struct WorldCloudMergeResult {
+struct ViewLegacyWorldCloudMergeResult {
     QVector<Point3D> points;
     QVector<int> cloudIds;
     QVector<qsizetype> sourceIndices;
     QVector<QString> sourceFiles;
     QString diagnostics;
-    QVector<IcpDiagnostics> icpDiagnostics;
+    QVector<ViewLegacyIcpDiagnostics> icpDiagnostics;
     qsizetype pointsBeforeCrossCloudFusion = 0;
     qsizetype crossCloudDuplicateCount = 0;
     float crossCloudFusionVoxelSize = 0.0f;
@@ -187,6 +197,9 @@ struct ThreePointPlaneOptions {
     // Fast preview mode: fit the model but defer full-cloud classification and
     // connected-component traversal until the user confirms the candidate.
     bool deferFinalClassification = false;
+    bool parallelEnabled = false;
+    int maxParallelTasks = 4;
+    std::function<bool()> isCancelled;
 };
 struct PlaneEdgeOptions {
     float edgeGridSize = 0.2f;
@@ -237,6 +250,8 @@ struct ThreePointPlaneResult {
     bool deferred = false;
     QString error;
     bool ok = false;
+    bool cancelled = false;
+    pcv::planefitting::StageTimings timings;
 };
 enum class PlaneConsistencyStatus : quint8 {
     Passed,
@@ -349,28 +364,20 @@ struct NoiseResult {
     bool ok = false;
 };
 
-// Loads ASCII PLY and binary little/big-endian PLY vertex xyz data.
-// RGB and other vertex properties are skipped safely.
-bool loadPly(const QString &fileName, QVector<Point3D> &points,
-             QString *error = nullptr,
-             const LoadProgressCallback &progress = {});
-
-// Loads a PLY through a validated binary cache next to the source file.
-// The cache is created after the first successful PLY parse.
+// Loads a PLY through a validated internal cache and Binary LE canonical PLY.
 bool loadPlyCached(const QString &fileName, QVector<Point3D> &points,
                    QString *error = nullptr, bool *usedCache = nullptr);
 
 LoadResult loadPlyCachedResult(const QString &fileName);
-// Direct asynchronous-load entry point.  It reads the source PLY without
-// creating or consulting an intermediate cache file.
+// Asynchronous-load entry points use the same cache and canonical PLY gate.
 LoadResult loadPlyResult(const QString &fileName);
 LoadResult loadPlyResultWithProgress(const QString &fileName,
                                      const LoadProgressCallback &progress);
 
 // Loads each PLY once, applies its supplied rigid world transform, and
 // concatenates the measured points.  No virtual/centroid points are created.
-WorldCloudMergeResult mergePlyCloudsInWorld(const QVector<WorldCloudInput> &inputs,
-                                             const IcpOptions &icp = {});
+ViewLegacyWorldCloudMergeResult mergePlyCloudsInWorld(const QVector<ViewLegacyWorldCloudInput> &inputs,
+                                             const ViewLegacyIcpOptions &icp = {});
 
 // HiViewer-style proportional thinning. denominator=1 keeps all points,
 // denominator=2 keeps approximately 1/2, denominator=16 keeps approximately 1/16.

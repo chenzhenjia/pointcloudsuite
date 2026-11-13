@@ -1,0 +1,9 @@
+<RCC><qresource prefix="/scan_geometry_v1">
+<file alias="scan_geometry_v1.qss">resources/scan_geometry_v1.qss</file>
+<file alias="icons/face.svg">resources/icons/face.svg</file>
+<file alias="icons/interference.svg">resources/icons/interference.svg</file>
+<file alias="icons/rectangle.svg">resources/icons/rectangle.svg</file>
+<file alias="icons/reset-planes.svg">resources/icons/reset-planes.svg</file>
+<file alias="icons/restore.svg">resources/icons/restore.svg</file>
+<file alias="icons/undo.svg">resources/icons/undo.svg</file>
+</qresource></RCC>

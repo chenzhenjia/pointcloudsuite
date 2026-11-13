@@ -1,0 +1,152 @@
+#pragma once
+
+#include <pcv/core/point_types.h>
+#include <pcv/registration/handeye_transform.h>
+#include <pcv/stitching/multiframe_registration.h>
+#include <pcv/stitching/seam_fusion.h>
+
+#include <QString>
+#include <QVector>
+
+#include <functional>
+
+namespace pcv::interface {
+
+struct StitchingFrameInput {
+    QString plyPath;
+    pointcloud::RobotPose startPose;
+    pointcloud::RobotPose endPose;
+    // Optional committed camera capture frame directory. Only supported for pose-only stitching.
+    QString captureFrameDirectory;
+};
+
+struct StitchingInputGroup {
+    QString calibrationPath;
+    QVector<StitchingFrameInput> frames;
+};
+
+struct StitchingRegistrationGroup {
+    pointcloud::IcpOptions options;
+    int sampleStride = 8;
+    bool parallelEnabled = true;
+    int maxParallelTasks = 0;
+    bool collectDiagnosticFrames = true;
+    bool structuralCoverageOfMatched = true;
+    float minimumStructuralMatchedRatio = 0.10f;
+    float visibilityWarningRatio = 0.25f;
+    bool tangentCoarseTrimmedScore = true;
+    int correspondenceParallelTasks = 0;
+};
+
+struct StitchingSeamGroup {
+    bool enabled = false;
+    float halfWidthMm = 8.0f;
+    float mutualDistanceMm = 0.6f;
+    float decisionCellSizeMm = 0.5f;
+};
+
+struct StitchingArtifactGroup {
+    QString outputDirectory;
+    bool allowOverwrite = false;
+    double previewRatio = 0.1;
+    bool writeSourceClouds = false;
+    bool writeDiagnosticFrames = false;
+};
+
+struct StitchingArtifactManifest {
+    QString formalPly;
+    QString previewPly;
+    QString mappingFile;
+    QString reportJson;
+    QStringList sourcePlyFiles;
+    QStringList diagnosticPreIcpFiles;
+    QStringList diagnosticPostIcpFiles;
+};
+
+struct StitchingRequest {
+    StitchingInputGroup input;
+    StitchingRegistrationGroup registration;
+    StitchingSeamGroup seam;
+    StitchingArtifactGroup artifacts;
+    std::function<bool()> isCancelled;
+    std::function<void(float, const QString &)> progress;
+};
+
+struct StitchingResult;
+StitchingResult stitch(const StitchingRequest &request);
+
+struct [[deprecated("Use StitchingRequest grouped fields")]] StitchingOptions {
+    QString calibrationPath;
+    QString outputDirectory;
+    bool allowOverwrite = true;
+    QVector<StitchingFrameInput> frames;
+    int sampleStride = 8;
+    bool seamEnabled = false;
+    float seamHalfWidthMm = 8.0f;
+    // Registration tuning that the module-30 orchestration forwards to the
+    // module-40 registration options. Defaults follow IcpOptions; they are
+    // exposed so a caller (and the regression harness) can A/B a configuration
+    // without touching the shared defaults.
+    bool structuralCoverageOfMatched = true;
+    float minimumStructuralMatchedRatio = 0.10f;
+    float visibilityWarningRatio = 0.25f;
+    bool tangentCoarseTrimmedScore = true;
+    int correspondenceParallelTasks = 0;
+    // Compatible default: the registration result keeps the 2 mm pre/post ICP
+    // diagnostic frames. Standard output callers disable this to skip frames.
+    bool collectDiagnosticFrames = true;
+    bool parallelEnabled = true;
+    int maxParallelTasks = 0;
+    pointcloud::IcpOptions registrationOptions;
+    bool useRegistrationOptions = false;
+    double previewRatio = 0.1;
+    bool writeSourceClouds = false;
+    bool writeDiagnosticFrames = false;
+    std::function<bool()> isCancelled;
+    std::function<void(float, const QString &)> progress;
+    float seamMutualDistanceMm = 0.6f;
+    float seamDecisionCellSizeMm = 0.5f;
+};
+
+struct StitchingResult {
+    bool success = false;
+    bool cancelled = false;
+    QString errorCode;
+    QString message;
+    QString outputPly;
+    StitchingArtifactManifest manifest;
+    QVector<pointcloud::Point3D> points;
+    // Optional application-layer texture overlay. The stitcher itself does
+    // not compute it; the camera wizard fills it from capture provenance.
+    QVector<quint8> textureGrayscale;
+    QVector<quint8> textureValid;
+    qsizetype textureMappedPointCount = 0;
+    qsizetype textureSkippedPointCount = 0;
+    QString textureManifest;
+    QString textureSourceDirectory;
+    QString textureError;
+    pointcloud::MultiFrameRegistrationResult merge;
+    QVector<pointcloud::IcpDiagnostics> icpDiagnostics;
+    QVector<pointcloud::SeamFusionDiagnostic> seamDiagnostics;
+    pointcloud::SeamFusionResult seamFusion;
+    QString diagnostics;
+    // Stage wall-clock timings (ms). readMs/transformMs/registrationMs are the
+    // durations of the conversion and registration calls; seamFusionMs comes
+    // from the shared seam fusion result; outputMs covers the formal PLY write.
+    // registration detail is reported in diagnostics via the module 40 result.
+    qint64 readMs = 0;
+    qint64 transformMs = 0;
+    qint64 registrationMs = 0;
+    qint64 seamFusionMs = 0;
+    qint64 outputMs = 0;
+    qint64 totalMs = 0;
+    bool parallelEnabled = false;
+    int requestedParallelTasks = 0;
+    int actualParallelTasks = 1;
+    qint64 readWorkMs = 0;
+    qint64 transformWorkMs = 0;
+};
+
+StitchingResult stitchRawLineProfiles(const StitchingOptions &options);
+
+} // namespace pcv::interface

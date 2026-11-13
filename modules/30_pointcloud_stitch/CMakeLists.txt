@@ -1,0 +1,22 @@
+add_library(pcv_m30_pointcloud_stitch STATIC
+    src/stitching_interface.cpp
+    src/process_job_json.cpp
+    include/pcv/interface/process_job_json.h
+    src/seam_fusion.cpp
+    src/multiframe_registration.cpp
+    src/selected_plane_stitch.cpp
+    include/pcv/stitching/selected_plane_stitch.h
+    include/pcv/interface/stitching_interface.h
+    include/pcv/stitching/seam_fusion.h
+    include/pcv/stitching/seam_fusion_kernel.h
+    include/pcv/stitching/seam_fusion_types.h
+    include/pcv/stitching/multiframe_registration.h
+)
+target_include_directories(pcv_m30_pointcloud_stitch PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(pcv_m30_pointcloud_stitch PUBLIC
+    pcv_m50_coordinate_conversion
+    pcv_m10_pointcloud_io
+    Qt::Core Qt::Gui Qt::Concurrent)
+target_compile_definitions(pcv_m30_pointcloud_stitch PRIVATE PCV_PROCESS_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
