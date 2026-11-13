@@ -77,6 +77,7 @@ public:
     void setSelectedEdgeIndices(const QVector<int> &indices);
 
     QVector<int> pickRectangleForSelection(const QRectF &selection);
+    pcv::render::CloudProjectionSnapshotV1 projectionSnapshot() const;
 
     void setSelectedIndices(const QVector<int> &indices);
     // Independent screen-space crosses; indices use the full source mapping.
@@ -106,6 +107,9 @@ public:
     void setEmptyMessage(const QString &message);
     // Colors/valid are indexed by the full source cloud, like gray overlays.
     bool setPointColorOverlay(const pcv::render::PointColorOverlay &overlay);
+    // Display-sized colors, for callers that already own a deterministic
+    // display subset. Does not change full-source selection/index semantics.
+    bool setDisplayPointColorOverlay(const pcv::render::PointColorOverlay &overlay);
     // Marker colors are rendered independently of the active color mode and
     // use the same full-source index contract as PointColorOverlay.
     bool setPointMarkerOverlay(const pcv::render::PointColorOverlay &overlay);

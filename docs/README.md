@@ -27,6 +27,7 @@
 | 60 几何/工件/扫描/纹理 | [60_geometry_workpiece](modules/60_geometry_workpiece.md) |
 | CLI | [pointcloudcli](modules/pointcloudcli.md) |
 | 原工作台 / 共享UI | [View](../apps/pointcloudview/README.md) / [stitching_ui](../apps/stitching_ui/README.md) |
+| 独立 STEP 模板制作 v1 | [开发与验收](development/step_template_builder_v1.md) |
 | 离线 PLY 单页 / 所选平面拼接 v2 | [操作说明](../apps/scan_geometry_demo_v1/README_v2.md) / [开发与用户验收](development/scan_geometry_real_selected_plane_v2.md) |
 
 70/80只保留兼容公共头，无构建target，详细职责归60/10；90/100并入路线图，不再各建空占位页。应用/无引用target清单和用户构建矩阵见[清理说明](development/application_target_cleanup_v1.md)。[features](../apps/pointcloudview/features/README.md)与[adapters](../apps/pointcloudview/adapters/README.md)明确同事工作边界。
@@ -46,6 +47,6 @@ v0.1～v0.4需求和v0.4协同旧路径保留短指引；详细历史只维护�
 - [最终工件模板蓝红显示v1](development/scan_geometry_result_regions_v1.md)：结果区域生成、修剪同步、取消重试与用户验收。
 
 
-## STEP 模板与自动匹配 v1
+## STEP 模板制作与匹配后端 v1
 
-2026-11-05 新增STEP模板与自动匹配v1开发/命令/验收说明；源码交付，尚未构建或验证定位成功率。 [开发与验收](development/step_template_matching_v1.md)。本轮未执行构建、CTest、GUI/DPI或真实样本验证，由用户执行。
+当前制作入口为独立 `step_template_builder_v1`，提供工件信息、STEP点云、选面修剪和模板草案保存；匹配算法与旧契约保留在模块40/60，暂不提供匹配页。 [制作开发与验收](development/step_template_builder_v1.md) · [历史匹配后端说明](development/step_template_matching_v1.md)。

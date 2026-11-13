@@ -1,5 +1,7 @@
 # 模块、UI 与交接协同规范 v0.5
 
+2026-11-06 独立 STEP 模板制作应用：`apps/step_template_builder_v1` 依赖20/60和Qt，使用20的投影快照与显示映射，60提供完整CAD采样、平面角色、掩码和ArtifactTransaction；模块不依赖应用。矩形修剪由应用后台按完整点集执行，显示抽样仅用于展示。demo1旧STEP/自动匹配入口移除，40/60底层能力保留。[开发说明](../development/step_template_builder_v1.md)。
+
 2026-11-05 应用/target清理：桌面入口保留scan_geometry_demo_v1与pointcloudview，独立拼接/亮度应用及旧模拟源码移除；两个GUI共用真实选面任务，整帧窗口仅随pointcloudview构建。无引用兼容target删除，公共兼容头保留；本轮用户明确授权清理，无须迁移公共头。CLI/Tools保留默认OFF，验证由用户执行。[清单](../development/application_target_cleanup_v1.md)。
 
 2026-11-04 配色状态协同：新GUI窗口根据当前帧 `hasCandidate` 显式传 `ScanGeometryCanvasV2::DisplayMode`，原始帧默认高度色、工件拟合后灰点，拼接/修剪结果灰点＋蓝红区域；20只负责既有统一色/高度色参数与蓝红平面绘制。应用缓存完整来源Z范围并在点发布后恢复，不改60拟合或30拼接，不改变marker/拾取默认契约。模式变化不更新点VBO，测试及GUI由用户执行。[说明](../development/scan_geometry_real_selected_plane_v2.md#2026-11-04-按工件拟合状态切换配色)。

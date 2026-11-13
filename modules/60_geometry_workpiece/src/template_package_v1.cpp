@@ -38,6 +38,81 @@ TemplatePackageV1 generateStepTemplatePackageV1(const StepModelResult &model,con
     out.coordinateFrame=QStringLiteral("cad_model");out.identity=templatePointIdentityV1(out.points,o.isCancelled);out.timings.insert("identity_ms",digest.nsecsElapsed()/1e6);
     out.cancelled=o.isCancelled&&o.isCancelled();out.ok=!out.cancelled;out.timings.insert("generate_package_ms",timer.nsecsElapsed()/1e6);return out;
 }
+TemplatePackageV1 generateStepTemplatePackageFromSampledV1(const StepModelResult &model,
+    const CadCloudResult &sampled,const QSet<int> &work,const QSet<int> &interference,
+    const QSet<int> &removed,const TemplateFeatureOptionsV1 &o) {
+    TemplatePackageV1 out;QElapsedTimer timer;timer.start();
+    const auto stopped=[&]{return o.isCancelled&&o.isCancelled();};
+    const auto fail=[&](const QString &message){TemplatePackageV1 failed;failed.error=message;failed.cancelled=stopped();return failed;};
+    if(stopped())return fail(QStringLiteral("已取消"));
+    if(!model.success||!sampled.success||sampled.points.isEmpty()||sampled.points.size()>kCadMaximumPoints
+        ||work.isEmpty()||work.intersects(interference))return fail(QStringLiteral("请选择互斥的工件解析面与干涉面"));
+    for(int i:removed)if(i<0||i>=sampled.points.size())return fail(QStringLiteral("修剪下标越界"));
+    QSet<int> roles=work;roles.unite(interference);
+    CadCloudResult selected=sampled;selected.faceRanges.clear();
+    QSet<int> found;qsizetype end=0;int lastFace=0;
+    for(const auto &range:sampled.faceRanges){
+        if(range.faceId<=lastFace||range.first!=end||range.count<1||range.count>sampled.points.size()-end)
+            return fail(QStringLiteral("CAD 逐面范围与完整点云不一致"));
+        end+=range.count;lastFace=range.faceId;
+        if(roles.contains(range.faceId)){selected.faceRanges.append(range);found.insert(range.faceId);}
+    }
+    if(end!=sampled.points.size()||found!=roles)return fail(QStringLiteral("选择面缺少完整采样范围"));
+    auto features=cadTemplateFeaturesV1(model,selected,interference,o.isCancelled);
+    if(!features.ok)return fail(features.error);
+    for(auto plane:features.planes){
+        if(stopped())return fail(QStringLiteral("已取消"));
+        const auto sourceFirst=plane.first,sourceCount=plane.count;
+        QVector<int> kept;kept.reserve(sourceCount);
+        for(qsizetype i=sourceFirst;i<sourceFirst+sourceCount;++i){
+            if((i&4095)==0&&stopped())return fail(QStringLiteral("已取消"));
+            if(!removed.contains(int(i)))kept.append(int(i));
+        }
+        if(kept.isEmpty())continue;
+        if(kept.size()!=sourceCount){
+            // Derive the grid from the immutable full face, then preserve it on
+            // every trim rebuild. Never reuse the untrimmed exact CAD mesh.
+            pcv::planefitting::PlaneMaskOptionsV1 mo;
+            mo.samplingAxisU=plane.axis;mo.processingBudget=o.budget;mo.isCancelled=o.isCancelled;
+            auto baseline=pcv::planefitting::buildPlaneMaskV1(sampled.points,plane.indices,plane.model,mo);
+            if(!baseline.ok)return fail(baseline.error);
+            mo.spacingUMm=baseline.spacingUMm;mo.spacingVMm=baseline.spacingVMm;
+            mo.fixedGridOrigin=true;mo.gridOriginU=baseline.gridOriginU;mo.gridOriginV=baseline.gridOriginV;
+            baseline.mesh={};
+            auto mask=pcv::planefitting::buildPlaneMaskV1(sampled.points,kept,plane.model,mo);
+            if(!mask.ok)return fail(mask.error);
+            plane.region=std::move(mask.mesh);
+        }
+        auto &dst=plane.interference?out.interferencePoints:out.points;
+        plane.first=dst.size();plane.count=kept.size();plane.indices.clear();
+        double x=0,y=0,z=0;
+        for(int index:kept){if((index&4095)==0&&stopped())return fail(QStringLiteral("已取消"));const auto &point=sampled.points.at(index);dst.append(point);x+=point.x;y+=point.y;z+=point.z;}
+        plane.center=QVector3D(float(x/kept.size()),float(y/kept.size()),float(z/kept.size()));
+        out.planes.append(std::move(plane));
+    }
+    if(out.points.isEmpty())return fail(QStringLiteral("修剪后没有保留工件点"));
+    if(!parseTemplateFeaturesV1(serializeTemplateFeaturesV1(out.planes),out.points.size(),out.interferencePoints.size()).ok)
+        return fail(QStringLiteral("修剪区域或点范围无效，不能生成模板"));
+    out.coordinateFrame=QStringLiteral("cad_model");out.source=sampled.source;
+    auto cad=out.source.value("cad").toObject();QJsonArray selectedFaces;
+    QSet<int> retainedFaces;for(const auto &plane:out.planes)retainedFaces.insert(plane.faceId);
+    for(auto v:cad.value("selected_faces").toArray())if(retainedFaces.contains(v.toObject().value("id").toInt()))selectedFaces.append(v);
+    cad.insert("selected_faces",selectedFaces);out.source.insert("cad",cad);
+    auto steps=out.source.value("processing_steps").toArray();
+    QJsonArray workIds,interferenceIds;auto sortedWork=work.values(),sortedInterference=interference.values();
+    std::sort(sortedWork.begin(),sortedWork.end());std::sort(sortedInterference.begin(),sortedInterference.end());
+    for(int id:sortedWork)workIds.append(id);for(int id:sortedInterference)interferenceIds.append(id);
+    steps.append(QJsonObject{{"operation","step_roles_and_trim_v1"},{"input_point_count",qint64(sampled.points.size())},
+        {"removed_point_count",qint64(removed.size())},{"workpiece_point_count",qint64(out.points.size())},
+        {"interference_point_count",qint64(out.interferencePoints.size())},{"workpiece_face_ids",workIds},
+        {"interference_face_ids",interferenceIds},{"trim_mode","view_rectangle_through"}});
+    out.source.insert("processing_steps",steps);
+    // generated_point_count remains the original complete-model sample count.
+    out.identity=templatePointIdentityV1(out.points,o.isCancelled);
+    if(stopped())return fail(QStringLiteral("已取消"));
+    out.timings.insert("generate_sampled_package_ms",timer.nsecsElapsed()/1e6);
+    out.ok=true;return out;
+}
 WorkpieceTemplateResult saveTemplatePackageV1(const TemplatePackageV1 &p,QString name,QString root,const std::function<bool()> &cancel) {
     if(!p.ok){WorkpieceTemplateResult r;r.message=QStringLiteral("没有有效模板");return r;}
     SaveWorkpieceTemplateRequest request;request.name=name;request.outputRoot=root;request.coordinateFrame=p.coordinateFrame;request.points=p.points;request.source=p.source;request.isCancelled=cancel;request.interferencePoints=p.interferencePoints;

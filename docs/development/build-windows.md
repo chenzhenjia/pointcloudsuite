@@ -68,3 +68,7 @@ pointcloudview自关闭变量为`POINTCLOUDVIEW_SELFTEST_CLOSE=1`；新GUI为`PC
 ## STEP 模板与自动匹配 v1
 
 2026-11-05 STEP模板匹配增加模块40 STATIC实现，新GUI也调用既有OCCT7.9.3部署函数；公共头变化请全新源码树外全量构建。STEP关闭仍可模板回读/匹配。 [开发与验收](step_template_matching_v1.md)。本轮未执行构建、CTest、GUI/DPI或真实样本验证，由用户执行。
+
+## 独立 STEP 模板制作 v1（2026-11-06）
+
+新增默认 ON 的 `PCV_BUILD_STEP_TEMPLATE_BUILDER_V1`。关闭两个旧 GUI 后仍可单独创建20/60和新程序，STEP能力默认启用并沿用OCCT7.9.3；`-CliOnly`同时关闭第三个GUI。独立Debug/Release、STEP ON/OFF、CTest命令及验收见[开发说明](step_template_builder_v1.md)。本轮仅静态，不运行本文命令。

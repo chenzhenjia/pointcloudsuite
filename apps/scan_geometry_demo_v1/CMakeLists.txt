@@ -10,11 +10,10 @@ target_compile_definitions(pcv_scan_geometry_session_v2 PRIVATE PCV_SCAN_GEOMETR
 add_library(pcv_scan_geometry_demo_view_v1 STATIC
     scan_geometry_canvas_v2.cpp scan_geometry_canvas_v2.h scan_geometry_window_v1.cpp scan_geometry_window_v1.h
     input_config_dialog_v2.cpp input_config_dialog_v2.h input_config_dialog_v2.ui
-    step_template_dialog_v1.cpp step_template_dialog_v1.h step_template_dialog_v1.ui
     scan_geometry_window_v1.ui scan_geometry_v1.qrc)
 set_target_properties(pcv_scan_geometry_demo_view_v1 PROPERTIES AUTOUIC ON AUTOMOC ON AUTORCC ON)
-target_link_libraries(pcv_scan_geometry_demo_view_v1 PUBLIC pcv_scan_geometry_session_v2 pcv_m20_pointcloud_render pcv_m40_pointcloud_matching)
-target_compile_definitions(pcv_scan_geometry_demo_view_v1 PRIVATE PCV_STEP_TEMPLATE_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
+target_link_libraries(pcv_scan_geometry_demo_view_v1 PUBLIC pcv_scan_geometry_session_v2 pcv_m20_pointcloud_render)
+
 
 qt_add_executable(scan_geometry_demo_v1 WIN32 main.cpp)
 target_link_libraries(scan_geometry_demo_v1 PRIVATE pcv_scan_geometry_demo_view_v1)

@@ -38,7 +38,6 @@
         </property>
         <item>
           <layout class="QHBoxLayout" name="pageHeading">
-            <item><widget class="QPushButton" name="stepTemplate"><property name="text"><string>STEP 模板与自动匹配…</string></property><property name="toolTip"><string>独立制作多平面模板，或匹配当前完整修剪结果</string></property></widget></item>
             <item>
               <widget class="QLabel" name="pageTitle">
                 <property name="text">

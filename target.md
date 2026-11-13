@@ -1,4 +1,8 @@
+2026-11-06 Codex：按用户要求将 `PCV_BUILD_STEP_IMPORT` 默认改为 ON，新增 `--step` 启动导入参数，独立 Debug/Release 编译完成。轴承 STEP 按既有闭合单实体规则拒绝；合成 CAD 导入测试通过。Debug CTest 27/28通过，既有 plane_mask_tests_v1 失败；未完成原生OpenGL/DPI验收，不提交推送。
+
 # PointCloudSuite 顶层目标与交付状态
+
+2026-11-06 Codex：新增独立 `step_template_builder_v1` Qt Widgets STEP数模模板制作程序，Designer `.ui`三步流程、60完整CAD采样/角色/修剪模板包接口、20完整点集投影快照与显示色覆盖；参考scan_geometry_demo_v1点云处理，矩形修剪沿视线贯穿完整点集。移除demo1旧STEP/自动匹配入口及构建注册，保留底层模板/匹配算法。新增开发说明、README、design-qa及契约/会话/采样测试源码；本轮仅静态检查，未构建/CTest/GUI/DPI/真实STEP，不提交推送。
 
 2026-11-05 Codex：最终结果起灰点、蓝色统一模板与红色确认干涉区域（25%），完整结果固定间距/网格原点，修剪后台重建、取消失败可重试；input/result/trim/annotation/token门控，面片更新不重传点。60掩码仅补显示元数据/固定原点，正式输出不变。新增测试源码，用户运行构建/CTest/GUI；[说明](docs/development/scan_geometry_result_regions_v1.md)。保留已有修改，不提交推送。
 
@@ -157,3 +161,5 @@ Owner：Codex（实现），用户（验证）。提供三组 v2 测试源码、
 ## 2026-11-05 STEP 选面模板与自动匹配 v1
 
 新GUI增加独立Designer模板制作/匹配审核窗口，多解析平面蓝工件/红干涉、完整采样及旧schema兼容角色伴随事务包；40新增STATIC模板6DoF搜索/精化/证据门控，50新增刚体估计/组合/约束秩，60复用完整选面/区域和CAD特征。当前完整修剪结果作目标，候选须人工确认后另存版本化JSON；原模板/扫描产物与30算法不变。STEP开关/OCCT部署、日志、revision/token、关闭join及测试源码已接入。仅静态检查，未配置/构建/CTest/GUI/真实样本，无EXE/成功率结论。保留已有修改/删除，不提交推送。[开发说明与用户命令](docs/development/step_template_matching_v1.md)。
+
+2026-11-13 Git归档与远程同步：用户明确授权提交当前全部修改并推送 github/develop。Owner：Codex；本轮仅归档已有STEP模板制作程序、接口、测试及文档，不新增业务代码。验证：git diff --check；不重跑构建/CTest/GUI，已有测试失败和未验收风险以对应开发说明为准。回滚点：提交前HEAD 578b869；后续需要回退时使用独立revert提交。

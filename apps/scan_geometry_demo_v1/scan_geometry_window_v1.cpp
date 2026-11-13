@@ -1,7 +1,6 @@
 #include "scan_geometry_window_v1.h"
 #include "scan_geometry_canvas_v2.h"
 #include "input_config_dialog_v2.h"
-#include "step_template_dialog_v1.h"
 #include "ui_scan_geometry_window_v1.h"
 #include <pcv/render/pointcloud_canvas.h>
 #include <QCloseEvent>
@@ -35,10 +34,6 @@ void available(QWidget *w,bool enabled,const QString &reason,const QString &help
 ScanGeometryWindowV1::ScanGeometryWindowV1(QWidget *parent)
     :QMainWindow(parent),ui(std::make_unique<Ui::ScanGeometryWindowV1>()) {
     initializeDemoResourcesV1();ui->setupUi(this);
-    connect(ui->stepTemplate,&QPushButton::clicked,this,[this]{
-        m_session.recordOperation(QStringLiteral("open_step_template_matching"));
-        StepTemplateDialogV1 dialog(&m_session,this);dialog.exec();
-    });
     const QStringList modelStepNames{tr("工件信息"),tr("工件位置及姿态"),tr("扫描与几何选择"),tr("探针测量"),tr("发布模板")};
     for(int i=0;i<modelStepNames.size();++i) {
         auto *button=new QToolButton(ui->stepNavigationHost);button->setObjectName(QStringLiteral("modelStep%1").arg(i));

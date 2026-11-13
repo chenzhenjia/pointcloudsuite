@@ -493,6 +493,15 @@ bool PointCloudCanvas::setPointColorOverlay(const pcv::render::PointColorOverlay
     return true;
 }
 
+bool PointCloudCanvas::setDisplayPointColorOverlay(const pcv::render::PointColorOverlay &overlay) {
+    if(QThread::currentThread()!=thread())return false;
+    QString error;
+    if(!pcv::render::validatePointColorOverlay(overlay,m_points.size(),&error))return false;
+    m_textureColors=overlay.colors;m_textureValid=overlay.valid;
+    for(qsizetype i=0;i<m_textureColors.size();++i)if(!m_textureValid.at(i))m_textureColors[i].setW(0);
+    m_textureUploadPending=true;update();return true;
+}
+
 bool PointCloudCanvas::setPointMarkerOverlay(const pcv::render::PointColorOverlay &overlay) {
     if (QThread::currentThread() != thread()) return false;
     QString error;
@@ -1452,6 +1461,14 @@ QMatrix4x4 PointCloudCanvas::rotationTransform() const {
         rotation.rotate(m_yaw, 0.0f, 0.0f, 1.0f);
         return rotation;
     }
+
+pcv::render::CloudProjectionSnapshotV1 PointCloudCanvas::projectionSnapshot() const {
+    Q_ASSERT(QThread::currentThread() == thread());
+    pcv::render::CloudProjectionSnapshotV1 out;
+    out.transform = viewTransform(); out.center = m_center; out.span = m_span;
+    out.pan = m_pan; out.viewport = size();
+    return out;
+}
 
 QMatrix4x4 PointCloudCanvas::viewTransform() const {
         const float aspect = float(qMax(1, width())) / float(qMax(1, height()));

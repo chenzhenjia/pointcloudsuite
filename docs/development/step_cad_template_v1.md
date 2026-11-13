@@ -28,7 +28,7 @@ schema_version=`pcv-workpiece-cad-template-v1`，kind=`workpiece_cad_template_3d
 
 ## 构建
 
-`PCV_BUILD_STEP_IMPORT` 默认OFF，仅隐藏导入入口；CAD模板包读写仍可用。ON时严格需要OCCT7.9.3动态库、MSVC x64匹配运行库；不调用FreeCAD。依赖放源码树外，使用vcpkg `opencascade:x64-windows@7.9.3` 对应port；固定port或使用已安装7.9.3的OpenCASCADE_DIR，不随意升级。
+`PCV_BUILD_STEP_IMPORT` 默认ON；关闭时仅隐藏导入入口，CAD模板包读写仍可用。ON时严格需要OCCT7.9.3动态库、MSVC x64匹配运行库；不调用FreeCAD。依赖放源码树外，使用vcpkg `opencascade:x64-windows@7.9.3` 对应port；固定port或使用已安装7.9.3的OpenCASCADE_DIR，不随意升级。
 
 本轮依赖基线：vcpkg commit `56bb2411609227288b70117ead2c47585ba07713`，`opencascade[core,freetype]:x64-windows@7.9.3`，依赖目录 `D:/Dev/vcpkg/installed/x64-windows`。安装时使用 `VCPKG_FORCE_SYSTEM_BINARIES=1` 及已有 CMake/Ninja。项目通过 CMake `EXACT` 拒绝其他 OCCT 版本；运行库复制按此 vcpkg 配置布局，从匹配 Debug/Release 的 TKernel 所在 bin 复制 DLL，并携带 OCCT LGPL/exception 及附带依赖许可证。
 

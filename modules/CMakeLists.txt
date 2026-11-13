@@ -1,5 +1,5 @@
 add_subdirectory(10_pointcloud_io)
-if(PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_SCAN_GEOMETRY_DEMO_V1)
+if(PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_SCAN_GEOMETRY_DEMO_V1 OR PCV_BUILD_STEP_TEMPLATE_BUILDER_V1)
     add_subdirectory(20_pointcloud_render)
 endif()
 add_subdirectory(50_coordinate_conversion)

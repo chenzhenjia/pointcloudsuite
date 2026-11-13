@@ -380,6 +380,29 @@ if(PCV_BUILD_POINTCLOUDVIEW)
     list(APPEND PCV_APPLICATION_TEST_TARGETS process_memory_usage_tests)
 endif()
 
+add_executable(step_sampled_template_tests_v1 unit/interface/step_sampled_template_tests_v1.cpp)
+target_link_libraries(step_sampled_template_tests_v1 PRIVATE pcv_m60_geometry_workpiece)
+add_test(NAME step_sampled_template_tests_v1 COMMAND step_sampled_template_tests_v1)
+list(APPEND PCV_APPLICATION_TEST_TARGETS step_sampled_template_tests_v1)
+
+if(TARGET pcv_step_template_builder_view_v1)
+    add_executable(step_template_builder_session_tests_v1
+        unit/pointcloudview/step_template_builder_session_tests_v1.cpp)
+    target_link_libraries(step_template_builder_session_tests_v1 PRIVATE pcv_step_template_builder_view_v1)
+    add_test(NAME step_template_builder_session_tests_v1 COMMAND step_template_builder_session_tests_v1)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS step_template_builder_session_tests_v1)
+    set_tests_properties(step_template_builder_session_tests_v1 PROPERTIES TIMEOUT 90)
+    add_executable(step_template_builder_contract_tests_v1
+        unit/pointcloudview/step_template_builder_contract_tests_v1.cpp)
+    target_link_libraries(step_template_builder_contract_tests_v1 PRIVATE
+        pcv_step_template_builder_view_v1)
+    target_compile_definitions(step_template_builder_contract_tests_v1 PRIVATE
+        $<$<BOOL:${PCV_BUILD_STEP_IMPORT}>:PCV_BUILD_STEP_IMPORT=1>)
+    add_test(NAME step_template_builder_contract_tests_v1
+        COMMAND step_template_builder_contract_tests_v1)
+    list(APPEND PCV_APPLICATION_TEST_TARGETS step_template_builder_contract_tests_v1)
+endif()
+
 if(PCV_BUILD_SCAN_GEOMETRY_DEMO_V1)
     find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
     find_package(Python3 QUIET COMPONENTS Interpreter)
@@ -400,11 +423,6 @@ if(PCV_BUILD_SCAN_GEOMETRY_DEMO_V1)
     target_link_libraries(scan_geometry_session_tests_v2 PRIVATE pcv_scan_geometry_session_v2 Qt::Test)
     add_test(NAME scan_geometry_session_tests_v2 COMMAND scan_geometry_session_tests_v2)
     add_executable(scan_geometry_view_tests_v2 unit/pointcloudview/scan_geometry_view_tests_v2.cpp)
-    add_executable(step_template_view_tests_v1 unit/pointcloudview/step_template_view_tests_v1.cpp)
-    target_link_libraries(step_template_view_tests_v1 PRIVATE pcv_scan_geometry_demo_view_v1)
-    add_test(NAME step_template_view_tests_v1 COMMAND step_template_view_tests_v1)
-    set_tests_properties(step_template_view_tests_v1 PROPERTIES TIMEOUT 60)
-    list(APPEND PCV_APPLICATION_TEST_TARGETS step_template_view_tests_v1)
     target_link_libraries(scan_geometry_view_tests_v2 PRIVATE pcv_scan_geometry_demo_view_v1 Qt::Test)
     add_test(NAME scan_geometry_view_tests_v2 COMMAND scan_geometry_view_tests_v2)
     add_executable(reference_plane_match_tests_v2 unit/pointcloudview/reference_plane_match_tests_v2.cpp)
@@ -448,7 +466,7 @@ if(TARGET scan_geometry_view_tests_v2)
         "QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins"
         "QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins/platforms")
 endif()
-foreach(stitchTest step_template_view_tests_v1 cad_import_view_tests_v1 stitching_ui_tests_v1 stitching_view_tests_v1 workpiece_template_view_tests_v1 camera_capture_panel_tests_v1 camera_depth_preview_tests_v1)
+foreach(stitchTest step_template_builder_contract_tests_v1 cad_import_view_tests_v1 stitching_ui_tests_v1 stitching_view_tests_v1 workpiece_template_view_tests_v1 camera_capture_panel_tests_v1 camera_depth_preview_tests_v1)
     if(TARGET ${stitchTest})
         set_property(TEST ${stitchTest} APPEND PROPERTY ENVIRONMENT
             "QT_QPA_PLATFORM=offscreen"

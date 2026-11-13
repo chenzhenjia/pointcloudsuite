@@ -1,5 +1,9 @@
 # 60_geometry_workpiece：几何与工件流程
 
+## 已有采样结果生成模板 v1（2026-11-06）
+
+新增 `generateStepTemplatePackageFromSampledV1()`，接收不可变 `CadCloudResult`、工件/干涉平面角色和完整点删除下标，修剪后重新生成逐面范围、区域网格和边界，再走既有CAD模板事务；不重新采样，原始完整采样计数和来源指纹保留。
+
 2026-11-05 清理：移除无引用旧plane_fitting/planefitting及70转发target，统一链接`pcv_m60_geometry_workpiece`；70公共兼容头保留。拟合、掩码、高侧及模板算法不变。[说明](../development/application_target_cleanup_v1.md)。
 
 2026-11-05 应用契约复用：扫描几何GUI将最终保留点交给既有`buildPlaneMaskV1`，再光栅化成0/128/255契约PNG，并用既有WObj矩阵/轴/位姿作一致性校验；60公共头与算法不改。base X平行法向的既有WObj退化仍拒绝。见[契约适配说明](../development/scan_geometry_contract_adapter_v1.md)。

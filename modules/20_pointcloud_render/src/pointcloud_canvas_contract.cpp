@@ -1,6 +1,19 @@
 #include <pcv/render/pointcloud_canvas_contract.h>
-
 #include <cmath>
+
+QPointF pcv::render::CloudProjectionSnapshotV1::project(const pointcloud::Point3D &point, bool *insideClip) const {
+    const bool validSpan = std::isfinite(span) && span > 0.0f;
+    const QVector3D normalized = validSpan ? (QVector3D(point.x, point.y, point.z) - center) * (2.0f / span) : QVector3D();
+    QVector4D clip = transform * QVector4D(normalized, 1);
+    clip.setX(clip.x() + float(pan.x()) * clip.w());
+    clip.setY(clip.y() + float(pan.y()) * clip.w());
+    bool valid = viewport.isValid() && validSpan && std::isfinite(clip.w()) && std::abs(clip.w()) > 1e-9f;
+    if (valid) clip /= clip.w();
+    valid = valid && std::isfinite(clip.x()) && std::isfinite(clip.y()) && std::isfinite(clip.z())
+        && std::abs(clip.x()) <= 1 && std::abs(clip.y()) <= 1 && std::abs(clip.z()) <= 1;
+    if (insideClip) *insideClip = valid;
+    return {(clip.x() * .5 + .5) * viewport.width(), (.5 - clip.y() * .5) * viewport.height()};
+}
 
 namespace pcv::render {
 

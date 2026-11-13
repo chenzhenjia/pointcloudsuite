@@ -12,6 +12,11 @@ struct TemplatePackageV1 {
 };
 TemplatePackageV1 generateStepTemplatePackageV1(const StepModelResult &model,const QSet<int> &workpiece,
     const QSet<int> &interference,double spacing,const TemplateFeatureOptionsV1 &options={});
+// Builds a package from an already sampled STEP cloud.  The sampled cloud is
+// never mutated; removed contains immutable source indices.
+TemplatePackageV1 generateStepTemplatePackageFromSampledV1(const StepModelResult &model,
+    const CadCloudResult &sampled,const QSet<int> &workpiece,const QSet<int> &interference,
+    const QSet<int> &removed,const TemplateFeatureOptionsV1 &options={});
 TemplatePackageV1 loadTemplatePackageV1(QString path,const TemplateFeatureOptionsV1 &options={});
 WorkpieceTemplateResult saveTemplatePackageV1(const TemplatePackageV1 &package,QString name,QString outputRoot,
     const std::function<bool()> &isCancelled={});

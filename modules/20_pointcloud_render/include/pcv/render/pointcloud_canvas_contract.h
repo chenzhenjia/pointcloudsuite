@@ -7,8 +7,21 @@
 #include <QMatrix4x4>
 #include <QVector3D>
 #include <QVector4D>
+#include <QSize>
+#include <QPointF>
 
 namespace pcv::render {
+
+// GUI-thread capture, safe to use without a QWidget on a worker. Coordinates
+// and rectangles use logical widget pixels (independent of devicePixelRatio).
+struct CloudProjectionSnapshotV1 {
+    QMatrix4x4 transform;
+    QVector3D center;
+    float span = 1;
+    QPointF pan;
+    QSize viewport;
+    QPointF project(const pointcloud::Point3D &point, bool *insideClip = nullptr) const;
+};
 
 enum class PointState : quint8 { Normal = 0, Plane = 1, Edge = 2 };
 

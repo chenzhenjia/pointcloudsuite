@@ -10,6 +10,14 @@
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
+    pcv::render::CloudProjectionSnapshotV1 projection;
+    projection.viewport={200,100};projection.span=2;
+    bool front=false,back=false;
+    const auto a=projection.project({0,0,-.5f},&front);
+    const auto b=projection.project({0,0,.5f},&back);
+    if(!front||!back||a!=QPointF(100,50)||a!=b)return 1;
+    projection.pan={.5,0};if(projection.project({0,0,0})!=QPointF(150,50))return 1;
+    projection.span=0;projection.project({0,0,0},&front);if(front)return 1;
     pcv::render::RenderSnapshot valid;
     valid.points = {{0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}};
     valid.states = {pcv::render::PointState::Normal, pcv::render::PointState::Plane};

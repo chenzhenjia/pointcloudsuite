@@ -6,7 +6,7 @@ param(
     [string]$Config = "Release",
     [switch]$BuildTests,
     [switch]$BuildTools,
-    [switch]$StepImport,
+    [switch]$StepImport = $true,
     [string]$OcctDir = "",
     [switch]$CliOnly,
     [switch]$Deploy,
@@ -385,7 +385,7 @@ $configureArguments = @(
 if ($OcctDir) { $configureArguments += ("-DOpenCASCADE_DIR={0}" -f $OcctDir) }
 if ($CliOnly) {
     $configureArguments += @('-DPCV_BUILD_POINTCLOUDVIEW=OFF',
-        '-DPCV_BUILD_SCAN_GEOMETRY_DEMO_V1=OFF', '-DPCV_BUILD_CLI=ON')
+        '-DPCV_BUILD_SCAN_GEOMETRY_DEMO_V1=OFF', '-DPCV_BUILD_STEP_TEMPLATE_BUILDER_V1=OFF', '-DPCV_BUILD_CLI=ON')
 }
 if ($Generator -eq 'Ninja') {
     $configureArguments += ("-DCMAKE_MAKE_PROGRAM={0}" -f $NinjaPath)

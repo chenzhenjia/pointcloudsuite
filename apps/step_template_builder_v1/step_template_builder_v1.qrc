@@ -1,0 +1,11 @@
+<RCC>
+ <qresource prefix="/step_template_builder_v1">
+  <file alias="builder.qss">resources/builder.qss</file>
+  <file alias="icons/face.svg">../scan_geometry_demo_v1/resources/icons/face.svg</file>
+  <file alias="icons/interference.svg">../scan_geometry_demo_v1/resources/icons/interference.svg</file>
+  <file alias="icons/rectangle.svg">../scan_geometry_demo_v1/resources/icons/rectangle.svg</file>
+  <file alias="icons/reset-planes.svg">../scan_geometry_demo_v1/resources/icons/reset-planes.svg</file>
+  <file alias="icons/undo.svg">../scan_geometry_demo_v1/resources/icons/undo.svg</file>
+  <file alias="icons/restore.svg">../scan_geometry_demo_v1/resources/icons/restore.svg</file>
+ </qresource>
+</RCC>

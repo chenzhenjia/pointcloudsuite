@@ -1,5 +1,9 @@
 # 20_pointcloud_render：画布与渲染
 
+## STEP 模板制作投影 v1（2026-11-06）
+
+新增 `CloudProjectionSnapshotV1` 与 `PointCloudCanvas::projectionSnapshot()`，应用可捕获当前视图后在后台投影完整点集；新增显示子集颜色覆盖，保持完整索引与显示映射分离。STEP模板应用用它实现矩形沿视线贯穿修剪，20不承担业务筛选。
+
 2026-11-05 清理：移除无引用`pcv_m20_pointcloudrender`，统一链接`pcv_m20_pointcloud_render`；公共头、渲染及拾取不变，保留两个GUI的调用。[说明](../development/application_target_cleanup_v1.md)。
 
 2026-10-30 扫描几何深度预览：`ScanGeometryCanvasV2` 复用 `DepthImageCanvasV1` 显示原始深度帧；SDK转换后切回既有点云画布。模块20仅接收中立 `CameraFrame` 预览数据，不调用SDK、不持有物化生命周期。PLY显示及拾取保持原行为。[开发记录](../development/scan_geometry_demo_v1.md#2026-10-30-sdk深度缓存与按需物化)。
