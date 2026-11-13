@@ -2,71 +2,165 @@
   "version": 6,
   "configurePresets": [
     {
-      "name": "windows-msvc-release",
-      "displayName": "Windows Qt 6 Release",
-      "binaryDir": "${sourceDir}/../build-${presetName}",
+      "name": "windows-msvc-base",
+      "hidden": true,
+      "generator": "NMake Makefiles",
+      "binaryDir": "${sourceDir}/../pcv-build/${presetName}",
+      "environment": {
+        "VSLANG": "1033"
+      },
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "PCV_BUILD_TESTS": "OFF"
+        "CMAKE_PREFIX_PATH": "$env{PCV_QT_DIR};$env{PCV_OCCT_PREFIX}",
+        "OpenCASCADE_DIR": "$env{PCV_OCCT_DIR}",
+        "PCV_BUILD_POINTCLOUDVIEW": "ON",
+        "PCV_BUILD_SCAN_GEOMETRY_DEMO_V1": "ON",
+        "PCV_BUILD_STEP_TEMPLATE_BUILDER_V1": "ON",
+        "PCV_BUILD_STEP_IMPORT": "ON",
+        "PCV_BUILD_EXPERIMENTAL_CAMERA": "ON",
+        "PCV_BUILD_RAW_CONVERTER": "OFF",
+        "PCV_BUILD_TESTS": "ON",
+        "PCV_BUILD_EXPERIMENTAL_TESTS": "OFF"
       }
     },
     {
       "name": "windows-msvc-debug",
-      "displayName": "Windows Qt 6 Debug with tests",
-      "binaryDir": "${sourceDir}/../build-${presetName}",
+      "inherits": "windows-msvc-base",
+      "displayName": "windows-msvc Debug",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "PCV_BUILD_TESTS": "ON",
-        "PCV_BUILD_TOOLS": "OFF"
-      }
-    },
-    {
-      "name": "step-template-debug",
-      "displayName": "Standalone STEP Template Debug",
-      "generator": "NMake Makefiles",
-      "binaryDir": "${sourceDir}/../build-step-template-debug",
-      "cacheVariables": {
-        "PCV_BUILD_STEP_TEMPLATE_BUILDER_V1": "ON",
-        "PCV_BUILD_STEP_IMPORT": "ON",
-        "PCV_BUILD_POINTCLOUDVIEW": "OFF",
-        "PCV_BUILD_SCAN_GEOMETRY_DEMO_V1": "OFF",
-        "PCV_BUILD_EXPERIMENTAL_CAMERA": "OFF",
-        "PCV_BUILD_CLI": "OFF",
-        "PCV_BUILD_TOOLS": "OFF",
-        "PCV_BUILD_TESTS": "ON",
-        "CMAKE_PREFIX_PATH": "C:/Qt/6.8.3/msvc2022_64;D:/Dev/vcpkg/installed/x64-windows",
-        "OpenCASCADE_DIR": "D:/Dev/vcpkg/installed/x64-windows/share/opencascade",
         "CMAKE_BUILD_TYPE": "Debug"
       }
     },
     {
-      "name": "step-template-release",
-      "displayName": "Standalone STEP Template Release",
-      "generator": "NMake Makefiles",
-      "binaryDir": "${sourceDir}/../build-step-template-release",
+      "name": "windows-msvc-release",
+      "inherits": "windows-msvc-base",
+      "displayName": "windows-msvc Release",
       "cacheVariables": {
-        "PCV_BUILD_STEP_TEMPLATE_BUILDER_V1": "ON",
-        "PCV_BUILD_STEP_IMPORT": "ON",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "pointcloudview-debug",
+      "inherits": "windows-msvc-base",
+      "displayName": "pointcloudview Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "PCV_BUILD_POINTCLOUDVIEW": "ON",
+        "PCV_BUILD_SCAN_GEOMETRY_DEMO_V1": "OFF",
+        "PCV_BUILD_STEP_TEMPLATE_BUILDER_V1": "OFF"
+      }
+    },
+    {
+      "name": "pointcloudview-release",
+      "inherits": "windows-msvc-base",
+      "displayName": "pointcloudview Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "PCV_BUILD_POINTCLOUDVIEW": "ON",
+        "PCV_BUILD_SCAN_GEOMETRY_DEMO_V1": "OFF",
+        "PCV_BUILD_STEP_TEMPLATE_BUILDER_V1": "OFF"
+      }
+    },
+    {
+      "name": "scan-geometry-debug",
+      "inherits": "windows-msvc-base",
+      "displayName": "scan-geometry Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "PCV_BUILD_POINTCLOUDVIEW": "OFF",
+        "PCV_BUILD_SCAN_GEOMETRY_DEMO_V1": "ON",
+        "PCV_BUILD_STEP_TEMPLATE_BUILDER_V1": "OFF"
+      }
+    },
+    {
+      "name": "scan-geometry-release",
+      "inherits": "windows-msvc-base",
+      "displayName": "scan-geometry Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "PCV_BUILD_POINTCLOUDVIEW": "OFF",
+        "PCV_BUILD_SCAN_GEOMETRY_DEMO_V1": "ON",
+        "PCV_BUILD_STEP_TEMPLATE_BUILDER_V1": "OFF"
+      }
+    },
+    {
+      "name": "step-template-debug",
+      "inherits": "windows-msvc-base",
+      "displayName": "step-template Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
         "PCV_BUILD_POINTCLOUDVIEW": "OFF",
         "PCV_BUILD_SCAN_GEOMETRY_DEMO_V1": "OFF",
-        "PCV_BUILD_EXPERIMENTAL_CAMERA": "OFF",
-        "PCV_BUILD_CLI": "OFF",
-        "PCV_BUILD_TOOLS": "OFF",
-        "PCV_BUILD_TESTS": "ON",
-        "CMAKE_PREFIX_PATH": "C:/Qt/6.8.3/msvc2022_64;D:/Dev/vcpkg/installed/x64-windows",
-        "OpenCASCADE_DIR": "D:/Dev/vcpkg/installed/x64-windows/share/opencascade",
-        "CMAKE_BUILD_TYPE": "Release"
+        "PCV_BUILD_STEP_TEMPLATE_BUILDER_V1": "ON",
+        "PCV_BUILD_EXPERIMENTAL_CAMERA": "OFF"
+      }
+    },
+    {
+      "name": "step-template-release",
+      "inherits": "windows-msvc-base",
+      "displayName": "step-template Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "PCV_BUILD_POINTCLOUDVIEW": "OFF",
+        "PCV_BUILD_SCAN_GEOMETRY_DEMO_V1": "OFF",
+        "PCV_BUILD_STEP_TEMPLATE_BUILDER_V1": "ON",
+        "PCV_BUILD_EXPERIMENTAL_CAMERA": "OFF"
+      }
+    },
+    {
+      "name": "raw-converter-debug",
+      "inherits": "windows-msvc-base",
+      "displayName": "RAW converter Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "PCV_BUILD_POINTCLOUDVIEW": "OFF",
+        "PCV_BUILD_SCAN_GEOMETRY_DEMO_V1": "OFF",
+        "PCV_BUILD_STEP_TEMPLATE_BUILDER_V1": "OFF",
+        "PCV_BUILD_STEP_IMPORT": "OFF",
+        "PCV_BUILD_EXPERIMENTAL_CAMERA": "ON",
+        "PCV_BUILD_RAW_CONVERTER": "ON",
+        "PCV_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "raw-converter-release",
+      "inherits": "windows-msvc-base",
+      "displayName": "RAW converter Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "PCV_BUILD_POINTCLOUDVIEW": "OFF",
+        "PCV_BUILD_SCAN_GEOMETRY_DEMO_V1": "OFF",
+        "PCV_BUILD_STEP_TEMPLATE_BUILDER_V1": "OFF",
+        "PCV_BUILD_STEP_IMPORT": "OFF",
+        "PCV_BUILD_EXPERIMENTAL_CAMERA": "ON",
+        "PCV_BUILD_RAW_CONVERTER": "ON",
+        "PCV_BUILD_TESTS": "OFF"
       }
     }
   ],
   "buildPresets": [
     {
+      "name": "build-debug",
+      "configurePreset": "windows-msvc-debug"
+    },
+    {
       "name": "build-release",
       "configurePreset": "windows-msvc-release"
     },
     {
-      "name": "build-debug",
-      "configurePreset": "windows-msvc-debug"
+      "name": "build-pointcloudview-debug",
+      "configurePreset": "pointcloudview-debug"
+    },
+    {
+      "name": "build-pointcloudview-release",
+      "configurePreset": "pointcloudview-release"
+    },
+    {
+      "name": "build-scan-geometry-debug",
+      "configurePreset": "scan-geometry-debug"
+    },
+    {
+      "name": "build-scan-geometry-release",
+      "configurePreset": "scan-geometry-release"
     },
     {
       "name": "build-step-template-debug",
@@ -75,12 +169,55 @@
     {
       "name": "build-step-template-release",
       "configurePreset": "step-template-release"
+    },
+    {
+      "name": "build-raw-converter-debug",
+      "configurePreset": "raw-converter-debug"
+    },
+    {
+      "name": "build-raw-converter-release",
+      "configurePreset": "raw-converter-release"
     }
   ],
   "testPresets": [
     {
       "name": "test-debug",
       "configurePreset": "windows-msvc-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "test-release",
+      "configurePreset": "windows-msvc-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "test-pointcloudview-debug",
+      "configurePreset": "pointcloudview-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "test-pointcloudview-release",
+      "configurePreset": "pointcloudview-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "test-scan-geometry-debug",
+      "configurePreset": "scan-geometry-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "test-scan-geometry-release",
+      "configurePreset": "scan-geometry-release",
       "output": {
         "outputOnFailure": true
       }

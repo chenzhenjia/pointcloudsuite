@@ -10,6 +10,8 @@ int main(int argc,char **argv){
     QCommandLineParser parser;parser.setApplicationDescription(QStringLiteral("STEP 数模模板制作"));parser.addHelpOption();
     QCommandLineOption stepOption(QStringLiteral("step"),QStringLiteral("启动后导入 STEP 文件"),QStringLiteral("file"));parser.addOption(stepOption);parser.process(application);
     pcv::stepbuilder::StepTemplateBuilderWindowV1 window;window.show();
+    if(qEnvironmentVariableIsSet("PCV_STEP_TEMPLATE_SELFTEST_CLOSE"))
+        QTimer::singleShot(800,&application,&QCoreApplication::quit);
     if(parser.isSet(stepOption)){
         const QString file=parser.value(stepOption);
         QTimer::singleShot(0,&window,[&window,file]{window.openStepFile(file);});

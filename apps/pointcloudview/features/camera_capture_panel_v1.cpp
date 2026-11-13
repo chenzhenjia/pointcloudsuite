@@ -1,3 +1,4 @@
+#include <task_runtime.h>
 #include "camera_capture_wizard.h"
 #include <pcv/registration/handeye_transform.h>
 #include <pcv/texture/texture_mapping.h>
@@ -33,14 +34,7 @@
 
 namespace {
 bool parsePose(const QString &text, pointcloud::RobotPose *pose) {
-    const auto parts = text.split(QRegularExpression("[\\s,，;]+"), Qt::SkipEmptyParts);
-    if (parts.size() != 6) return false;
-    double values[6];
-    for (int i = 0; i < 6; ++i) {
-        bool ok; values[i] = parts.at(i).toDouble(&ok);
-        if (!ok || !std::isfinite(values[i])) return false;
-    }
-    *pose = {values[0], values[1], values[2], values[3], values[4], values[5]}; return true;
+    return pcv::ui::parseRobotPose(text, pose, QRegularExpression(QStringLiteral("[\\s,，;]+")));
 }
 
 bool attachCaptureTexture(pcv::interface::StitchingResult *result,

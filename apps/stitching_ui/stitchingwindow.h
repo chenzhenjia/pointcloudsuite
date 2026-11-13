@@ -1,6 +1,6 @@
 #pragma once
 
-#include <pcv/registration/multiframe_registration.h>
+#include <pcv/stitching/multiframe_registration.h>
 #include <pcv/interface/stitching_interface.h>
 #include <pcv/stitching/seam_fusion_types.h>
 #include <pcv/stitching/world_cloud_types.h>

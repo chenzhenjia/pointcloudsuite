@@ -1,3 +1,4 @@
+#include <task_runtime.h>
 #include "scan_geometry_session_v2.h"
 #include "scan_geometry_output_v1.h"
 #include <QtConcurrent/QtConcurrentRun>
@@ -37,105 +38,10 @@ ScanGeometrySessionV2::ScanGeometrySessionV2(QObject *parent) : QObject(parent),
 #endif
     });
 }
+
 ScanGeometrySessionV2::~ScanGeometrySessionV2() { shutdown(); }
-void ScanGeometrySessionV2::recordOperation(const QString &operation) {
-    writeTiming({{"event","operation"},{"operation",operation},{"active_frame",m_active},
-        {"frame_id",activeFrame()?QString::number(activeFrame()->id):QString()},
-        {"attempt",activeFrame()?QString::number(activeFrame()->loadAttempt):QString()},
-        {"reference_revision",QString::number(m_referenceRevision)}});
-}
-void ScanGeometrySessionV2::cancelSelection() {recordOperation(QStringLiteral("cancelSelection"));m_seeds.clear();pump();}
-void ScanGeometrySessionV2::writeTiming(QJsonObject event) {
-    event.insert("utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-    event.insert("input_revision",QString::number(m_revision));
-    if(!event.contains("level"))event.insert("level",!event.value("error").toString().isEmpty()?"error"
-        :!event.value("warning").toString().isEmpty()?"warning":"info");
-    const auto line=QString::fromUtf8(QJsonDocument(event).toJson(QJsonDocument::Compact));
-    m_recentLog.append(line);if(m_recentLog.size()>200)m_recentLog.removeFirst();
-    if(!QDir().mkpath(m_logDirectory)){m_logError=tr("无法创建耗时日志目录");return;}
-    QFile file(m_logPath);
-    if(!file.open(QIODevice::WriteOnly|QIODevice::Append)){m_logError=file.errorString();return;}
-    const auto bytes=QJsonDocument(event).toJson(QJsonDocument::Compact)+'\n';
-    if(file.write(bytes)!=bytes.size())m_logError=file.errorString();
-}
-bool ScanGeometrySessionV2::interactionBlocked() const {
-    if(!m_pending.empty())return true;
-    for(const auto &job:m_jobKinds)
-        if(job.second!=Task::LoadDisplay&&job.second!=Task::PrepareIndex)return true;
-    return m_token->load();
-}
-bool ScanGeometrySessionV2::activeFrameBusy() const {
-    const auto *f=activeFrame();
-    return interactionBlocked()||(f&&(f->loading||f->indexQueued||f->indexPreparing));
-}
-bool ScanGeometrySessionV2::canSelectActive() const {
-    const auto *f=activeFrame();
-    return !activeFrameBusy()&&(!m_matching||m_paused)&&f&&f->sourceVerification==SourceVerificationV3::Verified&&f->index&&!f->cloud.fullPoints.isEmpty()&&!f->skipped;
-}
-QString ScanGeometrySessionV2::timingSummary() const {
-    const auto format=[](const QJsonValue &v){return v.isDouble()?QString::number(v.toDouble(),'f',1)+" ms":QStringLiteral("未观察");};
-    QString text=tr("日志：%1").arg(m_logDirectory);
-    if(const auto *f=activeFrame()) {
-        text+=tr("\n当前帧 %1 · attempt %2\n首显 %3 · 可选面 %4\n读取 %5 · 转换 %6 · 索引 %7")
-            .arg(m_active+1).arg(f->loadAttempt).arg(format(f->loadTiming.value("first_frame_ms")),format(f->loadTiming.value("selectable_ms")),
-            format(f->loadTiming.value("input_ms")),format(f->loadTiming.value("transform_ms")),format(f->loadTiming.value("index_ms")));
-        text+=tr("\n来源校验完成 %1").arg(format(f->loadTiming.value("verified_ms")));
-        text+=tr("\n本次切帧至显示 %1 · 可见等待 %2").arg(format(f->loadTiming.value("view_wait_ms")),format(f->loadTiming.value("visible_wait_ms")));
-    }
-    text+=tr("\n当前轮：%1 · 总等待 %2").arg(m_roundTiming.value("status").toString(tr("未加载")),format(m_roundTiming.value("wall_ms")));
-    if(!m_logError.isEmpty())text+=tr("\n日志写入失败：%1").arg(m_logError);
-    return text;
-}
-void ScanGeometrySessionV2::observeCanvasTiming(quint64 frameId,quint64 attempt,const QJsonObject &timing) {
-    for(auto &f:m_frames)if(f.id==frameId&&f.loadAttempt==attempt) {
-        QJsonObject event=timing;event.insert("frame_id",QString::number(frameId));event.insert("attempt",QString::number(attempt));
-        if(event.value("event").toString()=="view_frame_swapped") {
-            f.loadTiming.insert("view_wait_ms",event.value("view_wait_ms"));
-            f.loadTiming.insert("visible_wait_ms",event.value("visible_wait_ms"));
-        }
-        writeTiming(event);
-        if(event.value("event").toString()=="view_frame_swapped")emit changed(false);
-        return;
-    }
-}
-void ScanGeometrySessionV2::observeFirstFrame(quint64 frameId,quint64 attempt) {
-    for(auto &f:m_frames)if(f.id==frameId&&f.loadAttempt==attempt&&f.requestedAt.isValid()
-        &&!f.loadTiming.value("first_frame_ms").isDouble()) {
-        if(m_token->load()||f.loadTiming.value("status").toString()=="cancelled")return;
-        f.loadTiming.insert("first_frame_ms",double(f.requestedAt.elapsed()));
-        QJsonObject event=f.loadTiming;event.insert("event","first_frame_swapped");
-        writeTiming(event);emit changed(false);return;
-    }
-}
-void ScanGeometrySessionV2::finishRoundTiming() {
-    if(!m_roundTimingOpen||!m_loadQueue.empty())return;
-    for(const auto &job:m_jobKinds)if(job.second==Task::LoadDisplay||job.second==Task::PrepareIndex)return;
-    for(const auto &pending:m_pending)if(pending.kind==Task::LoadDisplay||pending.kind==Task::PrepareIndex)return;
-    for(int i=m_round*6;i<qMin(int(m_frames.size()),m_round*6+6);++i)
-        if(m_frames.at(i).indexQueued||m_frames.at(i).indexPreparing)return;
-    m_roundTimingOpen=false;bool failed=false;QJsonArray frames;
-    for(int i=m_round*6;i<qMin(int(m_frames.size()),m_round*6+6);++i) {
-        failed|=m_frames.at(i).problem;frames.append(m_frames.at(i).loadTiming);
-    }
-    m_roundTiming.insert("frames",frames);
-    m_roundTiming.insert("status",m_token->load()?"cancelled":failed?"failed":"ready");
-    m_roundTiming.insert("wall_ms",double(m_roundTimer.elapsed()));writeTiming(m_roundTiming);
-}
-void ScanGeometrySessionV2::enqueueLoad(int frame,bool front) {
-    auto &f=m_frames[frame];
-    if(f.loading)return;
-    m_loadQueue.erase(std::remove(m_loadQueue.begin(),m_loadQueue.end(),frame),m_loadQueue.end());
-    ++f.loadAttempt;f.requestedAt.start();f.sourceVerification=SourceVerificationV3::Unverified;
-    f.loadTiming={{"frame_id",QString::number(f.id)},{"attempt",QString::number(f.loadAttempt)},
-        {"first_frame_ms",QJsonValue::Null},{"verified_ms",QJsonValue::Null},{"selectable_ms",QJsonValue::Null},
-        {"event","load_requested"},{"status","queued"}};
-    f.loadTiming.insert("source",m_config.frames.size()>frame?m_config.frames.at(frame).path:QString());
-    writeTiming(f.loadTiming);
-    if(front)m_loadQueue.push_front(frame);else m_loadQueue.push_back(frame);
-}
-const SessionFrameV2 *ScanGeometrySessionV2::activeFrame() const {
-    return m_active>=0 && m_active<m_frames.size()?&m_frames.at(m_active):nullptr;
-}
+
+// 1. 配置与输入：帧/轮次参数均为0-based序号，不能传SessionFrameV2::id。
 bool ScanGeometrySessionV2::configure(const InputConfigV2 &config, QString *error) {
     recordOperation(QStringLiteral("configure"));
     auto fail=[&](const QString &s) {writeTiming({{"event","configuration_failed"},{"error",s}});if(error)*error=s;return false; };
@@ -173,55 +79,296 @@ bool ScanGeometrySessionV2::configure(const InputConfigV2 &config, QString *erro
     for(const auto &input:config.frames) { Q_UNUSED(input);SessionFrameV2 f;f.id=m_nextFrameId++;m_frames.append(f); }
     m_active=0;m_status=tr("配置完成：%1 帧；点击加载当前轮").arg(m_frames.size());emit changed(true);return true;
 }
-void ScanGeometrySessionV2::invalidateResult() {
-    ++m_resultRevision;m_result={};m_hasResult=false;invalidateGeometry();m_removed.clear();m_undo.clear();
-    ++m_trimRevision;m_resultRegions={};
+
+void ScanGeometrySessionV2::loadRound(int round) {
+    recordOperation(QStringLiteral("loadRound"));
+    if(busy()||m_matching||m_frames.isEmpty())return;
+    invalidateGeometry();
+    m_round=qBound(0,round,int((m_frames.size()-1)/6));m_active=m_round*6;m_seeds.clear();
+    releaseOutsideRound();m_loadQueue.clear();
+    for(int i=m_round*6;i<qMin(int(m_frames.size()),m_round*6+6);++i)
+        if(!m_frames.at(i).skipped && (m_config.frames.at(i).depthFrame
+            ? !m_frames.at(i).depthReady : m_frames.at(i).cloud.fullPoints.isEmpty()))enqueueLoad(i);
+    m_roundTimer.start();m_roundTimingOpen=true;m_roundTiming={{"event","round_finished"},{"round",m_round+1},{"status","loading"},{"wall_ms",QJsonValue::Null}};
+    for(int i=m_round*6;i<qMin(int(m_frames.size()),m_round*6+6);++i)
+        if(!m_frames.at(i).skipped&&!m_frames.at(i).cloud.fullPoints.isEmpty()&&!m_frames.at(i).index)m_frames[i].indexQueued=true;
+    m_status=tr("读取当前轮源帧：第 %1 轮").arg(m_round+1);pump();emit changed(true);
 }
-void ScanGeometrySessionV2::invalidateGeometry() {
-    m_geometryConfirmed=false;m_wobj1={};m_savedGeometryPath.clear();
+
+void ScanGeometrySessionV2::processActive() {
+    recordOperation(QStringLiteral("processActive"));
+    if(activeFrameBusy()||m_active<0||m_active>=m_frames.size()||m_matching)return;
+    auto &frame=m_frames[m_active];
+    if(!m_config.frames.at(m_active).depthFrame||!frame.depthReady||!frame.rawDepthFrame)return;
+    if(!frame.cloud.fullPoints.isEmpty()&&frame.index)return;
+    invalidateGeometry();enqueueLoad(m_active,true);
+    m_status=tr("正在物化当前深度帧并建立完整选面索引");pump();emit changed(true);
 }
-ResultRegionsRequestV1 ScanGeometrySessionV2::resultRegionRequest() const {
-    ResultRegionsRequestV1 request;
-    request.points=m_result.points;request.corrections=m_result.corrections;request.removed=m_removed;
-    request.basis=m_resultRegions.basis;request.budget=m_budget;
-    const auto token=m_token;request.isCancelled=[token]{return token->load();};
-    int kept=0;
-    for(int i=0;i<m_frames.size();++i)if(!m_frames.at(i).skipped) {
-        const auto &f=m_frames.at(i);
-        if(i==m_reference){request.reference=f.candidate;request.referenceKeptIndex=kept;}
-        ResultInterferenceFrameV1 frame;
-        if(!f.interferenceIndices.isEmpty()) {
-            frame.mask=f.interferenceMask;frame.error=f.interferenceMaskError;
-            if(frame.mask.triangleIndices.isEmpty()&&frame.error.isEmpty())frame.error=tr("已确认干涉区域缺失，请重新标注");
-        }
-        request.frames.append(std::move(frame));++kept;
+
+void ScanGeometrySessionV2::activate(int frame) {
+    recordOperation(QStringLiteral("activate"));
+    if(interactionBlocked()||(m_matching&&!m_paused)||frame<0||frame>=m_frames.size()||frame/6!=m_round)return;
+    m_active=frame;m_seeds.clear();
+    if(m_frames.at(frame).cloud.fullPoints.isEmpty()&&!m_frames.at(frame).skipped
+       && frame<m_config.frames.size()
+       && (!m_config.frames.at(frame).depthFrame || !m_frames.at(frame).depthReady)) {
+        if(!m_config.frames.at(frame).depthFrame)invalidateGeometry();
+        if(!m_frames.at(frame).loading)enqueueLoad(frame,true);pump();
     }
-    return request;
+    pump();
+    emit changed(true);
 }
-void ScanGeometrySessionV2::acceptResultRegions(const Task &task) {
-    if(!m_hasResult||task.resultRevision!=m_resultRevision||task.trimRevision!=m_trimRevision
-        ||task.annotationRevision!=m_annotationRevision)return;
-    m_resultRegions.resultRevision=m_resultRevision;m_resultRegions.trimRevision=m_trimRevision;
-    m_resultRegions.annotationRevision=m_annotationRevision;
-    if(!task.regions) {
-        m_resultRegions.state=ResultRegionStateV1::Failed;
-        m_resultRegions.error=task.error.isEmpty()?tr("区域生成未返回结果，可重建"):task.error;
+
+// 2. 状态查询：只能在所属GUI线程读取；引用/指针不能跨状态变更保存。
+const SessionFrameV2 *ScanGeometrySessionV2::activeFrame() const {
+    return m_active>=0 && m_active<m_frames.size()?&m_frames.at(m_active):nullptr;
+}
+
+bool ScanGeometrySessionV2::interactionBlocked() const {
+    if(!m_pending.empty())return true;
+    for(const auto &job:m_jobKinds)
+        if(job.second!=Task::LoadDisplay&&job.second!=Task::PrepareIndex)return true;
+    return m_token->load();
+}
+
+bool ScanGeometrySessionV2::activeFrameBusy() const {
+    const auto *f=activeFrame();
+    return interactionBlocked()||(f&&(f->loading||f->indexQueued||f->indexPreparing));
+}
+
+bool ScanGeometrySessionV2::canSelectActive() const {
+    const auto *f=activeFrame();
+    return !activeFrameBusy()&&(!m_matching||m_paused)&&f&&f->sourceVerification==SourceVerificationV3::Verified&&f->index&&!f->cloud.fullPoints.isEmpty()&&!f->skipped;
+}
+
+QString ScanGeometrySessionV2::summary() const {
+    int keep=0,skip=0,problem=0,unreviewed=0;
+    for(const auto &f:m_frames) {if(f.skipped)++skip;else if(f.hasCandidate)++keep;if(f.problem)++problem;if(!f.skipped&&(!f.hasCandidate||!f.reviewed))++unreviewed;}
+    return tr("保留 %1 · 跳过 %2 · 异常 %3 · 未审核 %4").arg(keep).arg(skip).arg(problem).arg(unreviewed);
+}
+
+bool ScanGeometrySessionV2::canReviewAll() const {
+    if(busy()||m_matching||!m_seeds.isEmpty()||m_reference<0)return false;int valid=0;
+    for(const auto &f:m_frames)if(!f.skipped){if(f.sourceVerification!=SourceVerificationV3::Verified||f.problem||!f.hasCandidate||!f.reviewed
+        ||conflicts(f.planeIndices,f.interferenceIndices)||conflicts(f.planeIndices,f.pendingInterference))return false;++valid;}
+    return valid>=2;
+}
+
+bool ScanGeometrySessionV2::canStitch() const {
+    if(!canReviewAll())return false;
+    for(const auto &f:m_frames)if(!f.skipped&&!f.confirmed)return false;return true;
+}
+
+bool ScanGeometrySessionV2::canConfirmGeometry() const {
+    if(busy()||!m_hasResult||m_active!=-1||m_reference<0||m_reference>=m_frames.size()
+       ||!m_frames.at(m_reference).confirmed||m_frames.at(m_reference).candidate.cloud.fullPoints.size()<3)return false;
+    for(const auto &f:m_frames)if(!f.pendingInterference.isEmpty()||f.problem)return false;
+    QVector3D a,b;bool first=false,second=false;
+    for(int i=0;i<m_result.points.size();++i)if(!m_removed.contains(i)) {
+        const auto &p=m_result.points.at(i);const QVector3D v(p.x,p.y,p.z);
+        if(!first){a=v;first=true;}else if(!second){if((v-a).lengthSquared()>1e-12f){b=v;second=true;}}
+        else if(QVector3D::crossProduct(b-a,v-a).lengthSquared()>1e-12f*(b-a).lengthSquared())return true;
+    }
+    return false;
+}
+
+// 3. 选面与审核：bool表示本次同步接受/确认，不代表后续worker成功。
+void ScanGeometrySessionV2::pick(int fullIndex,bool interference) {
+    recordOperation(QStringLiteral("pick"));
+    if(!canSelectActive())return;
+    auto &f=m_frames[m_active];
+    if(fullIndex<0||fullIndex>=f.cloud.fullPoints.size()||!f.index)return;
+    if(!interference) {
+        if(m_active==m_reference){invalidateReferenceDependents();m_reference=-1;}
+        f.candidate={};f.planeIndices.clear();f.workpieceMask={};f.hasCandidate=f.confirmed=f.reviewed=f.automatic=false;
+        f.workpieceMaskError.clear();
+        f.problem=false;f.status=tr("正在重新选择工件面");f.highSideCandidates.clear();
+        f.dismissedHighSideSeeds.clear();f.highSideError.clear();f.highSideChecking=false;invalidateResult();
     } else {
-        const auto &regions=*task.regions;
-        m_resultRegions.basis=regions.basis;
-        if(regions.workpieceOk)m_resultRegions.workpiece=regions.workpiece;
-        // Keep the previous valid red region on cancellation; clear/replace
-        // actions remove obsolete annotations before dispatching this task.
-        if(!regions.cancelled&&(regions.interferenceOk||!regions.interference.vertices.isEmpty()))m_resultRegions.interference=regions.interference;
-        m_resultRegions.error=regions.error;
-        m_resultRegions.state=regions.cancelled?ResultRegionStateV1::Cancelled:
-            regions.workpieceOk&&regions.interferenceOk?ResultRegionStateV1::Ready:ResultRegionStateV1::Failed;
+        f.pendingInterference.clear();f.pendingInterferenceMask={};f.pendingInterferenceMaskError.clear();
     }
-    writeTiming({{"event","result_regions"},{"result_revision",QString::number(m_resultRevision)},
-        {"trim_revision",QString::number(m_trimRevision)},{"annotation_revision",QString::number(m_annotationRevision)},
-        {"status",m_resultRegions.state==ResultRegionStateV1::Ready?"success":m_resultRegions.state==ResultRegionStateV1::Cancelled?"cancelled":"failed"},
-        {"error",m_resultRegions.error},{"performance",task.regions?task.regions->performance:task.performance}});
+    if(m_seedInterference!=interference){m_seeds.clear();m_seedInterference=interference;}
+    if(m_seeds.contains(fullIndex)){m_status=tr("请选不同控制点");emit changed(false);return;}
+    m_seeds.append(fullIndex);
+    if(m_config.threePoint&&m_seeds.size()<3){m_status=tr("三点选面：已选 %1/3，切换帧或 Esc 取消").arg(m_seeds.size());emit changed(true);return;}
+    const auto source=f.cloud;const auto retained=std::make_shared<const pointcloud::RobotBaseFrame>(source);
+    const auto index=f.index;const auto seeds=m_seeds;const auto config=m_config;const auto token=m_token;const auto budget=m_budget;
+    m_status=tr("正在完整数据上选面并生成快照");
+    submit(m_active,Task::Fit,[source,retained,index,seeds,config,token,budget] {
+        Q_UNUSED(retained);return pcv::ui::fitFullPlaneV2(source,seeds,config.tolerance,config.maximumGap,!config.threePoint,index,token,2,budget);
+    });emit changed(true);
 }
+
+void ScanGeometrySessionV2::cancelSelection() {recordOperation(QStringLiteral("cancelSelection"));m_seeds.clear();pump();}
+
+void ScanGeometrySessionV2::setThreePoint(bool enabled) {
+    recordOperation(QStringLiteral("setThreePoint"));
+    if(activeFrameBusy())return;m_config.threePoint=enabled;m_seeds.clear();pump();emit changed(false);
+}
+
+bool ScanGeometrySessionV2::confirmCandidate() {
+    recordOperation(QStringLiteral("confirmCandidate"));
+    if(activeFrameBusy()||!activeFrame()||activeFrame()->sourceVerification!=SourceVerificationV3::Verified||!activeFrame()->hasCandidate)return false;
+    auto &f=m_frames[m_active];
+    if(m_reference<0) {
+        for(int i=0;i<m_active;++i)if(!m_frames.at(i).skipped){m_status=tr("请先确认首个未跳过帧作为参考面");emit changed(false);return false;}
+        m_reference=m_active;invalidateReferenceDependents();
+    } else if(m_reference==m_active)invalidateReferenceDependents();
+
+    f.reviewed=true;f.confirmed=true;f.problem=false;f.status=m_active==m_reference?tr("已确认参考面"):tr("已确认");
+    if(m_active<m_config.frames.size()&&m_config.frames.at(m_active).depthFrame) {
+        f.cloud={};f.index.reset();f.display={};f.displayToFull={};f.displayLease.reset();
+    }
+    m_status=f.status;pump();emit changed(true);return true;
+}
+
+bool ScanGeometrySessionV2::confirmInterference() {
+    recordOperation(QStringLiteral("confirmInterference"));
+    if(activeFrameBusy()||!activeFrame()||activeFrame()->sourceVerification!=SourceVerificationV3::Verified||activeFrame()->pendingInterference.isEmpty())return false;
+    auto &f=m_frames[m_active];
+    if(conflicts(f.pendingInterference,f.planeIndices)) {m_status=tr("干涉面与工件面重叠；请重选干涉面，或先重置工件面");emit changed(false);return false;}
+    f.interferenceIndices=std::move(f.pendingInterference);f.pendingInterference.clear();
+    f.interferenceMask=std::move(f.pendingInterferenceMask);f.pendingInterferenceMask={};
+    f.interferenceMaskError=std::move(f.pendingInterferenceMaskError);f.pendingInterferenceMaskError.clear();
+    ++m_annotationRevision;
+    if(m_hasResult)m_resultRegions.interference={};
+    f.highSideCandidates.erase(std::remove_if(f.highSideCandidates.begin(),f.highSideCandidates.end(),[&](const auto &candidate) {
+        return std::binary_search(f.interferenceIndices.cbegin(),f.interferenceIndices.cend(),candidate.seedIndex);
+    }),f.highSideCandidates.end());
+    invalidateGeometry();
+    m_status=tr("人工干涉标注已确认，不参与拼接；请保存几何结果以持久化");
+    if(m_hasResult)rebuildResultRegions();emit changed(true);return true;
+}
+
+void ScanGeometrySessionV2::clearInterference() {
+    recordOperation(QStringLiteral("clearInterference"));
+    if(activeFrameBusy()||!activeFrame())return;auto &f=m_frames[m_active];f.interferenceIndices.clear();f.pendingInterference.clear();
+    f.interferenceMask={};f.pendingInterferenceMask={};f.interferenceMaskError.clear();f.pendingInterferenceMaskError.clear();invalidateGeometry();
+    ++m_annotationRevision;
+    if(m_hasResult){m_resultRegions.interference={};rebuildResultRegions();}
+    else if(f.hasCandidate)dispatchHighSideSearch(m_active);emit changed(true);
+}
+
+bool ScanGeometrySessionV2::selectHighSideCandidate(int seedIndex) {
+    recordOperation(QStringLiteral("selectHighSideCandidate"));
+    if(activeFrameBusy()||!activeFrame()||activeFrame()->sourceVerification!=SourceVerificationV3::Verified)return false;
+    const auto &candidates=activeFrame()->highSideCandidates;
+    if(std::none_of(candidates.cbegin(),candidates.cend(),[seedIndex](const auto &candidate){return candidate.seedIndex==seedIndex;}))return false;
+    const auto source=activeFrame()->cloud;const auto retained=std::make_shared<const pointcloud::RobotBaseFrame>(source);
+    const auto index=activeFrame()->index;const auto config=m_config;const auto token=m_token;const auto budget=m_budget;
+    m_seeds.clear();m_seedInterference=true;m_status=tr("正在预览高侧候选平面");
+    submit(m_active,Task::Fit,[source,retained,index,seedIndex,config,token,budget] {
+        Q_UNUSED(retained);
+        const QVector<int> seeds{seedIndex};
+        return pcv::ui::fitFullPlaneV2(source,seeds,config.tolerance,config.maximumGap,true,index,token,2,budget);
+    });
+    emit changed(true);return true;
+}
+
+bool ScanGeometrySessionV2::ignoreHighSideCandidate(int seedIndex) {
+    recordOperation(QStringLiteral("ignoreHighSideCandidate"));
+    if(activeFrameBusy()||!activeFrame()||activeFrame()->sourceVerification!=SourceVerificationV3::Verified)return false;
+    auto &f=m_frames[m_active];
+    const auto it=std::find_if(f.highSideCandidates.begin(),f.highSideCandidates.end(),[seedIndex](const auto &candidate){return candidate.seedIndex==seedIndex;});
+    if(it==f.highSideCandidates.end())return false;
+    f.dismissedHighSideSeeds.insert(seedIndex);f.highSideCandidates.erase(it);
+    m_status=tr("已忽略所选高侧提醒；不会影响拼接输入");emit changed(true);return true;
+}
+
+void ScanGeometrySessionV2::clearPlane() {
+    recordOperation(QStringLiteral("clearPlane"));
+    if(activeFrameBusy()||!activeFrame())return;
+    if(m_active==m_reference){invalidateReferenceDependents();m_reference=-1;}
+    auto &f=m_frames[m_active];f.candidate={};f.planeIndices.clear();f.workpieceMask={};f.workpieceMaskError.clear();f.hasCandidate=f.confirmed=f.reviewed=f.automatic=false;
+    f.status=tr("等待重新选面");f.highSideCandidates.clear();f.dismissedHighSideSeeds.clear();f.highSideError.clear();
+    m_seeds.clear();invalidateResult();pump();emit changed(true);
+}
+
+void ScanGeometrySessionV2::matchRemaining() {
+    recordOperation(QStringLiteral("matchRemaining"));
+    if(busy()||!m_seeds.isEmpty()||m_reference<0||!m_frames.at(m_reference).confirmed||m_frames.at(m_reference).sourceVerification!=SourceVerificationV3::Verified)return;
+    m_matching=true;m_paused=false;m_nextMatch=0;m_status=tr("以固定参考面匹配其余帧");pump();emit changed(false);
+}
+
+void ScanGeometrySessionV2::resumeMatching() {
+    recordOperation(QStringLiteral("resumeMatching"));
+    if(busy()||!m_seeds.isEmpty()||!m_paused||!activeFrame()
+       ||(!activeFrame()->skipped&&!activeFrame()->reviewed))return;
+    // A paused match can be resumed after the operator reviews or replaces
+    // the failed frame. Keep an unresolved frame blocked until that review.
+    if(activeFrame()->problem && !activeFrame()->hasCandidate)return;
+    m_frames[m_active].problem=false;
+    m_paused=false;m_matching=true;m_nextMatch=0;pump();emit changed(false);
+}
+
+void ScanGeometrySessionV2::skipActive() {
+    recordOperation(QStringLiteral("skipActive"));
+    if(activeFrameBusy()||!activeFrame())return;
+    m_seeds.clear();
+    if(m_active==m_reference){invalidateReferenceDependents();m_reference=-1;}
+    auto &f=m_frames[m_active];f.skipped=true;f.problem=false;f.hasCandidate=f.confirmed=f.reviewed=false;
+    f.candidate={};f.planeIndices.clear();f.workpieceMask={};f.workpieceMaskError.clear();
+    f.pendingInterference.clear();f.pendingInterferenceMask={};f.pendingInterferenceMaskError.clear();
+    f.highSideCandidates.clear();f.highSideError.clear();
+    f.indexQueued=false;
+    m_loadQueue.erase(std::remove(m_loadQueue.begin(),m_loadQueue.end(),m_active),m_loadQueue.end());
+    f.status=tr("用户明确跳过");invalidateResult();m_status=f.status;pump();emit changed(true);
+}
+
+void ScanGeometrySessionV2::confirmAll() {
+    recordOperation(QStringLiteral("confirmAll"));
+    if(!canReviewAll())return;
+    for(int i=0;i<m_frames.size();++i)if(!m_frames[i].skipped){
+        auto &f=m_frames[i];f.confirmed=true;f.status=tr("已批量确认");
+        if(i<m_config.frames.size()&&m_config.frames.at(i).depthFrame){f.cloud={};f.index.reset();f.display={};f.displayToFull={};f.displayLease.reset();}
+    }
+    m_status=tr("全部候选已确认；可手动开始拼接");emit changed(true);
+}
+
+// 4. 结果处理：只读借用，使用前检查hasResult及对应revision。
+void ScanGeometrySessionV2::showResult() {recordOperation(QStringLiteral("showResult"));if(!busy()&&m_hasResult){m_active=-1;m_seeds.clear();emit changed(true);}}
+
+void ScanGeometrySessionV2::stitch() {
+    recordOperation(QStringLiteral("stitch"));
+    if(!canStitch())return;invalidateResult();
+    pcv::stitching::SelectedPlaneStitchRequest request;
+    for(const auto &f:m_frames)if(!f.skipped)request.frames.append(f.candidate);
+    request.calibrationPath=m_config.calibration;request.options.fineEnabled=!m_config.poseOnly;
+    request.options.maxParallelTasks=4;
+    const auto intermediateRoot=m_config.contract.enabled()
+        ? QDir(m_config.contract.runtimeRoot).filePath(QStringLiteral("system/temp/%1/%2").arg(m_config.contract.jobId,m_config.contract.runId)) : m_config.outputRoot;
+    request.outputDirectory=QDir(intermediateRoot).filePath(QStringLiteral("selected_plane_%1_%2")
+        .arg(QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz"),QUuid::createUuid().toString(QUuid::Id128)));
+    const auto token=m_token;request.isCancelled=[token]{return token->load();};const auto revision=m_revision;
+    auto regionsRequest=resultRegionRequest();
+    const auto nextResultRevision=m_resultRevision+1,annotationRevision=m_annotationRevision;
+    request.progress=[this,token,revision](float value,const QString &stage) {
+        QMetaObject::invokeMethod(this,[this,token,revision,value,stage] {
+            if(token!=m_token||token->load()||revision!=m_revision)return;
+            m_progress=qBound(0,qRound(value*100),100);m_status=stage;emit changed(false);
+        },Qt::QueuedConnection);
+    };
+    m_status=tr("模块 30：所选平面拼接与事务输出");m_progress=-1;
+    submit(-1,Task::Stitch,[request,regionsRequest,nextResultRevision,annotationRevision]() mutable {
+        QElapsedTimer transaction;transaction.start();
+        Task task;task.kind=Task::Stitch;task.stitched=pcv::stitching::stitchSelectedPlanes(request);
+        task.performance.insert("stitch_transaction_ms",transaction.nsecsElapsed()/1e6);
+        if(task.stitched.success) {
+            task.resultRevision=nextResultRevision;task.trimRevision=0;task.annotationRevision=annotationRevision;
+            try {
+                regionsRequest.points=task.stitched.points;regionsRequest.corrections=task.stitched.corrections;
+                const auto retained=std::make_shared<const ResultRegionsRequestV1>(regionsRequest);
+                Q_UNUSED(retained);
+                task.regions=std::make_shared<ResultRegionsResultV1>(buildResultRegionsV1(regionsRequest));
+                for(auto it=task.regions->performance.begin();it!=task.regions->performance.end();++it)task.performance.insert(it.key(),it.value());
+                task.performance.insert("regions_error",task.regions->error);
+            }catch(const std::exception &e){task.error=QString::fromUtf8(e.what());}
+            catch(...){task.error=QStringLiteral("拼接已提交，区域生成异常，可重建");}
+        }
+        return task;
+    });emit changed(false);
+}
+
 void ScanGeometrySessionV2::rebuildResultRegions() {
     recordOperation(QStringLiteral("rebuildResultRegions"));
     if(!m_hasResult||busy()||m_shutdown)return;
@@ -244,14 +391,100 @@ void ScanGeometrySessionV2::rebuildResultRegions() {
     });
     emit changed(true);
 }
-void ScanGeometrySessionV2::reset() {
-    recordOperation(QStringLiteral("reset"));
-    if(busy())return;
-    ++m_revision;++m_referenceRevision;m_token->store(true);m_token=std::make_shared<std::atomic_bool>(false);
-    m_frames.clear();m_config={};m_loadQueue.clear();m_pending.clear();m_roundTimingOpen=false;m_active=-1;m_round=0;m_reference=-1;m_wobj1={};m_savedGeometryPath.clear();
-    m_matching=false;m_paused=false;m_seeds.clear();m_progress=-1;m_committedOutputs.clear();invalidateResult();
-    m_status=tr("请配置 PLY/SDK深度帧、手眼 XML 和逐帧 Start/End 位姿");emit changed(true);
+
+void ScanGeometrySessionV2::erase(const QVector<int> &indices,quint64 resultRevision) {
+    recordOperation(QStringLiteral("erase"));
+    if(busy()||!m_hasResult||m_active!=-1||resultRevision!=m_resultRevision)return;auto next=m_removed;
+    for(int i:indices)if(i>=0&&i<m_result.points.size())next.insert(i);
+    if(next==m_removed)return;m_undo.append(m_removed);m_removed=std::move(next);invalidateGeometry();
+    ++m_trimRevision;rebuildResultRegions();
 }
+
+void ScanGeometrySessionV2::undo() {
+    recordOperation(QStringLiteral("undo"));if(!busy()&&m_active==-1&&!m_undo.isEmpty()){m_removed=m_undo.takeLast();invalidateGeometry();++m_trimRevision;rebuildResultRegions();emit changed(true);}}
+
+void ScanGeometrySessionV2::restore() {
+    recordOperation(QStringLiteral("restore"));if(!busy()&&m_active==-1&&!m_removed.isEmpty()){m_undo.append(m_removed);m_removed.clear();invalidateGeometry();++m_trimRevision;rebuildResultRegions();emit changed(true);}}
+
+bool ScanGeometrySessionV2::generateWobj1() {
+    recordOperation(QStringLiteral("generateWobj1"));
+    if(!canConfirmGeometry())return false;
+    const auto &reference=m_frames.at(m_reference).candidate;
+    QVector<int> indices;indices.reserve(reference.cloud.fullPoints.size());
+    for(int i=0;i<reference.cloud.fullPoints.size();++i)indices.append(i);
+    const auto bounds=pcv::planefitting::calculateBoundsCenter(reference.cloud.fullPoints,indices);
+    if(!bounds.ok){m_status=bounds.error;emit changed(false);return false;}
+    // Use the full confirmed reference snapshot. Project its bounds center
+    // onto the confirmed plane; display sampling never enters this path.
+    const auto normal=reference.normal.normalized();
+    const auto origin=bounds.center-normal*QVector3D::dotProduct(normal,bounds.center-reference.center);
+    m_wobj1=pcv::roi::buildWorkpieceCoordinateSystemFromRobotAxes(origin,normal);
+    m_geometryConfirmed=false;m_savedGeometryPath.clear();
+    m_status=m_wobj1.valid?tr("WObj1 已生成：robot_base 轴投影，等待保存确认"):m_wobj1.error;
+    emit changed(true);return m_wobj1.valid;
+}
+
+// 5. 保存与生命周期：saveGeometry是唯一会话保存入口。
+void ScanGeometrySessionV2::saveGeometry() {
+    recordOperation(QStringLiteral("saveGeometry"));
+    if(!canConfirmGeometry())return;
+    if(!m_wobj1.valid&&!generateWobj1())return;
+    GeometryOutputRequestV1 request;request.result=m_result;request.removed=m_removed;request.wobj1=m_wobj1;
+    request.contract=m_config.contract;
+    if(request.contract.enabled() && QFileInfo::exists(QDir(pointCloudContractDirectoryV1(request.contract)).filePath("point_cloud_result.json"))) {
+        m_status=tr("当前 run_id 已有正式成果，请配置新的 run_id 后重新处理；已有结果保持不变");emit changed(false);return;
+    }
+    request.referenceFrame=m_reference;request.resultRevision=m_resultRevision;
+    request.outputRoot=QFileInfo(m_result.outputPly).absolutePath();
+    for(int i=0;i<m_frames.size();++i) {
+        GeometryFrameOutputV1 frame;frame.id=m_frames.at(i).id;frame.sourceFile=m_config.frames.at(i).path;
+        frame.scanJson=m_config.frames.at(i).scanJson;frame.interferenceIndices=m_frames.at(i).interferenceIndices;
+        request.frames.append(frame);
+        if(request.contract.enabled()) {
+            GeometryContractFrameV1 source;source.input=m_config.frames.at(i);source.sourceDigest=m_frames.at(i).digest;
+            source.selected=m_frames.at(i).candidate;source.skipped=m_frames.at(i).skipped;
+            source.interferenceMask=m_frames.at(i).interferenceMask;
+            if(!m_frames.at(i).interferenceIndices.isEmpty() && source.interferenceMask.triangleIndices.isEmpty()) {
+                m_status=tr("人工干涉掩码缺失，无法导出契约结果；请重新标注");emit changed(false);return;
+            }
+            request.contractFrames.append(source);
+        }
+    }
+    const auto token=m_token;request.isCancelled=[token]{return token->load();};
+    // Keep an extra shared immutable snapshot alive across all worker reads.
+    const auto retained=std::make_shared<const GeometryOutputRequestV1>(request);
+    m_status=tr("正在事务保存修剪结果、来源和人工干涉标注");
+    submit(-1,Task::SaveGeometry,[request,retained] {
+        Q_UNUSED(retained);const auto saved=saveSelectedPlaneGeometryV1(request);
+        Task task;task.kind=Task::SaveGeometry;task.geometrySaved=saved.success;task.ok=saved.success;
+        task.cancelled=saved.cancelled;task.error=saved.error;task.savedGeometryPath=saved.sidecar;
+        if(!saved.success&&!saved.cancelled&&request.contract.enabled()) {
+            const auto path=QDir(pointCloudContractDirectoryV1(request.contract)).filePath("diagnostics/"+QUuid::createUuid().toString(QUuid::Id128));
+            pcv::io::ArtifactTransaction evidence(path,false);
+            const QJsonObject diagnostic{{"kind","scan_geometry_contract_failure_v1"},{"job_id",request.contract.jobId},
+                {"run_id",request.contract.runId},{"step_id",request.contract.stepId},{"status","failed"},
+                {"result_revision",double(request.resultRevision)},{"error",saved.error},
+                {"generated_at",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
+            if(!evidence.stageJson("failure_v1.json",QJsonDocument(diagnostic).toJson())||!evidence.commit())
+                task.error+=QStringLiteral("; failure evidence: ")+evidence.error();
+        }
+        return task;
+    });emit changed(false);
+}
+
+void ScanGeometrySessionV2::retry() {
+    recordOperation(QStringLiteral("retry"));
+    if(activeFrameBusy()||m_active<0||(m_matching&&!m_paused))return;
+    auto &f=m_frames[m_active];
+    if(!f.cloud.fullPoints.isEmpty()&&(!f.index||f.sourceVerification!=SourceVerificationV3::Verified)){f.problem=false;f.index.reset();f.indexQueued=true;f.indexQueuedAt.start();pump();emit changed(false);return;}
+    if(f.skipped)invalidateResult();f.problem=false;f.skipped=false;
+    f.cloud={};f.index.reset();f.display.clear();f.displayToFull.clear();f.displayLease.reset();
+    m_seeds.clear();
+    invalidateGeometry();
+    enqueueLoad(m_active,true);m_status=tr("重新读取当前帧，核对原候选来源");pump();
+    emit changed(false);
+}
+
 void ScanGeometrySessionV2::cancel() {
     recordOperation(QStringLiteral("cancel"));
     for(int i:m_loadQueue)m_frames[i].loadTiming.insert("status","cancelled");
@@ -263,6 +496,16 @@ void ScanGeometrySessionV2::cancel() {
     m_status=tr("已请求取消；等待任务安全结束，保留原始帧和已审核候选");emit changed(false);
     if(!busy()){finishRoundTiming();m_token=std::make_shared<std::atomic_bool>(false);emit changed(false);}
 }
+
+void ScanGeometrySessionV2::reset() {
+    recordOperation(QStringLiteral("reset"));
+    if(busy())return;
+    ++m_revision;++m_referenceRevision;m_token->store(true);m_token=std::make_shared<std::atomic_bool>(false);
+    m_frames.clear();m_config={};m_loadQueue.clear();m_pending.clear();m_roundTimingOpen=false;m_active=-1;m_round=0;m_reference=-1;m_wobj1={};m_savedGeometryPath.clear();
+    m_matching=false;m_paused=false;m_seeds.clear();m_progress=-1;m_committedOutputs.clear();invalidateResult();
+    m_status=tr("请配置 PLY/SDK深度帧、手眼 XML 和逐帧 Start/End 位姿");emit changed(true);
+}
+
 void ScanGeometrySessionV2::shutdown() {
     if(m_shutdown)return;
     m_shutdown=true;
@@ -288,6 +531,149 @@ void ScanGeometrySessionV2::shutdown() {
     writeTiming({{"event","session_closed"},{"status",m_status},{"committed_outputs",QJsonArray::fromStringList(m_committedOutputs)}});
     for(const auto &f:m_frames)if(f.loadAttempt){auto event=f.loadTiming;event.insert("event","close_attempt");writeTiming(event);}
 }
+
+// 6. 诊断：会写源码树外JSONL，不属于正式业务产物/schema。
+QString ScanGeometrySessionV2::timingSummary() const {
+    const auto format=[](const QJsonValue &v){return v.isDouble()?QString::number(v.toDouble(),'f',1)+" ms":QStringLiteral("未观察");};
+    QString text=tr("日志：%1").arg(m_logDirectory);
+    if(const auto *f=activeFrame()) {
+        text+=tr("\n当前帧 %1 · attempt %2\n首显 %3 · 可选面 %4\n读取 %5 · 转换 %6 · 索引 %7")
+            .arg(m_active+1).arg(f->loadAttempt).arg(format(f->loadTiming.value("first_frame_ms")),format(f->loadTiming.value("selectable_ms")),
+            format(f->loadTiming.value("input_ms")),format(f->loadTiming.value("transform_ms")),format(f->loadTiming.value("index_ms")));
+        text+=tr("\n来源校验完成 %1").arg(format(f->loadTiming.value("verified_ms")));
+        text+=tr("\n本次切帧至显示 %1 · 可见等待 %2").arg(format(f->loadTiming.value("view_wait_ms")),format(f->loadTiming.value("visible_wait_ms")));
+    }
+    text+=tr("\n当前轮：%1 · 总等待 %2").arg(m_roundTiming.value("status").toString(tr("未加载")),format(m_roundTiming.value("wall_ms")));
+    if(!m_logError.isEmpty())text+=tr("\n日志写入失败：%1").arg(m_logError);
+    return text;
+}
+
+void ScanGeometrySessionV2::recordOperation(const QString &operation) {
+    writeTiming({{"event","operation"},{"operation",operation},{"active_frame",m_active},
+        {"frame_id",activeFrame()?QString::number(activeFrame()->id):QString()},
+        {"attempt",activeFrame()?QString::number(activeFrame()->loadAttempt):QString()},
+        {"reference_revision",QString::number(m_referenceRevision)}});
+}
+
+void ScanGeometrySessionV2::observeCanvasTiming(quint64 frameId,quint64 attempt,const QJsonObject &timing) {
+    for(auto &f:m_frames)if(f.id==frameId&&f.loadAttempt==attempt) {
+        QJsonObject event=timing;event.insert("frame_id",QString::number(frameId));event.insert("attempt",QString::number(attempt));
+        if(event.value("event").toString()=="view_frame_swapped") {
+            f.loadTiming.insert("view_wait_ms",event.value("view_wait_ms"));
+            f.loadTiming.insert("visible_wait_ms",event.value("visible_wait_ms"));
+        }
+        writeTiming(event);
+        if(event.value("event").toString()=="view_frame_swapped")emit changed(false);
+        return;
+    }
+}
+
+void ScanGeometrySessionV2::observeFirstFrame(quint64 frameId,quint64 attempt) {
+    for(auto &f:m_frames)if(f.id==frameId&&f.loadAttempt==attempt&&f.requestedAt.isValid()
+        &&!f.loadTiming.value("first_frame_ms").isDouble()) {
+        if(m_token->load()||f.loadTiming.value("status").toString()=="cancelled")return;
+        f.loadTiming.insert("first_frame_ms",double(f.requestedAt.elapsed()));
+        QJsonObject event=f.loadTiming;event.insert("event","first_frame_swapped");
+        writeTiming(event);emit changed(false);return;
+    }
+}
+
+// 内部失效、调度与worker收敛；不属于调用入口。
+void ScanGeometrySessionV2::writeTiming(QJsonObject event) {
+    event.insert("utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    event.insert("input_revision",QString::number(m_revision));
+    if(!event.contains("level"))event.insert("level",!event.value("error").toString().isEmpty()?"error"
+        :!event.value("warning").toString().isEmpty()?"warning":"info");
+    const auto line=QString::fromUtf8(QJsonDocument(event).toJson(QJsonDocument::Compact));
+    m_recentLog.append(line);if(m_recentLog.size()>200)m_recentLog.removeFirst();
+    if(!QDir().mkpath(m_logDirectory)){m_logError=tr("无法创建耗时日志目录");return;}
+    QFile file(m_logPath);
+    if(!file.open(QIODevice::WriteOnly|QIODevice::Append)){m_logError=file.errorString();return;}
+    const auto bytes=QJsonDocument(event).toJson(QJsonDocument::Compact)+'\n';
+    if(file.write(bytes)!=bytes.size())m_logError=file.errorString();
+}
+
+void ScanGeometrySessionV2::finishRoundTiming() {
+    if(!m_roundTimingOpen||!m_loadQueue.empty())return;
+    for(const auto &job:m_jobKinds)if(job.second==Task::LoadDisplay||job.second==Task::PrepareIndex)return;
+    for(const auto &pending:m_pending)if(pending.kind==Task::LoadDisplay||pending.kind==Task::PrepareIndex)return;
+    for(int i=m_round*6;i<qMin(int(m_frames.size()),m_round*6+6);++i)
+        if(m_frames.at(i).indexQueued||m_frames.at(i).indexPreparing)return;
+    m_roundTimingOpen=false;bool failed=false;QJsonArray frames;
+    for(int i=m_round*6;i<qMin(int(m_frames.size()),m_round*6+6);++i) {
+        failed|=m_frames.at(i).problem;frames.append(m_frames.at(i).loadTiming);
+    }
+    m_roundTiming.insert("frames",frames);
+    m_roundTiming.insert("status",m_token->load()?"cancelled":failed?"failed":"ready");
+    m_roundTiming.insert("wall_ms",double(m_roundTimer.elapsed()));writeTiming(m_roundTiming);
+}
+
+void ScanGeometrySessionV2::enqueueLoad(int frame,bool front) {
+    auto &f=m_frames[frame];
+    if(f.loading)return;
+    m_loadQueue.erase(std::remove(m_loadQueue.begin(),m_loadQueue.end(),frame),m_loadQueue.end());
+    ++f.loadAttempt;f.requestedAt.start();f.sourceVerification=SourceVerificationV3::Unverified;
+    f.loadTiming={{"frame_id",QString::number(f.id)},{"attempt",QString::number(f.loadAttempt)},
+        {"first_frame_ms",QJsonValue::Null},{"verified_ms",QJsonValue::Null},{"selectable_ms",QJsonValue::Null},
+        {"event","load_requested"},{"status","queued"}};
+    f.loadTiming.insert("source",m_config.frames.size()>frame?m_config.frames.at(frame).path:QString());
+    writeTiming(f.loadTiming);
+    if(front)m_loadQueue.push_front(frame);else m_loadQueue.push_back(frame);
+}
+
+void ScanGeometrySessionV2::invalidateResult() {
+    ++m_resultRevision;m_result={};m_hasResult=false;invalidateGeometry();m_removed.clear();m_undo.clear();
+    ++m_trimRevision;m_resultRegions={};
+}
+
+void ScanGeometrySessionV2::invalidateGeometry() {
+    m_geometryConfirmed=false;m_wobj1={};m_savedGeometryPath.clear();
+}
+
+ResultRegionsRequestV1 ScanGeometrySessionV2::resultRegionRequest() const {
+    ResultRegionsRequestV1 request;
+    request.points=m_result.points;request.corrections=m_result.corrections;request.removed=m_removed;
+    request.basis=m_resultRegions.basis;request.budget=m_budget;
+    const auto token=m_token;request.isCancelled=[token]{return token->load();};
+    int kept=0;
+    for(int i=0;i<m_frames.size();++i)if(!m_frames.at(i).skipped) {
+        const auto &f=m_frames.at(i);
+        if(i==m_reference){request.reference=f.candidate;request.referenceKeptIndex=kept;}
+        ResultInterferenceFrameV1 frame;
+        if(!f.interferenceIndices.isEmpty()) {
+            frame.mask=f.interferenceMask;frame.error=f.interferenceMaskError;
+            if(frame.mask.triangleIndices.isEmpty()&&frame.error.isEmpty())frame.error=tr("已确认干涉区域缺失，请重新标注");
+        }
+        request.frames.append(std::move(frame));++kept;
+    }
+    return request;
+}
+
+void ScanGeometrySessionV2::acceptResultRegions(const Task &task) {
+    if(!m_hasResult||task.resultRevision!=m_resultRevision||task.trimRevision!=m_trimRevision
+        ||task.annotationRevision!=m_annotationRevision)return;
+    m_resultRegions.resultRevision=m_resultRevision;m_resultRegions.trimRevision=m_trimRevision;
+    m_resultRegions.annotationRevision=m_annotationRevision;
+    if(!task.regions) {
+        m_resultRegions.state=ResultRegionStateV1::Failed;
+        m_resultRegions.error=task.error.isEmpty()?tr("区域生成未返回结果，可重建"):task.error;
+    } else {
+        const auto &regions=*task.regions;
+        m_resultRegions.basis=regions.basis;
+        if(regions.workpieceOk)m_resultRegions.workpiece=regions.workpiece;
+        // Keep the previous valid red region on cancellation; clear/replace
+        // actions remove obsolete annotations before dispatching this task.
+        if(!regions.cancelled&&(regions.interferenceOk||!regions.interference.vertices.isEmpty()))m_resultRegions.interference=regions.interference;
+        m_resultRegions.error=regions.error;
+        m_resultRegions.state=regions.cancelled?ResultRegionStateV1::Cancelled:
+            regions.workpieceOk&&regions.interferenceOk?ResultRegionStateV1::Ready:ResultRegionStateV1::Failed;
+    }
+    writeTiming({{"event","result_regions"},{"result_revision",QString::number(m_resultRevision)},
+        {"trim_revision",QString::number(m_trimRevision)},{"annotation_revision",QString::number(m_annotationRevision)},
+        {"status",m_resultRegions.state==ResultRegionStateV1::Ready?"success":m_resultRegions.state==ResultRegionStateV1::Cancelled?"cancelled":"failed"},
+        {"error",m_resultRegions.error},{"performance",task.regions?task.regions->performance:task.performance}});
+}
+
 void ScanGeometrySessionV2::submit(int frame, Task::Kind kind, std::function<Task()> work) {
     QElapsedTimer queuedAt;queuedAt.start();
     if(m_jobs.size()>=2) {m_pending.push_back({frame,kind,std::move(work),queuedAt});return;}
@@ -306,7 +692,7 @@ void ScanGeometrySessionV2::submit(int frame, Task::Kind kind, std::function<Tas
         QString warning=task.planeMaskError;
         if(task.stitched.success&&task.stitched.report.value("quality_policy").toString()=="warn_only")
             warning=tr("几何质量仅警告，未执行严格质量验收");
-        const bool stale=revision!=m_revision||token!=m_token
+        const bool stale=!pcv::ui::acceptsTask(revision,m_revision,token,m_token)
             ||(frame>=0&&(frame>=m_frames.size()||m_frames.at(frame).id!=frameId||m_frames.at(frame).loadAttempt!=attempt))
             ||((kind!=Task::LoadDisplay&&kind!=Task::PrepareIndex)&&referenceRevision!=m_referenceRevision);
         writeTiming({{"event","task_finished"},{"kind",int(kind)},{"frame_id",QString::number(frameId)},
@@ -353,25 +739,13 @@ void ScanGeometrySessionV2::submit(int frame, Task::Kind kind, std::function<Tas
         task.startedAt=started;task.workerMs=started.elapsed();task.completedAt.start();return task;
     }));
 }
+
 void ScanGeometrySessionV2::releaseOutsideRound() {
     for(int i=0;i<m_frames.size();++i)if(i/6!=m_round) {
         auto &f=m_frames[i];f.index.reset();f.cloud={};f.display.clear();f.displayToFull.clear();f.displayLease.reset();
     }
 }
-void ScanGeometrySessionV2::loadRound(int round) {
-    recordOperation(QStringLiteral("loadRound"));
-    if(busy()||m_matching||m_frames.isEmpty())return;
-    invalidateGeometry();
-    m_round=qBound(0,round,int((m_frames.size()-1)/6));m_active=m_round*6;m_seeds.clear();
-    releaseOutsideRound();m_loadQueue.clear();
-    for(int i=m_round*6;i<qMin(int(m_frames.size()),m_round*6+6);++i)
-        if(!m_frames.at(i).skipped && (m_config.frames.at(i).depthFrame
-            ? !m_frames.at(i).depthReady : m_frames.at(i).cloud.fullPoints.isEmpty()))enqueueLoad(i);
-    m_roundTimer.start();m_roundTimingOpen=true;m_roundTiming={{"event","round_finished"},{"round",m_round+1},{"status","loading"},{"wall_ms",QJsonValue::Null}};
-    for(int i=m_round*6;i<qMin(int(m_frames.size()),m_round*6+6);++i)
-        if(!m_frames.at(i).skipped&&!m_frames.at(i).cloud.fullPoints.isEmpty()&&!m_frames.at(i).index)m_frames[i].indexQueued=true;
-    m_status=tr("读取当前轮源帧：第 %1 轮").arg(m_round+1);pump();emit changed(true);
-}
+
 void ScanGeometrySessionV2::dispatchLoad(int frame) {
     m_frames[frame].loading=true;m_frames[frame].status=tr("读取与坐标转换中");
     m_frames[frame].loadTiming.insert("application_queue_ms",double(m_frames.at(frame).requestedAt.elapsed()));
@@ -389,6 +763,7 @@ void ScanGeometrySessionV2::dispatchLoad(int frame) {
         task.cancelled=token->load();task.ok=!task.cancelled;return task;
     });
 }
+
 void ScanGeometrySessionV2::dispatchIndex(int frame) {
     auto &f=m_frames[frame];
     writeTiming({{"event","index_dispatch"},{"frame_id",QString::number(f.id)},{"attempt",QString::number(f.loadAttempt)},
@@ -423,9 +798,10 @@ void ScanGeometrySessionV2::dispatchIndex(int frame) {
         return task;
     });
 }
+
 void ScanGeometrySessionV2::acceptSourceVerification(int frame,quint64 revision,quint64 attempt,
     const pcv::ui::CancellationTokenV2 &token,const QByteArray &digest,double digestMs,double verifiedMs) {
-    if(revision!=m_revision||token!=m_token||token->load()||frame<0||frame>=m_frames.size())return;
+    if(!pcv::ui::acceptsTask(revision,m_revision,token,m_token)||token->load()||frame<0||frame>=m_frames.size())return;
     auto &f=m_frames[frame];
     if(f.loadAttempt!=attempt||digest.isEmpty()||f.sourceVerification==SourceVerificationV3::Verified)return;
     const bool sourceChanged=!f.digest.isEmpty()&&f.digest!=digest;
@@ -443,15 +819,7 @@ void ScanGeometrySessionV2::acceptSourceVerification(int frame,quint64 revision,
     auto event=f.loadTiming;event.insert("event","source_verified");event.insert("status","success");
     event.insert("source_changed",sourceChanged);writeTiming(event);emit changed(true);
 }
-void ScanGeometrySessionV2::processActive() {
-    recordOperation(QStringLiteral("processActive"));
-    if(activeFrameBusy()||m_active<0||m_active>=m_frames.size()||m_matching)return;
-    auto &frame=m_frames[m_active];
-    if(!m_config.frames.at(m_active).depthFrame||!frame.depthReady||!frame.rawDepthFrame)return;
-    if(!frame.cloud.fullPoints.isEmpty()&&frame.index)return;
-    invalidateGeometry();enqueueLoad(m_active,true);
-    m_status=tr("正在物化当前深度帧并建立完整选面索引");pump();emit changed(true);
-}
+
 void ScanGeometrySessionV2::pump() {
     if(m_token->load()){finishRoundTiming();return;}
     while(!m_pending.empty()&&m_jobs.size()<2) {
@@ -479,6 +847,7 @@ void ScanGeometrySessionV2::pump() {
     if(!m_frames.at(i).index||m_frames.at(i).sourceVerification!=SourceVerificationV3::Verified){m_frames[i].indexQueued=true;pump();return;}
     dispatchMatch(i);
 }
+
 void ScanGeometrySessionV2::invalidateReferenceDependents() {
     ++m_referenceRevision;
     for(int i=0;i<m_frames.size();++i)if(i!=m_reference) {
@@ -490,14 +859,16 @@ void ScanGeometrySessionV2::invalidateReferenceDependents() {
     }
     m_matching=false;m_paused=false;invalidateResult();
 }
+
 void ScanGeometrySessionV2::pauseAt(int frame,const QString &reason) {
     m_paused=m_matching;m_active=frame;m_round=frame/6;m_frames[frame].problem=true;m_frames[frame].status=reason;
     m_status=tr("第 %1 帧需要处理：%2").arg(frame+1).arg(reason);
 }
+
 void ScanGeometrySessionV2::finish(int frame,Task::Kind kind,quint64 revision,quint64 referenceRevision,
     const pcv::ui::CancellationTokenV2 &token,Task task) {
     const bool dependsOnReference=kind==Task::Match||kind==Task::Fit||kind==Task::HighSideSearch||kind==Task::Stitch||kind==Task::SaveGeometry||kind==Task::BuildResultRegions;
-    if(revision!=m_revision||(dependsOnReference&&referenceRevision!=m_referenceRevision)||token!=m_token||token->load()) {
+    if(!pcv::ui::acceptsTask(revision,m_revision,token,m_token)||(dependsOnReference&&referenceRevision!=m_referenceRevision)) {
         // Cancellation can arrive after the stitch transaction committed, while
         // only the display mesh is still running. Configuration/reset wait for
         // this task, so this exact token/result generation can retain its cloud.
@@ -659,144 +1030,14 @@ void ScanGeometrySessionV2::finish(int frame,Task::Kind kind,quint64 revision,qu
     if(kind==Task::LoadDisplay&&!busy()&&m_loadQueue.empty()&&!m_matching)m_status+=tr("；当前轮任务结束");
     emit changed(true);
 }
+
 bool ScanGeometrySessionV2::conflicts(const QVector<int> &a,const QVector<int> &b) const {
     // Full-plane task indices are sorted in their immutable source order.
     qsizetype i=0,j=0;
     while(i<a.size()&&j<b.size()){if(a.at(i)==b.at(j))return true;if(a.at(i)<b.at(j))++i;else ++j;}
     return false;
 }
-void ScanGeometrySessionV2::activate(int frame) {
-    recordOperation(QStringLiteral("activate"));
-    if(interactionBlocked()||(m_matching&&!m_paused)||frame<0||frame>=m_frames.size()||frame/6!=m_round)return;
-    m_active=frame;m_seeds.clear();
-    if(m_frames.at(frame).cloud.fullPoints.isEmpty()&&!m_frames.at(frame).skipped
-       && frame<m_config.frames.size()
-       && (!m_config.frames.at(frame).depthFrame || !m_frames.at(frame).depthReady)) {
-        if(!m_config.frames.at(frame).depthFrame)invalidateGeometry();
-        if(!m_frames.at(frame).loading)enqueueLoad(frame,true);pump();
-    }
-    pump();
-    emit changed(true);
-}
-void ScanGeometrySessionV2::showResult() {recordOperation(QStringLiteral("showResult"));if(!busy()&&m_hasResult){m_active=-1;m_seeds.clear();emit changed(true);}}
-void ScanGeometrySessionV2::retry() {
-    recordOperation(QStringLiteral("retry"));
-    if(activeFrameBusy()||m_active<0||(m_matching&&!m_paused))return;
-    auto &f=m_frames[m_active];
-    if(!f.cloud.fullPoints.isEmpty()&&(!f.index||f.sourceVerification!=SourceVerificationV3::Verified)){f.problem=false;f.index.reset();f.indexQueued=true;f.indexQueuedAt.start();pump();emit changed(false);return;}
-    if(f.skipped)invalidateResult();f.problem=false;f.skipped=false;
-    f.cloud={};f.index.reset();f.display.clear();f.displayToFull.clear();f.displayLease.reset();
-    m_seeds.clear();
-    invalidateGeometry();
-    enqueueLoad(m_active,true);m_status=tr("重新读取当前帧，核对原候选来源");pump();
-    emit changed(false);
-}
-void ScanGeometrySessionV2::pick(int fullIndex,bool interference) {
-    recordOperation(QStringLiteral("pick"));
-    if(!canSelectActive())return;
-    auto &f=m_frames[m_active];
-    if(fullIndex<0||fullIndex>=f.cloud.fullPoints.size()||!f.index)return;
-    if(!interference) {
-        if(m_active==m_reference){invalidateReferenceDependents();m_reference=-1;}
-        f.candidate={};f.planeIndices.clear();f.workpieceMask={};f.hasCandidate=f.confirmed=f.reviewed=f.automatic=false;
-        f.workpieceMaskError.clear();
-        f.problem=false;f.status=tr("正在重新选择工件面");f.highSideCandidates.clear();
-        f.dismissedHighSideSeeds.clear();f.highSideError.clear();f.highSideChecking=false;invalidateResult();
-    } else {
-        f.pendingInterference.clear();f.pendingInterferenceMask={};f.pendingInterferenceMaskError.clear();
-    }
-    if(m_seedInterference!=interference){m_seeds.clear();m_seedInterference=interference;}
-    if(m_seeds.contains(fullIndex)){m_status=tr("请选不同控制点");emit changed(false);return;}
-    m_seeds.append(fullIndex);
-    if(m_config.threePoint&&m_seeds.size()<3){m_status=tr("三点选面：已选 %1/3，切换帧或 Esc 取消").arg(m_seeds.size());emit changed(true);return;}
-    const auto source=f.cloud;const auto retained=std::make_shared<const pointcloud::RobotBaseFrame>(source);
-    const auto index=f.index;const auto seeds=m_seeds;const auto config=m_config;const auto token=m_token;const auto budget=m_budget;
-    m_status=tr("正在完整数据上选面并生成快照");
-    submit(m_active,Task::Fit,[source,retained,index,seeds,config,token,budget] {
-        Q_UNUSED(retained);return pcv::ui::fitFullPlaneV2(source,seeds,config.tolerance,config.maximumGap,!config.threePoint,index,token,2,budget);
-    });emit changed(true);
-}
-void ScanGeometrySessionV2::setThreePoint(bool enabled) {
-    recordOperation(QStringLiteral("setThreePoint"));
-    if(activeFrameBusy())return;m_config.threePoint=enabled;m_seeds.clear();pump();emit changed(false);
-}
-bool ScanGeometrySessionV2::confirmCandidate() {
-    recordOperation(QStringLiteral("confirmCandidate"));
-    if(activeFrameBusy()||!activeFrame()||activeFrame()->sourceVerification!=SourceVerificationV3::Verified||!activeFrame()->hasCandidate)return false;
-    auto &f=m_frames[m_active];
-    if(m_reference<0) {
-        for(int i=0;i<m_active;++i)if(!m_frames.at(i).skipped){m_status=tr("请先确认首个未跳过帧作为参考面");emit changed(false);return false;}
-        m_reference=m_active;invalidateReferenceDependents();
-    } else if(m_reference==m_active)invalidateReferenceDependents();
 
-    f.reviewed=true;f.confirmed=true;f.problem=false;f.status=m_active==m_reference?tr("已确认参考面"):tr("已确认");
-    if(m_active<m_config.frames.size()&&m_config.frames.at(m_active).depthFrame) {
-        f.cloud={};f.index.reset();f.display={};f.displayToFull={};f.displayLease.reset();
-    }
-    m_status=f.status;pump();emit changed(true);return true;
-}
-bool ScanGeometrySessionV2::confirmInterference() {
-    recordOperation(QStringLiteral("confirmInterference"));
-    if(activeFrameBusy()||!activeFrame()||activeFrame()->sourceVerification!=SourceVerificationV3::Verified||activeFrame()->pendingInterference.isEmpty())return false;
-    auto &f=m_frames[m_active];
-    if(conflicts(f.pendingInterference,f.planeIndices)) {m_status=tr("干涉面与工件面重叠；请重选干涉面，或先重置工件面");emit changed(false);return false;}
-    f.interferenceIndices=std::move(f.pendingInterference);f.pendingInterference.clear();
-    f.interferenceMask=std::move(f.pendingInterferenceMask);f.pendingInterferenceMask={};
-    f.interferenceMaskError=std::move(f.pendingInterferenceMaskError);f.pendingInterferenceMaskError.clear();
-    ++m_annotationRevision;
-    if(m_hasResult)m_resultRegions.interference={};
-    f.highSideCandidates.erase(std::remove_if(f.highSideCandidates.begin(),f.highSideCandidates.end(),[&](const auto &candidate) {
-        return std::binary_search(f.interferenceIndices.cbegin(),f.interferenceIndices.cend(),candidate.seedIndex);
-    }),f.highSideCandidates.end());
-    invalidateGeometry();
-    m_status=tr("人工干涉标注已确认，不参与拼接；请保存几何结果以持久化");
-    if(m_hasResult)rebuildResultRegions();emit changed(true);return true;
-}
-bool ScanGeometrySessionV2::selectHighSideCandidate(int seedIndex) {
-    recordOperation(QStringLiteral("selectHighSideCandidate"));
-    if(activeFrameBusy()||!activeFrame()||activeFrame()->sourceVerification!=SourceVerificationV3::Verified)return false;
-    const auto &candidates=activeFrame()->highSideCandidates;
-    if(std::none_of(candidates.cbegin(),candidates.cend(),[seedIndex](const auto &candidate){return candidate.seedIndex==seedIndex;}))return false;
-    const auto source=activeFrame()->cloud;const auto retained=std::make_shared<const pointcloud::RobotBaseFrame>(source);
-    const auto index=activeFrame()->index;const auto config=m_config;const auto token=m_token;const auto budget=m_budget;
-    m_seeds.clear();m_seedInterference=true;m_status=tr("正在预览高侧候选平面");
-    submit(m_active,Task::Fit,[source,retained,index,seedIndex,config,token,budget] {
-        Q_UNUSED(retained);
-        const QVector<int> seeds{seedIndex};
-        return pcv::ui::fitFullPlaneV2(source,seeds,config.tolerance,config.maximumGap,true,index,token,2,budget);
-    });
-    emit changed(true);return true;
-}
-bool ScanGeometrySessionV2::ignoreHighSideCandidate(int seedIndex) {
-    recordOperation(QStringLiteral("ignoreHighSideCandidate"));
-    if(activeFrameBusy()||!activeFrame()||activeFrame()->sourceVerification!=SourceVerificationV3::Verified)return false;
-    auto &f=m_frames[m_active];
-    const auto it=std::find_if(f.highSideCandidates.begin(),f.highSideCandidates.end(),[seedIndex](const auto &candidate){return candidate.seedIndex==seedIndex;});
-    if(it==f.highSideCandidates.end())return false;
-    f.dismissedHighSideSeeds.insert(seedIndex);f.highSideCandidates.erase(it);
-    m_status=tr("已忽略所选高侧提醒；不会影响拼接输入");emit changed(true);return true;
-}
-void ScanGeometrySessionV2::clearInterference() {
-    recordOperation(QStringLiteral("clearInterference"));
-    if(activeFrameBusy()||!activeFrame())return;auto &f=m_frames[m_active];f.interferenceIndices.clear();f.pendingInterference.clear();
-    f.interferenceMask={};f.pendingInterferenceMask={};f.interferenceMaskError.clear();f.pendingInterferenceMaskError.clear();invalidateGeometry();
-    ++m_annotationRevision;
-    if(m_hasResult){m_resultRegions.interference={};rebuildResultRegions();}
-    else if(f.hasCandidate)dispatchHighSideSearch(m_active);emit changed(true);
-}
-void ScanGeometrySessionV2::clearPlane() {
-    recordOperation(QStringLiteral("clearPlane"));
-    if(activeFrameBusy()||!activeFrame())return;
-    if(m_active==m_reference){invalidateReferenceDependents();m_reference=-1;}
-    auto &f=m_frames[m_active];f.candidate={};f.planeIndices.clear();f.workpieceMask={};f.workpieceMaskError.clear();f.hasCandidate=f.confirmed=f.reviewed=f.automatic=false;
-    f.status=tr("等待重新选面");f.highSideCandidates.clear();f.dismissedHighSideSeeds.clear();f.highSideError.clear();
-    m_seeds.clear();invalidateResult();pump();emit changed(true);
-}
-void ScanGeometrySessionV2::matchRemaining() {
-    recordOperation(QStringLiteral("matchRemaining"));
-    if(busy()||!m_seeds.isEmpty()||m_reference<0||!m_frames.at(m_reference).confirmed||m_frames.at(m_reference).sourceVerification!=SourceVerificationV3::Verified)return;
-    m_matching=true;m_paused=false;m_nextMatch=0;m_status=tr("以固定参考面匹配其余帧");pump();emit changed(false);
-}
 void ScanGeometrySessionV2::dispatchMatch(int frame) {
     const auto source=m_frames.at(frame).cloud;const auto retained=std::make_shared<const pointcloud::RobotBaseFrame>(source);
     const auto index=m_frames.at(frame).index;const auto ref=m_frames.at(m_reference).candidate;
@@ -835,6 +1076,7 @@ void ScanGeometrySessionV2::dispatchMatch(int frame) {
         return task;
     });
 }
+
 void ScanGeometrySessionV2::dispatchHighSideSearch(int frame) {
     if(frame<0||frame>=m_frames.size())return;
     auto &f=m_frames[frame];
@@ -859,178 +1101,4 @@ void ScanGeometrySessionV2::dispatchHighSideSearch(int frame) {
         return task;
     });
 }
-void ScanGeometrySessionV2::resumeMatching() {
-    recordOperation(QStringLiteral("resumeMatching"));
-    if(busy()||!m_seeds.isEmpty()||!m_paused||!activeFrame()
-       ||(!activeFrame()->skipped&&!activeFrame()->reviewed))return;
-    // A paused match can be resumed after the operator reviews or replaces
-    // the failed frame. Keep an unresolved frame blocked until that review.
-    if(activeFrame()->problem && !activeFrame()->hasCandidate)return;
-    m_frames[m_active].problem=false;
-    m_paused=false;m_matching=true;m_nextMatch=0;pump();emit changed(false);
-}
-void ScanGeometrySessionV2::skipActive() {
-    recordOperation(QStringLiteral("skipActive"));
-    if(activeFrameBusy()||!activeFrame())return;
-    m_seeds.clear();
-    if(m_active==m_reference){invalidateReferenceDependents();m_reference=-1;}
-    auto &f=m_frames[m_active];f.skipped=true;f.problem=false;f.hasCandidate=f.confirmed=f.reviewed=false;
-    f.candidate={};f.planeIndices.clear();f.workpieceMask={};f.workpieceMaskError.clear();
-    f.pendingInterference.clear();f.pendingInterferenceMask={};f.pendingInterferenceMaskError.clear();
-    f.highSideCandidates.clear();f.highSideError.clear();
-    f.indexQueued=false;
-    m_loadQueue.erase(std::remove(m_loadQueue.begin(),m_loadQueue.end(),m_active),m_loadQueue.end());
-    f.status=tr("用户明确跳过");invalidateResult();m_status=f.status;pump();emit changed(true);
-}
-QString ScanGeometrySessionV2::summary() const {
-    int keep=0,skip=0,problem=0,unreviewed=0;
-    for(const auto &f:m_frames) {if(f.skipped)++skip;else if(f.hasCandidate)++keep;if(f.problem)++problem;if(!f.skipped&&(!f.hasCandidate||!f.reviewed))++unreviewed;}
-    return tr("保留 %1 · 跳过 %2 · 异常 %3 · 未审核 %4").arg(keep).arg(skip).arg(problem).arg(unreviewed);
-}
-bool ScanGeometrySessionV2::canReviewAll() const {
-    if(busy()||m_matching||!m_seeds.isEmpty()||m_reference<0)return false;int valid=0;
-    for(const auto &f:m_frames)if(!f.skipped){if(f.sourceVerification!=SourceVerificationV3::Verified||f.problem||!f.hasCandidate||!f.reviewed
-        ||conflicts(f.planeIndices,f.interferenceIndices)||conflicts(f.planeIndices,f.pendingInterference))return false;++valid;}
-    return valid>=2;
-}
-void ScanGeometrySessionV2::confirmAll() {
-    recordOperation(QStringLiteral("confirmAll"));
-    if(!canReviewAll())return;
-    for(int i=0;i<m_frames.size();++i)if(!m_frames[i].skipped){
-        auto &f=m_frames[i];f.confirmed=true;f.status=tr("已批量确认");
-        if(i<m_config.frames.size()&&m_config.frames.at(i).depthFrame){f.cloud={};f.index.reset();f.display={};f.displayToFull={};f.displayLease.reset();}
-    }
-    m_status=tr("全部候选已确认；可手动开始拼接");emit changed(true);
-}
-bool ScanGeometrySessionV2::canStitch() const {
-    if(!canReviewAll())return false;
-    for(const auto &f:m_frames)if(!f.skipped&&!f.confirmed)return false;return true;
-}
-void ScanGeometrySessionV2::stitch() {
-    recordOperation(QStringLiteral("stitch"));
-    if(!canStitch())return;invalidateResult();
-    pcv::stitching::SelectedPlaneStitchRequest request;
-    for(const auto &f:m_frames)if(!f.skipped)request.frames.append(f.candidate);
-    request.calibrationPath=m_config.calibration;request.options.fineEnabled=!m_config.poseOnly;
-    request.options.maxParallelTasks=4;
-    const auto intermediateRoot=m_config.contract.enabled()
-        ? QDir(m_config.contract.runtimeRoot).filePath(QStringLiteral("system/temp/%1/%2").arg(m_config.contract.jobId,m_config.contract.runId)) : m_config.outputRoot;
-    request.outputDirectory=QDir(intermediateRoot).filePath(QStringLiteral("selected_plane_%1_%2")
-        .arg(QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz"),QUuid::createUuid().toString(QUuid::Id128)));
-    const auto token=m_token;request.isCancelled=[token]{return token->load();};const auto revision=m_revision;
-    auto regionsRequest=resultRegionRequest();
-    const auto nextResultRevision=m_resultRevision+1,annotationRevision=m_annotationRevision;
-    request.progress=[this,token,revision](float value,const QString &stage) {
-        QMetaObject::invokeMethod(this,[this,token,revision,value,stage] {
-            if(token!=m_token||token->load()||revision!=m_revision)return;
-            m_progress=qBound(0,qRound(value*100),100);m_status=stage;emit changed(false);
-        },Qt::QueuedConnection);
-    };
-    m_status=tr("模块 30：所选平面拼接与事务输出");m_progress=-1;
-    submit(-1,Task::Stitch,[request,regionsRequest,nextResultRevision,annotationRevision]() mutable {
-        QElapsedTimer transaction;transaction.start();
-        Task task;task.kind=Task::Stitch;task.stitched=pcv::stitching::stitchSelectedPlanes(request);
-        task.performance.insert("stitch_transaction_ms",transaction.nsecsElapsed()/1e6);
-        if(task.stitched.success) {
-            task.resultRevision=nextResultRevision;task.trimRevision=0;task.annotationRevision=annotationRevision;
-            try {
-                regionsRequest.points=task.stitched.points;regionsRequest.corrections=task.stitched.corrections;
-                const auto retained=std::make_shared<const ResultRegionsRequestV1>(regionsRequest);
-                Q_UNUSED(retained);
-                task.regions=std::make_shared<ResultRegionsResultV1>(buildResultRegionsV1(regionsRequest));
-                for(auto it=task.regions->performance.begin();it!=task.regions->performance.end();++it)task.performance.insert(it.key(),it.value());
-                task.performance.insert("regions_error",task.regions->error);
-            }catch(const std::exception &e){task.error=QString::fromUtf8(e.what());}
-            catch(...){task.error=QStringLiteral("拼接已提交，区域生成异常，可重建");}
-        }
-        return task;
-    });emit changed(false);
-}
-void ScanGeometrySessionV2::erase(const QVector<int> &indices,quint64 resultRevision) {
-    recordOperation(QStringLiteral("erase"));
-    if(busy()||!m_hasResult||m_active!=-1||resultRevision!=m_resultRevision)return;auto next=m_removed;
-    for(int i:indices)if(i>=0&&i<m_result.points.size())next.insert(i);
-    if(next==m_removed)return;m_undo.append(m_removed);m_removed=std::move(next);invalidateGeometry();
-    ++m_trimRevision;rebuildResultRegions();
-}
-void ScanGeometrySessionV2::undo() {
-    recordOperation(QStringLiteral("undo"));if(!busy()&&m_active==-1&&!m_undo.isEmpty()){m_removed=m_undo.takeLast();invalidateGeometry();++m_trimRevision;rebuildResultRegions();emit changed(true);}}
-void ScanGeometrySessionV2::restore() {
-    recordOperation(QStringLiteral("restore"));if(!busy()&&m_active==-1&&!m_removed.isEmpty()){m_undo.append(m_removed);m_removed.clear();invalidateGeometry();++m_trimRevision;rebuildResultRegions();emit changed(true);}}
-bool ScanGeometrySessionV2::canConfirmGeometry() const {
-    if(busy()||!m_hasResult||m_active!=-1||m_reference<0||m_reference>=m_frames.size()
-       ||!m_frames.at(m_reference).confirmed||m_frames.at(m_reference).candidate.cloud.fullPoints.size()<3)return false;
-    for(const auto &f:m_frames)if(!f.pendingInterference.isEmpty()||f.problem)return false;
-    QVector3D a,b;bool first=false,second=false;
-    for(int i=0;i<m_result.points.size();++i)if(!m_removed.contains(i)) {
-        const auto &p=m_result.points.at(i);const QVector3D v(p.x,p.y,p.z);
-        if(!first){a=v;first=true;}else if(!second){if((v-a).lengthSquared()>1e-12f){b=v;second=true;}}
-        else if(QVector3D::crossProduct(b-a,v-a).lengthSquared()>1e-12f*(b-a).lengthSquared())return true;
-    }
-    return false;
-}
-bool ScanGeometrySessionV2::generateWobj1() {
-    recordOperation(QStringLiteral("generateWobj1"));
-    if(!canConfirmGeometry())return false;
-    const auto &reference=m_frames.at(m_reference).candidate;
-    QVector<int> indices;indices.reserve(reference.cloud.fullPoints.size());
-    for(int i=0;i<reference.cloud.fullPoints.size();++i)indices.append(i);
-    const auto bounds=pcv::planefitting::calculateBoundsCenter(reference.cloud.fullPoints,indices);
-    if(!bounds.ok){m_status=bounds.error;emit changed(false);return false;}
-    // Use the full confirmed reference snapshot. Project its bounds center
-    // onto the confirmed plane; display sampling never enters this path.
-    const auto normal=reference.normal.normalized();
-    const auto origin=bounds.center-normal*QVector3D::dotProduct(normal,bounds.center-reference.center);
-    m_wobj1=pcv::roi::buildWorkpieceCoordinateSystemFromRobotAxes(origin,normal);
-    m_geometryConfirmed=false;m_savedGeometryPath.clear();
-    m_status=m_wobj1.valid?tr("WObj1 已生成：robot_base 轴投影，等待保存确认"):m_wobj1.error;
-    emit changed(true);return m_wobj1.valid;
-}
-void ScanGeometrySessionV2::saveGeometry() {
-    recordOperation(QStringLiteral("saveGeometry"));
-    if(!canConfirmGeometry())return;
-    if(!m_wobj1.valid&&!generateWobj1())return;
-    GeometryOutputRequestV1 request;request.result=m_result;request.removed=m_removed;request.wobj1=m_wobj1;
-    request.contract=m_config.contract;
-    if(request.contract.enabled() && QFileInfo::exists(QDir(pointCloudContractDirectoryV1(request.contract)).filePath("point_cloud_result.json"))) {
-        m_status=tr("当前 run_id 已有正式成果，请配置新的 run_id 后重新处理；已有结果保持不变");emit changed(false);return;
-    }
-    request.referenceFrame=m_reference;request.resultRevision=m_resultRevision;
-    request.outputRoot=QFileInfo(m_result.outputPly).absolutePath();
-    for(int i=0;i<m_frames.size();++i) {
-        GeometryFrameOutputV1 frame;frame.id=m_frames.at(i).id;frame.sourceFile=m_config.frames.at(i).path;
-        frame.scanJson=m_config.frames.at(i).scanJson;frame.interferenceIndices=m_frames.at(i).interferenceIndices;
-        request.frames.append(frame);
-        if(request.contract.enabled()) {
-            GeometryContractFrameV1 source;source.input=m_config.frames.at(i);source.sourceDigest=m_frames.at(i).digest;
-            source.selected=m_frames.at(i).candidate;source.skipped=m_frames.at(i).skipped;
-            source.interferenceMask=m_frames.at(i).interferenceMask;
-            if(!m_frames.at(i).interferenceIndices.isEmpty() && source.interferenceMask.triangleIndices.isEmpty()) {
-                m_status=tr("人工干涉掩码缺失，无法导出契约结果；请重新标注");emit changed(false);return;
-            }
-            request.contractFrames.append(source);
-        }
-    }
-    const auto token=m_token;request.isCancelled=[token]{return token->load();};
-    // Keep an extra shared immutable snapshot alive across all worker reads.
-    const auto retained=std::make_shared<const GeometryOutputRequestV1>(request);
-    m_status=tr("正在事务保存修剪结果、来源和人工干涉标注");
-    submit(-1,Task::SaveGeometry,[request,retained] {
-        Q_UNUSED(retained);const auto saved=saveSelectedPlaneGeometryV1(request);
-        Task task;task.kind=Task::SaveGeometry;task.geometrySaved=saved.success;task.ok=saved.success;
-        task.cancelled=saved.cancelled;task.error=saved.error;task.savedGeometryPath=saved.sidecar;
-        if(!saved.success&&!saved.cancelled&&request.contract.enabled()) {
-            const auto path=QDir(pointCloudContractDirectoryV1(request.contract)).filePath("diagnostics/"+QUuid::createUuid().toString(QUuid::Id128));
-            pcv::io::ArtifactTransaction evidence(path,false);
-            const QJsonObject diagnostic{{"kind","scan_geometry_contract_failure_v1"},{"job_id",request.contract.jobId},
-                {"run_id",request.contract.runId},{"step_id",request.contract.stepId},{"status","failed"},
-                {"result_revision",double(request.resultRevision)},{"error",saved.error},
-                {"generated_at",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
-            if(!evidence.stageJson("failure_v1.json",QJsonDocument(diagnostic).toJson())||!evidence.commit())
-                task.error+=QStringLiteral("; failure evidence: ")+evidence.error();
-        }
-        return task;
-    });emit changed(false);
-}
-void ScanGeometrySessionV2::confirmGeometry() {saveGeometry();}
 } // namespace pcv::demo

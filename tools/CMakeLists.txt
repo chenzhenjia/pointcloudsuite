@@ -1,6 +1,7 @@
-add_subdirectory(registration_diagnostic)
 get_target_property(PCV_M10_CAMERA_DEFINITIONS pcv_m10_pointcloud_io INTERFACE_COMPILE_DEFINITIONS)
 if("PCV_CAMERA_HAVE_HIKSDK=1" IN_LIST PCV_M10_CAMERA_DEFINITIONS)
     add_executable(depth_raw_to_ply_v1 depth_raw_to_ply_v1.cpp)
     target_link_libraries(depth_raw_to_ply_v1 PRIVATE pcv_m10_pointcloud_io)
+else()
+    message(FATAL_ERROR "PCV_BUILD_RAW_CONVERTER requires PCV_BUILD_EXPERIMENTAL_CAMERA=ON and the Hikvision SDK.")
 endif()

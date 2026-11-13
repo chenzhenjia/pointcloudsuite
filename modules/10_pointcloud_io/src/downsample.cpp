@@ -1,4 +1,4 @@
-#include <pcv/filtering/downsample.h>
+#include <pcv/processing/downsample.h>
 
 #include <QtMath>
 

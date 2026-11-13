@@ -8,7 +8,7 @@ if(CMAKE_HOST_WIN32)
 endif()
 
 if(CMAKE_GENERATOR MATCHES "NMake Makefiles JOM")
-    message(
+    message(FATAL_ERROR
         "NMake Makefiles JOM is unsupported because it records localized MSVC /showIncludes output as dependency names. "
         "Select the NMake Makefiles generator and configure a fresh build directory.")
 endif()
@@ -25,10 +25,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(PCV_BUILD_POINTCLOUDVIEW "Build the point cloud viewer" ON)
 option(PCV_BUILD_SCAN_GEOMETRY_DEMO_V1 "Build the offline PLY selected-plane GUI (legacy target name)" ON)
 option(PCV_BUILD_STEP_TEMPLATE_BUILDER_V1 "Build the standalone STEP template builder GUI" ON)
-option(PCV_BUILD_CLI "Build the PointCloudSuite CLI" OFF)
-option(PCV_BUILD_TOOLS "Build diagnostic command-line tools" OFF)
+option(PCV_BUILD_RAW_CONVERTER "Build the depth RAW to PLY converter" OFF)
 option(PCV_BUILD_STEP_IMPORT "Enable OCCT STEP import" ON)
 option(PCV_BUILD_TESTS "Build all automated tests" OFF)
+option(PCV_BUILD_EXPERIMENTAL_TESTS "Build optional SDK-specific experimental tests" OFF)
 option(PCV_BUILD_EXPERIMENTAL_CAMERA
     "Build Hikvision camera acquisition and its UI/tests" ON)
 
@@ -43,7 +43,7 @@ if(MSVC)
 endif()
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui)
-if(PCV_BUILD_CLI OR PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_TOOLS
+if(PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_RAW_CONVERTER
    OR PCV_BUILD_TESTS OR PCV_BUILD_SCAN_GEOMETRY_DEMO_V1 OR PCV_BUILD_STEP_TEMPLATE_BUILDER_V1)
     find_package(Qt6 6.5 REQUIRED COMPONENTS Concurrent)
 endif()
@@ -79,11 +79,8 @@ endif()
 if(PCV_BUILD_STEP_TEMPLATE_BUILDER_V1)
     add_subdirectory(apps/step_template_builder_v1)
 endif()
-if(PCV_BUILD_TOOLS)
+if(PCV_BUILD_RAW_CONVERTER)
     add_subdirectory(tools)
-endif()
-if(PCV_BUILD_CLI)
-    add_subdirectory(apps/pointcloudcli)
 endif()
 if(PCV_BUILD_TESTS)
     add_subdirectory(tests)

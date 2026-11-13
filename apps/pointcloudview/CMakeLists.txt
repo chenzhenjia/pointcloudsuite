@@ -1,6 +1,4 @@
-qt_add_executable(pointcloudview
-    WIN32 MACOSX_BUNDLE
-    main.cpp
+add_library(pcv_workbench OBJECT
     mainwindow.cpp
     mainwindow.h
     workbench_shell_v1.h
@@ -25,8 +23,8 @@ qt_add_executable(pointcloudview
     pointcloudview.qrc
 )
 if(PCV_BUILD_EXPERIMENTAL_CAMERA)
-    target_compile_definitions(pointcloudview PRIVATE PCV_CAPTURE_UI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
-    target_sources(pointcloudview PRIVATE
+    target_compile_definitions(pcv_workbench PUBLIC PCV_CAPTURE_UI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
+    target_sources(pcv_workbench PRIVATE
         live_pipeline.cpp
         live_pipeline.h
         cameradialog.cpp
@@ -41,17 +39,17 @@ if(PCV_BUILD_EXPERIMENTAL_CAMERA)
         ui/cameradialog.ui
     )
 endif()
-set_property(TARGET pointcloudview PROPERTY AUTOUIC_SEARCH_PATHS
+set_property(TARGET pcv_workbench PROPERTY AUTOUIC_SEARCH_PATHS
     "${CMAKE_CURRENT_SOURCE_DIR}/ui")
-set_property(TARGET pointcloudview PROPERTY AUTORCC ON)
+set_property(TARGET pcv_workbench PROPERTY AUTORCC ON)
 
 # Localized MSVC /showIncludes output can leave an empty dependency file with
 # this Qt Creator Makefile kit. Keep this ABI-critical dependency explicit.
 set_property(SOURCE pointcloudprocessor.cpp APPEND PROPERTY OBJECT_DEPENDS
-    "${PROJECT_SOURCE_DIR}/include/pcv/io/ply_reader.h")
+    "${PROJECT_SOURCE_DIR}/modules/10_pointcloud_io/include/pcv/io/ply_reader.h")
 
-target_link_libraries(pointcloudview
-    PRIVATE
+target_link_libraries(pcv_workbench
+    PUBLIC
         Qt::Core
         Qt::Widgets
         Qt::Concurrent
@@ -64,15 +62,19 @@ target_link_libraries(pointcloudview
         pcv_m60_geometry_workpiece
         pcv_m30_pointcloud_stitch
         pcv_stitching_ui
-        pcv_selected_plane_tasks_v2
+        pcv_selected_plane_tasks
 )
 if (WIN32)
-    target_link_libraries(pointcloudview PRIVATE Psapi)
+    target_link_libraries(pcv_workbench PUBLIC Psapi)
 endif()
 if(PCV_BUILD_EXPERIMENTAL_CAMERA)
-    target_link_libraries(pointcloudview PRIVATE pcv_m10_pointcloud_io)
-    target_compile_definitions(pointcloudview PRIVATE PCV_BUILD_EXPERIMENTAL_CAMERA=1)
+    target_link_libraries(pcv_workbench PUBLIC pcv_m10_pointcloud_io)
+    target_compile_definitions(pcv_workbench PUBLIC PCV_BUILD_EXPERIMENTAL_CAMERA=1)
 endif()
+
+target_include_directories(pcv_workbench PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+qt_add_executable(pointcloudview WIN32 MACOSX_BUNDLE main.cpp)
+target_link_libraries(pointcloudview PRIVATE pcv_workbench)
 
 if (WIN32)
     add_custom_command(TARGET pointcloudview POST_BUILD

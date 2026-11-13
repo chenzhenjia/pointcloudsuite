@@ -1,7 +1,7 @@
 #include "live_pipeline.h"
 
 #include <pcv/camera/frame_converter.h>
-#include <pcv/filtering/downsample.h>
+#include <pcv/processing/downsample.h>
 
 #include <QJsonArray>
 #include <QJsonValue>

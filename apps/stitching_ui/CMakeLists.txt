@@ -1,7 +1,7 @@
-add_library(pcv_selected_plane_tasks_v2 STATIC
-    selected_plane_tasks_v2.cpp selected_plane_tasks_v2.h)
-target_include_directories(pcv_selected_plane_tasks_v2 PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(pcv_selected_plane_tasks_v2 PUBLIC
+add_library(pcv_selected_plane_tasks STATIC
+    selected_plane_tasks.cpp selected_plane_tasks.h task_runtime.h)
+target_include_directories(pcv_selected_plane_tasks PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(pcv_selected_plane_tasks PUBLIC
     Qt::Core Qt::Gui Qt::Concurrent pcv_m10_pointcloud_io
     pcv_m30_pointcloud_stitch pcv_m50_coordinate_conversion pcv_m60_geometry_workpiece)
 
@@ -31,6 +31,6 @@ if(PCV_BUILD_POINTCLOUDVIEW)
             pcv_m10_pointcloud_io
             pcv_m30_pointcloud_stitch
             pcv_m50_coordinate_conversion
-            pcv_selected_plane_tasks_v2
+            pcv_selected_plane_tasks
     )
 endif()

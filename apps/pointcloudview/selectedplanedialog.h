@@ -1,5 +1,5 @@
 #pragma once
-#include <selected_plane_tasks_v2.h>
+#include <selected_plane_tasks.h>
 #include <pcv/stitching/selected_plane_stitch.h>
 #include <pcv/planefitting/single_click_plane_selection_v1.h>
 #include <pcv/workpiece/workpiece_template_v1.h>

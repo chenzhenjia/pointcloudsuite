@@ -5,12 +5,13 @@ param(
     [ValidateSet("Debug", "Release")]
     [string]$Config = "Release",
     [switch]$BuildTests,
-    [switch]$BuildTools,
+    [switch]$BuildRawConverter,
+    [switch]$ExperimentalTests,
+    [ValidateSet('pointcloudview', 'scan_geometry_demo_v1', 'step_template_builder_v1')]
+    [AllowEmptyCollection()]
+    [string[]]$Gui = @('pointcloudview', 'scan_geometry_demo_v1', 'step_template_builder_v1'),
     [switch]$StepImport = $true,
     [string]$OcctDir = "",
-    [switch]$CliOnly,
-    [switch]$Deploy,
-    [string]$DeployDir = "",
     # Force a full rebuild (cmake --build --clean-first). Required after any
     # change to a public header when the build tree does not track header
     # dependencies; see docs/development/build-windows.md.
@@ -90,13 +91,6 @@ function Get-NinjaPath {
     return $candidates
 }
 
-function Get-JomPath {
-    return @(
-        (Get-ExecutablePath 'jom.exe'),
-        (Join-Path $env:SystemDrive 'Qt\Tools\QtCreator\bin\jom\jom.exe')
-    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
-}
-
 function Import-VcVarsEnvironment([string]$VcVarsPath) {
     $environmentLines = @(& cmd.exe /d /s /c ('"{0}" && set' -f $VcVarsPath) 2>&1)
     if ($LASTEXITCODE -ne 0) { throw "Failed to initialize MSVC with $VcVarsPath." }
@@ -137,308 +131,93 @@ function Get-QtDirectory([string]$RequestedQtDir) {
     throw 'Qt 6 was not found. Select a Qt Creator Kit, add qtpaths6/qmake to PATH, set CMAKE_PREFIX_PATH/Qt6_DIR, or pass -QtDir <Qt prefix>.'
 }
 
-function Resolve-SafeDeployDirectory([string]$RequestedDirectory, [string]$SourceDirectory) {
-    if ([string]::IsNullOrWhiteSpace($RequestedDirectory)) {
-        throw '-DeployDir must not be empty.'
-    }
-    $full = [System.IO.Path]::GetFullPath($RequestedDirectory)
-    $root = [System.IO.Path]::GetPathRoot($full)
-    if ([string]::Equals($full.TrimEnd('\'), $root.TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw ('-DeployDir must not be a drive root: {0}' -f $full)
-    }
-    $source = [System.IO.Path]::GetFullPath($SourceDirectory).TrimEnd('\')
-    $candidate = $full.TrimEnd('\')
-    $candidateInsideSource = [string]::Equals($candidate, $source, [System.StringComparison]::OrdinalIgnoreCase) -or
-        $candidate.StartsWith($source + '\', [System.StringComparison]::OrdinalIgnoreCase)
-    if ($candidateInsideSource) {
-        throw ('-DeployDir must be outside the source tree: {0}' -f $full)
-    }
-    if (Test-Path -LiteralPath $full) {
-        $resolved = (Resolve-Path -LiteralPath $full).Path.TrimEnd('\')
-        $resolvedInsideSource = [string]::Equals($resolved, $source, [System.StringComparison]::OrdinalIgnoreCase) -or
-            $resolved.StartsWith($source + '\', [System.StringComparison]::OrdinalIgnoreCase)
-        if ($resolvedInsideSource) {
-            throw ('-DeployDir resolves inside the source tree: {0}' -f $resolved)
-        }
-    }
-    return $full
-}
-
-function Get-CliExecutablePath([string]$BuildDirectory, [string]$BuildConfiguration) {
-    $candidates = @(
-        (Join-Path $BuildDirectory 'pointcloudcli.exe'),
-        (Join-Path (Join-Path $BuildDirectory $BuildConfiguration) 'pointcloudcli.exe'))
-    foreach ($candidate in $candidates) {
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-            return (Resolve-Path -LiteralPath $candidate).Path
-        }
-    }
-    throw ('pointcloudcli.exe was not found under {0}. Build target pointcloudcli first.' -f $BuildDirectory)
-}
-
-function Get-DumpbinPath {
-    $path = Get-ExecutablePath 'dumpbin.exe'
-    if ($path) { return $path }
-    $candidates = @()
-    if ($env:VCToolsInstallDir) {
-        $candidates += (Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64\dumpbin.exe')
-        $candidates += (Join-Path $env:VCToolsInstallDir 'bin\HostX64\x64\dumpbin.exe')
-    }
-    foreach ($candidate in $candidates | Select-Object -Unique) {
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return (Resolve-Path -LiteralPath $candidate).Path }
-    }
-    throw 'dumpbin.exe was not found in the MSVC environment; deployment dependency validation cannot continue.'
-}
-
-function Get-ImportedDllNames([string]$DumpbinPath, [string]$BinaryPath) {
-    $lines = @(& $DumpbinPath /DEPENDENTS $BinaryPath 2>&1)
-    if ($LASTEXITCODE -ne 0) { throw ('dumpbin /DEPENDENTS failed for {0}' -f $BinaryPath) }
-    $dependencies = @()
-    $inDependencies = $false
-    foreach ($line in $lines) {
-        $text = [string]$line
-        if ($text -match 'dependencies:') { $inDependencies = $true; continue }
-        if ($inDependencies -and $text -match '^\s*Summary\s*$') { break }
-        if ($inDependencies -and $text -match '^\s{2,}([A-Za-z0-9_.-]+\.dll)\s*$') {
-            $dependencies += $matches[1].ToLowerInvariant()
-        }
-    }
-    return $dependencies | Select-Object -Unique
-}
-
-function Test-WindowsSystemDll([string]$Name) {
-    if ($Name -match '^(api-ms-win-|ext-ms-win-)') { return $true }
-    $systemRoots = @(
-        (Join-Path $env:SystemRoot 'System32'),
-        (Join-Path $env:SystemRoot 'SysWOW64')) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) }
-    foreach ($root in $systemRoots) {
-        if (Test-Path -LiteralPath (Join-Path $root $Name) -PathType Leaf) { return $true }
-    }
-    return $false
-}
-
-function Assert-PortableDependencies([string]$DeployDirectory) {
-    $dumpbin = Get-DumpbinPath
-    $binaries = @(Get-ChildItem -LiteralPath $DeployDirectory -Recurse -File -Include '*.exe', '*.dll')
-    foreach ($binary in $binaries) {
-        foreach ($dependency in Get-ImportedDllNames $dumpbin $binary.FullName) {
-            $localMatches = @(Get-ChildItem -LiteralPath $DeployDirectory -Recurse -File -Filter $dependency -ErrorAction SilentlyContinue)
-            if (($localMatches.Count -gt 0) -or (Test-WindowsSystemDll $dependency)) { continue }
-            throw ('Portable dependency is missing: {0} imported by {1}' -f $dependency, $binary.FullName)
-        }
-    }
-}
-
-function Invoke-PortableCliTests([string]$CMakeExecutable, [string]$DeployDirectory, [string]$ProjectSourceDirectory, [string]$ProjectVersion) {
-    $testRoot = Join-Path $env:TEMP ('pointcloudcli-portable-tests-' + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
-    $invocationScript = Join-Path $ProjectSourceDirectory 'apps\pointcloudcli\tests\verify_cli_invocation.cmake'
-    $jobScript = Join-Path $ProjectSourceDirectory 'apps\pointcloudcli\tests\verify_cli_job.cmake'
-    $plyScript = Join-Path $ProjectSourceDirectory 'apps\pointcloudcli\tests\verify_cli_ply.cmake'
-    $cliPath = Join-Path $DeployDirectory 'pointcloudcli.exe'
-    $modes = @(
-        @{ Script = $invocationScript; Mode = 'help'; Version = $true },
-        @{ Script = $invocationScript; Mode = 'version'; Version = $true },
-        @{ Script = $invocationScript; Mode = 'empty'; Version = $true },
-        @{ Script = $invocationScript; Mode = 'unknown'; Version = $true },
-        @{ Script = $jobScript; Mode = 'rectangle'; Version = $false },
-        @{ Script = $jobScript; Mode = 'indices'; Version = $false },
-        @{ Script = $jobScript; Mode = 'overwrite'; Version = $false },
-        @{ Script = $jobScript; Mode = 'traversal'; Version = $false },
-        @{ Script = $plyScript; Mode = 'inspect_ascii'; Version = $false },
-        @{ Script = $plyScript; Mode = 'inspect_binary_le'; Version = $false },
-        @{ Script = $plyScript; Mode = 'inspect_binary_be'; Version = $false },
-        @{ Script = $plyScript; Mode = 'inspect_missing'; Version = $false },
-        @{ Script = $plyScript; Mode = 'read_summary'; Version = $false },
-        @{ Script = $plyScript; Mode = 'read_invalid'; Version = $false },
-        @{ Script = $plyScript; Mode = 'read_bounds'; Version = $false })
-    $oldPath = $env:PATH
-    Push-Location $testRoot
-    try {
-        # Keep the host PATH empty. Portable CMake scripts inject only the
-        # package directory into their child process environment because
-        # Windows CMake execute_process requires a searchable PATH.
-        $env:PATH = ''
-        foreach ($item in $modes) {
-            $arguments = @("-DPCV_CLI=$cliPath", "-DPCV_MODE=$($item.Mode)")
-            if ($item.Version) { $arguments += "-DPCV_PROJECT_VERSION=$ProjectVersion" }
-            $arguments += @('-DPCV_PORTABLE=ON', '-P', $item.Script)
-            & $CMakeExecutable @arguments
-            if ($LASTEXITCODE -ne 0) {
-                throw ('Portable CLI test failed: {0}' -f $item.Mode)
-            }
-        }
-    } finally {
-        $env:PATH = $oldPath
-        Pop-Location
-        Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
-
-function Deploy-PointCloudCli([string]$BuildDirectory, [string]$BuildConfiguration, [string]$QtPrefix, [string]$CMakeExecutable, [string]$SourceDirectory, [string]$TargetDirectory, [string]$ProjectVersion) {
-    $deploy = Resolve-SafeDeployDirectory $TargetDirectory $SourceDirectory
-    if (Test-Path -LiteralPath $deploy -PathType Leaf) { throw ('-DeployDir is an existing file: {0}' -f $deploy) }
-    if (Test-Path -LiteralPath $deploy) { Remove-Item -LiteralPath $deploy -Recurse -Force }
-    New-Item -ItemType Directory -Path $deploy -Force | Out-Null
-    $exe = Get-CliExecutablePath $BuildDirectory $BuildConfiguration
-    Copy-Item -LiteralPath $exe -Destination (Join-Path $deploy 'pointcloudcli.exe') -Force
-    $windeployqt = Join-Path $QtPrefix 'bin\windeployqt.exe'
-    if (-not (Test-Path -LiteralPath $windeployqt -PathType Leaf)) {
-        throw ('windeployqt.exe was not found under {0}' -f $QtPrefix)
-    }
-    $deployArguments = @('--release', '--compiler-runtime', '--no-translations',
-        '--no-system-d3d-compiler', '--no-opengl-sw', '--dir', $deploy,
-        (Join-Path $deploy 'pointcloudcli.exe'))
-    & $windeployqt @deployArguments
-    if ($LASTEXITCODE -ne 0) { throw 'windeployqt deployment failed.' }
-    if ($env:VCToolsRedistDir) {
-        $crtFiles = @(Get-ChildItem -LiteralPath $env:VCToolsRedistDir -Recurse -File -Include 'vcruntime*.dll', 'msvcp*.dll', 'concrt*.dll' -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match '\\x64\\' })
-        foreach ($crt in $crtFiles) {
-            $destination = Join-Path $deploy $crt.Name
-            if (-not (Test-Path -LiteralPath $destination)) { Copy-Item -LiteralPath $crt.FullName -Destination $destination -Force }
-        }
-    }
-    Get-ChildItem -LiteralPath $deploy -Recurse -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match '^(concrt|msvcp|vcruntime|ucrtbase).*d(?:_|\.dll)$' } |
-        Remove-Item -Force -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Path (Join-Path $deploy 'data') -Force | Out-Null
-    Assert-PortableDependencies $deploy
-    $readme = @"
-PointCloudSuite pointcloudcli portable package
-Version: $ProjectVersion
-
-Usage:
-  pointcloudcli.exe --version
-  pointcloudcli.exe inspect ply input.ply --json
-  pointcloudcli.exe read ply input.ply --json
-  pointcloudcli.exe temp-workpiece run job.json --data-dir .\data
-
-This package is the CLI only. Input Job JSON, PLY and calibration files are not included.
-"@
-    Set-Content -LiteralPath (Join-Path $deploy 'README.txt') -Value $readme -Encoding UTF8
-    Get-ChildItem -LiteralPath $deploy -Recurse -File | Unblock-File -ErrorAction SilentlyContinue
-    Invoke-PortableCliTests $CMakeExecutable $deploy $SourceDirectory $ProjectVersion
-    $files = @(Get-ChildItem -LiteralPath $deploy -Recurse -File)
-    $bytes = ($files | Measure-Object -Property Length -Sum).Sum
-    Write-Host ('Portable package: {0} files, {1:N0} bytes, {2}' -f $files.Count, $bytes, $deploy)
-}
-
 $SourceDir = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-if ($Deploy -and -not $CliOnly) { throw '-Deploy requires -CliOnly.' }
-if ($CliOnly -and $ExperimentalCamera) { throw '-CliOnly cannot be combined with -ExperimentalCamera.' }
-if ($Deploy -and $Config -ne 'Release') { throw '-Deploy is supported only with -Config Release.' }
-if ($Deploy -and $PSBoundParameters.ContainsKey('DeployDir') -and [string]::IsNullOrWhiteSpace($DeployDir)) {
-    throw '-DeployDir must not be empty when specified.'
-}
 if ([string]::IsNullOrWhiteSpace($BuildDir)) {
     $BuildDir = Join-Path (Split-Path $SourceDir -Parent) ("build-PointCloudSuite-{0}" -f $Config)
 }
-if (-not (Get-ExecutablePath 'cl.exe')) {
-    Import-VcVarsEnvironment (Get-VcVars64Path)
+$BuildDir = [System.IO.Path]::GetFullPath($BuildDir).TrimEnd('\', '/')
+if ($BuildDir -eq $SourceDir -or $BuildDir.StartsWith($SourceDir + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw 'BuildDir must be outside the source tree.'
 }
-$env:VSLANG = '1033'
-if (-not (Get-ExecutablePath 'cl.exe')) {
-    throw 'MSVC x64 tools were not initialized.'
-}
-
-$NinjaPath = Get-NinjaPath
 if ([string]::IsNullOrWhiteSpace($Generator)) { $Generator = 'NMake Makefiles' }
-if ($Generator -eq 'NMake Makefiles JOM') {
-    throw 'NMake Makefiles JOM does not emit usable MSVC header dependency files in this environment. Use -Generator "NMake Makefiles".'
+$existingCache = Join-Path $BuildDir 'CMakeCache.txt'
+if (Test-Path -LiteralPath $existingCache -PathType Leaf) {
+    $cacheValues = @{}
+    foreach ($cacheLine in Get-Content -LiteralPath $existingCache) {
+        if ($cacheLine -match '^(CMAKE_HOME_DIRECTORY|CMAKE_GENERATOR|CMAKE_BUILD_TYPE):[^=]+=(.*)$') {
+            $cacheValues[$matches[1]] = $matches[2]
+        }
+    }
+    $cachedSource = $cacheValues['CMAKE_HOME_DIRECTORY']
+    if (-not $cachedSource -or [System.IO.Path]::GetFullPath($cachedSource).TrimEnd('\', '/') -ne $SourceDir -or
+        $cacheValues['CMAKE_GENERATOR'] -ne $Generator -or $cacheValues['CMAKE_BUILD_TYPE'] -ne $Config) {
+        throw 'Existing CMake cache has a different source, generator or configuration. Choose a new -BuildDir; the old directory was preserved.'
+    }
 }
-if ($Generator -eq 'Ninja') {
-    if (-not $NinjaPath) { throw 'ninja.exe was not found. Install Ninja or pass -Generator "NMake Makefiles".' }
-    Write-Warning 'Ninja derives header dependencies from the MSVC /showIncludes prefix. On a localized MSVC that prefix does not match and header changes stop triggering rebuilds; the post-build check below will fail if that happens.'
-} else {
-    if (-not (Get-ExecutablePath 'nmake.exe')) { throw 'nmake.exe was not found in the MSVC environment.' }
+if ($StepImport) {
+    if (-not $OcctDir) { $OcctDir = $env:PCV_OCCT_DIR }
+    if (-not $OcctDir) { $OcctDir = $env:OpenCASCADE_DIR }
+    if (-not $OcctDir) {
+        foreach ($prefixPath in ($env:CMAKE_PREFIX_PATH -split ';')) {
+            if ($prefixPath -and (Test-Path -LiteralPath (Join-Path $prefixPath 'share/opencascade/OpenCASCADEConfig.cmake'))) {
+                $OcctDir = Join-Path $prefixPath 'share/opencascade'; break
+            }
+        }
+    }
+    if (-not $OcctDir -or -not (Test-Path -LiteralPath (Join-Path $OcctDir 'OpenCASCADEConfig.cmake') -PathType Leaf)) {
+        throw 'STEP is enabled. Pass -OcctDir <OCCT-7.9.3-config-directory>, set PCV_OCCT_DIR, or explicitly use -StepImport:$false.'
+    }
+    $OcctDir = (Resolve-Path -LiteralPath $OcctDir).Path
 }
-
+if (-not (Get-ExecutablePath 'cl.exe')) { Import-VcVarsEnvironment (Get-VcVars64Path) }
+$env:VSLANG = '1033'
+if (-not (Get-ExecutablePath 'cl.exe')) { throw 'MSVC x64 tools were not initialized.' }
+$NinjaPath = Get-NinjaPath
+if ($Generator -eq 'NMake Makefiles JOM') { throw 'NMake Makefiles JOM is unsupported. Use -Generator "NMake Makefiles".' }
+if ($Generator -eq 'Ninja' -and -not $NinjaPath) { throw 'ninja.exe was not found.' }
+if ($Generator -ne 'Ninja' -and -not (Get-ExecutablePath 'nmake.exe')) { throw 'nmake.exe was not found in the MSVC environment.' }
 $QtDir = Get-QtDirectory $QtDir
-if ($CliOnly -and $QtDir -match '(?i)(^|[\\/])mingw') {
-    throw ('-CliOnly requires an MSVC Qt kit; MinGW Qt was selected: {0}' -f $QtDir)
-}
 $CMakePath = Get-CMakePath $CMakePath
-
 $testOption = if ($BuildTests) { 'ON' } else { 'OFF' }
-$toolsOption = if ($BuildTools) { 'ON' } else { 'OFF' }
 $cameraOption = if ($ExperimentalCamera) { 'ON' } else { 'OFF' }
-Write-Host "CMake: $CMakePath"
-Write-Host "Qt: $QtDir"
-Write-Host "Generator: $Generator"
-Write-Host "Build: $BuildDir"
-Write-Host "CliOnly: $CliOnly"
-Write-Host "Deploy: $Deploy"
-Write-Host "BuildTests: $BuildTests"
-Write-Host "BuildTools: $BuildTools"
-Write-Host "ExperimentalCamera: $ExperimentalCamera"
-
 $configureArguments = @(
     '-S', $SourceDir, '-B', $BuildDir, '-G', $Generator,
     ("-DCMAKE_PREFIX_PATH={0}" -f $(if ($OcctDir) { "$QtDir;$(Split-Path (Split-Path $OcctDir -Parent) -Parent)" } else { $QtDir })),
     ("-DCMAKE_BUILD_TYPE={0}" -f $Config),
     ("-DPCV_BUILD_TESTS={0}" -f $testOption),
-    ("-DPCV_BUILD_TOOLS={0}" -f $toolsOption),
-    ("-DPCV_BUILD_STEP_IMPORT={0}" -f $(if ($StepImport) { "ON" } else { "OFF" })),
-    ("-DPCV_BUILD_EXPERIMENTAL_CAMERA={0}" -f $cameraOption)
+    ("-DPCV_BUILD_STEP_IMPORT={0}" -f $(if ($StepImport) { 'ON' } else { 'OFF' })),
+    ("-DPCV_BUILD_EXPERIMENTAL_CAMERA={0}" -f $cameraOption),
+    ("-DPCV_BUILD_RAW_CONVERTER={0}" -f $(if ($BuildRawConverter) { 'ON' } else { 'OFF' })),
+    ("-DPCV_BUILD_EXPERIMENTAL_TESTS={0}" -f $(if ($ExperimentalTests) { 'ON' } else { 'OFF' }))
 )
 if ($OcctDir) { $configureArguments += ("-DOpenCASCADE_DIR={0}" -f $OcctDir) }
-if ($CliOnly) {
-    $configureArguments += @('-DPCV_BUILD_POINTCLOUDVIEW=OFF',
-        '-DPCV_BUILD_SCAN_GEOMETRY_DEMO_V1=OFF', '-DPCV_BUILD_STEP_TEMPLATE_BUILDER_V1=OFF', '-DPCV_BUILD_CLI=ON')
+foreach ($guiEntry in @('pointcloudview', 'scan_geometry_demo_v1', 'step_template_builder_v1')) {
+    $guiEnabled = if ($guiEntry -in $Gui) { 'ON' } else { 'OFF' }
+    $optionName = $guiEntry.ToUpperInvariant()
+    $configureArguments += ("-DPCV_BUILD_{0}={1}" -f $optionName, $guiEnabled)
 }
-if ($Generator -eq 'Ninja') {
-    $configureArguments += ("-DCMAKE_MAKE_PROGRAM={0}" -f $NinjaPath)
-}
-if ($Generator -eq 'NMake Makefiles JOM') {
-    $jomPath = Get-JomPath
-    if (-not $jomPath) { throw 'jom.exe was not found. Install Qt Creator or pass -Generator "NMake Makefiles".' }
-    $configureArguments += ("-DCMAKE_MAKE_PROGRAM={0}" -f $jomPath)
-}
+if ($Generator -eq 'Ninja') { $configureArguments += ("-DCMAKE_MAKE_PROGRAM={0}" -f $NinjaPath) }
 & $CMakePath @configureArguments
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-$cacheVersion = Join-Path $BuildDir 'CMakeCache.txt'
-$projectVersion = 'unknown'
-if (Test-Path -LiteralPath $cacheVersion -PathType Leaf) {
-    $versionLine = Select-String -LiteralPath $cacheVersion -Pattern '^CMAKE_PROJECT_VERSION:STATIC=(.*)$' | Select-Object -First 1
-    if ($versionLine) { $projectVersion = $versionLine.Matches[0].Groups[1].Value.Trim() }
-}
-
-$buildArguments = @('--build', $BuildDir, '--parallel')
+$buildArguments = @('--build', $BuildDir)
+if ($Generator -eq 'Ninja') { $buildArguments += '--parallel' }
 if ($Clean) { $buildArguments += '--clean-first' }
 & $CMakePath @buildArguments
-$buildExitCode = $LASTEXITCODE
-if ($buildExitCode -ne 0) { exit $buildExitCode }
-
-# Guard against the failure mode that produced a stale-object crash: when the
-# build tree records no header dependencies, a later header-only change is
-# silently ignored and objects built from different versions of the same
-# struct get linked together. A healthy dependency database names headers.
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $dependencyProblem = $null
 if ($Generator -eq 'Ninja') {
     $ninjaDeps = Join-Path $BuildDir '.ninja_deps'
-    if (-not (Test-Path -LiteralPath $ninjaDeps -PathType Leaf)) {
-        $dependencyProblem = 'Ninja did not write .ninja_deps'
-    } elseif (-not ([System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($ninjaDeps)) -match '\.h(pp)?\b')) {
-        $dependencyProblem = '.ninja_deps records no header files (localized /showIncludes prefix)'
+    if (-not (Test-Path -LiteralPath $ninjaDeps -PathType Leaf)) { $dependencyProblem = 'Ninja did not write .ninja_deps' }
+    elseif (-not ([System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($ninjaDeps)) -match '\.h(pp)?\b')) {
+        $dependencyProblem = '.ninja_deps records no header files'
     }
 } else {
     $dependencyFiles = @(Get-ChildItem -Path $BuildDir -Recurse -File -Include 'compiler_depend.make', 'depend.make', '*.obj.d' -ErrorAction SilentlyContinue)
     $withHeaders = $dependencyFiles | Where-Object { $_.Length -gt 0 -and (Select-String -LiteralPath $_.FullName -Pattern '\.h(pp)?$|\.h(pp)? ' -Quiet) }
-    if (-not $withHeaders) {
-        $dependencyProblem = 'no dependency file records a header'
-    }
+    if (-not $withHeaders) { $dependencyProblem = 'no dependency file records a header' }
 }
 if ($dependencyProblem) {
-    Write-Error ("Header dependency tracking is not working in {0} ({1}). A public header change will not rebuild its users, which links objects with mismatched struct layouts. Rebuild with -Clean and keep the Makefile generator so CMake's own scanner is used." -f $BuildDir, $dependencyProblem)
+    Write-Error ("Header dependency tracking is not working in {0} ({1}). Rebuild with -Clean." -f $BuildDir, $dependencyProblem)
     exit 1
-}
-if ($Deploy) {
-    if ([string]::IsNullOrWhiteSpace($DeployDir)) {
-        $DeployDir = Join-Path (Split-Path $BuildDir -Parent) 'pointcloudcli-portable-Release'
-    }
-    if ($projectVersion -eq 'unknown') { throw 'CMAKE_PROJECT_VERSION was not found in CMakeCache.txt after configuration.' }
-    Deploy-PointCloudCli $BuildDir $Config $QtDir $CMakePath $SourceDir $DeployDir $projectVersion
 }
 exit 0

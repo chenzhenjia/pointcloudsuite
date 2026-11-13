@@ -1,5 +1,5 @@
 #pragma once
-#include <selected_plane_tasks_v2.h>
+#include <selected_plane_tasks.h>
 #include "scan_geometry_contract_v1.h"
 #include "result_regions_v1.h"
 #include <pcv/roi/automatic_workpiece_frame_v1.h>
@@ -15,51 +15,53 @@
 namespace pcv::demo {
 using InputFrameV2 = pcv::ui::SelectedPlaneInputV2;
 struct InputConfigV2 {
-    ScanGeometryContractV1 contract;
-    QVector<InputFrameV2> frames;
-    QString calibration, outputRoot;
-    float tolerance = 0.4f, maximumGap = 3.0f;
-    float searchDistance = 10.0f, searchAngle = 5.0f;
-    int maximumSeeds = 16;
-    float highSideMinimumHeightMm = 2.0f;
-    int highSideMinimumPointCount = 100;
-    bool poseOnly = false, threePoint = false;
+    ScanGeometryContractV1 contract; // 可选SR-2026导出；runtimeRoot为空时关闭。
+    QVector<InputFrameV2> frames; // 有序输入>=2；XYZ经50转换到robot_base/mm。
+    QString calibration, outputRoot; // 共用XML（可逐帧覆盖）；源码树外绝对输出根目录。
+    float tolerance = 0.4f, maximumGap = 3.0f; // mm；tolerance>0，gap在[0,50]。
+    float searchDistance = 10.0f, searchAngle = 5.0f; // mm/deg；距离>0，角度(0,90]。
+    int maximumSeeds = 16; // [1,64]。
+    float highSideMinimumHeightMm = 2.0f; // >=0；只生成提醒，不自动确认干涉。
+    int highSideMinimumPointCount = 100; // >=1。
+    bool poseOnly = false, threePoint = false; // 仅位姿拼接；三点选面（默认单击）。
 };
 enum class SourceVerificationV3 { Unverified, Checking, Verified, Failed };
 enum class ResultRegionStateV1 { Empty, Building, Ready, Failed, Cancelled };
+// GUI线程借用的区域视图；几何为robot_base/mm，版本三元组对应生成时的输入。
 struct ResultRegionSnapshotV1 {
     pcv::planefitting::PlaneMaskMeshV1 workpiece, interference;
     ResultRegionBasisV1 basis;
     ResultRegionStateV1 state = ResultRegionStateV1::Empty;
-    QString error;
+    QString error; // state可能Failed/Cancelled；部分已有有效区域可保留。
     quint64 resultRevision = 0, trimRevision = 0, annotationRevision = 0;
 };
+// 会话内部可变帧状态，经frames()/activeFrame()只读借用；不是持久快照。
 struct SessionFrameV2 {
     SourceVerificationV3 sourceVerification = SourceVerificationV3::Unverified;
-    quint64 id = 0, loadAttempt = 0;
+    quint64 id = 0, loadAttempt = 0; // 会话分配稳定ID；每次入加载队列递增attempt。
     bool indexQueued = false, indexPreparing = false;
     QElapsedTimer requestedAt, indexQueuedAt;
-    QPair<float,float> heightRange{0.0f,1.0f};
+    QPair<float,float> heightRange{0.0f,1.0f}; // robot_base完整点Z范围，hasHeightRange控制有效性。
     bool hasHeightRange = false;
-    QJsonObject loadTiming;
-    std::shared_ptr<const pcv::camera::CameraFrame> rawDepthFrame;
-    pointcloud::RobotBaseFrame cloud;
-    QVector<pointcloud::Point3D> display;
-    QVector<int> displayToFull;
-    pcv::planefitting::PlaneSelectionIndexPtr index;
-    std::shared_ptr<pcv::ProcessingBudget::Lease> displayLease;
-    QByteArray digest;
-    pcv::stitching::SelectedPlaneFrame candidate;
-    QVector<int> planeIndices, interferenceIndices, pendingInterference;
+    QJsonObject loadTiming; // 诊断耗时，不进入正式输出契约。
+    std::shared_ptr<const pcv::camera::CameraFrame> rawDepthFrame; // SDK原始深度预览来源，可先于XYZ就绪。
+    pointcloud::RobotBaseFrame cloud; // 当前完整XYZ及来源映射；确认后可能释放。
+    QVector<pointcloud::Point3D> display; // <=100万确定性实测展示点，不作正式计算输入。
+    QVector<int> displayToFull; // display下标 -> cloud.fullPoints下标。
+    pcv::planefitting::PlaneSelectionIndexPtr index; // 与当前完整点数据配套。
+    std::shared_ptr<pcv::ProcessingBudget::Lease> displayLease; // 内部预算生命周期，不可由调用方修改。
+    QByteArray digest; // PLY为完整转换数据摘要；深度为原始C16/强度摘要，用于来源核验。
+    pcv::stitching::SelectedPlaneFrame candidate; // 独立完整选面快照，不等于display子集。
+    QVector<int> planeIndices, interferenceIndices, pendingInterference; // 当前完整帧下标；确认/待确认干涉分开。
     pcv::planefitting::PlaneMaskMeshV1 workpieceMask, interferenceMask, pendingInterferenceMask;
     QString workpieceMaskError, interferenceMaskError, pendingInterferenceMaskError;
     QVector<pcv::planefitting::HighSidePlaneCandidateV1> highSideCandidates;
     QSet<int> dismissedHighSideSeeds;
     QString highSideError;
     bool highSideChecking = false;
-    bool hasCandidate = false, automatic = false, reviewed = false, confirmed = false;
+    bool hasCandidate = false, automatic = false, reviewed = false, confirmed = false; // 自动候选仍须人工审核。
     bool skipped = false, problem = false, loading = false;
-    bool depthReady = false;
+    bool depthReady = false; // 原始深度预览就绪，不代表XYZ/索引/来源校验完成。
     QString status = QStringLiteral("未加载");
 };
 
@@ -69,76 +71,90 @@ class ScanGeometrySessionV2 final : public QObject {
 public:
     explicit ScanGeometrySessionV2(QObject *parent = nullptr);
     ~ScanGeometrySessionV2() override;
+    // 1. 配置与输入：帧/轮次参数均为0-based序号，不能传SessionFrameV2::id。
     const InputConfigV2 &config() const { return m_config; }
+    // 同步校验；成功替换会话但不加载。false时可写error；成功不保证清空旧error。
+    bool configure(const InputConfigV2 &config, QString *error);
+    // 异步加载当前六帧窗口；忙/匹配中时忽略；轮次越界时夹取到有效范围。
+    void loadRound(int round);
+    // SDK深度预览物化为完整XYZ并建索引；无可处理深度源时忽略。
+    void processActive();
+    // 切换当前轮内帧，必要时异步加载；阻塞/自动匹配中或越界时忽略。
+    void activate(int frame);
+
+    // 2. 状态查询：只能在所属GUI线程读取；引用/指针不能跨状态变更保存。
     const QVector<SessionFrameV2> &frames() const { return m_frames; }
-    const SessionFrameV2 *activeFrame() const;
-    int active() const { return m_active; }
+    const SessionFrameV2 *activeFrame() const; // 结果视图/无活动帧时为nullptr。
+    int active() const { return m_active; } // -1表示无活动帧（可能为结果视图）。
     int round() const { return m_round; }
-    int reference() const { return m_reference; }
-    int runningCount() const { return m_jobs.size(); }
+    int reference() const { return m_reference; } // -1表示尚无参考帧。
+    int runningCount() const { return m_jobs.size(); } // 不含排队项。
     bool busy() const { return !m_jobs.isEmpty() || !m_pending.empty() || !m_loadQueue.empty(); }
-    bool interactionBlocked() const;
+    bool interactionBlocked() const; // 后台读取/索引不一定阻塞全局交互。
     bool activeFrameBusy() const;
-    bool canSelectActive() const;
+    bool canSelectActive() const; // 需完整XYZ、索引、来源Verified且未跳过。
+    bool matching() const { return m_matching; }
+    bool paused() const { return m_paused; }
+    QString status() const { return m_status; } // 显示文本，不作为错误码解析。
+    QString summary() const;
+    bool canReviewAll() const; // 至少两帧已审核、无冲突且来源已验证。
+    bool canStitch() const; // canReviewAll且所有未跳过帧confirmed。
+    bool canConfirmGeometry() const; // 保存前几何条件；不保证IO/契约校验成功。
+    bool geometryConfirmed() const { return m_geometryConfirmed; } // 当前几何保存已成功发布。
+    int progress() const { return m_progress; } // -1未知，否则0..100；不是完成事件。
+
+    // 3. 选面与审核：bool表示本次同步接受/确认，不代表后续worker成功。
+    void pick(int fullIndex, bool interference); // 完整当前帧下标；单击或收齐三点后异步拟合。
+    void cancelSelection(); // 清控制点并继续调度，不取消已运行worker。
+    const QVector<int> &pendingSeeds() const { return m_seeds; }
+    void setThreePoint(bool enabled); // 当前帧忙时忽略；接受时清控制点。
+    bool confirmCandidate(); // 首个未跳过帧先成为参考；深度帧确认后可释放XYZ缓存。
+    bool confirmInterference(); // 提交待确认干涉；与工件面重叠则false。
+    void clearInterference(); // 清已确认/待确认干涉，失效几何并可异步重建区域。
+    bool selectHighSideCandidate(int seedIndex); // 完整帧seed；true仅表示异步拟合已提交。
+    bool ignoreHighSideCandidate(int seedIndex); // 同步移除提醒，不等于确认干涉。
+    void clearPlane(); // 清工件候选；参考变化使依赖候选和结果失效。
+    void matchRemaining(); // 已确认参考面后异步匹配，异常暂停等待人工。
+    void resumeMatching(); // 当前异常帧须已审核或跳过，且无任务/控制点。
+    void skipActive(); // 显式跳过并使已有结果失效。
+    void confirmAll(); // canReviewAll时批量确认；不自动拼接。
+
+    // 4. 结果处理：只读借用，使用前检查hasResult及对应revision。
+    void showResult(); // 空闲且有结果时激活结果视图（active=-1）。
+    bool hasResult() const { return m_hasResult; }
+    const pcv::stitching::SelectedPlaneStitchResult &result() const { return m_result; }
+    QPair<float,float> resultHeightRange() const { return m_resultHeightRange; } // 显示辅助Z范围，默认(0,1)，非业务极值。
+    const QSet<int> &removed() const { return m_removed; } // 原始完整拼接结果下标。
+    quint64 resultRevision() const { return m_resultRevision; }
+    quint64 trimRevision() const { return m_trimRevision; }
+    const ResultRegionSnapshotV1 &resultRegions() const { return m_resultRegions; }
+    bool canUndo() const { return !m_undo.isEmpty(); } // 仅有撤销记录，执行仍需空闲结果视图。
+    const pcv::roi::WorkpieceCoordinateSystem &wobj1() const { return m_wobj1; }
+    void stitch(); // canStitch时异步调用30并提交完整产物，再计算展示区域。
+    void rebuildResultRegions(); // 有结果且空闲/未关闭时异步重建，不改磁盘点云。
+    void erase(const QVector<int> &originalIndices,quint64 resultRevision); // 过期revision拒绝；越界项忽略。
+    void undo(); // 撤销一轮修剪并异步重建区域。
+    void restore(); // 恢复全部点，可再撤销；异步重建区域。
+    bool generateWobj1(); // 同步从完整参考快照生成；true不表示已保存。
+
+    // 5. 保存与生命周期：saveGeometry是唯一会话保存入口。
+    QString savedGeometryPath() const { return m_savedGeometryPath; } // 已发布sidecar绝对路径。
+    const QStringList &committedOutputs() const { return m_committedOutputs; } // 产物入口，非所有文件清单。
+    void saveGeometry(); // 几何条件满足时异步保存；必要时先同步生成WObj1。
+    void retry(); // 当前帧重试校验/索引或重读来源；不会重试最终保存。
+    void cancel(); // 非阻塞请求；busy归false前仍需事件循环收尾。
+    void reset(); // 仅空闲时清会话；不删除已提交文件。
+    void shutdown(); // 幂等cancel/join，阻塞等待；终止后不得复用此对象。
+
+    // 6. 诊断：会写源码树外JSONL，不属于正式业务产物/schema。
     QString timingSummary() const;
     QString recentLog() const { return m_recentLog.join('\n'); }
     void recordOperation(const QString &operation);
     QString timingLogDirectory() const { return m_logDirectory; }
     void observeCanvasTiming(quint64 frameId, quint64 attempt, const QJsonObject &timing);
     void observeFirstFrame(quint64 frameId, quint64 attempt);
-    QPair<float,float> resultHeightRange() const { return m_resultHeightRange; }
-    bool matching() const { return m_matching; }
-    bool paused() const { return m_paused; }
-    QString status() const { return m_status; }
-    QString summary() const;
-    bool canReviewAll() const;
-    bool canStitch() const;
-    bool canConfirmGeometry() const;
-    bool geometryConfirmed() const { return m_geometryConfirmed; }
-    const pcv::roi::WorkpieceCoordinateSystem &wobj1() const { return m_wobj1; }
-    QString savedGeometryPath() const { return m_savedGeometryPath; }
-    bool hasResult() const { return m_hasResult; }
-    const pcv::stitching::SelectedPlaneStitchResult &result() const { return m_result; }
-    const QStringList &committedOutputs() const { return m_committedOutputs; }
-    const QSet<int> &removed() const { return m_removed; }
-    quint64 resultRevision() const { return m_resultRevision; }
-    quint64 trimRevision() const { return m_trimRevision; }
-    std::shared_ptr<pcv::ProcessingBudget> processingBudget() const { return m_budget; }
-    const ResultRegionSnapshotV1 &resultRegions() const { return m_resultRegions; }
-    void rebuildResultRegions();
-    bool canUndo() const { return !m_undo.isEmpty(); }
-    int progress() const { return m_progress; } // -1: no backend percentage
-    bool configure(const InputConfigV2 &config, QString *error);
-    void loadRound(int round);
-    void processActive();
-    void activate(int frame);
-    void showResult();
-    void retry();
-    void cancel();
-    void shutdown();
-    void reset();
-    void pick(int fullIndex, bool interference);
-    void cancelSelection();
-    const QVector<int> &pendingSeeds() const { return m_seeds; }
-    void setThreePoint(bool enabled);
-    bool confirmCandidate();
-    bool confirmInterference();
-    void clearInterference();
-    bool selectHighSideCandidate(int seedIndex);
-    bool ignoreHighSideCandidate(int seedIndex);
-    void clearPlane();
-    void matchRemaining();
-    void resumeMatching();
-    void skipActive();
-    void confirmAll();
-    void stitch();
-    void erase(const QVector<int> &originalIndices,quint64 resultRevision);
-    void undo();
-    void restore();
-    void confirmGeometry();
-    bool generateWobj1();
-    void saveGeometry();
 signals:
+    // true请求刷新点云/选择/区域；false刷新状态。不是每次调用都发，也不是成功事件。
     void changed(bool cloudChanged);
 private:
     friend struct ScanGeometrySessionTestAccessV2;

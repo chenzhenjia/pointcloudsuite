@@ -1,7 +1,7 @@
 #include <pcv/stitching/multiframe_registration.h>
 #include "selected_plane_refinement.h"
 #include <pcv/registration/handeye_transform.h>
-#include <pcv/filtering/downsample.h>
+#include <pcv/processing/downsample.h>
 
 #include <QElapsedTimer>
 #include <QFuture>

@@ -133,7 +133,7 @@ ScanGeometryWindowV1::ScanGeometryWindowV1(QWidget *parent)
         if(!m_session.removed().isEmpty()&&QMessageBox::question(this,tr("重新拼接"),tr("重新拼接会丢失当前会话修剪。磁盘既有完整产物保留，是否继续？"),QMessageBox::Yes|QMessageBox::No,QMessageBox::No)!=QMessageBox::Yes)return;
         m_session.stitch();
     });
-    connect(ui->confirmGeometry,&QPushButton::clicked,&m_session,&ScanGeometrySessionV2::confirmGeometry);
+    connect(ui->confirmGeometry,&QPushButton::clicked,&m_session,&ScanGeometrySessionV2::saveGeometry);
     connect(ui->rebuildResultRegions,&QPushButton::clicked,&m_session,&ScanGeometrySessionV2::rebuildResultRegions);
     connect(ui->generateWobj1,&QPushButton::clicked,&m_session,&ScanGeometrySessionV2::generateWobj1);
     connect(ui->saveGeometry,&QPushButton::clicked,&m_session,&ScanGeometrySessionV2::saveGeometry);

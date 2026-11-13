@@ -4,7 +4,7 @@ if(PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_SCAN_GEOMETRY_DEMO_V1 OR PCV_BUILD_STEP
 endif()
 add_subdirectory(50_coordinate_conversion)
 add_subdirectory(60_geometry_workpiece)
-if(PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_TOOLS OR PCV_BUILD_TESTS OR PCV_BUILD_SCAN_GEOMETRY_DEMO_V1)
+if(PCV_BUILD_POINTCLOUDVIEW OR PCV_BUILD_TESTS OR PCV_BUILD_SCAN_GEOMETRY_DEMO_V1)
     add_subdirectory(30_pointcloud_stitch)
     add_subdirectory(40_pointcloud_matching)
 endif()

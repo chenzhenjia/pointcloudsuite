@@ -4,8 +4,8 @@
 #include <pcv/registration/handeye_transform.h>
 
 #include <pcv/io/cloud_cache.h>
-#include <pcv/filtering/downsample.h>
-#include <pcv/filtering/statistical_filter.h>
+#include <pcv/processing/downsample.h>
+#include <pcv/processing/statistical_filter.h>
 #include <pcv/io/ply_reader.h>
 #include <pcv/io/ply_writer.h>
 #include <pcv/infrastructure/runtime_paths.h>

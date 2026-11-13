@@ -1,4 +1,4 @@
-#include <pcv/output/plane_output.h>
+#include <pcv/io/plane_output.h>
 
 #include <pcv/infrastructure/runtime_paths.h>
 #include <pcv/io/ply_writer.h>

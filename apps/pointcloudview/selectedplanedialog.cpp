@@ -1,3 +1,4 @@
+#include <task_runtime.h>
 #include "selectedplanedialog.h"
 #include "selected_plane_launcher.h"
 #include "features/workpiece_template_dialog_v1.h"
@@ -76,24 +77,8 @@ int lastRowOfRound(int round, int frameCount)
     return qMin(frameCount, firstRowOfRound(round) + kPanelsPerRound);
 }
 
-bool parsePose(QString text, pointcloud::RobotPose *pose)
-{
-    text.replace(',', ' ');
-    const auto fields = text.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
-    if (fields.size() != 6) return false;
-    double values[6]{};
-    for (int i = 0; i < 6; ++i) {
-        bool ok = false;
-        values[i] = fields.at(i).toDouble(&ok);
-        if (!ok || !std::isfinite(values[i])) return false;
-    }
-    pose->x = values[0];
-    pose->y = values[1];
-    pose->z = values[2];
-    pose->rx = values[3];
-    pose->ry = values[4];
-    pose->rz = values[5];
-    return true;
+bool parsePose(const QString &text, pointcloud::RobotPose *pose) {
+    return pcv::ui::parseRobotPose(text, pose, QRegularExpression(QStringLiteral("[\\s,]+")));
 }
 
 QString selectionMethodText(pcv::stitching::PlaneSelectionMethod method)
@@ -1178,7 +1163,7 @@ void SelectedPlaneDialog::finishJob(int slot) {
     const SelectedPlaneTask task=watcher->result();
     const qint64 queueMs=job.queuedAt.isValid()&&task.startedAt.isValid()
         ?qMax<qint64>(0,job.queuedAt.msecsTo(task.startedAt)):job.queueMs;
-    const bool stale=job.frameId!=frame->id||job.revision!=frame->revision
+    const bool stale=job.frameId!=frame->id||!pcv::ui::acceptsTask(job.revision,frame->revision,job.token,job.token)
         ||rowOf(frame)<0||panelOf(frame)<0||task.kind!=job.kind
         ||!job.token||job.token->load();
     watcher->deleteLater();

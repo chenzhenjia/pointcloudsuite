@@ -37,6 +37,14 @@ QVector3D position(const pointcloud::Point3D &point) { return {point.x, point.y,
 bool finite(const pointcloud::Point3D &point) {
     return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
 }
+// Projection uses float vectors. Snap only roundoff near a grid boundary;
+// points farther from it retain the occupancy mask's floor convention.
+double gridCoordinate(double value) {
+    const double nearest = std::round(value);
+    const double tolerance = std::min(1e-4,
+        8.0 * std::numeric_limits<float>::epsilon() * std::max(1.0, std::abs(value)));
+    return std::abs(value - nearest) <= tolerance ? nearest : std::floor(value);
+}
 }
 
 PlaneMaskResultV1 buildPlaneMaskV1(const QVector<pointcloud::Point3D> &points,
@@ -125,8 +133,8 @@ PlaneMaskResultV1 buildPlaneMaskV1(const QVector<pointcloud::Point3D> &points,
         result.gridOriginU=minimumU;result.gridOriginV=minimumV;
 
         result.performance.insert("mask_projection_ms",stage.nsecsElapsed()/1e6);stage.restart();
-        const double widthValue=std::floor((maximumU-minimumU)/spacingU)+1;
-        const double heightValue=std::floor((maximumV-minimumV)/spacingV)+1;
+        const double widthValue=gridCoordinate((maximumU-minimumU)/spacingU)+1;
+        const double heightValue=gridCoordinate((maximumV-minimumV)/spacingV)+1;
         size_t width=0,height=0;
         std::vector<quint8> denseOccupied;
         std::vector<quint32> denseVertexIds;
@@ -168,8 +176,8 @@ PlaneMaskResultV1 buildPlaneMaskV1(const QVector<pointcloud::Point3D> &points,
             if ((i & 4095) == 0 && cancelled()) {
                 result.cancelled = true; result.error = QStringLiteral("cancelled"); return result;
             }
-            const double u = std::floor((projectedU.at(i) - minimumU) / spacingU);
-            const double v = std::floor((projectedV.at(i) - minimumV) / spacingV);
+            const double u = gridCoordinate((projectedU.at(i) - minimumU) / spacingU);
+            const double v = gridCoordinate((projectedV.at(i) - minimumV) / spacingV);
             if (!std::isfinite(u) || !std::isfinite(v) || u > INT_MAX || v > INT_MAX)
                 return fail(QStringLiteral("平面掩码网格坐标超出范围"));
             const GridCell cell{qint64(u), qint64(v)};

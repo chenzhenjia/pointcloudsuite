@@ -9,10 +9,10 @@
 #include <stitchingwindow.h>
 #include "selected_plane_launcher.h"
 #include "ui_mainwindow.h"
-#include <pcv/interface/temp_workpiece_interface.h>
+#include <pcv/workpiece/temp_workpiece_interface.h>
 #include <pcv/interface/process_job_json.h>
 #include <pcv/io/artifact_transaction.h>
-#include <pcv/output/plane_output.h>
+#include <pcv/io/plane_output.h>
 #include <pcv/registration/handeye_transform.h>
 #include <pcv/render/pointcloud_canvas.h>
 #include <pcv/render/pointcloud_canvas_contract.h>
@@ -4051,5 +4051,3 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     }
     event->accept();
 }
-
-

@@ -1,4 +1,4 @@
-#include <pcv/filtering/statistical_filter.h>
+#include <pcv/processing/statistical_filter.h>
 
 #include <QCoreApplication>
 

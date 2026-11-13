@@ -65,6 +65,3 @@ if(PCV_CAMERA_HAVE_HIKSDK)
         "${PCV_HIKSDK_ROOT}/Libraries/win64/Mv3dLp.lib")
     target_compile_definitions(pcv_m10_pointcloud_io PUBLIC PCV_CAMERA_HAVE_HIKSDK=1)
 endif()
-
-add_library(pcv_m10_pointcloud_read INTERFACE)
-target_link_libraries(pcv_m10_pointcloud_read INTERFACE pcv_m10_pointcloud_io)

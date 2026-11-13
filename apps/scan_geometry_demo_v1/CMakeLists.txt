@@ -4,7 +4,7 @@ add_library(pcv_scan_geometry_session_v2 STATIC scan_geometry_session_v2.cpp sca
     result_regions_v1.cpp result_regions_v1.h)
 set_target_properties(pcv_scan_geometry_session_v2 PROPERTIES AUTOMOC ON)
 target_include_directories(pcv_scan_geometry_session_v2 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(pcv_scan_geometry_session_v2 PUBLIC pcv_selected_plane_tasks_v2 pcv_m60_geometry_workpiece pcv_m10_pointcloud_io)
+target_link_libraries(pcv_scan_geometry_session_v2 PUBLIC pcv_selected_plane_tasks pcv_m60_geometry_workpiece pcv_m10_pointcloud_io)
 target_compile_definitions(pcv_scan_geometry_session_v2 PRIVATE PCV_SCAN_GEOMETRY_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
 
 add_library(pcv_scan_geometry_demo_view_v1 STATIC

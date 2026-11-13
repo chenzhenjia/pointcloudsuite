@@ -1,3 +1,4 @@
+#include "task_runtime.h"
 #include "stitchingwindow.h"
 #include <pcv/interface/stitching_interface.h>
 #include <pcv/interface/process_job_json.h>
@@ -127,19 +128,9 @@ bool parsePoseText(const QString &text, QVector<double> *pose)
 {
     if (!pose) return false;
     pose->clear();
-    const QStringList parts = text.trimmed().split(
-        QRegularExpression(QStringLiteral("[\\s,，]+")), Qt::SkipEmptyParts);
-    if (parts.size() != 6) return false;
-    pose->reserve(6);
-    for (const QString &part : parts) {
-        bool ok = false;
-        const double value = part.toDouble(&ok);
-        if (!ok || !std::isfinite(value)) {
-            pose->clear();
-            return false;
-        }
-        pose->push_back(value);
-    }
+    pointcloud::RobotPose parsed;
+    if (!pcv::ui::parseRobotPose(text, &parsed, QRegularExpression(QStringLiteral("[\\s,，]+")))) return false;
+    *pose = {parsed.x, parsed.y, parsed.z, parsed.rx, parsed.ry, parsed.rz};
     return true;
 }
 
